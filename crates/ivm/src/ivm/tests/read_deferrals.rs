@@ -1,7 +1,7 @@
 //! Operational read refusals survive TLV, crypto, numeric and loader consumers.
 
 use super::*;
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 fn funded() -> (IVM, AllocationBudget) {
     let budget = AllocationBudget::new(64 * 1024 * 1024);

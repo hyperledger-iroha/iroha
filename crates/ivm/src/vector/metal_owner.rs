@@ -1,6 +1,6 @@
 //! Bounded process records whose physical health outlives policy and borrowers.
 
-use mv::allocation::{AllocationReservation, ChargedBuffer, ChargedShared};
+use iroha_allocation::{AllocationReservation, ChargedBuffer, ChargedShared};
 use std::{
     alloc::Layout,
     sync::{
@@ -489,7 +489,7 @@ pub(super) fn with_device_binding<T, R>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::AllocationBudget;
+    use iroha_allocation::AllocationBudget;
     fn setup() -> (DeviceRegistry<u32>, AllocationBudget) {
         let registry = DeviceRegistry::new();
         let budget = AllocationBudget::new(16384);
@@ -1014,7 +1014,7 @@ mod tests {
                     .observe(11, 3, |n| budget.try_reserve_bytes(n).ok())
                     .unwrap();
                 assert!(winner.initialize(|| Some(9)));
-                let mv::allocation::AllocationRefusal::Capacity { release, .. } =
+                let iroha_allocation::AllocationRefusal::Capacity { release, .. } =
                     budget.try_reserve_bytes(budget.limit_bytes()).unwrap_err()
                 else {
                     panic!("occupied pool")

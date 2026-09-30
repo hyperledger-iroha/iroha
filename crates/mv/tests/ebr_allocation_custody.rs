@@ -11,8 +11,8 @@ use std::{
 };
 
 use concread::ebrcell::EbrCell;
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use mv::{
-    allocation::{AllocationBudget, AllocationCharge},
     cell::{Cell, CellAllocationCharges},
     json::{CellSeeded, ValueFromJson},
 };

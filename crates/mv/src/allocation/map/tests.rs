@@ -1,7 +1,7 @@
 //! Physical original-map and original-pool retention controls.
 
-use super::super::tests::without_allocations;
 use super::*;
+use crate::allocation_test_support::without_allocations;
 
 struct Scalar;
 impl CopyPolicy<u64, u64> for Scalar {

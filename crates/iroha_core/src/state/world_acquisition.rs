@@ -8,7 +8,7 @@ use super::{
     WorldBlock,
     block_field::{BlockField, OriginalPublicationBlock},
 };
-use mv::allocation::OwnedAllocationScope;
+use iroha_allocation::OwnedAllocationScope;
 use mv::storage::AdmittedStorageError;
 use mv::{BlockAcquisition, BlockMode, BlockRetirement};
 

@@ -11,6 +11,48 @@ This record tracks implementation of the approved SDK and repository redesign.
 It is not a release qualification claim. The implementation retains one canonical
 first-release interface and does not add compatibility adapters.
 
+## Allocation and runtime storage boundary
+
+`iroha_allocation` owns the std-only finite budget, original reservations and
+charges, fixed buffers, shared backing and physical release notifications.
+Model finality artifacts, cryptographic commitments, primitive codecs and VM
+resource owners depend on it directly. Runtime storage generations, publication,
+transactions and charged B+tree adapters remain in `mv` and `concread`; those
+engines use the same lower allocation types rather than parallel custody owners.
+
+The model's complete non-development dependency closure cannot reach either
+storage engine. The Cargo feature-hygiene guard enforces that boundary, including
+optional, target-specific and build dependencies. MV-backed model roundtrip tests
+retain storage only as a development dependency. Canonical callers use the lower
+owner directly; retired generic `mv::allocation` and `concread::shared`/`release`
+exports are removed. Earlier footprint records below describe their own candidate
+and do not supersede this ownership boundary.
+
+## Current canonical protocol fixtures
+
+The current Exact12 matrix and typed archive are generated from the compiled
+canonical model types. The decoded archive has 390,344 bytes and SHA-256
+`da62506174ea651123d5973b451f755032a498479be49b53e697dfcc38923972`.
+SDK known-answer pins refer to this complete archive; older candidate captures
+below retain their own original digests and test evidence.
+
+The current normalized privacy transaction-intent fixture has 50,259 bytes and
+BLAKE3 digest `52756936c8e625cec56483d94eda82a3a9f5e8749922239622d78b37ab9009bc`.
+The model verifies its typed canonical projection against independently assembled
+field framing and mutation controls; the explicit ignored KAT exporter reproduces
+that value and the Vega digest from the public canonical model API. Previous codec
+fixture and documentation bytes remain under
+`docs/history/2026-09-30/codec-fixtures-before-unit-repair/`.
+
+Native finality checkpoints now carry genuine signed RS16 availability alongside
+the real three-of-four BLS certificate. Three explicit exporter runs produced
+identical H1 and H2 bytes, checked by canonical roundtrip and contiguous checkpoint
+verification. Current fixture inputs and exact component evidence are recorded in
+`fixtures/sumeragi/native-finality/capture.json`; the preceding capture and bytes
+are retained once under
+`docs/history/2026-09-30/native-finality-fixture-before-unit-repair/`.
+Supplied execution outputs remain synthetic and carry no World execution claim.
+
 ## Account-owned event and block streams
 
 `AccountClient::events().subscribe(filters).await` and
@@ -550,7 +592,7 @@ the field under test.
 
 Two independently generated Exact12 publications are byte-identical and match
 the adopted TSV and typed bundle. The production fixture checker passes. The
-Kotlin implementation now pins the decoded archive digest
+Kotlin implementation in that recorded candidate pins the decoded archive digest
 `ca479cad31f3d3fb6d834b5d490bb14f0f823ae4b869cf9c7cb5e32c20250035`.
 Its six codec tests pass, as do six native-independent Java consumer tests,
 42 Python parity tests and 72 standalone Python codec tests. The two required

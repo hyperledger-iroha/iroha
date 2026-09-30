@@ -9,6 +9,7 @@ import pytest
 from iroha_torii_client.native_sumeragi import (
     LANES_MAX_BYTES,
     SumeragiLaneStatus,
+    SumeragiDataAvailabilityLayout,
     parse_native_lanes,
     parse_native_lanes_json,
 )
@@ -56,6 +57,7 @@ def test_rust_corpus_keeps_every_lane_state_and_unsigned_range():
     assert (record.created_at, record.active_from) == (40, 42)
     assert (record.merged.height, record.merged.block_hash, record.merged.result) == (7, "22" * 32, "33" * 32)
     assert record.params.key_allowed_algorithms == ("bls_normal",)
+    assert record.da_layout == SumeragiDataAvailabilityLayout("reed_solomon16", 262144, 4, 2, 16777216, 1024)
     assert running.instance is not None and running.instance.protocol_version == 1
     assert running.instance.leader == record.committee[0].peer
     assert running.instance.footprint.probe == U64_MAX
@@ -89,7 +91,7 @@ def test_every_lane_field_is_required_and_unknown_fields_fail_closed():
             del value[0]["record"][field]
         with pytest.raises((ValueError, TypeError)):
             _parse(value)
-    for owner in ["params", "merged"]:
+    for owner in ["params", "da_layout", "merged"]:
         for field in list(lane["record"][owner]):
             value = _lanes()
             del value[0]["record"][owner][field]
@@ -99,6 +101,15 @@ def test_every_lane_field_is_required_and_unknown_fields_fail_closed():
         value[0]["record"][owner]["legacy"] = 0
         with pytest.raises((ValueError, TypeError)):
             _parse(value)
+    for field in ["encoding", "details"]:
+        value = _lanes()
+        del value[0]["record"]["da_layout"]["encoding"][field]
+        with pytest.raises(ValueError):
+            _parse(value)
+    value = _lanes()
+    value[0]["record"]["da_layout"]["encoding"]["legacy"] = None
+    with pytest.raises(ValueError):
+        _parse(value)
     for retired in ["lane_finality_manifest", "merge_carrier", "queue_plan", "relay_envelope"]:
         value = _lanes()
         value[0]["record"][retired] = None
@@ -114,6 +125,32 @@ def test_lane_identifier_is_an_exact_u32(bad):
     value[0]["record"]["lane"] = bad
     with pytest.raises((ValueError, TypeError)):
         parse_native_lanes(value)
+
+
+def test_data_availability_keeps_compact_final_stripes_and_rejects_invalid_geometry():
+    layout = _lanes()[0]["record"]["da_layout"]
+    compact = dict(layout, max_payload_size_bytes=4194305, max_chunk_count=30)
+    assert SumeragiDataAvailabilityLayout.from_payload(compact).max_payload_size_bytes == 4194305
+    for field, bad in [
+        ("chunk_size_bytes", 0), ("chunk_size_bytes", 1), ("chunk_size_bytes", 3), ("chunk_size_bytes", 262146),
+        ("data_shards", 0), ("data_shards", 17), ("data_shards", 65536), ("parity_shards", 0), ("parity_shards", 17),
+        ("max_payload_size_bytes", 0), ("max_payload_size_bytes", 16777217), ("max_chunk_count", 0),
+        ("max_chunk_count", 1025), ("max_chunk_count", 95),
+    ]:
+        with pytest.raises(ValueError):
+            SumeragiDataAvailabilityLayout.from_payload(dict(layout, **{field: bad}))
+    for bad in [
+        dict(layout, data_shards=1, parity_shards=2),
+        dict(layout, encoding={"encoding": "plain", "details": None}),
+        dict(layout, encoding={"encoding": "reed_solomon16", "details": {}}),
+        dict(compact, max_chunk_count=29),
+    ]:
+        with pytest.raises(ValueError):
+            SumeragiDataAvailabilityLayout.from_payload(bad)
+    value = _lanes()
+    value[0]["record"]["params"]["max_block_bytes"] = 16777217
+    with pytest.raises(ValueError):
+        _parse(value)
 
 
 @pytest.mark.parametrize("field", ["block_cadence_ms", "payload_retry_interval_ms", "exec_budget_ms",

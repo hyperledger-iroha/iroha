@@ -65,8 +65,8 @@ use crate::exec_witness::{
     roots::{parent_state_from_witness, witness_pairs},
     smt::compute_post_state_root,
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
 use iroha_data_model::sumeragi_finality::NativeLaneStateProof;
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
 
 pub use iroha_data_model::sumeragi_finality::{
     CommitmentError, ExecutionCommitment, ExecutionResultCommitment, MAX_RESULT_PREIMAGE_BYTES,
@@ -948,7 +948,7 @@ mod tests {
         assert!(matches!(
             encode_result_preimage(&owner, &budget),
             Err(ResultPreimageError::Allocation(
-                ChargedBufferError::Admission(mv::allocation::AllocationRefusal::Capacity { .. })
+                ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { .. })
             ))
         ));
         assert_eq!(budget.reserved_bytes(), 1);

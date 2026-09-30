@@ -13,7 +13,7 @@ fn musubi_universal_authority_is_revision_only_after_exact_source_checks() {
     let (world, release, _, selector) = seeded_musubi_publication_snapshot();
     musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -134,7 +134,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     mutation.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -149,7 +149,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     repair.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -177,7 +177,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     mutation.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -192,7 +192,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     repair.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -223,7 +223,7 @@ fn musubi_universal_directory_rejects_colliding_package_selector() {
     let error = musubi_universal::validate_musubi_universal_projection_cut(
         &world.view(),
         ProjectionCut::Current,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -251,7 +251,7 @@ fn musubi_publication_refuses_substituted_universal_row_without_committing_it() 
         .insert(release.clone(), substituted);
     let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
         &mut block,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         2,

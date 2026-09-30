@@ -13,6 +13,7 @@ use crate::{
 };
 use blake2::{Blake2b, digest::consts::U32};
 use hex;
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_config::{
     parameters::actual::{Snapshot as Config, SnapshotResourcePolicy},
     snapshot::Mode,
@@ -28,7 +29,6 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::state_path::StatePath;
 use iroha_model_base::topology::LaneId;
 use mv::{
-    allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError},
     cell::Cell,
     storage::{Storage, StorageReadOnly},
 };
@@ -74,7 +74,7 @@ mod state_snapshot_decode_error_tests {
             TryReadError::from(StateRestoreError::Admission(
                 crate::state::StateAdmissionError::History(
                     crate::state::BlockHashAdmissionError::Capacity(
-                        mv::allocation::AllocationRefusal::DemandOverflow
+                        iroha_allocation::AllocationRefusal::DemandOverflow
                     )
                 )
             )),

@@ -1,8 +1,8 @@
 //! Original remote witness ownership under actual pool pressure and bounded driver retry.
 
 use super::*;
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_sumeragi::message::ResultWitness;
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 
 fn fixture(
     budget: &AllocationBudget,

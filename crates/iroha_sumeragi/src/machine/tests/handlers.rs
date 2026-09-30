@@ -974,7 +974,7 @@ fn wanted_row_preserves_authenticated_relay_and_intake_filters() {
     foreign.bytes = RowBytes::from_untrusted(chunk.bytes.as_slice().to_vec()).unwrap();
     foreign
         .bytes
-        .admit(&mv::allocation::AllocationBudget::new(1 << 20))
+        .admit(&iroha_allocation::AllocationBudget::new(1 << 20))
         .unwrap();
     rejects.push(foreign);
     for rejected in rejects {

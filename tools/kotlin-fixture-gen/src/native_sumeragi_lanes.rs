@@ -40,6 +40,9 @@ pub fn rows() -> Vec<String> {
             dataspace: DataSpaceId::new(0),
             incarnation: [0x11; 32],
             params: SumeragiParameters::default(),
+            da_layout:
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended()
+                    .da_layout,
             committee: committee.clone(),
             created_at: 40,
             active_from: 42,
@@ -61,6 +64,9 @@ pub fn rows() -> Vec<String> {
             dataspace: DataSpaceId::new(u64::MAX),
             incarnation: [0x44; 32],
             params: SumeragiParameters::default(),
+            da_layout:
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended()
+                    .da_layout,
             committee: committee.clone(),
             created_at: 60,
             active_from: 62,
@@ -78,6 +84,9 @@ pub fn rows() -> Vec<String> {
             dataspace: DataSpaceId::new(7),
             incarnation: [0xFE; 32],
             params: SumeragiParameters::default(),
+            da_layout:
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended()
+                    .da_layout,
             committee: committee.clone(),
             created_at: 3,
             active_from: 5,

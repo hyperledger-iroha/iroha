@@ -162,7 +162,7 @@ impl ContractStateMapV1 {
     /// Construct an empty accumulated map retaining the caller's original finite pool.
     /// Every node allocated by later updates remains charged until its final owner releases it.
     #[must_use]
-    pub fn new(budget: &mv::allocation::AllocationBudget) -> Self {
+    pub fn new(budget: &iroha_allocation::AllocationBudget) -> Self {
         Self {
             map: MerkleMap::new(budget),
         }
@@ -178,7 +178,7 @@ impl ContractStateMapV1 {
     /// caller's original pool. Refusal releases the incomplete capture's node owners.
     pub fn capture<'a>(
         entries: impl IntoIterator<Item = (&'a StatePath, &'a [u8])>,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Self, MerkleMapError> {
         let mut map = Self::new(budget);
         for (path, value) in entries {
@@ -268,7 +268,7 @@ mod tests {
     fn inclusion_binds_exact_path_value_and_accumulated_history() {
         let a = StatePath::from_str("sc/alpha/Balance").unwrap();
         let b = StatePath::from_str("sc/beta/Balance").unwrap();
-        let budget = mv::allocation::AllocationBudget::new(1 << 20);
+        let budget = iroha_allocation::AllocationBudget::new(1 << 20);
         let mut map = ContractStateMapV1::new(&budget);
         map.replace(&a, None, Some(b"one")).unwrap();
         let first_root = map.root();
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn original_map_pool_funds_captures_clones_and_refusals() {
-        use mv::allocation::{AllocationBudget, AllocationRefusal};
+        use iroha_allocation::{AllocationBudget, AllocationRefusal};
         let a: StatePath = "sc/alpha/Balance".parse().unwrap();
         let b: StatePath = "sc/beta/Balance".parse().unwrap();
         let budget = AllocationBudget::new(4096);

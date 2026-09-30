@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1465 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1498 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1469 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1502 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -770,7 +770,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         root = Path(gate.__file__).resolve().parents[1]
         gate.validate_mv_test_registration(root)
         paths = ("scripts/formal/rust_text.py", "crates/mv/src/lib.rs",
-                 "crates/mv/src/allocation.rs", "crates/mv/src/allocation_tests.rs",
+                 "crates/mv/src/allocation.rs", "crates/mv/src/allocation_runtime_tests.rs",
+                 "crates/iroha_allocation/src/lib.rs", "crates/iroha_allocation/src/allocation_tests.rs",
+                 "crates/iroha_allocation/src/release.rs", "crates/iroha_allocation/src/release_tests.rs",
                  "crates/mv/src/publication.rs", "crates/mv/src/publication_nonblocking_tests.rs",
                  "crates/mv/src/release_tests.rs", "crates/mv/src/capture_tests.rs",
                  "crates/mv/src/cell.rs", "crates/mv/src/cell/charged_allocation_tests.rs",
@@ -823,9 +825,29 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             owner.write_text(owner.read_text().replace('path = "release_tests.rs"', 'path = "foreign_tests.rs"'))
             with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
                 gate.validate_mv_test_registration(copied)
+            owner.write_text(original_owner)
+            allocation = copied / "crates/iroha_allocation/src/allocation_tests.rs"
+            original_allocation = allocation.read_text()
+            canonical = "partition_retains_exact_original_pool_and_conserves_real_credits"
+            for fake in ("", "\n/* #[test]\nfn " + canonical + "() {} */\n",
+                         '\nconst FAKE: &str = r"#[test]\nfn ' + canonical + '() {}";\n'):
+                allocation.write_text(original_allocation.replace("fn " + canonical + "(", "fn retired_partition(") + fake)
+                with self.assertRaisesRegex(gate.CheckError, canonical):
+                    gate.validate_mv_test_registration(copied)
+            allocation.write_text(original_allocation)
+            for relative, old in (
+                ("lib.rs", 'path = "allocation_tests.rs"'),
+                ("release.rs", 'path = "release_tests.rs"'),
+            ):
+                lower_owner = copied / "crates/iroha_allocation/src" / relative
+                original_lower = lower_owner.read_text()
+                lower_owner.write_text(original_lower.replace(old, 'path = "foreign.rs"'))
+                with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
+                    gate.validate_mv_test_registration(copied)
+                lower_owner.write_text(original_lower)
         library_groups = {
             "publication::nonblocking_tests::": 1,
-            "allocation::tests::": 7,
+            "allocation_runtime_tests::": 1,
             "release_tests::": 8,
             "capture_tests::": 5,
             "cell::charged_allocation_tests::": 7,
@@ -843,14 +865,14 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             selected_gate = importlib.util.module_from_spec(spec)
             with patch.object(sys, "platform", platform):
                 spec.loader.exec_module(selected_gate)
-            self.assertEqual(selected_gate.MV_OWNERSHIP_HARNESSES, ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread"))
+            self.assertEqual(selected_gate.MV_OWNERSHIP_HARNESSES, ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread"))
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 98)
+                self.assertEqual(len(library), 92)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 154)):
+                for harness, count in (("allocation", 30), ("mv", 92), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 130)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -939,12 +961,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertNotIn("test_bptree2_cursor_remove_stress_7", canonical_remove,
                          "the disabled comment fixture must not qualify as executable coverage")
         expected = {
+            "allocation": [*("tests::" + name for name in names((root / "crates/iroha_allocation/src/allocation_tests.rs").read_text()) if "tests::" + name in {n for _, ns in gate.ALLOCATION_OWNERSHIP_STAGES for n in ns}),
+                           *("release::tests::" + name for name in names((root / "crates/iroha_allocation/src/release_tests.rs").read_text()))],
             "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage),
                                 *("storage_custody::capture::" + name for name in capture)],
             "mv-map": mapped,
             "concread": [*("ebrcell::acquisition_tests::" + name for name in names((root / "vendor/concread/src/ebrcell/acquisition_tests.rs").read_text())),
                          *("bptree::acquisition_tests::" + name for name in names((root / "vendor/concread/src/bptree/acquisition_tests.rs").read_text())),
-                         *("release::tests::" + name for name in names((root / "vendor/concread/src/release_tests.rs").read_text())),
                          *("bptree::abandonment_tests::" + name for name in names((root / "vendor/concread/src/bptree/abandonment_tests.rs").read_text())),
                          *("internals::lincowcell::identity_preparation_tests::" + name for name in names((root / "vendor/concread/src/internals/lincowcell/mod.rs").read_text()) if name.startswith("reader_")),
                          *("bptree::admission::tests::" + name for name in names(ordinary)),
@@ -988,10 +1011,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                       (root / "crates/mv/src/storage.rs").read_text())
         self.assertIn('#[path = "touches_tests.rs"]\nmod tests;',
                       (root / "crates/mv/src/storage/touches.rs").read_text())
-        partition = "allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits"
-        self.assertEqual(names((root / "crates/mv/src/allocation_tests.rs").read_text()).count(partition.rsplit("::", 1)[1]), 1)
+        partition = "tests::partition_retains_exact_original_pool_and_conserves_real_credits"
+        self.assertEqual(names((root / "crates/iroha_allocation/src/allocation_tests.rs").read_text()).count(partition.rsplit("::", 1)[1]), 1)
         self.assertIn('#[path = "allocation_tests.rs"]\nmod tests;',
-                      (root / "crates/mv/src/allocation.rs").read_text())
+                      (root / "crates/iroha_allocation/src/lib.rs").read_text())
         self.assertIn('#[path = "admission_tests.rs"]\nmod tests;',
                       (root / "vendor/concread/src/bptree/admission.rs").read_text())
         self.assertIn('#[path = "pair_admission.rs"]\nmod pair_admission;',
@@ -1008,12 +1031,16 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                       (root / "vendor/concread/src/internals/bptree/checkpoint.rs").read_text())
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
-            self.assertEqual([name for _, names in selected["mv"] for name in names].count(partition), 1)
+            self.assertEqual([name for _, names in selected["allocation"] for name in names].count(partition), 1)
             self.assertEqual([name for _, names in selected["mv"] for name in names
                               if name.startswith("storage::touches::tests::")],
                              ["storage::touches::tests::" + name for name in touch_names])
             for harness, actual_source_names in expected.items():
-                self.assertEqual([name for _, names in selected[harness] for name in names], actual_source_names)
+                actual = [name for _, names in selected[harness] for name in names]
+            if harness == "allocation":
+                self.assertCountEqual(actual, actual_source_names)
+            else:
+                self.assertEqual(actual, actual_source_names)
             prefix = "storage::admitted_tests::admitted_replacement_"
             selected_replacement = [name for _, names in selected["mv"] for name in names
                                     if name.startswith(prefix)]
@@ -1803,7 +1830,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                     environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                     source_commit="a" * 40, update_independent_checks=checkpoint)
             self.assertEqual(failure.exception.failures, ("core startup failed", "daemon startup failed"))
-            self.assertEqual(executed, ["config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon"])
+            self.assertEqual(executed, ["config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon"])
             checkpoint.assert_called_once_with(None)
             metadata.assert_not_called()
             network.assert_not_called()
@@ -1839,8 +1866,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                         environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                         source_commit="a" * 40, update_independent_checks=checkpoint)
                 self.assertIs(failure.exception, error)
-                self.assertEqual(order, ["compiled", "config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core"])
+                self.assertEqual(order, ["compiled", "config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core"])
                 self.assertEqual(executed, [("config", gate.CONFIG_STAGES),
+                                            ("allocation", gate.ALLOCATION_OWNERSHIP_STAGES),
                                             ("mv", gate.MV_OWNERSHIP_STAGES),
                                             ("mv-ebr", gate.MV_EBR_STAGES),
                                             ("mv-map", gate.MV_MAP_STAGES),
@@ -1941,7 +1969,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                             completed_independent_checks=evidence,
                                             update_independent_checks=checkpoint)
                     self.assertIs(failure.exception, error)
-                    self.assertEqual([call.args[0] for call in execute.call_args_list], ["config", "mv"])
+                    self.assertEqual([call.args[0] for call in execute.call_args_list], ["config", "allocation", "mv"])
                     checkpoint.assert_called_once_with(None)
                     network.assert_not_called()
 
@@ -2285,7 +2313,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
             self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
             self.assertEqual([call.args[0] for call in run.call_args_list],
-                             ["/copies/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config")])
+                             ["/copies/" + name for name in ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config")])
             self.assertEqual([call.args[3] for call in run.call_args_list],
                              [*[selected[name] for name in gate.MV_OWNERSHIP_HARNESSES], gate.CONFIG_STAGES])
             shipping.assert_not_called()
@@ -3072,7 +3100,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_complete_regression_census_tracks_every_native_stage_group(self):
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
-        for group in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "STAGES", "CONFIG_STAGES", "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "CURRENT_CONSENSUS_STAGES",
+        for group in ("ALLOCATION_OWNERSHIP_STAGES", "MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "STAGES", "CONFIG_STAGES", "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "CURRENT_CONSENSUS_STAGES",
                       "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
                       "PROOF_FLOW_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "CLIENT_STAGES", "WALLET_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES", "KAGAMI_STAGES"):
             original_count = sum(len(names) for _, names in getattr(gate, group))
@@ -3115,7 +3143,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "preflight_native_test_inventories", return_value={"/fixture/harness": "fixture: test\n"}))
             run = stack.enter_context(patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")))
             stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
-            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+            stack.enter_context(patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(),
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
@@ -3154,7 +3182,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "preflight_native_test_inventories", return_value={"/fixture/harness": "fixture: test\n"}))
             run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
             stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
-            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+            stack.enter_context(patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(),
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
@@ -3195,7 +3223,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})))
             run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=results))
             stack.enter_context(patch.object(gate, "STAGES", (("CLI", ("cli",)),)))
-            stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
+            stack.enter_context(patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(),
                                                CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()))
             stack.enter_context(patch.object(gate, "DATA_MODEL_STAGES", ()))
@@ -3235,7 +3263,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
                 name: "/warm/" + name for name in gate.HARNESS_TARGETS})) as compile, \
              patch.object(gate, "run_network_checks") as network, \
-             patch.multiple(gate, MV_OWNERSHIP_STAGES=(), MV_EBR_STAGES=(),
+             patch.multiple(gate, ALLOCATION_OWNERSHIP_STAGES=(), MV_OWNERSHIP_STAGES=(), MV_EBR_STAGES=(),
                             MV_MAP_STAGES=(), MV_ADMITTED_MAP_STAGES=(), CONCREAD_STAGES=(), CONFIG_FIXTURE_STAGES=(), GENESIS_STAGES=(), CONFIG_UNIT_STAGES=()), \
              patch.object(gate, "DATA_MODEL_STAGES", ()), \
              patch.object(gate, "CRYPTO_STAGES", ()), \
@@ -3257,7 +3285,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_network_failure_does_not_trigger_separate_harness_builds(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         with patch.object(gate, "run_network_checks", side_effect=gate.CheckError("consensus stalled")) as network, \
              patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
                  name: "/warm/" + name for name in names})) as batch, \
@@ -3272,7 +3300,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
-        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon", "cli", "torii-unit")])
+        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon", "cli", "torii-unit")])
         self.assertTrue(all(call.kwargs["inventories"] is inventory for call in stages.call_args_list))
         self.assertEqual([{key: value for key, value in call.kwargs.items() if key != "inventories"}
                           for call in stages.call_args_list],
@@ -3282,11 +3310,11 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         priority_torii, _ = gate.partition_priority_stages(
             gate.TORII_UNIT_STAGES, stage_labels=gate.PRIORITY_TORII_STAGE_LABELS)
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.MV_OWNERSHIP_STAGES, gate.MV_EBR_STAGES, gate.MV_MAP_STAGES, gate.MV_ADMITTED_MAP_STAGES, gate.CONCREAD_STAGES, gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES, tuple(stage for stage in gate.CORE_STARTUP_STAGES if stage not in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES), gate.CORE_ZK_STAGES, gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, priority_cli, priority_torii])
+                         [gate.ALLOCATION_OWNERSHIP_STAGES, gate.MV_OWNERSHIP_STAGES, gate.MV_EBR_STAGES, gate.MV_MAP_STAGES, gate.MV_ADMITTED_MAP_STAGES, gate.CONCREAD_STAGES, gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES, tuple(stage for stage in gate.CORE_STARTUP_STAGES if stage not in gate.CORE_NATIVE_ARCHIVE_RECOVERY_STAGES), gate.CORE_ZK_STAGES, gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, priority_cli, priority_torii])
 
     def test_deferred_transport_or_fixture_failure_stops_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         for failed, target in (("crypto", "crypto"), ("p2p", "p2p"),
                                ("fixture", "test-network")):
             output = io.StringIO()
@@ -3313,7 +3341,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_public_contract_library_failures_block_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        names = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         for failed in ("client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle"):
             def run(harness, *args, **_kwargs):
                 if harness == "/warm/" + failed:
@@ -3777,7 +3805,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
 
     def test_one_batch_runs_configuration_first_after_source_audits(self):
         events = []
-        libraries = ("config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
+        libraries = ("config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk", "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
 
         def run_stage(harness, root, env, stages, lock_fds, **kwargs):
             self.assertIn(harness, kwargs.pop("inventories"))
@@ -3805,7 +3833,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
         separate.assert_not_called()
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(events, ["source", "library-build", "config-pass",
-                                  *["/warm/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon", "cli", "torii-unit")]])
+                                  *["/warm/" + name for name in ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "core-zk", "torii-unit", "daemon", "cli", "torii-unit")]])
 
     def test_batch_or_configuration_failure_stops_all_later_execution_and_passes(self):
         for phase in ("build", "schema"):
@@ -3841,7 +3869,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
     def test_configuration_always_runs_before_exact_independent_checkpoint_reuse(self):
         for config_fails in (False, True):
             with self.subTest(config_fails=config_fails), contextlib.ExitStack() as stack:
-                for name in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES",
+                for name in ("ALLOCATION_OWNERSHIP_STAGES", "MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES",
                              "CONFIG_FIXTURE_STAGES", "GENESIS_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "SCHEMA_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "CURRENT_CONSENSUS_STAGES", "TEST_NETWORK_STAGES",
                              "CLIENT_STAGES", "WALLET_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES",
                              "PROOF_STAGES", "PROOF_FLOW_STAGES"):
@@ -4184,9 +4212,9 @@ class NativeTestBatchBuildTests(unittest.TestCase):
                 isolate.assert_not_called()
 
     def test_resource_batch_requires_both_libraries_and_all_explicit_integration_artifacts(self):
-        names = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
+        names = ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
         self.assertEqual(gate.native_harness_selection(names), [
-            "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
+            "-p", "iroha_allocation", "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
         ])
         lines = "".join(self.artifact(name) for name in names)
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
@@ -4198,7 +4226,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.args[0], [
             "/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test",
             "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
-            "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
+            "-p", "iroha_allocation", "-p", "mv", "-p", "concread", "--lib", "--test", "ebr_allocation_custody", "--test", "map_owned_generations", "--test", "admitted_map_custody",
             "--no-run", "--message-format=json-render-diagnostics",
         ])
         for missing in names:
@@ -4382,7 +4410,7 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
         for scope in gate.QUALIFICATION_SCOPES:
             _, names, _ = gate.native_harness_plan(gate.qualification_stages(scope), shipping)
             self.assertEqual(names, (
-                "config", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model",
+                "config", "allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "config-fixtures", "config-unit", "genesis", "data-model",
                 "kagami", "proof", "proof-flows", "crypto", "p2p", "core", "core-zk",
                 "sumeragi", "schema", "test-network", "client", "wallet", "torii-unit", "torii", "torii-shared",
                 "torii-lifecycle", "daemon", "network", "cli", "taira-launcher",
@@ -5416,7 +5444,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                     raise gate.CheckError("early CLI fixture failed")
                 errors = io.StringIO()
                 with contextlib.ExitStack() as stack:
-                    for name in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "DAEMON_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "NETWORK_STAGES"):
+                    for name in ("ALLOCATION_OWNERSHIP_STAGES", "MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "CORE_ZK_STAGES", "DAEMON_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "NETWORK_STAGES"):
                         stack.enter_context(patch.object(gate, name, ()))
                     for name in ("run_lifecycle_source_checks", "run_config_checks", "check_test_harnesses"):
                         stack.enter_context(patch.object(gate, name))

@@ -6528,7 +6528,7 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     #[error("finalized provider-ingest archive index is busy")]
     IndexBusy {
         /// Release Kura and State fences before awaiting this actual index owner.
-        wait: concread::release::ReleaseWait,
+        wait: iroha_allocation::release::ReleaseWait,
     },
     /// Archive ceilings are zero, inconsistent, or unrepresentable.
     #[error("invalid finalized provider-ingest archive bounds: {reason}")]

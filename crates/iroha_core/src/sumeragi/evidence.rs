@@ -7,6 +7,7 @@
 use crate::state::{
     EvidencePreparationError, NativeExecutionTip, State, StateReadOnly, StateView, WorldReadOnly,
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{
@@ -18,10 +19,7 @@ use iroha_data_model::{
     consensus::NposPenaltyAction,
 };
 use iroha_sumeragi::message::Evidence as NativeEvidence;
-use mv::{
-    allocation::{AllocationBudget, ChargedBuffer},
-    storage::StorageReadOnly,
-};
+use mv::storage::StorageReadOnly;
 
 /// Maximum number of original reports admitted by one carrier.
 pub(crate) const MAX_EVIDENCE_ADMISSIONS_PER_BLOCK: usize = 8;

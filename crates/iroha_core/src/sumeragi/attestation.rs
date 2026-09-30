@@ -5,6 +5,10 @@
 //! core already authenticated for that height. No local execution cache, World lookup, quorum
 //! subset or obsolete height context grants verification authority.
 
+use iroha_allocation::{
+    AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedShared, PrepaidSharedError,
+    RetainedPayload,
+};
 use iroha_data_model::{
     NetworkId,
     isi::kagemusha_v1::{
@@ -20,10 +24,6 @@ use iroha_sumeragi::{
     message::{AttestationSignature, BlockHeader, CommitAttestation, Qc, ResultWitness},
     preimage::{AttestationStatement, att_preimage},
     types::{Committee, Hash32, PublicKey, ValidatorIndex},
-};
-use mv::allocation::{
-    AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedShared, PrepaidSharedError,
-    RetainedPayload,
 };
 use std::sync::{Mutex, TryLockError};
 

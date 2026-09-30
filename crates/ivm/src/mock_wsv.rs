@@ -7203,7 +7203,7 @@ mod read_deferral_tests {
             "wonderland",
         );
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let mut vm = IVM::try_new_with_memory_budget(1_000_000, &budget).unwrap();
         vm.set_register(10, crate::Memory::INPUT_START);
         budget.set_limit_bytes(budget.reserved_bytes());

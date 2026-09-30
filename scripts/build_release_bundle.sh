@@ -345,7 +345,7 @@ prebuilt_provenance_sha256="$(
     --target "$target" \
     --cargo-profile deploy \
     --features "$provenance_features" \
-    "${cuda_provenance_args[@]}" \
+    ${cuda_provenance_args[@]+"${cuda_provenance_args[@]}"} \
     "${provenance_binaries[@]}" \
     --output-directory "$binary_root"
 )"

@@ -18,7 +18,7 @@ fn snapshot_read_buffer_refusal_preserves_descriptor_position_and_allows_retry()
     reader.seek(std::io::SeekFrom::Start(3)).unwrap();
     let budget = AllocationBudget::new(source.len());
     let occupied = budget.try_reserve_bytes(source.len()).unwrap();
-    let Err(TryReadError::PayloadAllocation(mv::allocation::AllocationRefusal::Capacity {
+    let Err(TryReadError::PayloadAllocation(iroha_allocation::AllocationRefusal::Capacity {
         requested_bytes,
         reserved_bytes,
         limit_bytes,
@@ -93,7 +93,7 @@ async fn snapshot_read_buffer_strict_restore_retains_charge_through_initializati
     };
     let restore = || {
         try_read_snapshot_with_initializer(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             &store,
@@ -118,7 +118,7 @@ async fn snapshot_read_buffer_strict_restore_retains_charge_through_initializati
     assert!(matches!(
         restore(),
         Err(TryReadError::PayloadAllocation(
-            mv::allocation::AllocationRefusal::Capacity { .. }
+            iroha_allocation::AllocationRefusal::Capacity { .. }
         ))
     ));
     assert_eq!(calls.get(), 0);
@@ -166,7 +166,7 @@ fn snapshot_read_buffer_gc_refusal_preserves_pointer_and_both_retained_generatio
     assert!(matches!(
         publish(),
         Err(TryWriteError::PayloadAllocation(
-            mv::allocation::AllocationRefusal::Capacity { .. }
+            iroha_allocation::AllocationRefusal::Capacity { .. }
         ))
     ));
     assert_eq!(
@@ -211,7 +211,7 @@ fn snapshot_read_buffer_gc_fallback_cannot_filter_out_a_capacity_refusal() {
     assert!(matches!(
         planned,
         Err(TryWriteError::PayloadAllocation(
-            mv::allocation::AllocationRefusal::Capacity { .. }
+            iroha_allocation::AllocationRefusal::Capacity { .. }
         ))
     ));
     assert_eq!(
@@ -289,7 +289,7 @@ async fn snapshot_read_buffer_writer_notifies_after_unlock_on_success_and_error(
     });
     let waker = Waker::from(Arc::clone(&observer));
     for expect_error in [false, true] {
-        let Err(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+        let Err(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
             budget.try_reserve_bytes(payload_len + 1)
         else {
             panic!("fixture sentinel must provide a real original-pool refusal");
@@ -372,7 +372,7 @@ async fn snapshot_read_buffer_maker_retains_the_original_startup_pool() {
     assert_eq!(maker.read_buffer_budget.reserved_bytes(), 64);
     assert!(matches!(
         maker.read_buffer_budget.try_reserve_bytes(1),
-        Err(mv::allocation::AllocationRefusal::Capacity { .. })
+        Err(iroha_allocation::AllocationRefusal::Capacity { .. })
     ));
     drop(occupied);
     let writer_owns = maker.read_buffer_budget.try_reserve_bytes(64).unwrap();
@@ -401,7 +401,7 @@ fn snapshot_read_buffer_operation_unwind_notifies_after_unlock() {
     let binding = bind_snapshot_file_handle(&path, 6).unwrap().unwrap();
     let budget = AllocationBudget::new(7);
     let _sentinel = budget.try_reserve_bytes(1).unwrap();
-    let Err(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+    let Err(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
         budget.try_reserve_bytes(7)
     else {
         panic!("fixture sentinel must provide an original-pool refusal");
@@ -558,7 +558,7 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
             &budget,
         ),
         Err(TryWriteError::PayloadAllocation(
-            mv::allocation::AllocationRefusal::Capacity { .. }
+            iroha_allocation::AllocationRefusal::Capacity { .. }
         ))
     ));
 
@@ -621,7 +621,7 @@ where
     let block_count = BlockCount(source.view().height());
     let lane_manifests = source.lane_manifests.read().clone();
     try_read_snapshot_with_initializer(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         store,
@@ -701,7 +701,7 @@ fn assert_strict_initializer_failure_refunds_before_notification(unwind: bool) {
     let pointer = std::fs::read(store.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
     let budget = AllocationBudget::new(payload.len() + 1);
     let _sentinel = budget.try_reserve_bytes(1).unwrap();
-    let Err(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+    let Err(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
         budget.try_reserve_bytes(payload.len() + 1)
     else {
         panic!("sentinel must produce an original-pool release observation");
@@ -858,7 +858,7 @@ async fn snapshot_read_buffer_concurrent_strict_and_gc_retry_after_actual_reader
             .recv_timeout(Duration::from_secs(30))
             .expect("Strict initializer owns the charged payload");
         assert_eq!(budget.reserved_bytes(), payload.len());
-        let Err(TryWriteError::PayloadAllocation(mv::allocation::AllocationRefusal::Capacity {
+        let Err(TryWriteError::PayloadAllocation(iroha_allocation::AllocationRefusal::Capacity {
             requested_bytes,
             reserved_bytes,
             limit_bytes,

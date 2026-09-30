@@ -88,7 +88,6 @@ def test_retired_routes_exist_only_as_catalog_and_openapi_negatives() -> None:
         for path in (REPO_ROOT / "crates").rglob("*.rs")
     }
     allowed_negative_tests = {
-        REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs",
         REPO_ROOT
         / "crates"
         / "iroha_torii_shared"
@@ -96,6 +95,20 @@ def test_retired_routes_exist_only_as_catalog_and_openapi_negatives() -> None:
         / "route_catalog"
         / "tests.rs",
     }
+
+    openapi_tests = REPO_ROOT / "crates/iroha_torii/src/openapi/tests"
+    fixture = openapi_tests / "openapi_static_contracts_v1.txt"
+    group = "openapi.retired_sorafs_economics_surface_is_absent.strings.1"
+    retired_fixture_paths = tuple(
+        bytes.fromhex(value).decode("utf-8")
+        for name, value in (line.split("\t", 1) for line in fixture.read_text().splitlines())
+        if name == group
+    )
+    assert retired_fixture_paths == RETIRED_PATHS
+    contracts = (openapi_tests / "catalog_and_contracts.rs").read_text()
+    assert f'fn retired_sorafs_economics_surface_is_absent()' in contracts
+    assert f'openapi_contract_strings("{group}")' in contracts
+    assert "!paths.contains_key(path)" in contracts
 
     for retired_path in RETIRED_PATHS:
         occurrences = {

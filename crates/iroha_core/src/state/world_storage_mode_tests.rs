@@ -2,10 +2,8 @@
 
 use super::*;
 use concread::bptree::{AllocationDemand, NodeCloning, NodeFunding, PlanningError};
-use mv::{
-    allocation::{AllocationBudget, AllocationCharge, AllocationReservation},
-    storage::AdmittedStoragePolicy,
-};
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationReservation};
+use mv::storage::AdmittedStoragePolicy;
 use std::alloc::Layout;
 
 struct Policy(AllocationReservation);

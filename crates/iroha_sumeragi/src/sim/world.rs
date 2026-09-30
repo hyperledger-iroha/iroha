@@ -153,7 +153,7 @@ pub struct Replica {
     /// Counting crypto shared with the core.
     pub crypto: SimCrypto,
     /// Original pool and live actual reconstruction jobs of this incarnation.
-    pub budget: mv::allocation::AllocationBudget,
+    pub budget: iroha_allocation::AllocationBudget,
     acquisitions: BTreeMap<Hash32, crate::availability::PayloadAcquisition>,
     /// Durable safety-record files of this instance per key (part of the machine's record
     /// store; never backed up or restored).
@@ -513,7 +513,7 @@ impl World {
                         (sc.host)(m, i)
                     },
                     crypto,
-                    budget: mv::allocation::AllocationBudget::new(1 << 30),
+                    budget: iroha_allocation::AllocationBudget::new(1 << 30),
                     acquisitions: BTreeMap::new(),
                     records: BTreeMap::new(),
                     bodies: BTreeMap::new(),

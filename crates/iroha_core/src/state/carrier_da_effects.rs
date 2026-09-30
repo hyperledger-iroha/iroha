@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::execution_attempt::ExecutionDeferred;
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError, PrepaidBufferError,
 };
 use std::alloc::Layout;
@@ -240,7 +240,7 @@ fn reserve_projection(
 }
 fn allocate_projection<T>(
     count: usize,
-    reservation: &mut mv::allocation::AllocationReservation,
+    reservation: &mut iroha_allocation::AllocationReservation,
 ) -> Result<ChargedBuffer<T>, ExecutionDeferred> {
     ChargedBuffer::from_reservation(count, reservation).map_err(|error| match error {
         PrepaidBufferError::Allocation(ChargedBufferError::Admission(refusal)) => refusal.into(),

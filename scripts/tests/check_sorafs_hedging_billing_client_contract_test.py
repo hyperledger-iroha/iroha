@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENT = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
@@ -40,10 +42,7 @@ def _source_slice(source: str, start: str, end: str) -> str:
     return source[start_offset : source.index(end, start_offset + len(start))]
 
 
-def test_hedging_billing_client_response_bounds_match_server_contract() -> None:
-    client = CLIENT.read_text(encoding="utf-8")
-    torii = TORII_API.read_text(encoding="utf-8")
-
+def _validate_response_bounds(client: str, torii: str) -> None:
     assert f"const {JSON_LIMIT}: usize = 1024 * 1024;" in client
     assert f"const {STATEMENT_LIMIT}: usize = 22 * 1024 * 1024;" in client
     assert "const MAX_JSON_RESPONSE_BYTES_V1: usize = 1024 * 1024;" in torii
@@ -55,7 +54,7 @@ def test_hedging_billing_client_response_bounds_match_server_contract() -> None:
 
     for start, end in (
         (
-            "    pub fn get_sorafs_billing_status(",
+            "        get_sorafs_billing_status => SorafsEndpoint::account_json_get(",
             "    /// Fetch one exact-checkpoint owner-isolated page",
         ),
         (
@@ -67,7 +66,7 @@ def test_hedging_billing_client_response_bounds_match_server_contract() -> None:
             "    /// Fetch payload-free `SoraFS` billing delivery reconciliation status.",
         ),
         (
-            "    pub fn get_sorafs_billing_reconciliation(",
+            "        get_sorafs_billing_reconciliation => SorafsEndpoint::account_json_get(",
             "    /// Fetch one exact-checkpoint page of finalized `SoraFS` hedging exposure.",
         ),
         (
@@ -76,14 +75,14 @@ def test_hedging_billing_client_response_bounds_match_server_contract() -> None:
         ),
     ):
         method = _source_slice(client, start, end)
-        assert f".max_response_bytes({JSON_LIMIT})" in method, start
+        assert f".with_max_response_bytes({JSON_LIMIT})" in method, start
 
     statement_method = _source_slice(
         client,
         "    pub fn get_sorafs_billing_statement(",
         "    /// Submit one canonical owner acknowledgement",
     )
-    assert f".max_response_bytes({STATEMENT_LIMIT})" in statement_method
+    assert f".with_max_response_bytes({STATEMENT_LIMIT})" in statement_method
 
     exposure_method = _source_slice(
         client,
@@ -104,8 +103,15 @@ def test_hedging_billing_client_response_bounds_match_server_contract() -> None:
         in intents_method
     )
 
-    assert client.count(f".max_response_bytes({JSON_LIMIT})") == 5
-    assert client.count(f".max_response_bytes({STATEMENT_LIMIT})") == 1
+    assert client.count(f".with_max_response_bytes({JSON_LIMIT})") == 5
+    assert client.count(f".with_max_response_bytes({STATEMENT_LIMIT})") == 1
+    endpoint = _source_slice(client, "    const fn with_max_response_bytes(", "macro_rules! sorafs_static_get_methods")
+    assert "max_response_bytes: Some(max_response_bytes)" in endpoint
+    methods = _source_slice(client, "macro_rules! sorafs_static_get_methods", "macro_rules! sorafs_typed_body_post_methods")
+    assert "self.send_sorafs_endpoint($endpoint, Vec::new(), |_| {})" in methods
+    request = _source_slice(client, "    fn send_sorafs_url(", "    fn send_sorafs_reserve_read(")
+    assert "if let Some(max_response_bytes) = endpoint.max_response_bytes" in request
+    assert "builder = builder.max_response_bytes(max_response_bytes);" in request
 
     for document_path in OPENAPI_DOCUMENTS:
         document = json.loads(document_path.read_text(encoding="utf-8"))
@@ -124,3 +130,21 @@ def test_hedging_billing_client_response_bounds_match_server_contract() -> None:
             acknowledgement_schema["x-iroha-norito-schema-hash"]
             == ACKNOWLEDGEMENT_SCHEMA_HASH
         )
+
+
+def test_hedging_billing_client_response_bounds_match_server_contract() -> None:
+    _validate_response_bounds(CLIENT.read_text(encoding="utf-8"), TORII_API.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("old,new", [
+    (f".with_max_response_bytes({JSON_LIMIT})", ".with_max_response_bytes(0)"),
+    ("max_response_bytes: Some(max_response_bytes)", "max_response_bytes: None"),
+    ("builder = builder.max_response_bytes(max_response_bytes);", "drop(max_response_bytes);"),
+    ("self.send_sorafs_endpoint($endpoint, Vec::new(), |_| {})", "self.send_sorafs_endpoint(SorafsEndpoint::account_json_get(\"changed\"), Vec::new(), |_| {})"),
+])
+def test_response_bound_is_preserved_through_endpoint_and_transport(old: str, new: str) -> None:
+    source = CLIENT.read_text(encoding="utf-8")
+    mutated = source.replace(old, new, 1)
+    assert mutated != source
+    with pytest.raises(AssertionError):
+        _validate_response_bounds(mutated, TORII_API.read_text(encoding="utf-8"))

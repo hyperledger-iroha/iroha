@@ -1,44 +1,34 @@
 # Generic model identity fixtures
 
-These immutable frames were captured before adding the ten identity declarations.
-The capture used the pinned repository toolchain, locally resolved model-library test
-features, and the default stack. Both capture tests passed with all 5,611 selected
-inputs unchanged. Temporary capture writers have been removed from the model.
+The current canonical model capture is reproduced by the explicit ignored unit
+`generic_identity_tests::capture_current_generic_identity_frames`. Each of the
+12 generic families and five concrete-argument cases has root, populated Vec,
+Some and ordered BTreeMap frames: 68 frames in total.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_generic_identity_frames.json` | 68 populated frames: 12 generic families and five concrete-argument cases, each as root, Vec, Some and BTreeMap | `a54a824b4c6006dc022cba9306ed722cb4acdfc6dd4c8187442fba75da9e0cf9` |
-| `fhe_provenance_identity_frames.json` | Five actual FHE signing preimages | `70abb7bee6935e909fa22e5fc58e5c8794c23a7ad387f5317f60ea48390dc2ed` |
+| `model_generic_identity_frames.json` | 68 current canonical populated frames | `982eb45b2c8c217ac66704a41e3fd7850f651a6e6b16d704fe0b28a94238f731` |
+| `fhe_provenance_identity_frames.json` | Five actual FHE signing preimages | `bd71e00979ea12bbd3eff32144291cfd70ca474d717a768f91e2ad7e66bd7fb0` |
 
-The generic owners are MetadataChanged, Validate and Mismatch. Their recorded names
-include the actual private model scopes. Concrete argument declarations cover RwaId,
-SignedTransaction, AnyQueryBox and TransactionDomain, including both domain variants.
-TriggerId and InstructionBox names are captured inside their generic frames. The
-instruction root declaration preserves its existing wire-ID/payload-pair projection;
-its containers retain the nominal instruction name. A separate root test checks both
-codec directions, roundtrip bytes, truncation and incorrect-header rejection.
-Metadata covers all seven current target aliases. Executor inputs include nonempty
-instructions, a query and a deterministic signed transaction with a fixed timestamp.
-These values demonstrate codec behavior; they do not establish transaction acceptance.
+The generic owners are MetadataChanged, Validate and Mismatch. Concrete arguments
+include RwaId, SignedTransaction, AnyQueryBox and TransactionDomain. InstructionBox
+uses its canonical wire-ID/payload-pair root projection; containers retain the
+nominal instruction identity. Metadata covers seven target aliases. Executor
+inputs contain instructions, a query and a deterministic signed transaction.
 
-`actual_type_name` records the original compiler name. Permanent tests compare the
-explicit nominal declaration against that saved value, allowing physical source moves
-without changing the declaration. The tests compare both directional hashes, bare
-payloads and complete frames, and exercise decoding/re-encoding. Wrong headers and
-truncated inputs are rejected. Marker-only checks require no payload codecs; equal
-String/Box<str> payloads retain distinct nominal arguments inside generic frames.
+Tests compare explicit nominal identities, both codec directions, adaptive
+payloads and complete canonical frames. They decode and re-encode each frame,
+and reject wrong headers and truncation. Marker-only checks require no payload
+codec; equal String and Box<str> payloads retain distinct nominal arguments.
 
-The private borrowed FHE helper is encoding-only. Its captured name retains the erased
-lifetime slot. The initial attempted decoder-hash capture failed because the borrowed
-fields cannot meet the derived higher-ranked decoder bound; no decoder hash or owned
-roundtrip is claimed. After the successful encoding capture, that unusable Decode
-derive was removed. The tests compare every frame to the public signing-preimage
-function and retain distinct ordered/reversed execution-proof cases. The supplied
-proof records are codec fixtures, not verified cryptographic evidence.
+The borrowed FHE helper is encoding-only. Its erased lifetime slot is part of
+its nominal identity. Tests compare its frames with the public signing-preimage
+function and distinguish ordered and reversed execution proofs. Supplied proof
+records and transaction values are codec fixtures and carry no authorization or
+execution claim.
 
-Five model identity tests and four adjacent query identity tests pass on one rebuilt
-default-feature artifact, with all 5,613 selected inputs unchanged. The same artifact
-passes ten participant-settlement tests and the removed recursive-layout rejection
-test with no stack override. These declarations do not switch active codec dispatch.
-Remaining owner coverage, other feature selections, the atomic trait cutover and
-physical model extraction remain required.
+The exact preceding fixture and original documentation are preserved under
+[the September 30 historical record](../../../../docs/history/2026-09-30/codec-fixtures-before-unit-repair/).
+Earlier component test counts apply only to their original candidate. Current
+captures and tests use the current canonical wire layout; historical frames are
+never decoder inputs or compatibility paths.

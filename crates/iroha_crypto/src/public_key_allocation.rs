@@ -2,10 +2,10 @@
 
 use std::alloc::Layout;
 
-use iroha_primitives::const_vec::ConstVec;
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationCharge, ChargedBuffer, ChargedBufferFromChargeError,
 };
+use iroha_primitives::const_vec::ConstVec;
 
 use super::{PublicKey, PublicKeyCompact};
 

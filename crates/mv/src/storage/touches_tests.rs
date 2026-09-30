@@ -1,7 +1,8 @@
 //! Actual finite key/array owners for the original transaction touch metadata.
 
 use super::*;
-use crate::allocation::{AllocationBudget, AllocationReservation, without_allocations};
+use crate::allocation_test_support::without_allocations;
+use iroha_allocation::{AllocationBudget, AllocationReservation};
 use std::{
     cmp::Ordering,
     panic::{AssertUnwindSafe, catch_unwind},

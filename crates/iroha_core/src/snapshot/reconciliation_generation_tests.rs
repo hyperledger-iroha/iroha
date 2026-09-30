@@ -181,7 +181,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         .expect("persist retained prefix block");
     let prefix_hash = block1.hash();
     let error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &snapshot_store_dir,
@@ -601,7 +601,7 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
     let expected_chain_id = state.chain_id.clone();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let snapshot_state = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1161,7 +1161,7 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
     let key_pair = checked_random_snapshot_keypair();
     let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x21));
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         store_dir,
@@ -1194,7 +1194,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     let corrupted = [1, 4, 1, 2, 3, 4, 1, 4];
     write_snapshot_bundle_from_bytes(&store_dir, &corrupted, &key_pair);
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1231,7 +1231,7 @@ async fn checksum_mismatch_rejected() {
     )
     .unwrap();
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1267,7 +1267,7 @@ async fn network_id_mismatch_rejected() {
     let expected_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x42));
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1326,7 +1326,7 @@ async fn missing_checksum_rejected() {
     ))
     .unwrap();
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1365,7 +1365,7 @@ async fn missing_merkle_rejected() {
     ))
     .unwrap();
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1404,7 +1404,7 @@ async fn merkle_root_mismatch_rejected() {
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1443,7 +1443,7 @@ async fn merkle_leaf_count_mismatch_rejected() {
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1479,7 +1479,7 @@ async fn merkle_chunk_size_mismatch_rejected() {
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,

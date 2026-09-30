@@ -895,7 +895,12 @@ mod tests {
         let (len, hash) = (wire.len() as u64, Hash::new(&wire));
         // A node-local commit certificate does not change the committed identity.
         let stored = block.clone().with_commit_certificate(Some(
-            crate::block::CommitCertificate::from_untrusted_parts(vec![1], vec![2], vec![3]),
+            crate::block::CommitCertificate::from_untrusted_parts(
+                vec![1],
+                vec![2],
+                vec![3],
+                vec![4],
+            ),
         ));
         for candidate in [&block, &stored] {
             let anchor = TrustedBlockProofAnchor::from_committed_execution(
@@ -1050,6 +1055,7 @@ mod tests {
             certificate.consensus_header().to_vec(),
             norito::encode_canonical(&qc).unwrap(),
             certificate.result_preimage().to_vec(),
+            certificate.availability().to_vec(),
         )));
         proof.block_wire = block.encode_wire().unwrap();
         let mut verifier = native.verifier();

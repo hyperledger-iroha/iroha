@@ -379,7 +379,7 @@ where
     let root = leaf.cast::<Node<usize, V, Charge>>();
     let source = SuperBlock::<usize, V, Prepaid<Policy>>::from_leaf_test(root, size, txid);
     let charges = InitialCharges {
-        notification: crate::release::ReleaseNotification::new_charged(
+        notification: iroha_allocation::release::ReleaseNotification::new_charged(
             provider.take_node_charge(layouts.notification),
         ),
         root: provider.take_node_charge(layouts.root),

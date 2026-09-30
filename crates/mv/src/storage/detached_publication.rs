@@ -1,6 +1,7 @@
 //! Caller-owned exact retained map-pair preparation with no successor copies.
 use super::*;
-use concread::{bptree::BptreeMapOwnedAcquisition, release::DeferredReleaseBatch};
+use concread::bptree::BptreeMapOwnedAcquisition;
+use iroha_allocation::release::DeferredReleaseBatch;
 
 enum Role<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> {
     Owned(BptreeMapOwned<K, V, M>),

@@ -49,8 +49,8 @@ mod call_runtime;
 mod input_cursor;
 #[cfg(test)]
 mod snapshot;
+use iroha_allocation::AllocationBudget;
 use likely_stable::unlikely;
-use mv::allocation::AllocationBudget;
 #[cfg(feature = "beep")]
 use rodio::{
     OutputStream, OutputStreamBuilder, Sink, Source, StreamError, mixer::Mixer, source::SineWave,
@@ -3389,7 +3389,7 @@ impl IVM {
     /// internal trace geometry or physical allocation before publishing a copy.
     pub fn try_diagnostic_snapshot(
         &self,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<zk::DiagnosticTraceSnapshot, VMError> {
         if self
             .memory

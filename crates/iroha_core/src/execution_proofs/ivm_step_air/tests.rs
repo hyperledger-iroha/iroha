@@ -311,12 +311,12 @@ fn diagnostic_immediate_statement(opcode: u8, rd: u8, rs1: u8, imm: i8) -> AluSt
 }
 
 fn diagnostic_step_statement(word: u32) -> AluStepStatement {
+    use iroha_allocation::AllocationBudget;
     use ivm::{
         IVM,
         execution_step_recorder::{DiagnosticStepRecord, DiagnosticStepRecorder},
         host::DefaultHost,
     };
-    use mv::allocation::AllocationBudget;
 
     let instructions = [
         ivm::encoding::wide::encode_ri(wide::arithmetic::ADDI, 1, 0, 2),

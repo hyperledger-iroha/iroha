@@ -9,8 +9,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, WorldReadOnly},
-    zk::test_utils::{FixtureEnvelope, halo2_fixture_envelope},
 };
+use iroha_core_zk::test_utils::{FixtureEnvelope, halo2_fixture_envelope};
 use iroha_data_model::{
     ValidationFail,
     confidential::ConfidentialStatus,
@@ -72,7 +72,7 @@ fn build_vk_record(
     vk_box: iroha_data_model::proof::VerifyingKeyBox,
     schema_hash: [u8; 32],
 ) -> iroha_data_model::proof::VerifyingKeyRecord {
-    let commitment = iroha_core::zk::hash_vk(&vk_box);
+    let commitment = iroha_core_zk::hash_vk(&vk_box);
     let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
         1,
         TINY_ADD_CIRCUIT_ID,
@@ -232,7 +232,7 @@ fn verifyproof_isi_records_proof() {
     // Apply transaction and ensure a proof record exists
     let pid = iroha_data_model::proof::ProofId {
         backend: "halo2/ipa".into(),
-        proof_hash: iroha_core::zk::hash_proof(&proof_box),
+        proof_hash: iroha_core_zk::hash_proof(&proof_box),
     };
     assert!(stx.world.proofs().get(&pid).is_some());
 }
@@ -966,7 +966,7 @@ fn verifyproof_records_rejected_malformed_halo2_envelope() {
         .expect("verify should record even if rejected");
     let pid = iroha_data_model::proof::ProofId {
         backend: attachment.backend,
-        proof_hash: iroha_core::zk::hash_proof(&attachment.proof),
+        proof_hash: iroha_core_zk::hash_proof(&attachment.proof),
     };
     let rec = stx.world.proofs().get(&pid).expect("proof record exists");
     assert!(matches!(

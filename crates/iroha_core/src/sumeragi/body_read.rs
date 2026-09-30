@@ -2,11 +2,11 @@
 
 use std::{io, path::Path};
 
+use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, BodyRestoration},
     message::ByteAdmissionError,
 };
-use mv::allocation::AllocationBudget;
 
 use super::{
     artifact_read::{ArtifactRead, ArtifactReadError},

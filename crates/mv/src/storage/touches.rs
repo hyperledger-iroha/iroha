@@ -6,8 +6,9 @@
 //! No-op and absent-to-absent keys remain present. Duplicate touches neither
 //! clone nor rewrite the retained first key. There is no growing iterator.
 
-use crate::{Key, Value, allocation::AllocationCharge};
+use crate::{Key, Value};
 use concread::bptree::{AllocationDemand, ClonePlanning, NodeCloning, NodeFunding, PlanningError};
+use iroha_allocation::AllocationCharge;
 use std::{alloc::Layout, mem::MaybeUninit, ptr, slice};
 
 // Field order is custody: payloads are drained by Drop, then the actual backing

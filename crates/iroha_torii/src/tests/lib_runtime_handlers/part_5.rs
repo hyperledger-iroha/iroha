@@ -3282,12 +3282,14 @@ fn tamper_native_ledger_certificate(
     let certificate = block.commit_certificate().unwrap();
     let header = certificate.consensus_header().to_vec();
     let result = certificate.result_preimage().to_vec();
+    let availability = certificate.availability().to_vec();
     let mut qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     mutate(&mut qc);
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
         header,
         norito::encode_canonical(&qc).unwrap(),
         result,
+        availability,
     )));
     let changed = block.encode_wire().unwrap();
     assert_eq!(

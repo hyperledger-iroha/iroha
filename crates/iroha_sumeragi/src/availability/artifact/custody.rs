@@ -8,10 +8,10 @@ use crate::{
     message::BlockHeader,
     types::{Hash32, HeightConfig},
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_primitives::erasure::rs16::compact::{
     CodecAllocationError, encode_funded, reconstruct_funded,
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 
 /// Immutable original-funded body usable after the existing durable-body barrier.
 /// Construction consumes exact authenticated reconstruction; cloning shares the backing.

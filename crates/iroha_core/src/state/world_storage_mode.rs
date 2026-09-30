@@ -31,7 +31,7 @@ pub(super) trait WorldStorageMode<K: Key, V: Value>:
     fn publication_slot<'a>(
         original: mv::storage::Detached<K, V, (), Self>,
         target: &'a Storage<K, V, Self>,
-        scope: &mv::allocation::OwnedAllocationScope,
+        scope: &iroha_allocation::OwnedAllocationScope,
     ) -> Self::Slot<'a>;
     fn try_prepare(slot: &mut Self::Slot<'_>) -> Result<(), Refusal>;
     fn release_writers(slot: &mut Self::Slot<'_>);
@@ -52,7 +52,7 @@ impl<K: Key, V: Value> WorldStorageMode<K, V> for Untracked {
     fn publication_slot<'a>(
         original: mv::storage::Detached<K, V, ()>,
         target: &'a Storage<K, V>,
-        _scope: &mv::allocation::OwnedAllocationScope,
+        _scope: &iroha_allocation::OwnedAllocationScope,
     ) -> Self::Slot<'a> {
         original.publication_slot(target)
     }
@@ -110,7 +110,7 @@ where
     fn publication_slot<'a>(
         original: mv::storage::Detached<K, V, (), Self>,
         target: &'a Storage<K, V, Self>,
-        scope: &mv::allocation::OwnedAllocationScope,
+        scope: &iroha_allocation::OwnedAllocationScope,
     ) -> Self::Slot<'a> {
         let result = original.try_publication_slot_owned(scope, target);
         match result {

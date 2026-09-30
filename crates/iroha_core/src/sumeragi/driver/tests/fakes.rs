@@ -351,7 +351,7 @@ pub struct ExecState {
 pub struct FakeExecutor {
     /// The shared state.
     pub state: Arc<Mutex<ExecState>>,
-    pub budget: mv::allocation::AllocationBudget,
+    pub budget: iroha_allocation::AllocationBudget,
     gate: Arc<(std::sync::Mutex<bool>, Condvar)>,
     waiting: Arc<AtomicUsize>,
 }
@@ -640,7 +640,7 @@ impl crate::sumeragi::durable_artifact::BodyReadJob for FakeRead {
     }
     fn poll(
         &mut self,
-        _: &mv::allocation::AllocationBudget,
+        _: &iroha_allocation::AllocationBudget,
     ) -> Result<
         crate::sumeragi::durable_artifact::BodyReadPoll,
         crate::sumeragi::durable_artifact::BodyReadError,

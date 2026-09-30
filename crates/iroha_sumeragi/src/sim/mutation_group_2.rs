@@ -74,7 +74,7 @@ struct Rig {
     topo: Topology,
     me: ValidatorIndex,
     core: Core,
-    budget: mv::allocation::AllocationBudget,
+    budget: iroha_allocation::AllocationBudget,
     now: Millis,
     local: LocalParams,
     pending: Vec<(u64, AvailableBody)>,
@@ -127,7 +127,7 @@ impl Rig {
             ],
             recent_headers: Vec::new(),
         };
-        let budget = mv::allocation::AllocationBudget::new(1 << 28);
+        let budget = iroha_allocation::AllocationBudget::new(1 << 28);
         let (core, actions) = Core::new(
             local,
             init,

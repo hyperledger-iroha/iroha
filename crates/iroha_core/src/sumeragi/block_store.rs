@@ -11,6 +11,7 @@ use super::{
     driver::{SharedCrypto, serve, traits::BlockStore},
 };
 use crate::kura::Kura;
+use iroha_allocation::AllocationBudget;
 #[cfg(test)]
 use iroha_data_model::block::CommitCertificate;
 use iroha_data_model::{block::SignedBlock, sumeragi_finality::result_of_preimage};
@@ -20,7 +21,6 @@ use iroha_sumeragi::{
     message::{BlockHeader, PayloadManifest, Qc, SyncEntry},
     types::Hash32,
 };
-use mv::allocation::AllocationBudget;
 use parking_lot::Mutex;
 use std::{io, num::NonZeroUsize, sync::Arc};
 #[path = "block_store/body_read.rs"]

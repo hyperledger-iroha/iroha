@@ -16,8 +16,8 @@ use crate::{
     },
     sumeragi_lanes::SumeragiLaneState,
 };
+use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{message::Qc, types::AggregateSignature};
-use mv::allocation::AllocationBudget;
 use std::collections::BTreeMap;
 
 /// Independently construct the complete receipt path from actual ordinary writes.
@@ -97,6 +97,7 @@ fn resign_result(
         header,
         norito::encode_canonical(&qc).unwrap(),
         commitment.preimage().unwrap(),
+        certificate.availability().to_vec(),
     )));
     let mut proof = proof.clone();
     proof.block_wire = block.encode_wire().unwrap();
@@ -265,6 +266,7 @@ fn native_finality_refuses_unsigned_genesis_result_and_corrupt_original_certific
         certificate.consensus_header().to_vec(),
         norito::encode_canonical(&qc).unwrap(),
         certificate.result_preimage().to_vec(),
+        certificate.availability().to_vec(),
     )));
     finality.finality_proof.block_wire = block.encode_wire().unwrap();
     assert!(finality.validate_against(&anchor).is_err());

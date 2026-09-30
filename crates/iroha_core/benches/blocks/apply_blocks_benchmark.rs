@@ -60,7 +60,7 @@ fn large_world() -> World {
 fn state_commit(c: &mut Criterion) {
     let mut group = c.benchmark_group("state_commit");
     group.significance_level(0.1).sample_size(30);
-    let execution_budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let execution_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     group.bench_function("world_commit_noop_large_world", |b| {
         b.iter_batched(
             large_world,

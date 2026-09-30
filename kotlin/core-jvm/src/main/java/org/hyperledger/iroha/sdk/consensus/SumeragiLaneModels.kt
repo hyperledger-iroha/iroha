@@ -68,12 +68,27 @@ class SumeragiLaneFrontier internal constructor(
     override fun equalityFields(): List<Any?> = listOf(height, blockHash, result)
 }
 
+/** Mandatory signed RS16 geometry pinned into one lane incarnation. */
+class SumeragiDataAvailabilityLayout internal constructor(
+    @JvmField val encoding: String,
+    @JvmField val chunkSizeBytes: BigInteger,
+    @JvmField val dataShards: BigInteger,
+    @JvmField val parityShards: BigInteger,
+    @JvmField val maxPayloadSizeBytes: BigInteger,
+    @JvmField val maxChunkCount: BigInteger,
+) : SumeragiStatusValue() {
+    override fun equalityFields(): List<Any?> = listOf(
+        encoding, chunkSizeBytes, dataShards, parityShards, maxPayloadSizeBytes, maxChunkCount,
+    )
+}
+
 /** The committed lifecycle record of one lane incarnation (`specs/sumeragi_lanes.md` §2.1). */
 class SumeragiLaneRecord internal constructor(
     @JvmField val lane: BigInteger,
     @JvmField val dataspace: BigInteger,
     @JvmField val incarnation: String,
     @JvmField val params: SumeragiParameters,
+    @JvmField val daLayout: SumeragiDataAvailabilityLayout,
     committee: List<SumeragiLaneMember>,
     @JvmField val createdAt: BigInteger,
     @JvmField val activeFrom: BigInteger,
@@ -91,7 +106,7 @@ class SumeragiLaneRecord internal constructor(
     fun isClosing(): Boolean = closing != null
 
     override fun equalityFields(): List<Any?> = listOf(
-        lane, dataspace, incarnation, params, committee, createdAt, activeFrom, closing,
+        lane, dataspace, incarnation, params, daLayout, committee, createdAt, activeFrom, closing,
         anchorFreshness, merged, mergedAt, rescued,
     )
 }
@@ -126,7 +141,7 @@ class SumeragiLaneStatus internal constructor(
 private object NativeLaneParser {
     private val statusFields = setOf("record", "instance")
     private val recordFields = setOf(
-        "lane", "dataspace", "incarnation", "params", "committee", "created_at", "active_from",
+        "lane", "dataspace", "incarnation", "params", "da_layout", "committee", "created_at", "active_from",
         "closing", "anchor_freshness", "merged", "merged_at", "rescued",
     )
     private val paramFields = setOf(
@@ -136,6 +151,9 @@ private object NativeLaneParser {
         "epoch_length_blocks", "demotion_window",
     )
     private val memberFields = setOf("peer", "pop")
+    private val layoutFields = setOf(
+        "encoding", "chunk_size_bytes", "data_shards", "parity_shards", "max_payload_size_bytes", "max_chunk_count",
+    )
     private val frontierFields = setOf("height", "block_hash", "result")
     private const val BLS_NORMAL_PREFIX = "ea0130"
     private const val BLS_NORMAL_POP_BYTES = 96
@@ -162,11 +180,17 @@ private object NativeLaneParser {
         fun u64(name: String) = SumeragiJsonPrimitives.u64(r[name], "$context.$name")
         val committee = SumeragiJsonPrimitives.array(r["committee"], "$context.committee", MAX_COMMITTEE)
             .mapIndexed { index, member -> member(member, "$context.committee[$index]") }
+        val params = params(r["params"], "$context.params")
+        val layout = layout(r["da_layout"], "$context.da_layout")
+        require(params.maxBlockBytes <= layout.maxPayloadSizeBytes) {
+            "$context block limit exceeds its data-availability payload limit"
+        }
         return SumeragiLaneRecord(
             SumeragiJsonPrimitives.u32(r["lane"], "$context.lane"),
             u64("dataspace"),
             byte32(r["incarnation"], "$context.incarnation"),
-            params(r["params"], "$context.params"),
+            params,
+            layout,
             committee,
             u64("created_at"),
             u64("active_from"),
@@ -226,6 +250,36 @@ private object NativeLaneParser {
         require(Base64.getEncoder().encodeToString(bytes) == pop) { "$context.pop must be canonical base64" }
         require(bytes.size == BLS_NORMAL_POP_BYTES) { "$context.pop must be a 96-byte BLS-normal proof" }
         return SumeragiLaneMember(peer, bytes)
+    }
+
+    private fun layout(value: Any?, context: String): SumeragiDataAvailabilityLayout {
+        val r = SumeragiJsonPrimitives.exactObject(value, layoutFields, context)
+        val encoding = SumeragiJsonPrimitives.exactObject(r["encoding"], setOf("encoding", "details"), "$context.encoding")
+        require(encoding["encoding"] == "reed_solomon16" && encoding["details"] == null) {
+            "$context encoding must be Reed-Solomon16"
+        }
+        val chunk = SumeragiJsonPrimitives.u32(r["chunk_size_bytes"], "$context.chunk_size_bytes")
+        val data = SumeragiJsonPrimitives.u32(r["data_shards"], "$context.data_shards")
+        val parity = SumeragiJsonPrimitives.u32(r["parity_shards"], "$context.parity_shards")
+        val payload = SumeragiJsonPrimitives.u64(r["max_payload_size_bytes"], "$context.max_payload_size_bytes")
+        val chunks = SumeragiJsonPrimitives.u32(r["max_chunk_count"], "$context.max_chunk_count")
+        fun within(value: BigInteger, minimum: Long, maximum: Long): Boolean =
+            value >= BigInteger.valueOf(minimum) && value <= BigInteger.valueOf(maximum)
+        require(within(chunk, 2, 256 * 1024) && !chunk.testBit(0) && within(data, 1, 16) &&
+            within(parity, 1, 16) && within(payload, 1, 16 * 1024 * 1024) && within(chunks, 1, 1024)) {
+            "$context exceeds protocol bounds"
+        }
+        // Protocol caps above make every product fit in a signed Long.
+        val stripeBytes = data.toLong() * chunk.toLong()
+        val full = payload.toLong() / stripeBytes
+        val remainder = payload.toLong() % stripeBytes
+        val stripes = full + if (remainder > 0) 1 else 0
+        val terminalRow = 2 * ((remainder + 2 * data.toLong() - 1) / (2 * data.toLong()))
+        val width = data.toLong() + parity.toLong()
+        require(stripes * width <= chunks.toLong() && (full * chunk.toLong() + terminalRow) * width <= 32 * 1024 * 1024) {
+            "$context geometry exceeds protocol bounds"
+        }
+        return SumeragiDataAvailabilityLayout("reed_solomon16", chunk, data, parity, payload, chunks)
     }
 
     private fun frontier(value: Any?, context: String): SumeragiLaneFrontier {

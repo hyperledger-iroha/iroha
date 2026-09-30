@@ -272,7 +272,7 @@ impl Fixture {
             attest: false,
         };
         let budget = self.chain.state().ivm_execution_budget();
-        let mut original = mv::allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        let mut original = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
         original.append(&payload).unwrap();
         let payload = PayloadBytes::from_charged(original, &budget)
             .unwrap_or_else(|_| panic!("original fixture lane payload backing/control"));

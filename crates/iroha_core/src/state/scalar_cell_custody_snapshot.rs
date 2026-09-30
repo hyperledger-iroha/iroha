@@ -62,7 +62,8 @@ fn noncanonical(parser: &Parser<'_>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::{allocation::AllocationBudget, cell::CellInitialization};
+    use iroha_allocation::AllocationBudget;
+    use mv::cell::CellInitialization;
 
     #[test]
     fn complete_layout_matches_actual_charged_cell_codec_and_both_cuts() {

@@ -4,7 +4,7 @@ use super::{
     DigestEntry, Hash, KEY_DOMAIN, MAX_NORITO_TREE_ENTRIES, NoritoKeyRangeError, branch_hash,
     digest_frame, leaf_hash, pad_hash,
 };
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationRefusal, AllocationReservation, ChargedBuffer,
     InsufficientReservation,
 };

@@ -230,7 +230,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         None,
         iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
             &witness,
-            &mv::allocation::AllocationBudget::new(64 * 1024),
+            &iroha_allocation::AllocationBudget::new(64 * 1024),
         )
         .unwrap(),
     )
@@ -397,7 +397,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
             attest: boundary.is_some(),
         };
         let budget = world.ivm_execution_budget();
-        let mut backing = mv::allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        let mut backing = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
         backing.append(&payload).unwrap();
         let payload = PayloadBytes::from_charged(backing, &budget)
             .unwrap_or_else(|_| panic!("original historical fixture payload admission"));
@@ -433,7 +433,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
             beacon,
             iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
                 &witness,
-                &mv::allocation::AllocationBudget::new(64 * 1024),
+                &iroha_allocation::AllocationBudget::new(64 * 1024),
             )
             .unwrap(),
         )

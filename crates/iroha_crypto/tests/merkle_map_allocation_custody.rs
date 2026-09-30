@@ -1,7 +1,7 @@
 //! Physical allocator refusal, rollback and final-release controls for resident maps.
 
+use iroha_allocation::{AllocationBudget, AllocationRefusal, PrepaidSharedError};
 use iroha_crypto::{Hash, MerkleMap, MerkleMapError};
-use mv::allocation::{AllocationBudget, AllocationRefusal, PrepaidSharedError};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::{Cell, RefCell},

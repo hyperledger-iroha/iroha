@@ -26,10 +26,10 @@ use iroha_sumeragi::{
 };
 
 std::thread_local! {
-    static TEST_BUDGET: mv::allocation::AllocationBudget = mv::allocation::AllocationBudget::new(1 << 28);
+    static TEST_BUDGET: iroha_allocation::AllocationBudget = iroha_allocation::AllocationBudget::new(1 << 28);
 }
 /// One original pool retained by all fixture workers of this test instance.
-pub(super) fn test_budget() -> mv::allocation::AllocationBudget {
+pub(super) fn test_budget() -> iroha_allocation::AllocationBudget {
     TEST_BUDGET.with(Clone::clone)
 }
 /// Admit an actual nonempty builder result under the fixture's original pool.

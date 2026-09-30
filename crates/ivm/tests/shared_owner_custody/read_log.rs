@@ -1,7 +1,7 @@
 //! Actual read-row allocator refusal and final backing/credit release ordering.
 
 use super::{Layout, SERIAL, SeqCst, memory_stats};
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 use std::{
     cell::Cell,
     sync::{Arc, OnceLock, atomic::AtomicUsize},

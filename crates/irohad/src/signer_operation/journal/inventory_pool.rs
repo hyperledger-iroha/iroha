@@ -11,8 +11,8 @@ use std::{
     },
 };
 
+use iroha_allocation::{AllocationBudget, AllocationReservation};
 use iroha_config::parameters::actual::SorafsSignerJournalInventory;
-use mv::allocation::{AllocationBudget, AllocationReservation};
 
 use super::{
     Directory, MAX_JOURNAL_PATH_BYTES, MAX_JOURNAL_PATH_COMPONENTS, SignerReceiptJournalErrorV1,

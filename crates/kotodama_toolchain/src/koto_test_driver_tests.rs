@@ -2603,7 +2603,7 @@ fn invocation_alias_decoding_preserves_read_deferral_before_test_failure() {
             None,
             HashMap::new(),
         );
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let mut vm = IVM::try_new_with_memory_budget(u64::MAX, &budget).unwrap();
         let envelope = make_tlv(PointerType::Blob, b"unknown");
         vm.memory.preload_input(0, &envelope).unwrap();

@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::execution_attempt::{ExecutionAttemptError, ExecutionDeferred, vm_attempt_error};
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use ivm::{VMError, error::ExecutionDeferral};
-use mv::allocation::{AllocationBudget, AllocationRefusal};
 
 const FUNDED_BYTES: usize = 128 * 1024 * 1024;
 

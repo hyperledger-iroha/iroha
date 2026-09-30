@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .native_sumeragi import SumeragiStatus, SumeragiFootprint, SumeragiBeaconHorizon, SumeragiHaltReason, parse_native_status_json
-from .native_sumeragi import SumeragiLaneStatus, SumeragiLaneRecord, SumeragiLaneMember, SumeragiLaneFrontier, SumeragiParameters, parse_native_lanes_json
+from .native_sumeragi import SumeragiLaneStatus, SumeragiLaneRecord, SumeragiLaneMember, SumeragiLaneFrontier, SumeragiParameters, SumeragiDataAvailabilityLayout, parse_native_lanes_json
 from .iroha_hash import iroha_hash_bytes as _iroha_hash_bytes
 
 import base64
@@ -676,7 +676,7 @@ def inspect_i105_network_prefix(
 
 __all__ = [
     "SumeragiStatus", "SumeragiFootprint", "SumeragiBeaconHorizon", "SumeragiHaltReason",
-    "SumeragiLaneStatus", "SumeragiLaneRecord", "SumeragiLaneMember", "SumeragiLaneFrontier", "SumeragiParameters",
+    "SumeragiLaneStatus", "SumeragiLaneRecord", "SumeragiLaneMember", "SumeragiLaneFrontier", "SumeragiParameters", "SumeragiDataAvailabilityLayout",
     "ToriiClient",
     "TairaTestnetProfile",
     "TAIRA_TESTNET_PROFILE",

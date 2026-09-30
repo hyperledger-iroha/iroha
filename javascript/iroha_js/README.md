@@ -2096,6 +2096,9 @@ qualification remain open.
 
 ## Advanced Sumeragi Observability
 
+`getSumeragiLanes()` requires every current record field, including the committed
+`da_layout` RS16 encoding and resource bounds. Lane observations do not confer finality.
+
 Torii exposes additional consensus observability endpoints. The JS SDK mirrors
 them so operators can inspect key observations and on-chain parameters without
 bespoke fetch plumbing:
@@ -3999,7 +4002,7 @@ console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the zero-skip hermetic profile. Release CI separately provisions and runs the 1 GiB and live qualification profiles.
 - Test the declared minimum Node 20.19.0 and the existing Node 20, 22 and 24 CI lines alongside the `rust-toolchain.toml` version. These selectors do not establish release qualification; retain the exact runtime version and matching-candidate results.
-- Use `node scripts/run-test-profile.mjs unit` for quick hermetic runs when native artifacts are already built. Raw `node --test` intentionally selects the fail-closed live and 1 GiB lanes as well.
+- Use `node scripts/run-test-profile.mjs unit` for quick hermetic runs when native artifacts are already built. The profile refreshes `dist` from the current source before testing packaged browser exports. Raw `node --test` intentionally selects the fail-closed live and 1 GiB lanes as well.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `specs/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
 

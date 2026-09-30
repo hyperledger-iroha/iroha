@@ -2265,6 +2265,7 @@ mod tests {
         group::{Curve as _, Group as _},
         pasta::{Ep, EpAffine, Eq, EqAffine, Fp, Fq},
     };
+    use iroha_allocation::AllocationBudget;
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature,
         bls_normal_aggregate_signatures,
@@ -2304,7 +2305,6 @@ mod tests {
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_sumeragi::{message::Qc, types::AggregateSignature};
-    use mv::allocation::AllocationBudget;
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
     use snark_verifier::{loader::native::NativeLoader, pcs::ipa::IpaAccumulator};
 

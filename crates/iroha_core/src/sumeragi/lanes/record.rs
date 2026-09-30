@@ -6,6 +6,7 @@
 
 use std::fmt;
 
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_sumeragi::{
     availability::{
         AvailabilityFrame, AvailabilitySource, AvailableBody, BodyRestoration, PayloadBytes,
@@ -13,7 +14,6 @@ use iroha_sumeragi::{
     crypto::Crypto,
     message::{BlockHeader, ByteAdmissionError, Qc, VoteKind},
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 use crate::sumeragi::durable_record_codec::{BytesRef, FieldRef, FixedWriter};
 

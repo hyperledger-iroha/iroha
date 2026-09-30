@@ -145,6 +145,7 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
+iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 iroha_musubi_service = { workspace = true }
 iroha_storage_client = { workspace = true }

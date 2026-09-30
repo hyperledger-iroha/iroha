@@ -690,7 +690,7 @@ fn borrowed_world_tail_matches_move_only_preparation_and_retains_publication_rec
         let mut world = state.world.block();
         let effects = PreparedWorldCommit::prepare_overlay(
             &mut world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             1,

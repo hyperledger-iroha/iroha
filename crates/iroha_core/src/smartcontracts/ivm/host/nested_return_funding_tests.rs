@@ -42,7 +42,7 @@ seiyaku Callee {
 #[test]
 fn prepaid_nested_return_refuses_before_checkout_effects_and_gas_then_retries() {
     let (state, authority, caller, callee) = nested_return_funding_fixture();
-    let budget = mv::allocation::AllocationBudget::new(0);
+    let budget = iroha_allocation::AllocationBudget::new(0);
     let cache = PreparedContractCache::with_execution_budget(1, budget.clone());
     let (refused, vm, effects) = call_contract_syscall_with_prepared_cache(
         &state,
@@ -146,7 +146,7 @@ fn prepaid_nested_return_refuses_before_checkout_effects_and_gas_then_retries() 
 #[test]
 fn prepaid_nested_return_is_released_when_child_effects_roll_back() {
     let (state, authority, caller, callee) = nested_return_funding_fixture();
-    let budget = mv::allocation::AllocationBudget::new(128 * 1024 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
     let cache = PreparedContractCache::with_execution_budget(1, budget.clone());
     let (result, vm, effects) = call_contract_syscall_with_prepared_cache(
         &state,

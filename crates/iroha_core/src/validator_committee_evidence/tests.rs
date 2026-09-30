@@ -228,7 +228,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         None,
         iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
             &witness,
-            &mv::allocation::AllocationBudget::new(64 * 1024),
+            &iroha_allocation::AllocationBudget::new(64 * 1024),
         )
         .unwrap(),
     )
@@ -378,7 +378,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
         .height_config()
         .unwrap();
         let budget = state.ivm_execution_budget();
-        let mut backing = mv::allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        let mut backing = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
         backing.append(&payload).unwrap();
         let charged_payload = PayloadBytes::from_charged(backing, &budget)
             .unwrap_or_else(|_| panic!("original committee fixture payload admission"));
@@ -411,7 +411,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             pulse,
             iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
                 &witness,
-                &mv::allocation::AllocationBudget::new(64 * 1024),
+                &iroha_allocation::AllocationBudget::new(64 * 1024),
             )
             .unwrap(),
         )

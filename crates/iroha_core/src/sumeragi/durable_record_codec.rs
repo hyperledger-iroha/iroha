@@ -1,10 +1,10 @@
 //! Bounded canonical record fields and direct fixed-buffer serialization shared by stores.
 
+use iroha_allocation::ChargedBuffer;
 use iroha_sumeragi::{
     message::BlockHeader,
     types::{MAX_COMMITTEE_SIZE, MAX_CONTROL_WITNESS_BYTES, MAX_PUBLIC_KEY_LEN},
 };
-use mv::allocation::ChargedBuffer;
 use norito::core as ncore;
 use std::{io, ops::Range};
 

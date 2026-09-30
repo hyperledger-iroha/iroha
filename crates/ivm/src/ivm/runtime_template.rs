@@ -45,7 +45,7 @@ pub(super) struct RuntimeTemplateBacking {
 impl RuntimeTemplate {
     pub(super) fn owner_allocation_bytes() -> Result<usize, crate::VMError> {
         let overflow = || {
-            crate::VMError::AllocationDeferred(mv::allocation::AllocationRefusal::DemandOverflow)
+            crate::VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::DemandOverflow)
         };
         let data = norito::core::owned_arc_allocation_bytes::<RuntimeTemplateData>()
             .map_err(|_| overflow())?;

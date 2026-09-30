@@ -2,11 +2,11 @@
 
 use std::io;
 
+use iroha_allocation::ChargedBuffer;
 use iroha_sumeragi::{
     availability::{AuthoringError, PayloadAuthoring, PayloadBytes},
     types::HeightConfig,
 };
-use mv::allocation::ChargedBuffer;
 
 use super::*;
 
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(body.payload().as_slice(), payload);
         assert!(!body.availability().as_slice().is_empty());
         assert!(body.admitted_to(&chain.state.ivm_execution_budget()));
-        assert!(!body.admitted_to(&mv::allocation::AllocationBudget::new(1 << 27)));
+        assert!(!body.admitted_to(&iroha_allocation::AllocationBudget::new(1 << 27)));
     }
 
     /// Cold replay uses the exact original certificate and target-funded restoration, not re-signing.

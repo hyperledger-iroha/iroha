@@ -5,7 +5,7 @@
 
 use super::fixture;
 use crate::state::{State, storage_transactions};
-use concread::release::DeferredRelease;
+use iroha_allocation::release::DeferredRelease;
 use iroha_data_model::parameter::Parameters;
 use mv::{PublicationCleanup, PublicationPreparationError};
 use std::{

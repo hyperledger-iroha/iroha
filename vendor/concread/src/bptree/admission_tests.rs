@@ -30,7 +30,7 @@ impl ClonePlanning<usize, usize> for ScalarPolicy {
 
 #[test]
 fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
-    use crate::release::ReleaseNotification;
+    use iroha_allocation::release::ReleaseNotification;
     use std::{
         future::Future,
         pin::Pin,
@@ -77,7 +77,7 @@ fn acquired_admission_refusal_retains_actual_writer_and_deferred_release() {
 
 #[test]
 fn acquired_admission_busy_poison_and_unwind_preserve_real_custody() {
-    use crate::release::ReleaseNotification;
+    use iroha_allocation::release::ReleaseNotification;
     use std::{
         future::Future,
         pin::Pin,
@@ -1142,7 +1142,7 @@ fn writer_and_clear_generation_exhaustion_refuse_before_admission_or_allocation(
         inner: LinCowCell::new_charged(
             source,
             InitialCharges {
-                notification: crate::release::ReleaseNotification::default(),
+                notification: iroha_allocation::release::ReleaseNotification::default(),
                 root: Untracked,
                 reader: Untracked,
             },
@@ -2351,7 +2351,7 @@ mod writer_start {
             inner: LinCowCell::new_charged(
                 source,
                 InitialCharges {
-                    notification: crate::release::ReleaseNotification::default(),
+                    notification: iroha_allocation::release::ReleaseNotification::default(),
                     root: Untracked,
                     reader: Untracked,
                 },

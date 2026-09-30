@@ -40,7 +40,7 @@ fn probe(state: &Arc<State>) -> Arc<Probe> {
         blocked: AtomicBool::new(false),
     })
 }
-fn waits(state: &State) -> [concread::release::ReleaseWait; 2] {
+fn waits(state: &State) -> [iroha_allocation::release::ReleaseWait; 2] {
     [
         state.block_hashes.map().unwrap().observe_reader_release(),
         state.transactions.reader_release_wait_for_tests(),

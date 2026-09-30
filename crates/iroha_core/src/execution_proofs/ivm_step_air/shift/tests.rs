@@ -5,6 +5,7 @@ use crate::execution_proofs::stark::proof_managed_note_stark::{
     degree_audit::measured_maximum_affine_degree_v1, prove_proof_managed_note_stark_v1,
     verify_proof_managed_note_stark_v1,
 };
+use iroha_allocation::AllocationBudget;
 use ivm::{
     IVM, ProgramMetadata,
     execution_step_recorder::{
@@ -12,7 +13,6 @@ use ivm::{
     },
     host::DefaultHost,
 };
-use mv::allocation::AllocationBudget;
 
 const REGISTER_OPCODES: [u8; 5] = [
     wide::arithmetic::SLL,

@@ -9,12 +9,12 @@
 
 use std::{alloc::Layout, io, num::NonZeroU64};
 
-use concread::shared::Shared;
+use iroha_allocation::shared::Shared;
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use iroha_crypto::{
     Hash, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore, MerkleMapUpdateWorkspace,
     MerkleMapValueRef,
 };
-use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 
 use super::{
     CommittedMembershipRoot, Identity, Key, MembershipReadError, MembershipRootError,

@@ -10,8 +10,8 @@ use crate::{
     message::BlockHeader,
     types::{Hash32, HeightConfig, SIGNATURE_LEN},
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_primitives::erasure::rs16::compact::{CodecAllocationError, Encoded, encode_funded};
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 
 /// Authoring failure. Resource refusal retains the worker's original request and completed phases.
 #[derive(Debug)]

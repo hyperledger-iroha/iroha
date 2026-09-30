@@ -95,10 +95,11 @@ def test_complete_source_contract_baseline() -> None:
 
 
 def test_beacon_parliament_fixture_module_is_connected_to_production_guard() -> None:
-    """The full checker follows the compiled module and both canonical admissions."""
+    """The full checker follows real native shares and authenticated cold replay."""
     guard.require_beacon_parliament_pulse_fixtures(
-        guard.read("crates/iroha_core/src/beacon.rs"),
-        guard.read("crates/iroha_core/src/beacon/tests.rs"),
+        guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"),
+        guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"),
+        guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer/execution_tests.rs"),
     )
     body = ast.parse(inspect.getsource(guard.main))
     calls = [node.func.id for node in ast.walk(body)
@@ -108,43 +109,47 @@ def test_beacon_parliament_fixture_module_is_connected_to_production_guard() -> 
 
 @pytest.mark.parametrize("replacement", (
     "",
-    "#[cfg(any())]\npub(crate) mod tests;",
-    '#[path = "disconnected.rs"]\n#[cfg(test)]\npub(crate) mod tests;',
-    "#[cfg(test)]\npub(crate) mod other_tests;",
+    "#[cfg(any())]\nmod tests;",
+    '#[path = "disconnected.rs"]\n#[cfg(test)]\nmod tests;',
+    "#[cfg(test)]\nmod other_tests;",
 ))
 def test_beacon_parliament_fixture_module_cannot_be_disconnected(replacement: str) -> None:
     """Intact fixture text is insufficient when its compiled owner is removed."""
-    core = guard.read("crates/iroha_core/src/beacon.rs")
-    anchor = "#[cfg(test)]\npub(crate) mod tests;"
+    core = guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs")
+    anchor = "#[cfg(test)]\nmod tests;"
     assert core.count(anchor) == 1
     with pytest.raises(RuntimeError, match="original test module"):
         guard.require_beacon_parliament_pulse_fixtures(
             core.replace(anchor, replacement, 1) + "\n/* " + anchor + " */\n",
-            guard.read("crates/iroha_core/src/beacon/tests.rs"),
+            guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"),
+            guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer/execution_tests.rs"),
         )
 
 
-@pytest.mark.parametrize("declaration", (
-    "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
-    "fn assert_same_block_key_rotation_persists_requested_pulse(",
-))
-@pytest.mark.parametrize("original,replacement", (
-    (".put_parliament_attempt(attempt)", ".unchecked_parliament_attempt(attempt)"),
-    ('expect("persist the Parliament request and its beacon-slot index")', 'unwrap()'),
+@pytest.mark.parametrize("declaration,original,replacement", (
+    ("fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse()",
+     "Err(NativeBeaconError::AwaitingShares { height: 9 })", "Err(NativeBeaconError::Context)"),
+    ("fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse()",
+     "control::verify_result(&witness, None).is_err()", "true"),
+    ("fn native_active_session_from_a_foreign_real_committee_refuses_before_signing()",
+     "Err(NativeBeaconError::Source(_))", "Ok(None)"),
+    ("fn native_active_session_from_a_foreign_real_committee_refuses_before_signing()",
+     "count.load(Ordering::SeqCst) == 0", "true"),
 ))
 def test_beacon_parliament_fixture_admission_cannot_be_moved_to_disconnected_text(
     declaration: str, original: str, replacement: str,
 ) -> None:
-    """Each actual consumer retains its own admission and persistence assertion."""
-    path = "crates/iroha_core/src/beacon/tests.rs"
+    """Disconnected text cannot replace actual missing-work and custody refusals."""
+    path = "crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"
     fixtures = guard.read(path)
     body = guard.section(fixtures, declaration, "\n}\n", path)
-    assert body.count(original) == 1
-    changed = fixtures.replace(body, body.replace(original, replacement, 1), 1)
+    assert original in body
+    changed = fixtures.replace(body, body.replace(original, replacement), 1)
     changed += "\n/* " + original + " */\n"
     with pytest.raises(RuntimeError, match="missing modeled source binding"):
         guard.require_beacon_parliament_pulse_fixtures(
-            guard.read("crates/iroha_core/src/beacon.rs"), changed,
+            guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"), changed,
+            guard.read("crates/iroha_core/src/sumeragi/epoch_beacon/producer/execution_tests.rs"),
         )
 
 
@@ -834,45 +839,131 @@ def test_sccp_heartbeat_keeps_the_original_ordered_start_owner(
         guard.require_block_start_enactment_phases(source.replace(original, replacement, 1))
 
 
-BEACON_PATH = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+BEACON_PATH = "crates/iroha_core/src/sumeragi/epoch_beacon.rs"
+PRODUCER_PATH = "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
 
 
-def test_indexed_beacon_requirement_survives_deferred_activation() -> None:
-    """Both constructors, activation, and candidate attachment retain the original demand."""
-    guard.require_parliament_beacon_requirement(guard.read(BEACON_PATH))
+def test_indexed_beacon_requirement_survives_native_source_activation() -> None:
+    """The exact committed cut binds retained production and follower admission."""
+    guard.require_parliament_beacon_requirement(guard.read(BEACON_PATH), guard.read(PRODUCER_PATH))
     body = ast.parse(inspect.getsource(guard.main))
     calls = [node.func.id for node in ast.walk(body)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
     assert calls.count("require_parliament_beacon_requirement") == 1
 
 
-@pytest.mark.parametrize("old,new", (
-    ("npos_boundary_requested || parliament_requested", "npos_boundary_requested && parliament_requested"),
-    ("context.height.checked_add(1)", "context.height.checked_add(2)"),
-    (".get(&(logical_beacon_id, context.height))", ".get(&(logical_beacon_id, context.height + 1))"),
-    (".is_some_and(|attempts| !attempts.is_empty())", ".is_some_and(|attempts| attempts.is_empty())"),
-    ("let required_for_consensus = Self::required_for_height(context, state);",
-     "let required_for_consensus = false;"),
-    ("local_validator.is_some() && Self::required_for_height(context, state.as_ref())", "false"),
-    ("deferred_state: required_for_consensus.then_some(state)", "deferred_state: None"),
-    ("Err(error) => return Err(error),", "Err(_) => None,"),
-    ("if self.active.is_some() || !self.required_for_consensus", "if true"),
-    ("&self.context,\n            state,", "&self.context,\n            &replacement_state,"),
-    ("self.signer.clone(),\n        )?;", "self.signer.clone(),\n        ).unwrap();"),
-    ("        *self = activated;", "        drop(activated);"),
-    ("pub(crate) const fn pulse_required_for_consensus(&self) -> bool {\n        self.required_for_consensus",
-     "pub(crate) const fn pulse_required_for_consensus(&self) -> bool {\n        false"),
-    ("if self.pulse_required_for_consensus() && pulse.is_none()", "if false"),
-    ("effects.finalized_global_beacon_pulse = pulse;", "effects.finalized_global_beacon_pulse = None;"),
+@pytest.mark.parametrize("path,old,new", (
+    (BEACON_PATH, "height.checked_add(1)", "height.checked_add(2)"),
+    (BEACON_PATH, "Some(current.authorization.last_height))\n        || world",
+     "Some(current.authorization.last_height))\n        && world"),
+    (BEACON_PATH, ".get(&(BeaconSessionId::for_network_v1(&current.network_id), height))",
+     ".get(&(BeaconSessionId::for_network_v1(&current.network_id), height + 1))"),
+    (BEACON_PATH, ".is_some_and(|attempts| !attempts.is_empty())", ".is_some_and(|attempts| attempts.is_empty())"),
+    (BEACON_PATH, "let demanded = required(world, current, height);", "let demanded = false;"),
+    (BEACON_PATH, "return if demanded {", "return if false {"),
+    (BEACON_PATH, "if !demanded {", "if false {"),
+    (BEACON_PATH, "record.session.adaptive_dkg.session.authority_generation != current.authority.generation",
+     "false"),
+    (BEACON_PATH, ".parliament_unavailable_beacon_pulse_slots()", ".parliament_required_beacon_pulse_slots()"),
+    (BEACON_PATH, "pulse: Some(pulse),", "pulse: None,"),
+    (PRODUCER_PATH, "let parent = committed_block(state, applied.0)", "let parent = committed_block(other, applied.0)"),
+    (PRODUCER_PATH, "if parent.core_hash() != context.parent_hash || parent.result() != context.parent_result",
+     "if false"),
+    (PRODUCER_PATH, ".ready(context.height)", ".ready(context.height + 1)"),
+    (PRODUCER_PATH, "if self.prepared.as_ref() == Some(context)", "if true"),
+    (PRODUCER_PATH, "let active = if super::required(state.world(), current, context.height)",
+     "let active = if false"),
+    (PRODUCER_PATH, "super::validate_pending_slot(state.world(), current, context.height)", "Ok::<_, String>(())"),
+    (PRODUCER_PATH, "block_hash: parent.block_hash(),", "block_hash: other.block_hash(),"),
+    (PRODUCER_PATH, "        self.active = active;", "        drop(active);"),
+    (PRODUCER_PATH, "        self.prepared = Some(*context);", "        self.prepared = None;"),
+    (PRODUCER_PATH, "if self.prepared.as_ref() != Some(&source)", "if false"),
+    (PRODUCER_PATH, "height: context.height,\n            })?)", "height: context.height,\n            }).ok()?)"),
+    (PRODUCER_PATH, "Ok((control::encode(pulse)?, self.mandatory_attestation))", "Ok((control::encode(None)?, false))"),
 ))
-def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(old: str, new: str) -> None:
-    """Demand, original State activation, and missing-pulse refusal cannot be bypassed."""
-    source = guard.read(BEACON_PATH)
-    guard.require_parliament_beacon_requirement(source)
+def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(
+    path: str, old: str, new: str,
+) -> None:
+    """Indexed demand, actual source activation and missing-pulse refusal remain closed."""
+    beacon, producer = guard.read(BEACON_PATH), guard.read(PRODUCER_PATH)
+    guard.require_parliament_beacon_requirement(beacon, producer)
+    source = beacon if path == BEACON_PATH else producer
+    assert old in source
+    changed = source.replace(old, new)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_parliament_beacon_requirement(
+            changed if path == BEACON_PATH else beacon,
+            changed if path == PRODUCER_PATH else producer,
+        )
+
+
+@pytest.mark.parametrize("path,old,new", (
+    (PRODUCER_PATH.replace("producer.rs", "producer/tests.rs"),
+     '#[path = "execution_tests.rs"]\nmod execution_tests;', "mod other_tests;"),
+    (PRODUCER_PATH.replace("producer.rs", "producer/execution_tests.rs"),
+     "invalid(&mut worker, &replay, &missing);", "drop(missing);"),
+    (PRODUCER_PATH.replace("producer.rs", "producer/execution_tests.rs"),
+     'expect("cold executor reproduces the original certified pulse writes")', "unwrap()"),
+    (PRODUCER_PATH.replace("producer.rs", "producer/execution_tests.rs"),
+     'expect("completed publication is idempotent")', "unwrap()"),
+))
+def test_native_pulse_execution_fixtures_remain_connected(path: str, old: str, new: str) -> None:
+    """Missing-witness refusal and authenticated replay stay in their compiled owners."""
+    tests_path = PRODUCER_PATH.replace("producer.rs", "producer/tests.rs")
+    execution_path = PRODUCER_PATH.replace("producer.rs", "producer/execution_tests.rs")
+    fixtures, execution = guard.read(tests_path), guard.read(execution_path)
+    source = fixtures if path == tests_path else execution
     assert source.count(old) == 1
-    changed = source.replace(old, new, 1)
-    with pytest.raises(RuntimeError, match=BEACON_PATH):
-        guard.require_parliament_beacon_requirement(changed)
+    changed = source.replace(old, new, 1) + "\n/* " + old + " */\n"
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_beacon_parliament_pulse_fixtures(
+            guard.read(PRODUCER_PATH),
+            changed if path == tests_path else fixtures,
+            changed if path == execution_path else execution,
+        )
+
+
+PULSE_APPLICATION_PATH = "crates/iroha_core/src/sumeragi/schedule/execution.rs"
+BLOCK_PATH = "crates/iroha_core/src/block.rs"
+
+
+def test_native_pulse_application_has_one_verified_original_owner() -> None:
+    """Pristine capture precedes all writes; a second payload pulse is rejected."""
+    guard.require_native_pulse_application(guard.read(PULSE_APPLICATION_PATH), guard.read(BLOCK_PATH))
+    body = ast.parse(inspect.getsource(guard.main))
+    calls = [node.func.id for node in ast.walk(body)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    assert calls.count("require_native_pulse_application") == 1
+
+
+@pytest.mark.parametrize("path,old,new", (
+    (PULSE_APPLICATION_PATH, "source.header() != self._curr_block", "false"),
+    (PULSE_APPLICATION_PATH, "authenticate_successor_context(self, &self._curr_block, expected)?;", ""),
+    (PULSE_APPLICATION_PATH, "let current = &schedule.ready(height)?.epoch;", "let current = &other;"),
+    (PULSE_APPLICATION_PATH, "if let (Some(value), Some(link)) = (pulse.pulse(), pulse.link())",
+     "if let (Some(value), Some(link)) = (other.pulse(), other.link())"),
+    (PULSE_APPLICATION_PATH, ".insert(value.pulse_id, value);", ".insert(value.pulse_id, other);"),
+    (PULSE_APPLICATION_PATH, "                value.height,", "                value.height + 1,"),
+    (PULSE_APPLICATION_PATH, ".insert(slot, value.pulse_id);", ".insert(slot, other.pulse_id);"),
+    (PULSE_APPLICATION_PATH, ".insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);", ""),
+    (PULSE_APPLICATION_PATH, "self.sumeragi_schedule = ScheduleStep::Requested { captured, pulse };", ""),
+    (BLOCK_PATH, "|| block.header().global_beacon_pulse_hash().is_some()", "&& false"),
+    (BLOCK_PATH, 'return Err(Self::npos_effects_error(\n                    "native payload rejects a second beacon pulse owner",',
+     'drop(Self::npos_effects_error(\n                    "native payload rejects a second beacon pulse owner",'),
+))
+def test_native_pulse_application_rejects_source_or_journal_substitution(
+    path: str, old: str, new: str,
+) -> None:
+    """Comments and another source cannot substitute for proof, indexes or original custody."""
+    schedule, block = guard.read(PULSE_APPLICATION_PATH), guard.read(BLOCK_PATH)
+    source = schedule if path == PULSE_APPLICATION_PATH else block
+    assert old in source
+    changed = source.replace(old, new) + "\n/* " + old + " */\n"
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_native_pulse_application(
+            changed if path == PULSE_APPLICATION_PATH else schedule,
+            changed if path == BLOCK_PATH else block,
+        )
 
 
 STORAGE_PATH = "crates/mv/src/storage.rs"

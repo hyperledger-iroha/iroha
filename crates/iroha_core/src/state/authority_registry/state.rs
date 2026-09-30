@@ -105,9 +105,9 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Startup provenance latch; authenticated canonical_runtime retains effective lifecycle values"));
     nexus_storage_budget_last_check_height: AtomicU64 => ("state.nexus_storage_budget_last_check_height",
         Role::Local("Physical storage-budget scan scheduling cursor; storage refusal is local and cannot invalidate execution"));
-    evidence_preparation_budget: mv::allocation::AllocationBudget => ("state.evidence_preparation_budget",
+    evidence_preparation_budget: iroha_allocation::AllocationBudget => ("state.evidence_preparation_budget",
         Role::Local("Original process-local evidence preparation capacity; refusal cannot choose consensus validity"));
-    stake_index_budget: mv::allocation::AllocationBudget => ("state.stake_index_budget",
+    stake_index_budget: iroha_allocation::AllocationBudget => ("state.stake_index_budget",
         Role::Local("Original process-local flat stake-index capacity; canonical staking values are classified in World"));
     tiered_backend: Arc<PublicationMutex<TieredStateBackend>> => ("state.tiered_backend",
         Role::Local("Physical tiered storage and background persistence; logical authority stays in State and authenticated history"));

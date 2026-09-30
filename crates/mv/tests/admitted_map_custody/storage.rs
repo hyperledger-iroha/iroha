@@ -600,9 +600,11 @@ fn actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_image
         .checked_add(Undo::node_custody_allocation_demand().unwrap().bytes())
         .unwrap();
     let initial = NativeStorage::initial_allocation_demand().unwrap().bytes();
-    let identity = concread::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
+    let identity =
+        iroha_allocation::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
     let notification =
-        concread::release::ReleaseNotification::allocation_layout::<AllocationCharge>().size();
+        iroha_allocation::release::ReleaseNotification::allocation_layout::<AllocationCharge>()
+            .size();
     // Each physical current/undo writer and the joint publication mutex owns
     // its prepaid release source, beside the two identities and native maps.
     let expected = maps
@@ -2651,7 +2653,8 @@ fn storage_publication_identity_is_prepaid_and_retained_after_storage_drop() {
     reclaimed_since(0);
     // Only one owner and two distinct versions survive; duplicate observations
     // retain the original allocation rather than acquiring another charge.
-    let identity = concread::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
+    let identity =
+        iroha_allocation::shared::Shared::<(), Option<AllocationCharge>>::layout().size();
     assert_eq!(budget.reserved_bytes(), 3 * identity);
     without_allocations(|| drop(same));
     assert_eq!(budget.reserved_bytes(), 3 * identity);

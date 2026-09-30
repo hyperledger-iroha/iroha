@@ -54,7 +54,7 @@ use crate::{
 /// honours the guarantees of §12.3.
 #[allow(clippy::struct_excessive_bools)] // independent per-view and per-height flags of §6.0
 pub struct Core {
-    body_budget: mv::allocation::AllocationBudget,
+    body_budget: iroha_allocation::AllocationBudget,
     crypto: Box<dyn Crypto>,
     /// The node's attestor and the attestation verifier (§3.7).
     attestation: Attestation,

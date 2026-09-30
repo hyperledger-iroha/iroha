@@ -87,7 +87,7 @@ enum SnapshotJsonField<'a> {
 impl<'a> SnapshotJsonField<'a> {
     fn into_operation_index(
         self,
-        budget: mv::allocation::AllocationBudget,
+        budget: iroha_allocation::AllocationBudget,
         refusal: &std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     ) -> Result<OperationIndex, json::Error> {
         let result = match self {
@@ -158,7 +158,7 @@ impl<'a> SnapshotJsonField<'a> {
     }
     fn decode_transactions(
         self,
-        budget: mv::allocation::AllocationBudget,
+        budget: iroha_allocation::AllocationBudget,
     ) -> Result<TransactionsStorage, StateRestoreError> {
         let decoded: Result<TransactionsStorage, StateRestoreError> = (|| match self {
             Self::Borrowed { raw } => {
@@ -339,7 +339,7 @@ fn canonical_world_field_order() -> &'static [&'static str] {
 #[derive(Clone, Copy)]
 pub struct IvmSeed<'e, T> {
     pub ivm: &'e IVM,
-    pub operation_index_budget: &'e mv::allocation::AllocationBudget,
+    pub operation_index_budget: &'e iroha_allocation::AllocationBudget,
     pub operation_index_refusal: &'e std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     _marker: PhantomData<T>,
 }
@@ -360,9 +360,9 @@ impl IvmSeed<'_, TriggerSet> {
     }
 }
 pub struct KuraSeed {
-    pub operation_index_budget: mv::allocation::AllocationBudget,
+    pub operation_index_budget: iroha_allocation::AllocationBudget,
     /// Original caller-owned execution pool retained by the restored State.
-    pub execution_budget: mv::allocation::AllocationBudget,
+    pub execution_budget: iroha_allocation::AllocationBudget,
     pub kura: Arc<Kura>,
     /// Immutable configured manifest sources used before the first restored State view.
     pub lane_manifests: LaneManifestRegistryHandle,
@@ -399,8 +399,8 @@ mod state_snapshot_decode_error_tests {
         for height in [1, 2, 100] {
             let kura = crate::kura::Kura::blank_kura_for_testing();
             let seed = KuraSeed {
-                execution_budget: mv::allocation::AllocationBudget::new(0),
-                operation_index_budget: mv::allocation::AllocationBudget::new(0),
+                execution_budget: iroha_allocation::AllocationBudget::new(0),
+                operation_index_budget: iroha_allocation::AllocationBudget::new(0),
                 kura: Arc::clone(&kura),
                 lane_manifests: Arc::new(
                     crate::governance::manifest::LaneManifestRegistry::default(),
@@ -439,7 +439,7 @@ mod state_snapshot_decode_error_tests {
         assert!(matches!(
             durable_state_restore_error(MergeLedgerCommitError::BlockHashAdmission(
                 BlockHashAdmissionError::Capacity(
-                    mv::allocation::AllocationRefusal::DemandOverflow
+                    iroha_allocation::AllocationRefusal::DemandOverflow
                 )
             )),
             StateRestoreError::Admission(StateAdmissionError::History(_))
@@ -1756,8 +1756,8 @@ fn take_musubi_resolver_index_checkpoints(
 }
 fn take_musubi_replication_shortfall_releases(
     map: &mut SnapshotJsonMap<'_>,
-    execution_budget: &mv::allocation::AllocationBudget,
-) -> Result<Cell<u64, mv::allocation::AllocationCharge>, StateRestoreError> {
+    execution_budget: &iroha_allocation::AllocationBudget,
+) -> Result<Cell<u64, iroha_allocation::AllocationCharge>, StateRestoreError> {
     // Reserve every concrete outer allocation before decoding either scalar.
     // Refusal leaves the original encoded field available for exact retry.
     let initial = mv::cell::CellInitialization::<u64>::try_reserve(execution_budget)

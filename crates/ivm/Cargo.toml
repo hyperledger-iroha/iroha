@@ -12,8 +12,8 @@ documentation = "https://docs.rs/ivm"
 build = "build.rs"
 
 [dependencies]
+iroha_allocation = { workspace = true }
 iroha_accel = { workspace = true }
-mv = { workspace = true }
 iroha_model_base = { workspace = true }
 poseidon-primitives = "0.2.0"
 sha2 = { version = "0.10.9" }

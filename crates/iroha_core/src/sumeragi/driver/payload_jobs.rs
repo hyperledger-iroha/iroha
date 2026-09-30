@@ -1,5 +1,6 @@
 //! Retained availability work executed off the consensus loop.
 
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_primitives::erasure::rs16::compact::{CodecAllocationError, Encoded, encode_funded};
 use iroha_sumeragi::{
     availability::{
@@ -11,7 +12,6 @@ use iroha_sumeragi::{
     message::{BlockHeader, ByteAdmissionError, PayloadChunk, PayloadManifest},
     types::{HeightConfig, PublicKey},
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 
 /// An original author request, retaining every completed encoding/signing phase on refusal.
 pub struct AuthorJob {

@@ -35,6 +35,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'native_context_archive_capacity_retry_retains_original_overlay_and_result',
         'native_context_archive_failure_preserves_original_bytes_until_durable_acknowledgement',
         'native_context_archive_preparation_refuses_foreign_pool_without_reexecuting',
+        'availability_encoding_refusal_retains_original_header_qc_and_execution',
     )),
     ('native durable archive recovery', 'sumeragi/executor.rs', 'sumeragi/executor/archive_tests.rs', 'archive_tests', 'sumeragi::executor::archive_tests', (
         'partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications',
@@ -69,6 +70,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'portable_committee_uses_the_authenticated_original_epoch_members',
         'borrowed_native_frames_use_the_same_verifier_and_exact_cut',
         'borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash',
+        'certified_reader_rejects_missing_foreign_and_corrupt_signed_availability',
     )),
     ('native certified history boundaries', 'sumeragi/certified_chain/tests.rs', 'sumeragi/certified_chain/boundary_tests.rs', 'boundaries', 'sumeragi::certified_chain::tests::boundaries', (
         'rotated_away_committee_verifies_from_authenticated_boundaries_with_bounded_authority',
@@ -112,6 +114,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'expansion_consumes_only_the_exact_original_proposal',
         'expansion_refuses_equivalent_foreign_state_and_changed_publication',
         'merged_rejection_event_retains_the_original_native_proposal_header',
+        'leader_proposal_preserves_local_storage_error_instead_of_omitting_lane_work',
     )),
     ('native beacon custody', 'sumeragi/epoch_beacon/producer.rs', 'sumeragi/epoch_beacon/producer/tests.rs', 'tests', 'sumeragi::epoch_beacon::producer::tests', (
         'all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse',
@@ -188,6 +191,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'failing_disk_bounds_the_queues_and_releases_in_batches',
         'publication_recovery_halts_before_poll_and_preserves_safety_persistence',
         'frame_limits_cover_both_atomic_boundary_configs_without_pending_fallback',
+        'core_discard_routes_the_same_authorized_keep_set_to_payload_lifetime',
     )),
     ('native driver fault conformance', 'sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/conformance.rs', 'conformance', 'sumeragi::driver::tests::conformance', (
         'f09_loss_duplication_reordering',

@@ -66,6 +66,7 @@ const PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1: &str =
 const PREPARED_ENVELOPE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const PREPARED_TRANSACTION_MAX_BYTES: usize = 1024 * 1024;
 const PREPARED_TRANSACTION_CLOCK_SKEW_MS: u64 = 30_000;
+const READINESS_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
 const INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
 const INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const INROU_PUBLIC_DISCOVERY_CONTENT_TYPE: &str = "application/json";
@@ -93,9 +94,16 @@ const FULL_MCP_TOOLS: &[&str] = &[
 #[derive(Clone, Copy)]
 enum RouteCheckMethod {
     Get,
+    GetReadiness,
     PostEmptyObject,
 }
 const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
+    (
+        "readiness",
+        RouteCheckMethod::GetReadiness,
+        "/readyz",
+        &[200],
+    ),
     ("status", RouteCheckMethod::Get, "/status", &[200]),
     ("time_now", RouteCheckMethod::Get, "/v1/time/now", &[200]),
     (
@@ -202,7 +210,7 @@ impl Run for Command {
 /// Read-only Taira public endpoint diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub(super) enum DoctorScope {
-    /// Basic account, asset, transaction and consensus connectivity.
+    /// Basic admission readiness, account, asset, transaction and consensus connectivity.
     #[default]
     Basic,
     /// Include advanced service readiness and strict network-time health.
@@ -220,7 +228,8 @@ impl DoctorScope {
         self == Self::Full
             || matches!(
                 name,
-                "status"
+                "readiness"
+                    | "status"
                     | "time_now"
                     | "sumeragi_status"
                     | "pipeline_transaction_status"
@@ -2629,14 +2638,23 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
             continue;
         }
         let url = join_url(&public_root, path)?;
-        let (method, body) = match method {
-            RouteCheckMethod::Get => (reqwest::Method::GET, None),
-            RouteCheckMethod::PostEmptyObject => (reqwest::Method::POST, Some(&empty_object)),
+        let result = match method {
+            RouteCheckMethod::Get => http_json(&http, reqwest::Method::GET, url.as_str(), None)?,
+            RouteCheckMethod::GetReadiness => http_readiness(&http, url.as_str())?,
+            RouteCheckMethod::PostEmptyObject => http_json(
+                &http,
+                reqwest::Method::POST,
+                url.as_str(),
+                Some(&empty_object),
+            )?,
         };
-        let result = http_json(&http, method, url.as_str(), body)?;
         let status_ok = expected_statuses.contains(&result.status);
         let semantic_error = if status_ok {
             match *name {
+                "readiness" => (result.body.as_ref().and_then(Value::as_str) != Some("Ready"))
+                    .then(|| {
+                        "/readyz did not return the exact plain-text Ready response".to_owned()
+                    }),
                 "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref(), scope).err(),
                 "kagemusha_readiness" => validate_kagemusha_readiness(result.body.as_ref()).err(),
@@ -2645,6 +2663,13 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
         } else {
             None
         };
+        let readiness_failure = (*name == "readiness" && !status_ok).then(|| {
+            format!(
+                "/readyz returned HTTP {}; error_code={}; expected 200",
+                result.status,
+                readiness_error_code(result.body.as_ref())
+            )
+        });
         let ok = status_ok && semantic_error.is_none();
         push_check(
             &mut checks,
@@ -2653,18 +2678,21 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
             ok,
             semantic_error
                 .clone()
+                .or_else(|| readiness_failure.clone())
                 .or_else(|| route_check_detail(expected_statuses)),
         );
         if !status_ok {
-            failures.push(format!(
-                "{name} returned HTTP {}; expected {}",
-                result.status,
-                expected_statuses
-                    .iter()
-                    .map(u16::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" or ")
-            ));
+            failures.push(readiness_failure.unwrap_or_else(|| {
+                format!(
+                    "{name} returned HTTP {}; expected {}",
+                    result.status,
+                    expected_statuses
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                )
+            }));
         } else if let Some(error) = semantic_error {
             failures.push(error);
         }
@@ -6058,6 +6086,57 @@ fn http_json(
         .send()
         .wrap_err_with(|| format!("request failed for {url}"))?;
     decode_http_json_response(response)
+}
+fn http_readiness(http: &HttpClient, url: &str) -> Result<HttpJson> {
+    // Successful readiness is plain text; failures use the typed JSON envelope.
+    // Bound the response and retain only exact success or a bounded machine code.
+    let response = http
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/plain, application/json")
+        .send()
+        .wrap_err_with(|| format!("readiness request failed for {url}"))?;
+    let status = response.status().as_u16();
+    let plain_text = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim() == "text/plain")
+        });
+    if response
+        .content_length()
+        .is_some_and(|length| length > READINESS_RESPONSE_MAX_BYTES)
+    {
+        return Ok(HttpJson { status, body: None });
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(READINESS_RESPONSE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read bounded Taira readiness response")?;
+    let body = if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > READINESS_RESPONSE_MAX_BYTES {
+        None
+    } else if status == 200 {
+        (plain_text && bytes.as_slice() == b"Ready").then(|| Value::from("Ready"))
+    } else {
+        json::from_slice(&bytes).ok()
+    };
+    Ok(HttpJson { status, body })
+}
+fn readiness_error_code(body: Option<&Value>) -> &str {
+    body.and_then(|body| body.get("code"))
+        .and_then(Value::as_str)
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+        .unwrap_or("unspecified")
 }
 fn http_mcp_json(
     http: &HttpClient,
@@ -10094,6 +10173,7 @@ mod tests {
     }
     fn doctor_mock_response(request: &MockRequest, omit_tool: Option<&str>) -> MockResponse {
         match (request.method.as_str(), path_only(&request.path)) {
+            ("GET", "/readyz") => MockResponse::text(200, "Ready"),
             ("GET", "/v1/accounts/capabilities") => doctor_account_tests::capability_response(),
             ("GET", "/v1/accounts/faucet/policy") => doctor_account_tests::faucet_response(),
             ("GET", "/status") => MockResponse::json(
@@ -12644,6 +12724,142 @@ mod tests {
                 && request.body == "{}"
         }));
     }
+
+    #[test]
+    fn doctor_readiness_requires_exact_plain_text_ready_in_both_scopes() {
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            for (label, content_type, body, accepted) in [
+                (
+                    "ready",
+                    "text/plain; charset=utf-8",
+                    b"Ready".to_vec(),
+                    true,
+                ),
+                ("other text", "text/plain", b"Alive".to_vec(), false),
+                (
+                    "JSON string",
+                    "application/json",
+                    b"\"Ready\"".to_vec(),
+                    false,
+                ),
+                (
+                    "oversized",
+                    "text/plain",
+                    vec![b'x'; usize::try_from(READINESS_RESPONSE_MAX_BYTES + 1).unwrap()],
+                    false,
+                ),
+            ] {
+                let server = spawn_mock_http(16, move |request| {
+                    if path_only(&request.path) == "/readyz" {
+                        MockResponse {
+                            status: 200,
+                            content_type,
+                            headers: Vec::new(),
+                            body: body.clone(),
+                        }
+                    } else {
+                        doctor_mock_response(request, None)
+                    }
+                });
+                let report = run_doctor(&server.base_url, scope).expect("doctor report");
+                let requests = finish_mock(server);
+                assert_eq!(
+                    report_status(&report),
+                    Some(if accepted { "ok" } else { "fail" }),
+                    "{scope:?}: {label}"
+                );
+                let readiness_requests = requests
+                    .iter()
+                    .filter(|request| path_only(&request.path) == "/readyz")
+                    .collect::<Vec<_>>();
+                assert_eq!(readiness_requests.len(), 1, "{scope:?}: {label}");
+                assert_eq!(readiness_requests[0].method, "GET");
+                assert_eq!(
+                    readiness_requests[0].header_values("accept"),
+                    ["text/plain, application/json"]
+                );
+                let checks = report["checks"].as_array().unwrap();
+                let readiness = checks
+                    .iter()
+                    .find(|check| check["name"].as_str() == Some("readiness"))
+                    .expect("mandatory readiness check");
+                assert_eq!(readiness["http_status"].as_u64(), Some(200));
+                assert_eq!(readiness["ok"].as_bool(), Some(accepted));
+                assert!(checks.iter().all(|check| {
+                    check["name"].as_str() == Some("readiness")
+                        || check["ok"].as_bool() == Some(true)
+                }));
+                assert_eq!(
+                    report["failures"].as_array().unwrap().len(),
+                    usize::from(!accepted)
+                );
+                assert!(
+                    doctor_expected_checks(scope)
+                        .iter()
+                        .any(|(name, status, detail)| {
+                            *name == "readiness" && *status == 200 && detail.is_none()
+                        })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn doctor_readiness_unavailable_fails_both_scopes_with_only_bounded_error_codes() {
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            for (code, expected) in [
+                (
+                    Value::from("consensus_admission_unavailable"),
+                    "consensus_admission_unavailable",
+                ),
+                (Value::from("injected\ncode"), "unspecified"),
+                (Value::from("x".repeat(65)), "unspecified"),
+                (Value::Bool(false), "unspecified"),
+            ] {
+                let server = spawn_mock_http(16, move |request| {
+                    if path_only(&request.path) == "/readyz" {
+                        MockResponse::json(
+                            503,
+                            norito::json!({
+                                "code": (code.clone()),
+                                "message": "do-not-forward-server-message",
+                                "details": { "private": "do-not-forward-server-data" }
+                            }),
+                        )
+                    } else {
+                        doctor_mock_response(request, None)
+                    }
+                });
+                let report = run_doctor(&server.base_url, scope).expect("doctor report");
+                finish_mock(server);
+                assert_eq!(
+                    report_status(&report),
+                    Some("fail"),
+                    "{scope:?}: {expected}"
+                );
+                let checks = report["checks"].as_array().unwrap();
+                let readiness = checks
+                    .iter()
+                    .find(|check| check["name"].as_str() == Some("readiness"))
+                    .expect("mandatory readiness check");
+                assert_eq!(readiness["http_status"].as_u64(), Some(503));
+                assert_eq!(readiness["ok"].as_bool(), Some(false));
+                let failure =
+                    format!("/readyz returned HTTP 503; error_code={expected}; expected 200");
+                assert_eq!(readiness["detail"].as_str(), Some(failure.as_str()));
+                assert_eq!(
+                    report["failures"].as_array().unwrap().as_slice(),
+                    &[Value::from(failure)]
+                );
+                assert!(checks.iter().all(|check| {
+                    check["name"].as_str() == Some("readiness")
+                        || check["ok"].as_bool() == Some(true)
+                }));
+                assert!(!json::to_json(&report).unwrap().contains("do-not-forward"));
+            }
+        }
+    }
+
     #[test]
     fn inrou_status_probe_uses_canonical_account_authentication() {
         let server = spawn_mock_http(1, |request| {

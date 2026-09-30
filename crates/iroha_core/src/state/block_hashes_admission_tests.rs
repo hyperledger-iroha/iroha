@@ -1,7 +1,7 @@
 //! Finite history admission precedes execution and retains actual allocation custody.
 
 use super::*;
-use mv::allocation::{AllocationBudget, AllocationRefusal};
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use std::{
     future::Future,
     task::{Context, Poll, Waker},
@@ -342,7 +342,7 @@ fn configured_state() -> State {
         crate::query::store::LiveQueryStore::start_test(),
     )
 }
-fn fill_original_pool(state: &State) -> mv::allocation::AllocationReservation {
+fn fill_original_pool(state: &State) -> iroha_allocation::AllocationReservation {
     let original = state.kura.block_hash_history_budget();
     assert_eq!(
         original.reserved_bytes(),
@@ -439,7 +439,7 @@ fn empty_fast_history_is_read_only_and_uses_no_mutable_tree_credit() {
 
 #[test]
 fn only_releasable_local_refusals_expose_an_original_wait() {
-    let notification = concread::release::ReleaseNotification::default();
+    let notification = iroha_allocation::release::ReleaseNotification::default();
     let wait = notification.observe();
     assert_eq!(
         BlockHashAdmissionError::Busy(wait.clone()).release_wait(),

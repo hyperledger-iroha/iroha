@@ -192,7 +192,7 @@ fn select(
         let index = (0..count).find(|&index| {
             DEVICES
                 .record(index, physical_limit())
-                .is_some_and(|other| mv::allocation::ChargedShared::ptr_eq(&lease, &other))
+                .is_some_and(|other| iroha_allocation::ChargedShared::ptr_eq(&lease, &other))
         })?;
         cost(state, &mut || {
             pass.as_mut()?.begin_attempt(index, Instant::now())

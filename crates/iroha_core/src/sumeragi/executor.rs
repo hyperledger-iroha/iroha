@@ -24,16 +24,32 @@ pub(crate) struct NativeExecutionAuthorization {
     state: usize,
     tip: crate::state::native_execution_tip::NativeExecutionTipRecord,
     parent: Option<(Hash32, Hash32)>,
+    telemetry_origin: CommitTelemetryOrigin,
+}
+
+/// Local observations of an authenticated execution; never protocol authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommitTelemetryOrigin {
+    /// A newly committed execution emits its transition observations once.
+    Forward,
+    /// Startup re-execution restores gauges without recounting historical transitions.
+    HistoricalReplay,
 }
 impl NativeExecutionAuthorization {
     /// The startup module can transfer only its own original signed-genesis execution.
     pub(super) fn from_genesis(original: super::startup::GenesisExecutionAuthorization) -> Self {
-        let (state, tip) = original.into_parts();
+        let (state, tip, telemetry_origin) = original.into_parts();
         Self {
             state,
             tip,
             parent: None,
+            telemetry_origin,
         }
+    }
+
+    /// Observe the local origin retained beside this exact execution authorization.
+    pub(crate) fn telemetry_origin(&self) -> CommitTelemetryOrigin {
+        self.telemetry_origin
     }
 
     /// Return fixed claims only for the exact State that owns the execution.
@@ -164,6 +180,7 @@ impl FinalizedArchives {
 
 /// One State publication awaiting durable archive capture and its remaining notifications.
 struct PendingCommit {
+    telemetry_origin: CommitTelemetryOrigin,
     native_contexts: PreparedNativeContext,
     header: iroha_sumeragi::message::BlockHeader,
     availability: AvailabilityFrame,
@@ -230,6 +247,7 @@ enum Request {
     Prepare(
         AvailableBody,
         Qc,
+        CommitTelemetryOrigin,
         mpsc::SyncSender<Result<Option<Hash32>, PublicationError>>,
     ),
     Commit(
@@ -280,7 +298,7 @@ enum Request {
 /// Cryptographic validity cannot authorize allocation from another or uncharged pool.
 fn require_qc_witness_admission(
     qc: &Qc,
-    budget: &mv::allocation::AllocationBudget,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), PublicationError> {
     if qc
         .attestation_witness
@@ -297,7 +315,7 @@ fn require_qc_witness_admission(
 /// Only the exact verified frame and payload from this State pool may enter execution.
 fn require_body_admission(
     body: &AvailableBody,
-    budget: &mv::allocation::AllocationBudget,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), PublicationError> {
     if !body.admitted_to(budget) {
         return Err(PublicationError::RecoveryRequired(
@@ -310,7 +328,7 @@ fn require_body_admission(
 /// The driver-facing handle of the executor thread.
 pub struct StateExecutor {
     /// The same pool as the worker, checked before retaining a queued certificate.
-    execution_budget: mv::allocation::AllocationBudget,
+    execution_budget: iroha_allocation::AllocationBudget,
     requests: mpsc::SyncSender<Request>,
     _thread: JoinHandle<()>,
 }
@@ -452,7 +470,7 @@ impl StateExecutor {
     /// The block does not re-execute to its certified result, or a local failure.
     pub fn replay(&mut self, block: &AvailableBody, commit_qc: &Qc) -> Result<(), String> {
         match self
-            .prepare(block, commit_qc)
+            .prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)
             .map_err(|error| error.to_string())?
         {
             Some(result) if result == commit_qc.result => {}
@@ -462,6 +480,22 @@ impl StateExecutor {
         self.commit(block, commit_qc)
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    fn prepare_with_origin(
+        &mut self,
+        block: &AvailableBody,
+        commit_qc: &Qc,
+        origin: CommitTelemetryOrigin,
+    ) -> Result<Option<Hash32>, PublicationError> {
+        require_body_admission(block, &self.execution_budget)?;
+        require_qc_witness_admission(commit_qc, &self.execution_budget)?;
+        self.call(|reply| Request::Prepare(block.clone(), commit_qc.clone(), origin, reply))
+            .unwrap_or_else(|| {
+                Err(PublicationError::RecoveryRequired(
+                    "executor thread stopped".into(),
+                ))
+            })
     }
 }
 
@@ -483,14 +517,7 @@ impl Executor for StateExecutor {
         block: &AvailableBody,
         commit_qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
-        require_body_admission(block, &self.execution_budget)?;
-        require_qc_witness_admission(commit_qc, &self.execution_budget)?;
-        self.call(|reply| Request::Prepare(block.clone(), commit_qc.clone(), reply))
-            .unwrap_or_else(|| {
-                Err(PublicationError::RecoveryRequired(
-                    "executor thread stopped".into(),
-                ))
-            })
+        self.prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::Forward)
     }
 
     fn commit(
@@ -572,15 +599,15 @@ impl std::ops::Deref for ScheduledAuthority {
 /// Original completed execution inputs advance once through proof and result preparation.
 enum FinishingPhase {
     ContextProof {
-        inputs: mv::allocation::RetainedPayload<NativeExecutionInputs>,
+        inputs: iroha_allocation::RetainedPayload<NativeExecutionInputs>,
         refusal: Option<NativeLaneStateProofError>,
     },
-    Ready(mv::allocation::RetainedPayload<ExecutionResultCommitment>),
+    Ready(iroha_allocation::RetainedPayload<ExecutionResultCommitment>),
     /// A one-shot deterministic transition failed or unwound; only recovery may release it.
     Consuming,
 }
 impl FinishingPhase {
-    fn ready(&self) -> Option<&mv::allocation::RetainedPayload<ExecutionResultCommitment>> {
+    fn ready(&self) -> Option<&iroha_allocation::RetainedPayload<ExecutionResultCommitment>> {
         match self {
             Self::Ready(commitment) => Some(commitment),
             Self::ContextProof { .. } | Self::Consuming => None,
@@ -611,6 +638,7 @@ struct Finishing<'s> {
 
 /// The executed overlay of one block.
 struct Live<'s> {
+    telemetry_origin: Option<CommitTelemetryOrigin>,
     native_contexts: Option<PreparedNativeContext>,
     block_hash: Hash32,
     height: u64,
@@ -622,7 +650,7 @@ struct Live<'s> {
     witness: iroha_data_model::block::consensus::ExecWitness,
     result: Hash32,
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
-    commitment: mv::allocation::RetainedPayload<ExecutionResultCommitment>,
+    commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
     /// Exact original witness/signature progress, retained independently of durable encoding.
     attestation: local_attestation::Progress,
     applied_config: AppliedConfig,
@@ -634,15 +662,15 @@ struct Live<'s> {
 enum PublicationPhase {
     Executed {
         valid: ValidBlock,
-        preimage: mv::allocation::ChargedBuffer<u8>,
+        preimage: iroha_allocation::ChargedBuffer<u8>,
     },
     /// Each successful encoding remains owned while a later allocation is refused.
     EncodingCertificate {
         valid: ValidBlock,
-        preimage: mv::allocation::ChargedBuffer<u8>,
-        header_wire: Option<mv::allocation::ChargedBuffer<u8>>,
-        qc_wire: Option<mv::allocation::ChargedBuffer<u8>>,
-        availability_wire: Option<mv::allocation::ChargedBuffer<u8>>,
+        preimage: iroha_allocation::ChargedBuffer<u8>,
+        header_wire: Option<iroha_allocation::ChargedBuffer<u8>>,
+        qc_wire: Option<iroha_allocation::ChargedBuffer<u8>>,
+        availability_wire: Option<iroha_allocation::ChargedBuffer<u8>>,
         qc: Qc,
         refusal: Option<super::commitment::ResultPreimageError>,
     },
@@ -813,8 +841,8 @@ impl<'s> Worker<'s> {
                 let _ = reply.send(self.execute(&block, block_hash));
             }
             Request::Discard(height, keep) => self.discard(height, &keep),
-            Request::Prepare(block, qc, reply) => {
-                let _ = reply.send(self.prepare(&block, &qc));
+            Request::Prepare(block, qc, origin, reply) => {
+                let _ = reply.send(self.prepare_with_origin(&block, &qc, origin));
             }
             Request::Commit(block, qc, reply) => {
                 let _ = reply.send(self.commit(&block, &qc));
@@ -944,10 +972,10 @@ impl<'s> Worker<'s> {
         block: &AvailableBody,
         block_hash: Hash32,
         encode: impl FnOnce(
-            &mv::allocation::RetainedPayload<ExecutionResultCommitment>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> ExecOutcome {
@@ -1253,10 +1281,10 @@ impl<'s> Worker<'s> {
     fn finish_execution_with_encoder(
         &mut self,
         encode: impl FnOnce(
-            &mv::allocation::RetainedPayload<ExecutionResultCommitment>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> ExecOutcome {
@@ -1295,6 +1323,7 @@ impl<'s> Worker<'s> {
             unreachable!("encoded original result")
         };
         self.live = Some(Live {
+            telemetry_origin: None,
             native_contexts: Some(
                 original
                     .native_contexts
@@ -1390,7 +1419,16 @@ impl<'s> Worker<'s> {
         block: &AvailableBody,
         qc: &Qc,
     ) -> Result<Option<Hash32>, PublicationError> {
-        self.prepare_with_encoder(block, qc, |part, budget| {
+        self.prepare_with_origin(block, qc, CommitTelemetryOrigin::Forward)
+    }
+
+    fn prepare_with_origin(
+        &mut self,
+        block: &AvailableBody,
+        qc: &Qc,
+        origin: CommitTelemetryOrigin,
+    ) -> Result<Option<Hash32>, PublicationError> {
+        self.prepare_with_encoder(block, qc, origin, |part, budget| {
             super::commitment::encode_certificate_part(
                 part,
                 budget,
@@ -1403,11 +1441,12 @@ impl<'s> Worker<'s> {
         &mut self,
         block: &AvailableBody,
         qc: &Qc,
+        origin: CommitTelemetryOrigin,
         mut encode: impl FnMut(
             super::commitment::CertificatePart<'_>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> Result<Option<Hash32>, PublicationError> {
@@ -1416,7 +1455,7 @@ impl<'s> Worker<'s> {
         }
         require_qc_witness_admission(qc, &self.state.ivm_execution_budget())?;
         match catch_unwind(AssertUnwindSafe(|| {
-            self.prepare_inner(block, qc, &mut encode)
+            self.prepare_inner(block, qc, origin, &mut encode)
         })) {
             Ok(result) => result.map_err(|error| match &self.recovery {
                 Some(reason) => PublicationError::RecoveryRequired(reason.clone()),
@@ -1434,16 +1473,17 @@ impl<'s> Worker<'s> {
         &mut self,
         block: &AvailableBody,
         qc: &Qc,
+        origin: CommitTelemetryOrigin,
         encode: &mut impl FnMut(
             super::commitment::CertificatePart<'_>,
-            &mv::allocation::AllocationBudget,
+            &iroha_allocation::AllocationBudget,
         ) -> Result<
-            mv::allocation::ChargedBuffer<u8>,
+            iroha_allocation::ChargedBuffer<u8>,
             super::commitment::ResultPreimageError,
         >,
     ) -> Result<Option<Hash32>, String> {
         if let Some(pending) = &self.pending_commit {
-            return if pending.matches(block, qc) {
+            return if pending.matches(block, qc) && pending.telemetry_origin == origin {
                 Ok(Some(pending.qc.result))
             } else {
                 Err("another committed decision is awaiting archive capture".into())
@@ -1507,6 +1547,12 @@ impl<'s> Worker<'s> {
         {
             return Err("prepared header differs from original execution".into());
         }
+        if live
+            .telemetry_origin
+            .is_some_and(|original| original != origin)
+        {
+            return Err("prepared execution telemetry origin cannot be replaced".into());
+        }
         match &live.phase {
             PublicationPhase::Prepared {
                 staged,
@@ -1545,6 +1591,7 @@ impl<'s> Worker<'s> {
                 .ok_or("original pending overlay was consumed")?
                 .verify_sumeragi_execution_witness(valid.as_ref(), &live.witness)?;
         }
+        live.telemetry_origin = Some(origin);
         if matches!(live.phase, PublicationPhase::Executed { .. }) {
             let PublicationPhase::Executed { valid, preimage } =
                 std::mem::replace(&mut live.phase, PublicationPhase::Consuming)
@@ -1762,6 +1809,9 @@ impl<'s> Worker<'s> {
             // A normal authorization refusal retains the same original and can retry
             // after append. Metadata finalization itself is one-shot and may unwind.
             let native_execution = NativeExecutionAuthorization {
+                telemetry_origin: live
+                    .telemetry_origin
+                    .expect("original prepared telemetry origin"),
                 state: std::ptr::from_ref(self.state) as usize,
                 tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                     height: live.header.height,
@@ -1827,6 +1877,9 @@ impl<'s> Worker<'s> {
             unreachable!("original prepared owner")
         };
         self.pending_commit = Some(PendingCommit {
+            telemetry_origin: live
+                .telemetry_origin
+                .expect("original prepared telemetry origin"),
             native_contexts: live
                 .native_contexts
                 .take()
@@ -2278,6 +2331,7 @@ mod native_execution_authorization_tests {
             LiveQueryStore::start_test(),
         );
         let token = NativeExecutionAuthorization {
+            telemetry_origin: CommitTelemetryOrigin::Forward,
             state: std::ptr::from_ref(&original) as usize,
             tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                 height: 1,

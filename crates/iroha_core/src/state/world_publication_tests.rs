@@ -86,7 +86,7 @@ fn publication_scope_refusal_keeps_the_original_world_journal_for_retry() {
     assert!(matches!(
         error,
         WorldPublicationError::Scope(mv::storage::AdmittedStorageError::Allocation(
-            mv::allocation::AllocationRefusal::Capacity { .. }
+            iroha_allocation::AllocationRefusal::Capacity { .. }
         ))
     ));
     drop(cleanup);
@@ -831,7 +831,7 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
     struct ObservePrefix {
         original: Box<dyn RetainedWorldField>,
         journal: DetachedWorld<()>,
-        future: Arc<Mutex<Option<concread::release::ReleaseFuture>>>,
+        future: Arc<Mutex<Option<iroha_allocation::release::ReleaseFuture>>>,
         callback: Arc<Probe>,
     }
     impl RetainedWorldField for ObservePrefix {
@@ -864,7 +864,7 @@ fn world_refusal_retains_prefix_callbacks_and_original_shells_through_enclosing_
     struct PreparedObservePrefix<'target> {
         original: Box<dyn PreparedWorldField + 'target>,
         journal: Option<DetachedWorld<()>>,
-        future: Arc<Mutex<Option<concread::release::ReleaseFuture>>>,
+        future: Arc<Mutex<Option<iroha_allocation::release::ReleaseFuture>>>,
         callback: Arc<Probe>,
         target: &'target World,
     }

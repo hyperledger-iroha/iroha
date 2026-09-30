@@ -1806,7 +1806,7 @@ impl From<crate::sumeragi::schedule::ScheduleError> for BlockValidationError {
 #[test]
 fn epoch_schedule_capacity_preserves_original_local_release() {
     use crate::sumeragi::schedule::ScheduleError;
-    let budget = mv::allocation::AllocationBudget::new(8);
+    let budget = iroha_allocation::AllocationBudget::new(8);
     let occupied = budget.try_reserve_bytes(8).expect("occupy original pool");
     let refusal = budget
         .try_reserve_bytes(1)
@@ -1819,7 +1819,7 @@ fn epoch_schedule_capacity_preserves_original_local_release() {
     assert_eq!(owner.allocation_refusal(), Some(&refusal));
     assert!(matches!(
         owner.allocation_refusal(),
-        Some(mv::allocation::AllocationRefusal::Capacity { .. })
+        Some(iroha_allocation::AllocationRefusal::Capacity { .. })
     ));
     drop(occupied);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -1872,7 +1872,7 @@ impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
 fn native_resource_refusal_is_a_local_certified_merge_staging_error() {
     let error = BlockValidationError::from_certified_merge_stage_error(
         crate::state::MergeLedgerCommitError::NativeResourceAdmission(
-            mv::allocation::AllocationRefusal::DemandOverflow,
+            iroha_allocation::AllocationRefusal::DemandOverflow,
         ),
     );
     assert!(matches!(

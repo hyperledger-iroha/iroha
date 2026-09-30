@@ -2,10 +2,8 @@
 
 use super::*;
 use crate::publication::{IdentityRetirement, PreparedIdentity};
-use concread::{
-    ebrcell::{EbrCellCommitSlot, EbrCellRetirement},
-    release::DeferredRelease,
-};
+use concread::ebrcell::{EbrCellCommitSlot, EbrCellRetirement};
+use iroha_allocation::release::DeferredRelease;
 
 /// Original current and undo owners released from both writers, with cleanup.
 type DetachedCellPair<V, C, Cleanup> = (EbrCellOwned<V, C>, EbrCellOwned<Option<V>, C>, Cleanup);

@@ -65,6 +65,7 @@ pub struct GenesisTip {
 pub(crate) struct GenesisExecutionAuthorization {
     state: usize,
     tip: crate::state::native_execution_tip::NativeExecutionTipRecord,
+    telemetry_origin: super::executor::CommitTelemetryOrigin,
 }
 impl GenesisExecutionAuthorization {
     pub(super) fn into_parts(
@@ -72,8 +73,9 @@ impl GenesisExecutionAuthorization {
     ) -> (
         usize,
         crate::state::native_execution_tip::NativeExecutionTipRecord,
+        super::executor::CommitTelemetryOrigin,
     ) {
-        (self.state, self.tip)
+        (self.state, self.tip, self.telemetry_origin)
     }
 }
 
@@ -145,11 +147,11 @@ pub fn apply_genesis(
     let preimage = encode_result_preimage(&retained_result, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let result = result_of_preimage(preimage.as_slice());
-    let empty_header = mv::allocation::ChargedBuffer::new(0, &budget)
+    let empty_header = iroha_allocation::ChargedBuffer::new(0, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
-    let empty_qc = mv::allocation::ChargedBuffer::new(0, &budget)
+    let empty_qc = iroha_allocation::ChargedBuffer::new(0, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
-    let empty_availability = mv::allocation::ChargedBuffer::new(0, &budget)
+    let empty_availability = iroha_allocation::ChargedBuffer::new(0, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let certificate = CommitCertificate::from_charged_parts(
         empty_header,
@@ -201,6 +203,10 @@ pub fn apply_genesis(
             &certificate,
             super::executor::NativeExecutionAuthorization::from_genesis(
                 GenesisExecutionAuthorization {
+                    telemetry_origin: match stored {
+                        Some(_) => super::executor::CommitTelemetryOrigin::HistoricalReplay,
+                        None => super::executor::CommitTelemetryOrigin::Forward,
+                    },
                     state: std::ptr::from_ref(state) as usize,
                     tip: crate::state::native_execution_tip::NativeExecutionTipRecord {
                         height: GENESIS_HEIGHT,

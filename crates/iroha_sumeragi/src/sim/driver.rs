@@ -782,7 +782,7 @@ pub(super) fn fixture_body(
         header,
         payload,
         &config,
-        &mv::allocation::AllocationBudget::new(1 << 24),
+        &iroha_allocation::AllocationBudget::new(1 << 24),
         &keys.crypto,
         signer,
     )

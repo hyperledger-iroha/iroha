@@ -12,10 +12,10 @@ use std::{
     time::Duration,
 };
 
+use iroha_allocation::AllocationBudget;
 use iroha_data_model::NetworkId;
 use iroha_model_base::topology::LaneId;
 use iroha_sumeragi::{crypto::AttestationVerifier, types::Hash32};
-use mv::allocation::AllocationBudget;
 use parking_lot::Mutex;
 
 use super::{

@@ -6,6 +6,10 @@
 //! an unwind conservatively retains credits when destruction cannot be established.
 
 use super::BoundaryInputs;
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
+    ChargedBufferError, ChargedBufferFromChargeError, PrepaidBufferError, RetainedPayload,
+};
 use iroha_crypto::{PublicKey, PublicKeyAllocationError};
 use iroha_data_model::{
     isi::kagemusha_v1::{
@@ -18,10 +22,6 @@ use iroha_data_model::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::{bigint::BigIntAdmissionCloneError, numeric::Quantity};
-use mv::allocation::{
-    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
-    ChargedBufferError, ChargedBufferFromChargeError, PrepaidBufferError, RetainedPayload,
-};
 use std::alloc::Layout;
 
 /// A local allocation refusal stays distinct from deterministic invalid boundary inputs.
@@ -789,7 +789,7 @@ fn retain_slots(
     };
     match RetainedConsensusSchedule::from_retained(retained, &mut owner.reservation) {
         Ok(result) => Ok(result),
-        Err((original, mv::allocation::PrepaidSharedError::Allocator { requested_bytes })) => {
+        Err((original, iroha_allocation::PrepaidSharedError::Allocator { requested_bytes })) => {
             drop(original);
             Err(BoundaryCaptureError::Allocator { requested_bytes })
         }

@@ -1,11 +1,11 @@
 //! Retained lane file decoding and authenticated availability restoration jobs.
 
+use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, BodyRestoration},
     crypto::{AttestationVerifier, Verifier},
     message::{BlockHeader, ByteAdmissionError, Qc},
 };
-use mv::allocation::AllocationBudget;
 use std::{io, path::Path, sync::Arc};
 
 use super::{MAX_FRAME_FILE_BYTES, invalid};

@@ -1,8 +1,8 @@
 //! Final ordered backing remains charged after a scoped paired owner is evicted.
 
 use super::*;
+use iroha_allocation::AllocationBudget;
 use iroha_data_model::consensus::{ConsensusKeyId, ConsensusKeyRole};
-use mv::allocation::AllocationBudget;
 
 #[test]
 fn paired_final_ordered_borrower_keeps_original_charge_and_root() {
@@ -100,7 +100,7 @@ fn paired_build_funds_staging_and_final_copies_at_the_same_time() {
 
 #[test]
 fn staging_refusal_keeps_original_release_and_never_yields_partial_snapshot() {
-    use mv::allocation::AllocationRefusal;
+    use iroha_allocation::AllocationRefusal;
     use std::{
         future::Future,
         pin::pin,

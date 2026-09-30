@@ -5,7 +5,7 @@ use crate::state::{
     REPLAY_PUBLICATION_PANIC_AFTER_INSTALL, REPLAY_PUBLICATION_PAUSE_BEFORE_INSTALL,
     replay_blocks_from_kura_range,
 };
-use mv::allocation::{AllocationBudget, AllocationRefusal};
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use std::{
     future::Future,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -39,7 +39,7 @@ impl Wake for AfterUnlockProbe {
     }
 }
 
-fn original_refund_wait(budget: &AllocationBudget) -> concread::release::ReleaseFuture {
+fn original_refund_wait(budget: &AllocationBudget) -> iroha_allocation::release::ReleaseFuture {
     assert!(
         budget.reserved_bytes() > 0,
         "the original State owns real credits"

@@ -76,7 +76,7 @@ impl StateView<'_> {
         &self,
         expected_policy: &RetailDailyLimitPolicyV1,
         expected_activation: &RetailDailyActivationV1,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<LocalRetailContractStateSnapshotV1, RetailContractStateSnapshotErrorV1> {
         let block_hash = self
             .latest_block_hash()
@@ -178,7 +178,7 @@ mod tests {
         );
         // Test State installs native lane markers at startup; the committed
         // root must include those existing entries as well as our three keys.
-        let budget = mv::allocation::AllocationBudget::new(1 << 20);
+        let budget = iroha_allocation::AllocationBudget::new(1 << 20);
         let baseline = state.world.smart_contract_state.view();
         let mut expected_full = ContractStateMapV1::capture(
             baseline

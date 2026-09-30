@@ -1,7 +1,8 @@
 //! Actual allocator refusal and reclamation of the original admitted World shell.
 
+use iroha_allocation::AllocationBudget;
 use iroha_core::state::{World, WorldBlockFields};
-use mv::{allocation::AllocationBudget, storage::AdmittedStorageError};
+use mv::storage::AdmittedStorageError;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

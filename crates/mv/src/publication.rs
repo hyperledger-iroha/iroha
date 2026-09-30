@@ -1,13 +1,9 @@
 //! Opaque local identity for one storage owner's published current/undo pair.
 
-use crate::{
-    BlockMode, ReleaseGuard, ReleaseNotification, ReleaseWait,
-    allocation::{AllocationCharge, AllocationReservation},
-};
-use concread::{
-    bptree::{AllocationDemand, PlanningError},
-    shared::Shared,
-};
+use crate::{BlockMode, ReleaseGuard, ReleaseNotification, ReleaseWait};
+use concread::bptree::{AllocationDemand, PlanningError};
+use iroha_allocation::shared::Shared;
+use iroha_allocation::{AllocationCharge, AllocationReservation};
 use std::sync::{Mutex, TryLockError};
 
 type Identity<T> = Shared<T, Option<AllocationCharge>>;
@@ -46,9 +42,9 @@ pub type PublicationPreparationResult<Prepared, Journal, E, Installation> = Resu
 /// fabricated for an acquisition that did not happen.
 #[must_use = "retain original cleanup through the enclosing publication fences"]
 pub struct PublicationCleanup<Installation> {
-    pub(crate) _readers: [Option<concread::release::DeferredRelease>; 2],
-    pub(crate) _writers: [Option<concread::release::DeferredRelease>; 2],
-    pub(crate) writer_batches: [Option<concread::release::DeferredReleaseBatch>; 2],
+    pub(crate) _readers: [Option<iroha_allocation::release::DeferredRelease>; 2],
+    pub(crate) _writers: [Option<iroha_allocation::release::DeferredRelease>; 2],
+    pub(crate) writer_batches: [Option<iroha_allocation::release::DeferredReleaseBatch>; 2],
     pub(crate) identities: [Option<IdentityRetirement>; 2],
     pub(crate) installation: Option<Installation>,
 }
@@ -94,7 +90,7 @@ impl NextPublication {
 
     pub(crate) fn try_from_charge(
         charge: AllocationCharge,
-    ) -> Result<Self, (AllocationCharge, concread::shared::ReservationError)> {
+    ) -> Result<Self, (AllocationCharge, iroha_allocation::shared::ReservationError)> {
         match Shared::try_new(Version, Some(charge)) {
             Ok(original) => Ok(Self(original)),
             Err((_, Some(charge), error)) => Err((charge, error)),
@@ -136,7 +132,7 @@ pub(crate) struct PreparedIdentity<'a> {
 /// Released identity and original predecessor storage, retained through cleanup.
 pub(crate) struct IdentityRetirement {
     _version: Option<Identity<Version>>,
-    _release: concread::release::DeferredRelease,
+    _release: iroha_allocation::release::DeferredRelease,
 }
 
 impl PreparedIdentity<'_> {
@@ -239,7 +235,7 @@ impl Publication {
     /// physical failure retires every constructed control before refunding it.
     pub(crate) fn try_from_original(
         reservation: &mut AllocationReservation,
-    ) -> Result<Self, concread::shared::ReservationError> {
+    ) -> Result<Self, iroha_allocation::shared::ReservationError> {
         let [owner_layout, version_layout, release_layout] = Self::initial_layouts();
         let owner_charge = reservation
             .try_split(owner_layout)

@@ -262,7 +262,7 @@ where
     pub fn try_matches_current_retaining(
         &self,
         target: &BptreeMap<K, V, M>,
-    ) -> Result<(bool, Option<crate::release::DeferredRelease>), OwnedWriteError> {
+    ) -> Result<(bool, Option<iroha_allocation::release::DeferredRelease>), OwnedWriteError> {
         self.inner.try_matches_current_retaining(&target.inner)
     }
 
@@ -358,7 +358,7 @@ where
 
     /// Observe the original active-reader mutex before probing read or commit
     /// preparation. Retained snapshots and writer releases cannot satisfy it.
-    pub fn observe_reader_release(&self) -> crate::release::ReleaseWait {
+    pub fn observe_reader_release(&self) -> iroha_allocation::release::ReleaseWait {
         self.inner.observe_reader_release()
     }
 
@@ -372,7 +372,7 @@ where
 
     /// Constant-space custody for this original map's actual reader-lock releases.
     /// Drop only after all enclosing State/effect/publication fences are released.
-    pub fn reader_release_batch(&self) -> crate::release::DeferredReleaseBatch {
+    pub fn reader_release_batch(&self) -> iroha_allocation::release::DeferredReleaseBatch {
         self.inner.reader_release_batch()
     }
 
@@ -381,7 +381,7 @@ where
     /// returns Poisoned and retains its actual release/poison in the original batch.
     pub fn read_retaining(
         &self,
-        releases: &mut crate::release::DeferredReleaseBatch,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<BptreeMapReadTxn<'_, K, V, M>, OwnedWriteError> {
         self.inner
             .read_retaining(releases)
@@ -392,7 +392,7 @@ where
     /// Busy acquires nothing and records no release; foreign batches refuse first.
     pub fn try_read_retaining(
         &self,
-        releases: &mut crate::release::DeferredReleaseBatch,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<BptreeMapReadTxn<'_, K, V, M>, OwnedWriteError> {
         self.inner
             .try_read_retaining(releases)
@@ -603,7 +603,7 @@ where
         self,
     ) -> (
         BptreeMapWriteTxn<'a, K, V, M>,
-        Option<crate::release::DeferredRelease>,
+        Option<iroha_allocation::release::DeferredRelease>,
     ) {
         let (inner, release) = self.inner.abort_retaining();
         (BptreeMapWriteTxn { inner }, release)
@@ -692,7 +692,7 @@ where
         self,
     ) -> (
         BptreeMapWriteTxn<'a, K, V, M>,
-        crate::release::DeferredRelease,
+        iroha_allocation::release::DeferredRelease,
     ) {
         let (inner, release) = self.inner.abort_retaining();
         (BptreeMapWriteTxn { inner }, release)

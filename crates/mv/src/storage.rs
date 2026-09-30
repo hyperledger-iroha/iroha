@@ -100,7 +100,7 @@ where
 pub struct AdmittedAcquisitionCustody {
     // A returned physical owner retains the actual original scope, not merely
     // a marker claiming a scope existed earlier during admission.
-    _owned: Option<crate::allocation::OwnedAllocationScope>,
+    _owned: Option<iroha_allocation::OwnedAllocationScope>,
     _thread: std::marker::PhantomData<*mut ()>,
 }
 
@@ -116,7 +116,7 @@ pub struct Storage<K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
     pub(crate) blocks: BptreeMap<K, V, M>,
     // Only the admitted constructor installs a pool; ordinary constructors
     // remain explicitly Untracked and cannot create prepaid map owners.
-    pub(crate) allocation: Option<crate::allocation::AllocationBudget>,
+    pub(crate) allocation: Option<iroha_allocation::AllocationBudget>,
 }
 impl<K: Key, V: Value> Storage<K, V> {
     /// Construct new [`Self`]
@@ -532,8 +532,8 @@ enum StorageWriterState<'a, K: Key, V: Value, M: StorageMode<K, V>> {
     Released {
         _blocks: BptreeMapAbandonment<K, V, M>,
         _revert: BptreeMapAbandonment<K, Option<V>, M>,
-        _blocks_release: concread::release::DeferredRelease,
-        _revert_release: concread::release::DeferredRelease,
+        _blocks_release: iroha_allocation::release::DeferredRelease,
+        _revert_release: iroha_allocation::release::DeferredRelease,
     },
 }
 
@@ -1002,7 +1002,7 @@ mod block {
         pub(super) parent_dirty: &'block mut bool,
         pub(super) dirty: bool,
         pub(super) failed: bool,
-        pub(super) allocation: Option<&'block crate::allocation::AllocationBudget>,
+        pub(super) allocation: Option<&'block iroha_allocation::AllocationBudget>,
         // LAST: both original checkpoints and all local touch keys/buffers must
         // finish rollback/apply cleanup before this parent-failure guard drops.
         pub(super) parent_failure: Option<super::admitted_transaction::ParentFailure<'block>>,

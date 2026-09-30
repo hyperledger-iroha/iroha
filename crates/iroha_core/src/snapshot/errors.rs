@@ -25,7 +25,7 @@ pub enum TryReadError {
     /// Snapshot exceeds a configured typed decode or transient resource boundary: {0}
     SnapshotResourceLimit(String),
     /// Local snapshot read-buffer allocation admission refused: {0}
-    PayloadAllocation(#[source] mv::allocation::AllocationRefusal),
+    PayloadAllocation(#[source] iroha_allocation::AllocationRefusal),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
     PayloadAllocatorFailure {
         /// Exact requested byte allocation; no buffer was installed.
@@ -166,7 +166,7 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 pub(super) enum TryWriteError {
     /// Local snapshot read-buffer allocation admission refused: {0}
-    PayloadAllocation(#[source] mv::allocation::AllocationRefusal),
+    PayloadAllocation(#[source] iroha_allocation::AllocationRefusal),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
     PayloadAllocatorFailure {
         /// Exact requested byte allocation; original generation evidence remains valid.
@@ -234,7 +234,7 @@ mod native_schedule_tests {
     #[test]
     fn restore_schedule_refusal_keeps_original_typed_local_error() {
         use crate::{state::deserialize::StateRestoreError, sumeragi::schedule::ScheduleError};
-        let budget = mv::allocation::AllocationBudget::new(64);
+        let budget = iroha_allocation::AllocationBudget::new(64);
         let occupied = budget.try_reserve_bytes(64).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let converted = TryReadError::from(StateRestoreError::NativeSchedule(
@@ -243,7 +243,7 @@ mod native_schedule_tests {
         assert!(matches!(
             converted,
             TryReadError::StateNativeSchedule(ScheduleError::Admission(
-                mv::allocation::AllocationRefusal::Capacity { .. }
+                iroha_allocation::AllocationRefusal::Capacity { .. }
             ))
         ));
         assert_eq!(

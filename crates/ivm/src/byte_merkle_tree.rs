@@ -850,7 +850,7 @@ pub(crate) fn sha256_oneblock32(input: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::AllocationBudget;
+    use iroha_allocation::AllocationBudget;
 
     #[test]
     fn funded_leaves_keep_prepaid_owner_and_match_local_updates() {

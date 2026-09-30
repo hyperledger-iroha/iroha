@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 use parking_lot::Mutex;
 
 use crate::{RegistryLimits, resources::ResourcePools, slots::Slots};
@@ -104,8 +104,12 @@ impl ProcessResources {
         let layout = Layout::array::<T>(len).map_err(|_| crate::HostOutputError::InvalidLayout)?;
         let mut reservation = self.resources.try_reserve_host(layout.size())?;
         crate::HostOutput::from_reservation(len, &mut reservation).map_err(|error| match error {
-            mv::allocation::PrepaidBufferError::Reservation(_) => crate::HostOutputError::Capacity,
-            mv::allocation::PrepaidBufferError::Allocation(_) => crate::HostOutputError::Allocation,
+            iroha_allocation::PrepaidBufferError::Reservation(_) => {
+                crate::HostOutputError::Capacity
+            }
+            iroha_allocation::PrepaidBufferError::Allocation(_) => {
+                crate::HostOutputError::Allocation
+            }
         })
     }
 
@@ -143,7 +147,7 @@ impl ProcessResources {
     pub fn try_consumer_metadata(
         &self,
         layout: Layout,
-    ) -> Option<mv::allocation::AllocationReservation> {
+    ) -> Option<iroha_allocation::AllocationReservation> {
         self.metadata.try_reserve(layout).ok()
     }
 

@@ -220,7 +220,7 @@ pub struct Backlog {
 /// What the kernel of an instance starts from.
 pub struct KernelStart {
     /// Exact original instance resource pool shared by Core and workers.
-    pub allocation_budget: mv::allocation::AllocationBudget,
+    pub allocation_budget: iroha_allocation::AllocationBudget,
     /// Local parameters.
     pub local: LocalParams,
     /// Startup input (§7.4).
@@ -806,7 +806,7 @@ pub struct DriverStart {
     /// Node-wide storage gate; every production instance shares its Kura owner’s gate.
     pub node_gate: Arc<NodeGate>,
     /// Exact original State resource pool used to admit retained result witnesses.
-    pub allocation_budget: mv::allocation::AllocationBudget,
+    pub allocation_budget: iroha_allocation::AllocationBudget,
     /// Local parameters.
     pub local: LocalParams,
     /// Startup input ([`assemble_init`]).
@@ -840,7 +840,7 @@ struct PendingMessage {
 /// State shared between the event loop and the handles.
 struct Shared {
     node_gate: Arc<NodeGate>,
-    allocation_budget: mv::allocation::AllocationBudget,
+    allocation_budget: iroha_allocation::AllocationBudget,
     pending_admission: Mutex<Option<PendingMessage>>,
     instance: Hash32,
     own: Vec<PublicKey>,

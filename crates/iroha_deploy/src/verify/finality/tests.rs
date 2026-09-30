@@ -34,7 +34,7 @@ use iroha_data_model::{
         ScheduleOutcome, ScheduledConfig, SumeragiFinalityAttestationBody, chain_hash, core_epoch,
         genesis_epoch, global_threshold_beacon_npos_successor_seed_v1,
         global_threshold_beacon_pulse_id_v1, global_threshold_beacon_pulse_payload_v1,
-        test_fixtures::NativeFinalityFixture,
+        test_fixtures::{NativeFinalityFixture, author_payload},
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
@@ -147,10 +147,12 @@ fn replace_certificate(
     result: &ExecutionResultCommitment,
 ) {
     let mut b = block(proof);
+    let availability = b.commit_certificate().unwrap().availability().to_vec();
     b.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
         norito::encode_canonical(header).unwrap(),
         norito::encode_canonical(qc).unwrap(),
         result.preimage().unwrap(),
+        availability,
     )));
     proof.block_wire = b.encode_wire().unwrap();
 }
@@ -443,6 +445,9 @@ impl Chain {
                     ordinary_writes_root: ordinary_root,
                     kagemusha_top_up_root: None,
                     kagemusha_top_up_count: 0,
+                    parent_world_state_root: Hash::new(b"synthetic parent world"),
+                    world_state_root: Hash::new(b"synthetic world"),
+                    event_commitment: None,
                     executed_block_wire_len: len,
                     executed_block_wire_hash: hash,
                     transaction_input_commitment: b.network_input_merkle_commitment(),
@@ -458,6 +463,7 @@ impl Chain {
                     vec![],
                     vec![],
                     commitment.preimage().unwrap(),
+                    vec![],
                 )
             } else {
                 let payload = b.canonical_resultless_proposal().encode_wire().unwrap();
@@ -469,6 +475,7 @@ impl Chain {
                     parent_hash,
                     parent_result,
                     payload_hash: Hash32(Hash::new_from_chunks(&[TAG_PAY, &payload]).into()),
+                    availability_digest: Hash32::ZERO,
                     payload_len: payload.len().try_into().unwrap(),
                     proposer: 0,
                     skipped_leaders: vec![],
@@ -476,6 +483,25 @@ impl Chain {
                     attest: commitment.schedule.boundary.is_some(),
                 };
                 let keys = &chain.epochs[index].keys;
+                let parent_decision = native
+                    .verify_retained_decision(parent.as_ref().unwrap())
+                    .unwrap();
+                let ScheduledSlot::Ready(scheduled) = &parent_decision.commitment().schedule.next
+                else {
+                    panic!("fixture parent must authorize the proposed height");
+                };
+                assert_eq!(scheduled.height, height);
+                let config = scheduled.height_config().unwrap();
+                let budget = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
+                let authored = author_payload(
+                    header,
+                    &payload,
+                    &config,
+                    &budget,
+                    &validators(keys),
+                    &keys[0],
+                );
+                let header = authored.body.header();
                 let q = CommitteeSize::new(keys.len()).unwrap().quorum();
                 let mut qc = Qc {
                     kind: VoteKind::Commit,
@@ -483,7 +509,7 @@ impl Chain {
                     epoch: header.epoch,
                     height,
                     view: 0,
-                    block_hash: chain_hash(&block_hash_preimage(&header)),
+                    block_hash: chain_hash(&block_hash_preimage(header)),
                     result: commitment.result().unwrap(),
                     attest: header.attest,
                     signers: Bitmap::new(keys.len()),
@@ -505,9 +531,10 @@ impl Chain {
                 }
                 sign_qc(&mut qc, keys, &seats(0..q));
                 CommitCertificate::from_untrusted_parts(
-                    norito::encode_canonical(&header).unwrap(),
+                    norito::encode_canonical(header).unwrap(),
                     norito::encode_canonical(&qc).unwrap(),
                     commitment.preimage().unwrap(),
+                    norito::encode_canonical(authored.body.availability()).unwrap(),
                 )
             };
             b.set_commit_certificate(Some(certificate));

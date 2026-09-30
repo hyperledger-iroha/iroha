@@ -51,6 +51,10 @@ bound. The result is immutable operational observation, not a finality proof.
 Retired global QC and grouped diagnostics APIs are removed. Native execution
 capture parity and actual cross-dataspace settlement qualification remain open.
 
+`get_sumeragi_lanes()` decodes the operator lane list into `SumeragiLaneStatus`.
+Every record requires its committed `da_layout` RS16 encoding and resource bounds;
+these observations do not confer finality.
+
 Committed Sumeragi evidence is exposed through the authenticated
 `list_sumeragi_evidence()` and `get_sumeragi_evidence_count()` reads. The
 first-release JSON contract accepts only `NativeSumeragiEvidence` records,

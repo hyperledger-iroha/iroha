@@ -167,7 +167,7 @@ fn archive_error(error: NativeContextArchiveError) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::{AllocationBudget, ChargedBuffer};
+    use iroha_allocation::{AllocationBudget, ChargedBuffer};
 
     #[test]
     fn archive_allocation_refusal_remains_retryable_with_its_original_error() {

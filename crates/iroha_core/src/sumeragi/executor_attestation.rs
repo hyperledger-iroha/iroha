@@ -6,8 +6,8 @@ use crate::sumeragi::attestation::{
     NativePastaVerifier, attest_original,
 };
 use crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1;
+use iroha_allocation::{ChargedBuffer, ChargedBufferError};
 use iroha_sumeragi::message::{ByteAdmissionError, ResultWitness};
-use mv::allocation::{ChargedBuffer, ChargedBufferError};
 
 const _: () = assert!(
     super::super::commitment::MAX_RESULT_PREIMAGE_BYTES

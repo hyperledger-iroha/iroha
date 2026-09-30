@@ -1,7 +1,7 @@
 //! This module provides the [`State`] — an in-memory representation of the current blockchain state.
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
 /// Original finite allocation pool passed from startup into State and restore.
-pub use mv::allocation::AllocationBudget;
+pub use iroha_allocation::AllocationBudget;
 
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
@@ -897,7 +897,7 @@ mod threshold_key_lifecycle_certificate_tests {
                 .collect(),
         )
         .unwrap();
-        let budget = mv::allocation::AllocationBudget::new(1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         let mut schedule = world.consensus_schedule.block();
         *schedule.get_mut() = RetainedConsensusSchedule::admit(&graph, &budget).unwrap();
         schedule.commit();
@@ -1581,8 +1581,8 @@ macro_rules! build_world_view {
 /// Every concrete tree allocation retains credits from its original finite pool.
 pub struct BlockHashes {
     inner: BlockHashStorage,
-    budget: mv::allocation::AllocationBudget,
-    released: concread::release::ReleaseNotification,
+    budget: iroha_allocation::AllocationBudget,
+    released: iroha_allocation::release::ReleaseNotification,
     committed_height: AtomicUsize,
 }
 
@@ -1623,7 +1623,8 @@ impl State {
     }
 }
 /// The original history owner frees its exact control allocation before refund.
-type ChargedBlockHashMap = concread::shared::Shared<BlockHashMap, mv::allocation::AllocationCharge>;
+type ChargedBlockHashMap =
+    iroha_allocation::shared::Shared<BlockHashMap, iroha_allocation::AllocationCharge>;
 enum BlockHashStorage {
     Owned(ChargedBlockHashMap),
     EmergencyFastMapped(ReadOnlyMmap),
@@ -1701,7 +1702,7 @@ enum BlockHashIterInner<'a> {
             'a,
             usize,
             HashOf<BlockHeader>,
-            mv::allocation::AllocationCharge,
+            iroha_allocation::AllocationCharge,
         >,
     ),
     Slice(std::slice::Iter<'a, HashOf<BlockHeader>>),
@@ -1842,7 +1843,7 @@ impl BlockHashes {
     pub fn new(initial: Vec<HashOf<BlockHeader>>) -> Self {
         Self::try_new(
             initial,
-            mv::allocation::AllocationBudget::new(
+            iroha_allocation::AllocationBudget::new(
                 usize::try_from(
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
                 )
@@ -1860,8 +1861,8 @@ impl BlockHashes {
     fn new_emergency_fast_empty() -> Self {
         Self {
             inner: BlockHashStorage::EmergencyFastEmpty,
-            budget: mv::allocation::AllocationBudget::new(0),
-            released: concread::release::ReleaseNotification::default(),
+            budget: iroha_allocation::AllocationBudget::new(0),
+            released: iroha_allocation::release::ReleaseNotification::default(),
             committed_height: AtomicUsize::new(0),
         }
     }
@@ -1873,8 +1874,8 @@ impl BlockHashes {
         );
         Self {
             inner: BlockHashStorage::EmergencyFastMapped(mapping),
-            budget: mv::allocation::AllocationBudget::new(0),
-            released: concread::release::ReleaseNotification::default(),
+            budget: iroha_allocation::AllocationBudget::new(0),
+            released: iroha_allocation::release::ReleaseNotification::default(),
             committed_height: AtomicUsize::new(committed_height),
         }
     }
@@ -2423,7 +2424,7 @@ pub enum MergeLedgerCommitError {
     /// The original finite Native execution pool cannot fund a host allocation.
     /// This is a local scheduling refusal, never a deterministic body verdict.
     #[error("Native execution resource admission refused: {0}")]
-    NativeResourceAdmission(#[source] mv::allocation::AllocationRefusal),
+    NativeResourceAdmission(#[source] iroha_allocation::AllocationRefusal),
     /// This local attempt lacked execution capacity and produced no canonical result.
     #[error("local execution deferred: {0}")]
     ExecutionDeferred(crate::execution_attempt::ExecutionDeferred),
@@ -2756,7 +2757,7 @@ pub enum MergeLedgerCommitError {
 pub enum EvidencePreparationError {
     /// The original finite pool refused a complete preparation backing layout.
     #[error("consensus penalty preparation capacity: {0}")]
-    Admission(mv::allocation::AllocationRefusal),
+    Admission(iroha_allocation::AllocationRefusal),
     /// The allocator refused a layout already admitted by the original pool.
     #[error("allocator refused {requested_bytes} consensus penalty preparation bytes")]
     Allocator {
@@ -2777,11 +2778,11 @@ pub enum EvidencePreparationError {
     #[error("consensus penalty preparation plan exceeded its fixed capacity")]
     Invariant,
 }
-impl From<mv::allocation::ChargedBufferError> for EvidencePreparationError {
-    fn from(error: mv::allocation::ChargedBufferError) -> Self {
+impl From<iroha_allocation::ChargedBufferError> for EvidencePreparationError {
+    fn from(error: iroha_allocation::ChargedBufferError) -> Self {
         match error {
-            mv::allocation::ChargedBufferError::Admission(refusal) => Self::Admission(refusal),
-            mv::allocation::ChargedBufferError::Allocator { requested_bytes } => {
+            iroha_allocation::ChargedBufferError::Admission(refusal) => Self::Admission(refusal),
+            iroha_allocation::ChargedBufferError::Allocator { requested_bytes } => {
                 Self::Allocator { requested_bytes }
             }
         }
@@ -2789,9 +2790,9 @@ impl From<mv::allocation::ChargedBufferError> for EvidencePreparationError {
 }
 impl EvidencePreparationError {
     /// Original pool release observation, available only for temporary contention.
-    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
-            Self::Admission(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {
+            Self::Admission(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {
                 Some(release)
             }
             _ => None,
@@ -3101,7 +3102,7 @@ pub enum LaneLifecycleError {
         /// Original physical lock which prevented acquisition.
         field: &'static str,
         /// Release observation captured before probing that lock.
-        wait: concread::release::ReleaseWait,
+        wait: iroha_allocation::release::ReleaseWait,
     },
 }
 /// Errors surfaced while installing runtime ZK configuration into committed state.
@@ -4207,7 +4208,7 @@ pub struct WorldData {
     /// Universal sparse-index revision bound into finalized query cursors.
     pub(crate) musubi_resolver_index_revision: Cell<MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
-    pub(crate) musubi_replication_shortfall_releases: Cell<u64, mv::allocation::AllocationCharge>,
+    pub(crate) musubi_replication_shortfall_releases: Cell<u64, iroha_allocation::AllocationCharge>,
     /// Greatest globally allocated Soracloud audit sequence, or zero before the first allocation.
     pub(crate) soracloud_sequence_watermark: Cell<u64>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
@@ -5192,7 +5193,7 @@ pub struct WorldBlockFields<'world> {
     pub(crate) musubi_resolver_index_revision: CellField<'world, MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases:
-        CellField<'world, u64, mv::allocation::AllocationCharge>,
+        CellField<'world, u64, iroha_allocation::AllocationCharge>,
     /// Greatest globally allocated Soracloud audit sequence.
     pub(crate) soracloud_sequence_watermark: CellField<'world, u64>,
     /// Admitted Soracloud service revisions.
@@ -5658,7 +5659,7 @@ pub struct WorldBlockFields<'world> {
     external_event_buf: Vec<EventBox>,
     // Last: every World sibling releases before original pool refunds can wake.
     #[norito(skip)]
-    operation_index_scope: mv::allocation::OwnedAllocationScope,
+    operation_index_scope: iroha_allocation::OwnedAllocationScope,
 }
 impl WorldBlock<'_> {
     #[cfg(test)]
@@ -6853,7 +6854,7 @@ pub struct WorldTransaction<'block, 'world> {
         CellTransaction<'block, 'world, MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases:
-        CellTransaction<'block, 'world, u64, mv::allocation::AllocationCharge>,
+        CellTransaction<'block, 'world, u64, iroha_allocation::AllocationCharge>,
     /// Greatest globally allocated Soracloud audit sequence.
     pub(crate) soracloud_sequence_watermark: CellTransaction<'block, 'world, u64>,
     /// Admitted Soracloud service revisions.
@@ -12050,9 +12051,9 @@ pub struct State {
     nexus_storage_budget_last_check_height: AtomicU64,
     /// Process-lived finite owner for committed-evidence preparation allocations.
     /// Funded slices cover fixed prune keys and pending penalty metadata only.
-    evidence_preparation_budget: mv::allocation::AllocationBudget,
+    evidence_preparation_budget: iroha_allocation::AllocationBudget,
     /// Original process-local owner for flat consensus stake-index key backing.
-    stake_index_budget: mv::allocation::AllocationBudget,
+    stake_index_budget: iroha_allocation::AllocationBudget,
     /// Tiered state backend coordinating hot/cold snapshots.
     pub(crate) tiered_backend: Arc<PublicationMutex<TieredStateBackend>>,
     /// Background worker for tiered snapshot processing.
@@ -12445,7 +12446,7 @@ pub struct StateBlockFields<'state> {
     pub(crate) native_execution_tip: block_field::CellField<
         'state,
         Option<NativeExecutionTip>,
-        mv::allocation::AllocationCharge,
+        iroha_allocation::AllocationCharge,
     >,
     state_ref: &'state State,
     /// Original replacement-rewind notices, dropped only after joint writer retirement.
@@ -12655,7 +12656,7 @@ pub struct StateBlockFields<'state> {
     /// Last: deliver view-read notices only after every original field retires.
     read_releases: StateViewReleases<'state>,
     /// Original execution-pool scratch wakes outlive every physical State writer.
-    ivm_refunds: mv::allocation::AllocationRefundBatch,
+    ivm_refunds: iroha_allocation::AllocationRefundBatch,
 }
 
 impl<'state> std::ops::Deref for StateBlock<'state> {
@@ -13745,7 +13746,7 @@ pub struct StateTransaction<'block, 'state> {
     local_storage_refusal: &'block mut Option<StateStorageAdmissionError>,
     /// Borrowed original State pool for final-application stake indexes.
     #[cfg(test)]
-    pub(crate) stake_index_budget: &'state mv::allocation::AllocationBudget,
+    pub(crate) stake_index_budget: &'state iroha_allocation::AllocationBudget,
     /// Actual MV runtime scope; projected fields never replace its undo authority.
     pub(crate) canonical_runtime: CellTransaction<'block, 'state, SnapshotNexusRuntime>,
     // An instruction can read but cannot mutate the original execution anchor.
@@ -18879,8 +18880,8 @@ impl World {
         domains: D,
         accounts: A,
         asset_definitions: Ad,
-        budget: mv::allocation::AllocationBudget,
-        execution_budget: &mv::allocation::AllocationBudget,
+        budget: iroha_allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Self, mv::storage::AdmittedStorageError>
     where
         D: IntoIterator<Item = Domain>,
@@ -18898,7 +18899,7 @@ impl World {
         ))
     }
     /// Retain the configured original pool for same-process restore and publication.
-    pub(crate) fn operation_index_budget(&self) -> &mv::allocation::AllocationBudget {
+    pub(crate) fn operation_index_budget(&self) -> &iroha_allocation::AllocationBudget {
         self.kagemusha_mint_credit_operations.allocation_budget()
     }
     fn with_assets_on<D, A, Ad, As, N>(
@@ -20197,14 +20198,14 @@ impl World {
     /// Acquire every original World field or return a local storage refusal.
     pub fn try_block(
         &self,
-        execution_budget: &mv::allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<WorldBlock<'_>, mv::storage::AdmittedStorageError> {
         build_world_block!(self, mv::BlockMode::Ordinary, execution_budget)
     }
     /// Acquire the exact replacement overlay under the original finite pool.
     pub fn try_block_and_revert(
         &self,
-        execution_budget: &mv::allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<WorldBlock<'_>, mv::storage::AdmittedStorageError> {
         build_world_block!(self, mv::BlockMode::Replace, execution_budget)
     }
@@ -20213,13 +20214,13 @@ impl World {
     /// to `try_block`; this convenience is unavailable on those paths.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn block(&self) -> WorldBlock<'_> {
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         self.try_block(&budget).expect("fixture World admission")
     }
     /// Acquire a fixture replacement World using a finite test-only control pool.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn block_and_revert(&self) -> WorldBlock<'_> {
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         self.try_block_and_revert(&budget)
             .expect("fixture World replacement admission")
     }
@@ -25965,7 +25966,7 @@ impl State {
     )]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
-    ) -> Result<PublicationGuard<'_>, concread::release::ReleaseWait> {
+    ) -> Result<PublicationGuard<'_>, iroha_allocation::release::ReleaseWait> {
         self.lane_lifecycle_lock.try_lock_or_wait()
     }
     /// Resolve a physical lane incarnation from one coherent committed view.
@@ -27600,10 +27601,10 @@ impl State {
             nexus: parking_lot::RwLock::new(nexus),
             nexus_runtime_restored_from_snapshot: false,
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
-            evidence_preparation_budget: mv::allocation::AllocationBudget::new(
+            evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
             ),
-            stake_index_budget: mv::allocation::AllocationBudget::new(
+            stake_index_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
             ),
             tiered_backend: Arc::clone(&tiered_backend),
@@ -30519,8 +30520,8 @@ impl State {
             '_,
             LaneManifestRegistryHandle,
         >,
-        hashes: &mut Option<concread::release::DeferredReleaseBatch>,
-        membership: &mut concread::release::DeferredReleaseBatch,
+        hashes: &mut Option<iroha_allocation::release::DeferredReleaseBatch>,
+        membership: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<Option<StateView<'_>>, LaneLifecycleError> {
         const STATE_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
         let caller = core::panic::Location::caller();
@@ -31932,10 +31933,10 @@ impl State {
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             let replacement_evidence_preparation_budget = (evidence_preparation_bytes
                 != self.evidence_preparation_budget.limit_bytes())
-            .then(|| mv::allocation::AllocationBudget::new(evidence_preparation_bytes));
+            .then(|| iroha_allocation::AllocationBudget::new(evidence_preparation_bytes));
             let replacement_stake_index_budget = (stake_index_bytes
                 != self.stake_index_budget.limit_bytes())
-            .then(|| mv::allocation::AllocationBudget::new(stake_index_bytes));
+            .then(|| iroha_allocation::AllocationBudget::new(stake_index_bytes));
             *self.nexus.get_mut() = nexus;
             if let Some(budget) = replacement_evidence_preparation_budget {
                 self.evidence_preparation_budget = budget;
@@ -32001,11 +32002,11 @@ impl State {
         Ok(())
     }
     /// Borrow the original process-local evidence preparation pool.
-    pub(crate) fn evidence_preparation_budget(&self) -> &mv::allocation::AllocationBudget {
+    pub(crate) fn evidence_preparation_budget(&self) -> &iroha_allocation::AllocationBudget {
         &self.evidence_preparation_budget
     }
     /// Borrow the original process-local stake-index backing pool.
-    pub(crate) fn stake_index_budget(&self) -> &mv::allocation::AllocationBudget {
+    pub(crate) fn stake_index_budget(&self) -> &iroha_allocation::AllocationBudget {
         &self.stake_index_budget
     }
     fn ensure_config_catalog_mutation_is_pre_genesis(
@@ -32087,10 +32088,10 @@ impl State {
         let stake_index_bytes = nexus.storage.consensus_stake_index_bytes;
         let replacement_evidence_preparation_budget = (evidence_preparation_bytes
             != self.evidence_preparation_budget.limit_bytes())
-        .then(|| mv::allocation::AllocationBudget::new(evidence_preparation_bytes));
+        .then(|| iroha_allocation::AllocationBudget::new(evidence_preparation_bytes));
         let replacement_stake_index_budget = (stake_index_bytes
             != self.stake_index_budget.limit_bytes())
-        .then(|| mv::allocation::AllocationBudget::new(stake_index_bytes));
+        .then(|| iroha_allocation::AllocationBudget::new(stake_index_bytes));
         let mut releases = LaneLifecycleReleases::new(self);
         validate_lane_authority_geometry(&nexus.lane_catalog, &nexus.dataspace_catalog)?;
         nexus.configured_lane_catalog = configured_lane_catalog;
@@ -38794,7 +38795,7 @@ mod tiered_snapshot_diff_tests {
     ) -> Result<Box<State>, deserialize::StateRestoreError> {
         deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-            execution_budget: mv::allocation::AllocationBudget::new(
+            execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),

@@ -28,7 +28,7 @@ type CastingBinding =
 
 struct OriginalReceiptSource {
     finality: SumeragiFinalityProof,
-    witness: mv::allocation::RetainedPayload<ExecWitness>,
+    witness: iroha_allocation::RetainedPayload<ExecWitness>,
     casting_bindings: ordinary_writes::CastingOwner,
 }
 

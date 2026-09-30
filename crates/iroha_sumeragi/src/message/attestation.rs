@@ -44,7 +44,7 @@ pub struct CommitAttestation {
 mod tests {
     use super::*;
     use crate::bytes::ByteAdmissionError;
-    use mv::allocation::{AllocationBudget, ChargedBuffer};
+    use iroha_allocation::{AllocationBudget, ChargedBuffer};
     use norito::codec::{DecodeAll as _, Encode as _};
 
     #[test]

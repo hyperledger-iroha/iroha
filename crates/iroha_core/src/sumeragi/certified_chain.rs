@@ -699,7 +699,9 @@ impl PrefixVerifierContext<'_> {
         checked.map_err(|error| ChainReadError::Certificate { height, error })?;
         // Parent-authenticated parameters and authority also bind the original signed row
         // table. A valid CommitQC alone does not certify possession of these payload bytes.
-        let config = config.ok_or_else(|| malformed("non-genesis certificate lacks parent-authenticated configuration".into()))?;
+        let config = config.ok_or_else(|| {
+            malformed("non-genesis certificate lacks parent-authenticated configuration".into())
+        })?;
         verify_availability(&committed, config, &authority.crypto)?;
         Ok(CertifiedBlock {
             committed,
@@ -1152,9 +1154,11 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             {
                 return Err(ChainReadError::ForeignGenesis);
             }
-            return self
-                .verification_context()
-                .verify_certificate(committed, &prefix.authority, None);
+            return self.verification_context().verify_certificate(
+                committed,
+                &prefix.authority,
+                None,
+            );
         }
         while prefix
             .tip

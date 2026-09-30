@@ -496,8 +496,13 @@ not establish the monetary ratchet. See the [Android attestation
 contract](https://source.android.com/docs/security/features/keystore/attestation)
 and [phone algorithm](kagemusha_v1_phone_algorithm.md).
 
-The Android SDK now has typed method-12 enrollment framing over the existing
-native coordinator. A rebuilt ABI-23 host bridge runs nine focused Android
+The current native coordinator revokes its process-local handle after every
+failed dispatch or response publication. SDK transports mirror that revocation;
+successful exact reads and original-ticket cancellation retries require a live
+owner. Uncertain outcomes require qualified backend recovery in a fresh process.
+
+An earlier Android candidate had typed method-12 enrollment framing over the
+native coordinator. A rebuilt ABI-23 host bridge ran nine focused Android
 host-native tests, including original-ticket phase-6 cancellation retry after a
 lost response or a locally poisoned proof response. The adapter retains one
 phase-1 selection in process, can read its byte-identical response after a lost

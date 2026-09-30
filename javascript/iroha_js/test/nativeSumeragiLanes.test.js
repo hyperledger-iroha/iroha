@@ -44,6 +44,8 @@ for (const [name, json] of Object.entries(laneRows)) {
       assert.ok(Object.isFrozen(lane.record));
       assert.ok(Object.isFrozen(lane.record.committee));
       assert.ok(Object.isFrozen(lane.record.params.key_allowed_algorithms));
+      assert.ok(Object.isFrozen(lane.record.da_layout));
+      assert.ok(Object.isFrozen(lane.record.da_layout.encoding));
     }
   });
 }
@@ -57,6 +59,10 @@ test("lane corpus keeps every lane state and exact unsigned range", () => {
   assert.ok(running.record.committee.every(({ peer, pop }) => peer.startsWith("ea0130") && Buffer.from(pop, "base64").length === 96));
   assert.equal(running.record.closing, null);
   assert.deepEqual([...running.record.params.key_allowed_algorithms], ["bls_normal"]);
+  assert.deepEqual(running.record.da_layout, {
+    encoding: { encoding: "reed_solomon16", details: null }, chunk_size_bytes: 262144,
+    data_shards: 4, parity_shards: 2, max_payload_size_bytes: 16777216, max_chunk_count: 1024,
+  });
   assert.equal(running.instance.protocol_version, 1);
   assert.equal(running.instance.leader, running.record.committee[0].peer);
   assert.equal(running.instance.footprint.probe, U64_MAX);
@@ -83,17 +89,40 @@ test("every lane field is required and unknown or retired fields fail closed", (
   for (const retired of ["lane_finality_manifest", "merge_carrier", "queue_plan", "relay_envelope"]) {
     assert.throws(() => parseSumeragiLanesJson(mutateRecord((record) => { record[retired] = null; })), retired);
   }
-  for (const owner of ["params", "merged"]) {
+  for (const owner of ["params", "da_layout", "merged"]) {
     for (const field of Object.keys(lane.record[owner])) {
       assert.throws(() => parseSumeragiLanesJson(mutateRecord((record) => { delete record[owner][field]; })), `${owner}.${field}`);
     }
     assert.throws(() => parseSumeragiLanesJson(mutateRecord((record) => { record[owner].legacy = 0; })));
   }
+  for (const field of ["encoding", "details"]) {
+    assert.throws(() => parseSumeragiLanesJson(mutateRecord((record) => { delete record.da_layout.encoding[field]; })), field);
+  }
+  assert.throws(() => parseSumeragiLanesJson(mutateRecord((record) => { record.da_layout.encoding.legacy = null; })));
   for (const field of ["peer", "pop"]) {
     assert.throws(() => parseSumeragiLanesJson(mutateRecord((record) => { delete record.committee[0][field]; })), field);
   }
   assert.throws(() => parseSumeragiLanesPayload({}));
   assert.throws(() => parseSumeragiLanesPayload([{ record: lane.record, instance: { protocol_version: 1 } }]));
+});
+
+test("lane data availability admits compact final stripes and rejects malformed RS16 geometry", () => {
+  const changedLayout = (change) => mutateRecord((record) => change(record.da_layout));
+  const compact = parseSumeragiLanesJson(changedLayout((layout) => {
+    layout.max_payload_size_bytes = 4194305; layout.max_chunk_count = 30;
+  }));
+  assert.equal(compact[0].record.da_layout.max_payload_size_bytes, 4194305);
+  for (const [field, bad] of [
+    ["chunk_size_bytes", 0], ["chunk_size_bytes", 1], ["chunk_size_bytes", 3], ["chunk_size_bytes", 262146],
+    ["data_shards", 0], ["data_shards", 17], ["data_shards", 65536], ["parity_shards", 0], ["parity_shards", 17],
+    ["max_payload_size_bytes", 0], ["max_payload_size_bytes", 16777217], ["max_chunk_count", 0],
+    ["max_chunk_count", 1025], ["max_chunk_count", 95],
+  ]) assert.throws(() => parseSumeragiLanesJson(changedLayout((layout) => { layout[field] = bad; })), `${field}=${bad}`);
+  assert.throws(() => parseSumeragiLanesJson(changedLayout((layout) => { layout.data_shards = 1; layout.parity_shards = 2; })));
+  assert.throws(() => parseSumeragiLanesJson(changedLayout((layout) => { layout.encoding.encoding = "plain"; })));
+  assert.throws(() => parseSumeragiLanesJson(changedLayout((layout) => { layout.encoding.details = {}; })));
+  assert.throws(() => parseSumeragiLanesJson(changedLayout((layout) => { layout.max_payload_size_bytes = 4194305; layout.max_chunk_count = 29; })));
+  assert.throws(() => parseSumeragiLanesJson(mutateRecord((record) => { record.params.max_block_bytes = 16777217; })));
 });
 
 test("malformed lane scalars, keys, proofs and bodies never alias canonical values", () => {

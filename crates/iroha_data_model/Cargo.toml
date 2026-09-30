@@ -40,11 +40,10 @@ governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 
 [dependencies]
+iroha_allocation = { workspace = true }
 # Protocol JSON is mandatory: custom parameters and retained ledger metadata use it.
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }
 iroha_model_base = { workspace = true }
-# Resident contract-state commitments retain the caller's original allocation pool.
-mv = { workspace = true }
 
 iroha_primitives = { workspace = true, features = ["json"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "json"] }
@@ -82,6 +81,8 @@ tempfile = { workspace = true, optional = true }
 rustix = { version = "1.1.4", features = ["fs", "process"], optional = true }
 
 [dev-dependencies]
+# Exercise real runtime storage JSON only in model tests.
+mv = { workspace = true }
 criterion = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm", "bfv-test-fixtures"] }
 hex-literal = { workspace = true }

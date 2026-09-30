@@ -2,8 +2,8 @@
 
 use std::io::{self, Write};
 
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_sumeragi::{availability::PayloadBytes, message::ByteAdmissionError};
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 
 /// A local resource refusal preserves the original source and completed encoding.
 #[derive(Debug)]

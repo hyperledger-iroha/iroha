@@ -265,9 +265,9 @@ pub struct Kura {
     /// Configured finite maximum for an original native context archive record.
     native_context_archive_max_bytes: NonZeroUsize,
     /// One finite pool shared by every State hash generation using this store.
-    block_hash_history_budget: mv::allocation::AllocationBudget,
+    block_hash_history_budget: iroha_allocation::AllocationBudget,
     /// One finite pool shared by every State transaction-membership generation using this store.
-    transaction_history_budget: mv::allocation::AllocationBudget,
+    transaction_history_budget: iroha_allocation::AllocationBudget,
     membership_storage: membership_storage::MembershipStorage,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
@@ -505,11 +505,11 @@ enum LaneHistoryCompactionOutcome {
 }
 impl Kura {
     /// Retain the original configured pool for State history construction and edits.
-    pub(crate) fn block_hash_history_budget(&self) -> mv::allocation::AllocationBudget {
+    pub(crate) fn block_hash_history_budget(&self) -> iroha_allocation::AllocationBudget {
         self.block_hash_history_budget.clone()
     }
     /// Retain the original configured pool through membership restore, replay, and edits.
-    pub(crate) fn transaction_history_budget(&self) -> mv::allocation::AllocationBudget {
+    pub(crate) fn transaction_history_budget(&self) -> iroha_allocation::AllocationBudget {
         self.transaction_history_budget.clone()
     }
     fn notify_block_writer_sender(
@@ -1536,8 +1536,8 @@ impl Kura {
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
         let (sidecar_lock, sidecar_read_permit) = PublicationMutex::with_read_permit();
         let kura = Arc::new(Self {
-            block_hash_history_budget: mv::allocation::AllocationBudget::new(history_bytes),
-            transaction_history_budget: mv::allocation::AllocationBudget::new(
+            block_hash_history_budget: iroha_allocation::AllocationBudget::new(history_bytes),
+            transaction_history_budget: iroha_allocation::AllocationBudget::new(
                 transaction_history_bytes,
             ),
             membership_storage,
@@ -1769,13 +1769,13 @@ impl Kura {
                 iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             )
             .expect("default finite membership control fits its original pool"),
-            block_hash_history_budget: mv::allocation::AllocationBudget::new(
+            block_hash_history_budget: iroha_allocation::AllocationBudget::new(
                 usize::try_from(
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
                 )
                 .expect("default history budget fits supported platforms"),
             ),
-            transaction_history_budget: mv::allocation::AllocationBudget::new(
+            transaction_history_budget: iroha_allocation::AllocationBudget::new(
                 usize::try_from(
                     iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES.get(),
                 )

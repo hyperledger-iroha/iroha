@@ -7035,7 +7035,7 @@ mod validation_fee_registry_restore_tests {
         let snapshot = json::to_value(&state).expect("serialize validation-fee restore fixture");
         KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-            execution_budget: mv::allocation::AllocationBudget::new(
+            execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             lane_manifests: state.lane_manifests.read().clone(),
@@ -7195,7 +7195,7 @@ mod validation_fee_registry_restore_tests {
         let kura = Kura::blank_kura_for_testing();
         let error = build_state(
             BuildStateInputs {
-                execution_budget: mv::allocation::AllocationBudget::new(
+                execution_budget: iroha_allocation::AllocationBudget::new(
                     iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ),
                 lane_manifests: Arc::new(LaneManifestRegistry::empty()),
@@ -7426,7 +7426,7 @@ struct NativeScheduleSnapshot {
 }
 fn take_native_consensus_schedule(
     map: &mut SnapshotJsonMap<'_>,
-    budget: &mv::allocation::AllocationBudget,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<Cell<crate::sumeragi::schedule::RetainedConsensusSchedule>, StateRestoreError> {
     use crate::sumeragi::schedule::{RetainedConsensusSchedule, ScheduleError};
     let snapshot: NativeScheduleSnapshot = take_required(map, "consensus_schedule")?;
@@ -7473,7 +7473,7 @@ fn expect_completed_restore_rejection(error: StateRestoreError) -> json::Error {
 /// immediately performs every existing validation and index rebuild in order.
 #[inline(never)]
 fn decode_world_fields(
-    execution_budget: &mv::allocation::AllocationBudget,
+    execution_budget: &iroha_allocation::AllocationBudget,
     mut map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, StateRestoreError> {
@@ -8545,7 +8545,7 @@ fn decode_world_fields(
 }
 
 fn parse_world(
-    execution_budget: &mv::allocation::AllocationBudget,
+    execution_budget: &iroha_allocation::AllocationBudget,
     map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, StateRestoreError> {
@@ -9026,7 +9026,7 @@ mod asset_transfer_control_persistence_tests {
 }
 
 struct BuildStateInputs {
-    execution_budget: mv::allocation::AllocationBudget,
+    execution_budget: iroha_allocation::AllocationBudget,
     lane_manifests: LaneManifestRegistryHandle,
     canonical_runtime: Cell<SnapshotNexusRuntime>,
     native_execution_tip: Option<native_execution_tip::TipCell>,
@@ -9247,10 +9247,10 @@ fn build_state(
         native_execution_tip,
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
-        evidence_preparation_budget: mv::allocation::AllocationBudget::new(
+        evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
             evidence_preparation_bytes,
         ),
-        stake_index_budget: mv::allocation::AllocationBudget::new(stake_index_bytes),
+        stake_index_budget: iroha_allocation::AllocationBudget::new(stake_index_bytes),
         tiered_backend: Arc::clone(&tiered_backend),
         tiered_snapshot_worker,
         fraud_monitoring: default_fraud_monitoring_cfg(),
@@ -9684,7 +9684,7 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let error = match parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse election fixture"),
@@ -9935,7 +9935,7 @@ mod decode_tests {
         validate_musubi_persisted_snapshot(world)?;
         validate_musubi_live_projections(
             world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10255,7 +10255,7 @@ mod decode_tests {
         let (world, _, archive_id, _) = seeded_musubi_publication_snapshot();
         validate_musubi_live_projections(
             &world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10277,7 +10277,7 @@ mod decode_tests {
         block.commit();
         let error = validate_musubi_live_projections(
             &world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10293,7 +10293,7 @@ mod decode_tests {
         block.commit();
         let error = validate_musubi_live_projections(
             &world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10322,7 +10322,7 @@ mod decode_tests {
             .insert(orphan.archive_id, orphan);
         let error = validate_musubi_live_projections(
             &world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10353,7 +10353,7 @@ mod decode_tests {
                 .insert(archive_id, original);
             crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
                 &mut block,
-                &mv::allocation::AllocationBudget::new(
+                &iroha_allocation::AllocationBudget::new(
                     iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ),
                 2,
@@ -10367,7 +10367,7 @@ mod decode_tests {
             block.musubi_archive_availability.insert(archive_id, stale);
             let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
                 &mut block,
-                &mv::allocation::AllocationBudget::new(
+                &iroha_allocation::AllocationBudget::new(
                     iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ),
                 2,
@@ -10403,7 +10403,7 @@ mod decode_tests {
         );
         let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
             &mut replacement,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             2,
@@ -10440,7 +10440,7 @@ mod decode_tests {
         block.musubi_archives.insert(archive_id, changed);
         let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
             &mut block,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             2,
@@ -10463,7 +10463,7 @@ mod decode_tests {
         let key = seed_provider_attested_location(&mut world, &release, archive_id);
         validate_musubi_live_projections(
             &world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10480,7 +10480,7 @@ mod decode_tests {
         removal.commit();
         let error = validate_musubi_live_projections(
             &world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10498,7 +10498,7 @@ mod decode_tests {
         repair.commit();
         let error = validate_musubi_live_projections(
             &world,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -10521,7 +10521,7 @@ mod decode_tests {
         block.musubi_provider_bundle_attestations.remove(key);
         let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
             &mut block,
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             2,
@@ -10844,7 +10844,7 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let restored = parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse governed pool World"),
@@ -10871,7 +10871,7 @@ mod decode_tests {
         }
         let corrupt = json::to_json(&world).expect("serialize corrupt governed pool projection");
         let error = match parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             SnapshotJsonMap::parse(&corrupt, "world").expect("parse corrupt World"),
@@ -10919,7 +10919,7 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let restored = parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse finalized settlement World"),
@@ -10987,7 +10987,7 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let restored = parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse prepared settlement World"),
@@ -11040,7 +11040,7 @@ mod decode_tests {
         let operation_index_refusal = std::cell::RefCell::new(None);
         let ivm = IVM::new(0);
         let error = match parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse adversarial World"),
@@ -11087,7 +11087,7 @@ mod decode_tests {
             "authoritative SoraFS alias records must remain in the canonical snapshot"
         );
         parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             SnapshotJsonMap::parse(&encoded, "world").expect("parse default World"),
@@ -11101,7 +11101,7 @@ mod decode_tests {
             .expect("canonical World contains account_aliases");
 
         let error = match parse_world(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             map,
@@ -11129,7 +11129,7 @@ mod decode_tests {
             let error = SnapshotJsonMap::parse(&injected, "world")
                 .and_then(|map| {
                     parse_world(
-                        &mv::allocation::AllocationBudget::new(
+                        &iroha_allocation::AllocationBudget::new(
                             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                         ),
                         map,
@@ -11199,7 +11199,7 @@ mod decode_tests {
         let snapshot = json::to_value(&state).expect("serialize populated State snapshot");
         let restored = KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-            execution_budget: mv::allocation::AllocationBudget::new(
+            execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             lane_manifests: state.lane_manifests.read().clone(),
@@ -11662,7 +11662,7 @@ mod decode_tests {
             .into_iter()
             .map(|layout| layout.size())
             .sum::<usize>();
-        let pool = mv::allocation::AllocationBudget::new(demand - 1);
+        let pool = iroha_allocation::AllocationBudget::new(demand - 1);
         let mut map = SnapshotJsonMap::parse(raw, "world").unwrap();
         let error = take_musubi_replication_shortfall_releases(&mut map, &pool)
             .err()
@@ -11680,7 +11680,7 @@ mod decode_tests {
             r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9,"extra":0}}"#,
             r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9,"blocks":9}}"#,
         ] {
-            let budget = mv::allocation::AllocationBudget::new(demand);
+            let budget = iroha_allocation::AllocationBudget::new(demand);
             let mut map = SnapshotJsonMap::parse(raw, "world").unwrap();
             let error = take_musubi_replication_shortfall_releases(&mut map, &budget)
                 .err()

@@ -31,7 +31,7 @@ use crate::sumeragi::driver::{
     payload_build::PayloadBuild,
     traits::{BlockStore, Executor, PublicationError},
 };
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 /// The global chain as a lane executor sees it: anchors, and a way to wait for one.
 pub trait AnchorSource: AnchorView + Send + Sync {

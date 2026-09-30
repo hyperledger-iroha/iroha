@@ -67,6 +67,12 @@ final class NativeSumeragiLanesTests: XCTestCase {
         XCTAssertEqual(running.record.merged.blockHash, String(repeating: "22", count: 32))
         XCTAssertEqual(running.record.merged.result, String(repeating: "33", count: 32))
         XCTAssertEqual(running.record.params.keyAllowedAlgorithms, ["bls_normal"])
+        XCTAssertEqual(running.record.daLayout.encoding, "reed_solomon16")
+        XCTAssertEqual(running.record.daLayout.chunkSizeBytes, 262144)
+        XCTAssertEqual(running.record.daLayout.dataShards, 4)
+        XCTAssertEqual(running.record.daLayout.parityShards, 2)
+        XCTAssertEqual(running.record.daLayout.maxPayloadSizeBytes, 16777216)
+        XCTAssertEqual(running.record.daLayout.maxChunkCount, 1024)
         let instance = try XCTUnwrap(running.instance)
         XCTAssertEqual(instance.protocolVersion, 1)
         XCTAssertEqual(instance.leader, running.record.committee[0].peer)
@@ -107,7 +113,7 @@ final class NativeSumeragiLanesTests: XCTestCase {
         for retired in ["lane_finality_manifest", "merge_carrier", "queue_plan", "relay_envelope"] {
             XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedRecord { $0[retired] = NSNull() }), retired)
         }
-        for owner in ["params", "merged"] {
+        for owner in ["params", "da_layout", "merged"] {
             let nested = try XCTUnwrap(record[owner] as? [String: Any])
             for field in nested.keys {
                 XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedRecord {
@@ -118,12 +124,54 @@ final class NativeSumeragiLanesTests: XCTestCase {
                 var copy = nested; copy["legacy"] = 0; $0[owner] = copy
             }))
         }
+        let layout = try XCTUnwrap(record["da_layout"] as? [String: Any])
+        let encoding = try XCTUnwrap(layout["encoding"] as? [String: Any])
+        for field in encoding.keys {
+            XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedRecord {
+                var copy = encoding; copy.removeValue(forKey: field)
+                var changed = layout; changed["encoding"] = copy; $0["da_layout"] = changed
+            }), "da_layout.encoding.\(field)")
+        }
+        XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedRecord {
+            var copy = encoding; copy["legacy"] = NSNull()
+            var changed = layout; changed["encoding"] = copy; $0["da_layout"] = changed
+        }))
         let member = try XCTUnwrap((record["committee"] as? [[String: Any]])?.first)
         for field in member.keys {
             XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedRecord {
                 var copy = member; copy.removeValue(forKey: field); $0["committee"] = [copy]
             }), "committee.\(field)")
         }
+    }
+
+    func testDataAvailabilityKeepsCompactFinalStripesAndRejectsInvalidGeometry() throws {
+        let record = try XCTUnwrap(try lanes()[0]["record"] as? [String: Any])
+        let layout = try XCTUnwrap(record["da_layout"] as? [String: Any])
+        func changedLayout(_ values: [String: Any]) throws -> Data {
+            try changedRecord { $0["da_layout"] = layout.merging(values) { _, replacement in replacement } }
+        }
+        let compact: [String: Any] = ["max_payload_size_bytes": 4194305, "max_chunk_count": 30]
+        XCTAssertEqual(try ToriiSumeragiLaneStatus.parseJSONList(changedLayout(compact))[0].record.daLayout.maxPayloadSizeBytes, 4194305)
+        for (field, bad) in [
+            ("chunk_size_bytes", 0), ("chunk_size_bytes", 1), ("chunk_size_bytes", 3), ("chunk_size_bytes", 262146),
+            ("data_shards", 0), ("data_shards", 17), ("data_shards", 65536), ("parity_shards", 0), ("parity_shards", 17),
+            ("max_payload_size_bytes", 0), ("max_payload_size_bytes", 16777217), ("max_chunk_count", 0),
+            ("max_chunk_count", 1025), ("max_chunk_count", 95),
+        ] {
+            XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedLayout([field: bad])), "\(field)=\(bad)")
+        }
+        for bad: [String: Any] in [
+            ["data_shards": 1, "parity_shards": 2],
+            ["encoding": ["encoding": "plain", "details": NSNull()]],
+            ["encoding": ["encoding": "reed_solomon16", "details": [:]]],
+            ["max_payload_size_bytes": 4194305, "max_chunk_count": 29],
+        ] {
+            XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedLayout(bad)))
+        }
+        let params = try XCTUnwrap(record["params"] as? [String: Any])
+        XCTAssertThrowsError(try ToriiSumeragiLaneStatus.parseJSONList(changedRecord {
+            var changed = params; changed["max_block_bytes"] = 16777217; $0["params"] = changed
+        }))
     }
 
     func testMalformedLaneScalarsKeysAndProofsAreRejected() throws {

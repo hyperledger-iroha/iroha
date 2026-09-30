@@ -24303,7 +24303,7 @@ seiyaku DurableOwner {
         assert_eq!(host.zk_tree_roots_history_len, roots_history_len_before);
 
         let startup_error = State::try_new(
-            mv::allocation::AllocationBudget::new(usize::MAX),
+            iroha_allocation::AllocationBudget::new(usize::MAX),
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
@@ -24369,7 +24369,7 @@ seiyaku DurableOwner {
                 );
                 assert!(!host.zk_elections.contains_key("candidate"));
                 let startup_error = State::try_new(
-                    mv::allocation::AllocationBudget::new(usize::MAX),
+                    iroha_allocation::AllocationBudget::new(usize::MAX),
                     world,
                     kura,
                     query,
@@ -24411,7 +24411,7 @@ seiyaku DurableOwner {
         );
         assert!(!host.zk_elections.contains_key("candidate/alias"));
         let startup_error = State::try_new(
-            mv::allocation::AllocationBudget::new(usize::MAX),
+            iroha_allocation::AllocationBudget::new(usize::MAX),
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),

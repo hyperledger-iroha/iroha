@@ -1405,7 +1405,7 @@ mod snapshot_read_error_tests {
             BlockHashAdmissionError, MembershipAdmissionError, StateAdmissionError,
             StateStorageAdmissionError,
         };
-        let budget = mv::allocation::AllocationBudget::new(1);
+        let budget = iroha_allocation::AllocationBudget::new(1);
         let _occupied = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         for admission in [
@@ -2625,8 +2625,8 @@ impl Iroha {
         };
         let mut loaded_state_from_snapshot = false;
         let state_execution_budget =
-            mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
-        let operation_index_budget = mv::allocation::AllocationBudget::new(
+            iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        let operation_index_budget = iroha_allocation::AllocationBudget::new(
             usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
                 |_| {
                     Report::new(StartError::InitKura)
@@ -2635,7 +2635,7 @@ impl Iroha {
             )?,
         );
         let snapshot_read_buffer_budget =
-            mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
+            iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
             try_read_snapshot_with_limits(
                 &state_execution_budget,
@@ -8879,12 +8879,12 @@ fn validate_genesis_execution_offline(
     })?;
     let kura = open_disposable_validation_kura(config, &validation_root)?;
     let execution_budget =
-        mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
     let mut world = World::try_with_resource_budgets(
         [genesis_domain(config.genesis.public_key.clone())],
         [genesis_account(config.genesis.public_key.clone())],
         [],
-        mv::allocation::AllocationBudget::new(
+        iroha_allocation::AllocationBudget::new(
             usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
                 |_| {
                     Report::new(MainError::Config)
@@ -11343,12 +11343,12 @@ mod tests {
             let root = DisposableValidationRoot::create().expect("temporary genesis storage");
             let kura = open_disposable_validation_kura(config, &root).expect("genesis Kura");
             let budget =
-                mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+                iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
             let mut world = World::try_with_resource_budgets(
                 [genesis_domain(signer.public_key().clone())],
                 [genesis_account(signer.public_key().clone())],
                 [],
-                mv::allocation::AllocationBudget::new(
+                iroha_allocation::AllocationBudget::new(
                     usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get())
                         .expect("operation-index budget"),
                 ),

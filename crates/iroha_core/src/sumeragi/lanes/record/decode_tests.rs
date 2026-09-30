@@ -1,8 +1,8 @@
 //! Every bulk decode backing/control phase retains its actual source and partial owners.
 
+use iroha_allocation::ChargedShared;
 use iroha_sumeragi::message::{AttestationSignature, MAX_ATTESTATION_SIGNATURE_BYTES};
 use iroha_sumeragi::types::MAX_COMMITTEE_SIZE;
-use mv::allocation::ChargedShared;
 
 use super::*;
 use crate::sumeragi::lanes::record::tests::{fixture, raw_job, verify};

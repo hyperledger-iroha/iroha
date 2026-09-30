@@ -1,5 +1,5 @@
 //! Current four-validator checkpoint and publication authentication regressions.
-use super::super::tests::{Fixture, result, sign_qc};
+use super::super::tests::{Fixture, author_payload, result, sign_qc};
 use super::*;
 use crate::{
     account::AccountId,
@@ -56,12 +56,21 @@ fn extend(
         parent_hash: parent.core_hash,
         parent_result: parent.result,
         payload_hash: payload_hash(&crypto, &payload),
+        availability_digest: Hash32::ZERO,
         payload_len: payload.len().try_into().unwrap(),
         proposer: 0,
         skipped_leaders: vec![],
         control_witness: iroha_sumeragi::types::ControlWitness::empty(),
         attest: false,
     };
+    let authored = author_payload(
+        header,
+        &payload,
+        &parent.commitment.schedule.current,
+        &fixture.keys,
+    );
+    let header = authored.body.header().clone();
+    let availability = norito::encode_canonical(authored.body.availability()).unwrap();
     let mut qc = Qc {
         kind: VoteKind::Commit,
         instance: header.instance,
@@ -81,6 +90,7 @@ fn extend(
         norito::encode_canonical(&header).unwrap(),
         norito::encode_canonical(&qc).unwrap(),
         result.preimage().unwrap(),
+        availability,
     )));
     SumeragiFinalityProof {
         block_header: block.header(),
@@ -358,6 +368,7 @@ fn publication_proof_rejects_signed_failure_replay_phase_and_output_substitution
         consensus_header,
         norito::encode_canonical(&qc).unwrap(),
         result_preimage,
+        certificate.availability().to_vec(),
     )));
     corrupt.lineage[1].block_wire = block.encode_wire().unwrap();
     assert!(verify_sorafs_publication_v1(&fixture.network, &checkpoint, &tx, &corrupt).is_err());
@@ -442,6 +453,7 @@ fn retained_decision_verifier_uses_selected_checkpoint_commitments() {
         header,
         norito::encode_canonical(&qc).unwrap(),
         result.preimage().unwrap(),
+        cert.availability().to_vec(),
     )));
     forged.block_wire = block.encode_wire().unwrap();
     assert!(forged.decode_checked().is_ok());

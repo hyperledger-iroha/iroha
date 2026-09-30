@@ -508,8 +508,8 @@ def require_block_start_construction(state: str) -> None:
     handoff = section(code, "finish_state_block_construction(||{", "})}}#[inline(never)]", path)
     prefix = (
         "letcanonical_runtime::AcquiredRuntimeBlockFields{world,transactions,"
-        "commit_topology,prev_commit_topology,lane_consensus_contexts,canonical_runtime,"
-        "projection,block_hashes,da_rewind_releases,}=original.take()"
+        "commit_topology,prev_commit_topology,canonical_runtime,"
+        "native_execution_tip,projection,block_hashes,da_rewind_releases,}=original.take()"
         '.expect("originalacquiredStateblock").into_fields();'
         "letblock=StateBlock::from_fields(StateBlockFields{"
     )
@@ -551,20 +551,14 @@ def require_block_start_construction(state: str) -> None:
     )}
     expected.update({
         "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
+        "native_execution_tip": "block_field::BlockField::new(native_execution_tip)",
         "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",
         "transactions": "storage_transactions::TransactionsBlockField::new(transactions)",
         "commit_topology": "block_field::BlockField::new(commit_topology)",
         "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
-        "lane_consensus_contexts": "block_field::BlockField::new(lane_consensus_contexts)",
         "local_storage_refusal": "None",
         "state_ref": "self", "_curr_block": "curr_block",
         "nexus": "projection.nexus", "start_of_block_effects_applied": "false",
-        "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
-        "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",
-        "transactions": "storage_transactions::TransactionsBlockField::new(transactions)",
-        "commit_topology": "block_field::BlockField::new(commit_topology)",
-        "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
-        "lane_consensus_contexts": "block_field::BlockField::new(lane_consensus_contexts)",
         "pending_parliament_telemetry_events":
             'pending_parliament_telemetry_events.take().expect("preparedStateinput")',
     })
@@ -907,119 +901,164 @@ def require_parliament_commit_publication(state: str) -> None:
         raise RuntimeError(f"{path}: Parliament commit must have one exact transition-metric publisher")
 
 
-def require_parliament_beacon_requirement(beacon: str) -> None:
-    """One exact indexed requirement survives deferred activation and candidate gating."""
-    # TODO(N1): the previous consensus runtime's `v2_beacon.rs`, `wire::HeightContext`
-    # and the `State::apply_without_execution_inner` section are deleted, so this
-    # check and its callers fail. Rebind the Parliament beacon-pulse requirement and
-    # the other runtime sections to `crates/iroha_core/src/sumeragi/epoch_beacon.rs`.
-    path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
-    def compact(text: str) -> str:
-        return re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", text))
+def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
+    """Bind indexed demand to the retained native source and transported witness."""
+    path = "crates/iroha_core/src/sumeragi/epoch_beacon.rs"
+    producer_path = "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
 
-    requirement = section(beacon,
-        "    fn required_for_height(context: &wire::HeightContext, state: &State) -> bool {",
-        "    /// Activate only on real carrier demand,", path)
+    def compact(text: str) -> str:
+        return re.sub(r"\s+", "", re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S))
+
+    requirement = section(beacon, "pub(crate) fn required(",
+                          "/// Verify presence/absence", path)
     expected = """
-        let npos_boundary_requested = context.mode == wire::ConsensusMode::Npos
-            && context.height.checked_add(1) == Some(context.epoch_end_height);
-        let world = state.world_view();
-        let logical_beacon_id = BeaconSessionId::for_network_v1(&context.network_id);
-        let parliament_requested = world.parliament_required_beacon_pulse_slots
-            .get(&(logical_beacon_id, context.height))
-            .is_some_and(|attempts| !attempts.is_empty());
-        npos_boundary_requested || parliament_requested
+        world: &impl WorldReadOnly, current: &ValidatorEpochContextV1, height: u64,
+    ) -> bool {
+        (current.mode == ConsensusMode::Npos
+            && height.checked_add(1) == Some(current.authorization.last_height))
+            || world.parliament_required_beacon_pulse_slots()
+                .get(&(BeaconSessionId::for_network_v1(&current.network_id), height))
+                .is_some_and(|attempts| !attempts.is_empty())
     }
     """
     if compact(requirement) != compact(expected):
         raise RuntimeError(f"{path}: mandatory beacon demand must use the exact committed network-height index")
-    opened = compact(section(beacon, "    pub(crate) fn open(",
-        "    /// Retain the height's pulse requirement without starting an idle ceremony.", path))
-    required_assignment = "letrequired_for_consensus=Self::required_for_height(context,state);"
-    require_all(path, opened, (
-        "context.validate()?;", required_assignment,
-        "if!required_for_consensus{returnOk(Self{",
-        "letactive=matchactive{Ok(active)=>Some(active),Err(_)if!required_for_consensus=>None,Err(error)=>returnErr(error),};",
-        "signer,required_for_consensus,active,deferred_state:None,",
-    ))
-    if opened.count("letrequired_for_consensus") != 1:
-        raise RuntimeError(f"{path}: immediate beacon activation must retain one original requirement")
-    deferred = compact(section(beacon, "    pub(crate) fn open_deferred(",
-        "    fn required_for_height(", path))
-    require_all(path, deferred, (
-        "context.validate()?;",
-        "letrequired_for_consensus=local_validator.is_some()&&Self::required_for_height(context,state.as_ref());",
-        "required_for_consensus,active:None,deferred_state:required_for_consensus.then_some(state),",
-    ))
-    if deferred.count("letrequired_for_consensus") != 1:
-        raise RuntimeError(f"{path}: deferred beacon activation must retain one original requirement")
-    activation = section(beacon, "    pub(crate) fn activate(&mut self) -> Result<(), V2GlobalBeaconError> {",
-                         "    /// Return whether committed state requests a pulse attempt at this height.", path)
-    expected_activation = """
-        if self.active.is_some() || !self.required_for_consensus { return Ok(()); }
-        let state = self.deferred_state.as_ref().ok_or(V2GlobalBeaconError::State(
-            "mandatory beacon activation lost its committed state owner",
-        ))?;
-        let activated = Self::open(&self.context, state, self.local_validator, self.signer.clone(),)?;
-        *self = activated;
-        Ok(())
-    }
-    """
-    if compact(activation) != compact(expected_activation):
-        raise RuntimeError(f"{path}: deferred beacon must authenticate the original activation before replacement")
-    getter = section(beacon, "    pub(crate) const fn pulse_required_for_consensus(&self) -> bool {",
-                     "    /// Route the height-bound pulse through a view and emit the local share.", path)
-    if compact(getter) != "self.required_for_consensus}":
-        raise RuntimeError(f"{path}: candidate requirement must be the original committed beacon demand")
-    opening = section(beacon, "    pub(crate) fn open(",
-                      "    /// Return whether committed state requests a pulse attempt at this height.", path)
-    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in opening:
-        raise RuntimeError(f"{path}: beacon production regressed to an unbounded Parliament attempt scan")
-
-    beacon_attach = section(
-        beacon,
-        "    pub(crate) fn attach_candidate_effects(",
-        "        Ok(())\n    }",
-        path,
+    require_all(path, compact(beacon), ("pub(crate)modproducer;",))
+    source = compact(section(producer, "    fn ensure_source(",
+                             "/// Fixed-width projection", producer_path))
+    ordered = (
+        "ifcontext.instance!=self.instance||applied.0.checked_add(1)!=Some(context.height)||applied.1!=context.parent_hash||u64::try_from(state.height()).ok()!=Some(applied.0){returnErr(NativeBeaconError::Context);}",
+        "letparent=committed_block(state,applied.0)",
+        "ifparent.core_hash()!=context.parent_hash||parent.result()!=context.parent_result{returnErr(NativeBeaconError::Context);}",
+        "letretained=state.world().consensus_schedule();",
+        "letscheduled=retained.ready(context.height)",
+        "ifcurrent.network_id!=*state.network_id()||schedule::core_epoch(current)",
+        "ifself.prepared.as_ref()==Some(context){returnOk(());}",
+        "letactive=ifsuper::required(state.world(),current,context.height){",
+        "super::validate_pending_slot(state.world(),current,context.height)",
+        "Some(ActiveRound::open(state.world(),current,context.height,GlobalThresholdBeaconChainAnchorV1{height:applied.0,block_hash:parent.block_hash(),},self.local_bls,pulse_context(context),)?)",
+        "}else{None};",
+        "self.active=active;",
+        "self.prepared=Some(*context);",
     )
-    require_all(
-        path,
-        beacon_attach,
-        (
-            "if self.pulse_required_for_consensus() && pulse.is_none()",
-            '"required finalized pulse is absent for the candidate view"',
-            "effects.finalized_global_beacon_pulse = pulse;",
-        ),
-    )
+    positions = [source.find(token) for token in ordered]
+    if any(source.count(token) != 1 for token in ordered) or positions != sorted(positions):
+        raise RuntimeError(f"{producer_path}: native activation must authenticate and retain the original committed source")
+    build = compact(section(producer, "    pub(crate) fn build(",
+                            "    fn ensure_source(", producer_path))
+    require_all(producer_path, build, (
+        "ifself.prepared.as_ref()!=Some(&source){returnErr(NativeBeaconError::Context);}",
+        "letpulse=match&self.active{None=>None,Some(active)=>Some(active.finalized.ok_or(NativeBeaconError::AwaitingShares{height:context.height,})?),};",
+        "Ok((control::encode(pulse)?,self.mandatory_attestation))",
+    ))
+    capture = compact(section(beacon, "pub(crate) fn capture(",
+                              "/// Reuse the exact committed", path))
+    require_all(path, capture, (
+        "letdemanded=required(world,current,height);",
+        'letSome(pulse)=suppliedelse{returnifdemanded{Err("mandatorynativebeaconcontrolwitnessisabsent".into())}',
+        'if!demanded{returnErr("nativebeaconcontrolwitnesswasnotrequested".into());}',
+        "validate_pending_slot(world,current,height)?;",
+        "record.session.adaptive_dkg.session.authority_generation!=current.authority.generation",
+        "current.authorization.beacon!=BeaconEpochBindingV1::Installed(installed)",
+        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session,&peers)",
+        "verify_finalized_global_threshold_beacon_pulse_v1(&session,&pulse,anchor,expected_context.as_ref()",
+        "Ok(VerifiedEpochPulse{pulse:Some(pulse),link:Some(link),})",
+    ))
+    pending = compact(section(beacon, "fn validate_pending_slot(", "\n}\n", path))
+    require_all(path, pending, (
+        "letslot=(BeaconSessionId::for_network_v1(&current.network_id),height);",
+        ".parliament_unavailable_beacon_pulse_slots().get(&slot).is_some_and(|attempts|!attempts.is_empty())",
+        "||world.global_beacon_pulse_slots().get(&slot).is_some()",
+    ))
+    if "parliament_attempts" in compact(requirement) + source + capture + pending:
+        raise RuntimeError(f"{path}: native pulse demand must use bounded derived indexes")
 
-def require_beacon_parliament_pulse_fixtures(core: str, fixtures: str) -> None:
-    """Follow the actual compiled test module to both canonical fixture admissions."""
-    core_path = "crates/iroha_core/src/beacon.rs"
-    tests_path = "crates/iroha_core/src/beacon/tests.rs"
+
+def require_beacon_parliament_pulse_fixtures(
+    core: str, fixtures: str, execution_fixtures: str,
+) -> None:
+    """Follow compiled native tests through real shares, refusal and cold replay."""
+    core_path = "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
+    tests_path = "crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"
+    execution_path = "crates/iroha_core/src/sumeragi/epoch_beacon/producer/execution_tests.rs"
     code = re.sub(r"/\*.*?\*/|//[^\n]*", "", core, flags=re.S)
     declarations = list(re.finditer(
-        r"(?P<attrs>(?:[ \t]*#\[[^\n]+\]\s*)*)pub\(crate\)\s+mod\s+tests\s*;",
+        r"(?P<attrs>(?:[ \t]*#\[[^\n]+\]\s*)*)mod\s+tests\s*;",
         code,
     ))
     if (len(declarations) != 1
             or re.sub(r"\s+", "", declarations[0].group("attrs")) != "#[cfg(test)]"):
         raise RuntimeError(f"{core_path}: Parliament pulse fixtures must use the original test module")
     fixtures = re.sub(r"/\*.*?\*/|//[^\n]*", "", fixtures, flags=re.S)
-    for declaration in (
-        "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
-        "fn assert_same_block_key_rotation_persists_requested_pulse(",
+    nested = re.sub(r"\s+", "", fixtures)
+    if nested.count('#[path="execution_tests.rs"]modexecution_tests;') != 1:
+        raise RuntimeError(f"{tests_path}: Parliament pulse fixtures must use the original execution test module")
+    for declaration, needles in (
+        ("fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse()", (
+            "Err(NativeBeaconError::AwaitingShares { height: 9 })",
+            "observer.accept(&source, applied, key, message).unwrap()",
+            '"build and retransmission never sign twice"',
+            "IngressOutcome::Duplicate",
+            "control::verify_result(&witness, None).is_err()",
+        )),
+        ("fn native_active_session_from_a_foreign_real_committee_refuses_before_signing()", (
+            "Err(NativeBeaconError::Source(_))",
+            "count.load(Ordering::SeqCst) == 0",
+        )),
     ):
         if fixtures.count(declaration) != 1:
             raise RuntimeError(f"{tests_path}: Parliament pulse fixture declaration changed: {declaration}")
         body = section(fixtures, declaration, "\n}\n", tests_path)
-        require_all(tests_path, body, (
-            ".put_parliament_attempt(attempt)",
-            'expect("persist the Parliament request and its beacon-slot index")',
-        ))
-    if fixtures.count(".put_parliament_attempt(attempt)") < 2:
-        raise RuntimeError(
-            f"{tests_path}: Parliament pulse fixtures must seed both derived-index consumers through canonical admission"
-        )
+        require_all(tests_path, re.sub(r"\s+", "", body),
+                    tuple(re.sub(r"\s+", "", needle) for needle in needles))
+    execution_fixtures = re.sub(r"/\*.*?\*/|//[^\n]*", "", execution_fixtures, flags=re.S)
+    replay = section(execution_fixtures,
+        "fn transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_result()",
+        "\n}\n", execution_path)
+    require_all(execution_path, re.sub(r"\s+", "", replay), (
+        "missing_header.control_witness=ControlWitness::empty();",
+        "invalid(&mutworker,&replay,&missing);",
+        'worker.replay(&block,&qc).expect("coldexecutorreproducestheoriginalcertifiedpulsewrites");',
+        'worker.replay(&block,&qc).expect("completedpublicationisidempotent");',
+        "view.world().global_beacon_pulse_slots().len(),1",
+    ))
+
+
+def require_native_pulse_application(schedule: str, block: str) -> None:
+    """Apply the independently verified pulse once through the original block journal."""
+    path = "crates/iroha_core/src/sumeragi/schedule/execution.rs"
+    source = section(schedule, "    pub(crate) fn request_sumeragi_schedule(",
+                     "    /// Finalize within the exact original output seal.", path)
+    code = re.sub(r"\s+", "", re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S))
+    require_all(path, code, (
+        "source.header()!=self._curr_block",
+        "authenticate_successor_context(self,&self._curr_block,expected)?;",
+        "letcurrent=&schedule.ready(height)?.epoch;",
+        "letpulse=epoch_beacon::capture(&self.world,self.block_hashes(),current,height,supplied_pulse,expected_context,).map_err(ScheduleError::Epoch)?;",
+        "letslot=(iroha_data_model::governance::types::BeaconSessionId::for_network_v1(&value.network_id,),value.height,);",
+    ))
+    if code.count("epoch_beacon::capture(") != 2:
+        raise RuntimeError(f"{path}: genesis and native successor must each authenticate their original pulse")
+    ordered = (
+        "letcurrent=&schedule.ready(height)?.epoch;",
+        "letpulse=epoch_beacon::capture(",
+        "iflet(Some(value),Some(link))=(pulse.pulse(),pulse.link()){",
+        "self.world.global_beacon_pulses.insert(value.pulse_id,value);",
+        "self.world.global_beacon_pulse_slots.insert(slot,value.pulse_id);",
+        "self.world.global_beacon_latest_pulse.insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,link);",
+        "self.sumeragi_schedule=ScheduleStep::Requested{captured,pulse};",
+    )
+    successor = code[code.index(ordered[0]):]
+    positions = [successor.find(token) for token in ordered]
+    if any(successor.count(token) != 1 for token in ordered) or positions != sorted(positions):
+        raise RuntimeError(f"{path}: exact pulse proof must precede original journal writes and retained schedule")
+    block_path = "crates/iroha_core/src/block.rs"
+    duplicate_owner = section(block, "            if block.global_beacon_pulse().is_some()",
+                              "\n            }", block_path)
+    require_all(block_path, duplicate_owner, (
+        "|| block.header().global_beacon_pulse_hash().is_some()",
+        'return Err(Self::npos_effects_error(\n                    "native payload rejects a second beacon pulse owner",\n                ));',
+    ))
 
 
 def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
@@ -4490,9 +4529,11 @@ def main() -> int:
         ),
     )
 
-    beacon_runtime_path = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+    beacon_runtime_path = "crates/iroha_core/src/sumeragi/epoch_beacon.rs"
     beacon_runtime = read(beacon_runtime_path)
-    require_parliament_beacon_requirement(beacon_runtime)
+    beacon_producer_path = "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
+    beacon_producer = read(beacon_producer_path)
+    require_parliament_beacon_requirement(beacon_runtime, beacon_producer)
     beacon_state_path = "crates/iroha_core/src/beacon.rs"
     beacon_state = read(beacon_state_path)
     require_encrypted_beacon_dkg_source(
@@ -4504,69 +4545,14 @@ def main() -> int:
         read("crates/iroha_core/src/validation_fee/staking_effects.rs"),
     )
     require_beacon_parliament_pulse_fixtures(
-        beacon_state, read("crates/iroha_core/src/beacon/tests.rs")
+        beacon_producer,
+        read("crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"),
+        read("crates/iroha_core/src/sumeragi/epoch_beacon/producer/execution_tests.rs"),
     )
 
-    block_path = "crates/iroha_core/src/block.rs"
-    block = read(block_path)
-    pulse_validation = section(
-        block,
-        "        fn validate_global_beacon_pulse_effect(",
-        "        fn execution_context_error(",
-        block_path,
-    )
-    require_all(
-        block_path,
-        pulse_validation,
-        (
-            ".parliament_required_beacon_pulse_slots",
-            ".get(&(logical_beacon_id, context.height))",
-            "let pulse_requested = pulse_required_for_successor || parliament_requested;",
-            "return if pulse_requested {",
-            '"block is missing a finalized global beacon pulse requested by committed pre-state"',
-            ".parliament_unavailable_beacon_pulse_slots",
-            ".get(&(logical_beacon_id, pulse.height))",
-            '"global beacon pulse arrives after Parliament terminally classified its slot as unavailable"',
-            "authenticated_global_threshold_beacon_roster_hash_v1(",
-            "&context_roster,",
-        ),
-    )
-    if "attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_id, pulse.height)" in pulse_validation:
-        raise RuntimeError(
-            f"{block_path}: block validation regressed to an unbounded unavailable-pulse attempt scan"
-        )
-    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in pulse_validation:
-        raise RuntimeError(
-            f"{block_path}: block validation regressed to an unbounded required-pulse attempt scan"
-        )
-    require_all(
-        block_path,
-        block,
-        (
-            "fn committed_parliament_request_rejects_candidate_without_pulse()",
-            ".put_parliament_attempt(attempt)",
-            'expect("persist the committed Parliament pulse request and its indexes")',
-        ),
-    )
-
-    penalty_path = "crates/iroha_core/src/sumeragi/penalties.rs"
-    penalties = read(penalty_path)
-    pulse_application = section(
-        penalties,
-        "pub(crate) fn apply_npos_consensus_effects_to_transaction(",
-        "    for admission in &effects.v2_evidence_admissions",
-        penalty_path,
-    )
-    require_all(
-        penalty_path,
-        pulse_application,
-        (
-            "authenticated_roster: &[PeerId]",
-            "authenticated_global_threshold_beacon_roster_hash_v1(",
-            "authenticated_roster,",
-            '"pulse-height global beacon key differs from the authenticated height roster"',
-            "roster_hash: expected_roster_hash,",
-        ),
+    require_native_pulse_application(
+        read("crates/iroha_core/src/sumeragi/schedule/execution.rs"),
+        read("crates/iroha_core/src/block.rs"),
     )
 
     for declaration in ("SPECIFICATION Spec", "INVARIANTS", "CHECK_DEADLOCK FALSE"):

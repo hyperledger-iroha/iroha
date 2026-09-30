@@ -78,7 +78,7 @@ pub(in crate::state) fn arm_first_release(
     original: DetachedWorld<()>,
     target: &World,
     waker: &Waker,
-) -> concread::release::ReleaseFuture {
+) -> iroha_allocation::release::ReleaseFuture {
     let (_, error, cleanup) = original
         .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
         .err()

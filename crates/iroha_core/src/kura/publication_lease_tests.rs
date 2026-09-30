@@ -28,12 +28,12 @@ impl Wake for WakeCount {
     }
 }
 
-fn poll(wait: &mut concread::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut iroha_allocation::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
 }
 
-fn busy(kura: &Kura, expected: &str) -> concread::release::ReleaseWait {
+fn busy(kura: &Kura, expected: &str) -> iroha_allocation::release::ReleaseWait {
     match kura.try_publication_lease() {
         Err(KuraPublicationPreparationError::Busy { field, wait }) => {
             assert_eq!(field, expected);

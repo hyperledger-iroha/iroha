@@ -171,7 +171,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> CellField<'a, V, C> {
     pub(crate) fn install_frozen_publication(
         &mut self,
         target: &'a mv::cell::Cell<V, C>,
-        _scope: &mv::allocation::OwnedAllocationScope,
+        _scope: &iroha_allocation::OwnedAllocationScope,
     ) -> Result<(), mv::storage::AdmittedStorageError> {
         self.begin_frozen_publication(|original| {
             Ok(mv::cell::BlockPublicationSlot::from_frozen(
@@ -184,7 +184,7 @@ impl<'a, K: Key, V: Value> StorageField<'a, K, V> {
     pub(crate) fn install_frozen_publication(
         &mut self,
         target: &'a mv::storage::Storage<K, V>,
-        _scope: &mv::allocation::OwnedAllocationScope,
+        _scope: &iroha_allocation::OwnedAllocationScope,
     ) -> Result<(), mv::storage::AdmittedStorageError> {
         self.begin_frozen_publication(|original| {
             Ok(mv::storage::BlockPublicationSlot::from_frozen(
@@ -202,7 +202,7 @@ where
     pub(crate) fn install_frozen_publication(
         &mut self,
         target: &'a mv::storage::Storage<K, V, concread::bptree::Prepaid<P>>,
-        scope: &mv::allocation::OwnedAllocationScope,
+        scope: &iroha_allocation::OwnedAllocationScope,
     ) -> Result<(), mv::storage::AdmittedStorageError> {
         self.begin_frozen_publication(|original| {
             mv::storage::BlockPublicationSlot::try_from_frozen_owned(original, target, scope)

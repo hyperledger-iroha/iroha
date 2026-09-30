@@ -2783,7 +2783,8 @@ mod tests {
             epoch_length: params.epoch_length_blocks.get(),
         };
         assert_eq!(chain, iroha_sumeragi::types::ChainParams::default());
-        let transport = u64::from(params.max_block_bytes.get()) + 64 * 1024;
+        let transport = u64::from(params.max_block_bytes.get())
+            + u64::from(iroha_sumeragi::pacemaker::FRAME_OVERHEAD);
         iroha_sumeragi::pacemaker::validate_chain(&chain, transport)
             .expect("default chain parameters are valid");
         assert_eq!(

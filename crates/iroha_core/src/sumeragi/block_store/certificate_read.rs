@@ -2,12 +2,12 @@
 
 use std::{ops::Range, sync::Arc};
 
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_data_model::block::SignedBlock;
 use iroha_sumeragi::{
     availability::{AvailabilityFrame, MAX_AVAILABILITY_FRAME_BYTES},
     message::{BlockHeader, ByteAdmissionError, Qc, ResultWitness},
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 use norito::core as ncore;
 
 use crate::sumeragi::{

@@ -173,7 +173,7 @@ fn held_cell_observation<V: mv::Value>(
     journal: mv::cell::Detached<V, ()>,
 ) -> (
     mv::cell::Detached<V, ()>,
-    concread::release::ReleaseWait,
+    iroha_allocation::release::ReleaseWait,
     PublicationCleanup<()>,
 ) {
     let physical_admissions = AtomicUsize::new(0);
@@ -196,7 +196,7 @@ fn held_membership_observation(
     journal: storage_transactions::DetachedTransactionsBlock,
 ) -> (
     storage_transactions::DetachedTransactionsBlock,
-    concread::release::ReleaseWait,
+    iroha_allocation::release::ReleaseWait,
 ) {
     let (journal, error, _cleanup) = journal
         .try_prepare_publication(&state.transactions, |_, _| Ok::<_, ()>(()))

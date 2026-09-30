@@ -10,6 +10,12 @@ Cargo metadata/build gate without a temporary harness. MV production still
 disables default features and selects `ebr`, `maps`, and `foldhash`; the release
 gate checks shipping binaries separately from the broader test feature graph.
 
+The generic strong-only shared shell and release observation kernel now belong to
+`crates/iroha_allocation`, a standard-library-only crate below both models and runtime
+storage. This engine consumes those original owners directly. The generic custody,
+reservation and allocation-refusal tests moved with their implementation; B+tree and
+linear-cell tests remain here. No retired module reexports are retained.
+
 The local EBR change binds typed resource custody to the real allocated generation,
 including abandoned writers and epoch-delayed reclamation. It does not measure
 nested payloads or establish an aggregate Iroha memory quota. Consumer regression

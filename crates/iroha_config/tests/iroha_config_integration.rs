@@ -41,8 +41,6 @@ mod pipeline_signature_batch_alias_hard_cut;
 mod push_provider_credentials;
 #[path = "queue_plan_retirement.rs"]
 mod queue_plan_retirement;
-#[path = "transaction_gossip_config.rs"]
-mod transaction_gossip_config;
 #[path = "sorafs_gateway_runtime_providers.rs"]
 mod sorafs_gateway_runtime_providers;
 #[path = "sorafs_governance_dag_runtime_signer.rs"]
@@ -63,6 +61,8 @@ mod sorafs_stream_token_runtime_signer;
 mod soranet_privacy_ingest_hard_cut;
 #[path = "sumeragi_core_config.rs"]
 mod sumeragi_core_config;
+#[path = "transaction_gossip_config.rs"]
+mod transaction_gossip_config;
 #[path = "transaction_ingress_limits.rs"]
 mod transaction_ingress_limits;
 #[path = "trusted_peers_pop_validation.rs"]

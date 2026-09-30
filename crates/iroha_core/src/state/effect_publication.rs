@@ -30,7 +30,7 @@ macro_rules! define_indexes {
         pub(in crate::state) struct StateEffectLocks<'state> {
             target: &'state State,
             $(pub(in crate::state) $field: Option<PublicationRwLockWriteGuard<'state, $ty>> ,)*
-            retired: [concread::release::DeferredReleaseBatch; 9],
+            retired: [iroha_allocation::release::DeferredReleaseBatch; 9],
             attempted: bool,
             complete: bool,
             retired_manifests: Option<LaneManifestRegistryHandle>,
@@ -53,13 +53,13 @@ macro_rules! define_indexes {
 
             /// Retain each acquired original guard before probing its successor.
             /// The returned waiter belongs to the actual reader/writer blocker.
-            pub(in crate::state) fn try_prepare(&mut self) -> Result<(), (&'static str, concread::release::ReleaseWait)> {
+            pub(in crate::state) fn try_prepare(&mut self) -> Result<(), (&'static str, iroha_allocation::release::ReleaseWait)> {
                 assert!(!self.attempted, "effect lock preparation is one-shot");
                 self.attempted = true;
                 self.prepare_inner()
             }
 
-            fn prepare_inner(&mut self) -> Result<(), (&'static str, concread::release::ReleaseWait)> {
+            fn prepare_inner(&mut self) -> Result<(), (&'static str, iroha_allocation::release::ReleaseWait)> {
                 $(self.$field = Some(self.target.$field.try_write_or_wait()
                     .map_err(|wait| (stringify!($field), wait))?);)*
                 self.complete = true;

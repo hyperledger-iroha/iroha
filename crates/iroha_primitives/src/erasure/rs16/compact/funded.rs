@@ -2,7 +2,7 @@
 //! Inputs and the shared RS16 field tables have separate existing owners.
 use super::CompactShape;
 use crate::erasure::rs16::Rs16Error;
-use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer, PrepaidBufferError};
+use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer, PrepaidBufferError};
 use std::alloc::Layout;
 /// A resource refusal or an invalid RS16 input encountered by a funded codec job.
 #[derive(Debug)]

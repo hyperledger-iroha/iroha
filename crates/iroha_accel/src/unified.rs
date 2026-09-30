@@ -1,7 +1,7 @@
 //! One aligned physical backing allocation admitted against applicable ceilings.
 
 use crate::resources::ResourcePools;
-use mv::allocation::AllocationCharge;
+use iroha_allocation::AllocationCharge;
 use std::{
     alloc::{Layout, alloc_zeroed, dealloc},
     ptr::NonNull,

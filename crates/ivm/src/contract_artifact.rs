@@ -205,7 +205,7 @@ mod preparation_deferral_tests {
 
     #[test]
     fn preparation_keeps_exact_pool_release_observation_through_error_conversion() {
-        let budget = mv::allocation::AllocationBudget::new(8);
+        let budget = iroha_allocation::AllocationBudget::new(8);
         let occupied = budget.try_reserve_bytes(8).unwrap();
         let original = budget.try_reserve_bytes(1).unwrap_err();
         let deferred = VMError::Metered {
@@ -220,7 +220,7 @@ mod preparation_deferral_tests {
             Some(ExecutionDeferral::ActiveMemoryCapacity)
         );
         assert_eq!(error.metered_gas(), None);
-        let VMError::AllocationDeferred(mv::allocation::AllocationRefusal::Capacity {
+        let VMError::AllocationDeferred(iroha_allocation::AllocationRefusal::Capacity {
             release,
             ..
         }) = error
@@ -231,7 +231,7 @@ mod preparation_deferral_tests {
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         // A refund from another pool cannot make this failed attempt ready.
-        let other = mv::allocation::AllocationBudget::new(8);
+        let other = iroha_allocation::AllocationBudget::new(8);
         drop(other.try_reserve_bytes(8).unwrap());
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         drop(occupied);

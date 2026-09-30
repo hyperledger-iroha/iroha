@@ -5,7 +5,7 @@
 //! or writer may still hold the lock. Enclosing publication owners must retain
 //! deferred notifications until their other physical guards have released.
 
-use concread::release::{
+use iroha_allocation::release::{
     DeferredRelease, DeferredReleaseBatch, ReleaseGuard, ReleaseNotification, ReleaseWait,
 };
 

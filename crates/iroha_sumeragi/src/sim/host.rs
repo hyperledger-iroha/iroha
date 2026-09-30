@@ -272,7 +272,7 @@ pub struct Start {
     /// Crypto (counting, with provenance).
     pub crypto: Box<dyn Crypto>,
     /// Original pool shared by Core and its worker jobs.
-    pub budget: mv::allocation::AllocationBudget,
+    pub budget: iroha_allocation::AllocationBudget,
     /// The commit-attestation extension (§3.7).
     pub attestation: Attestation,
     /// Local time of the start.

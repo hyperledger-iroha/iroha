@@ -26,7 +26,7 @@ pub(super) type Hook = Box<dyn Fn(Millis, usize, &Event) -> bool>;
 
 pub(super) struct Node {
     pub core: Option<Core>,
-    budget: mv::allocation::AllocationBudget,
+    budget: iroha_allocation::AllocationBudget,
     acquisitions: BTreeMap<Hash32, PayloadAcquisition>,
     pub key: PublicKey,
     pub record: Option<Vec<u8>>,
@@ -77,7 +77,7 @@ impl Cluster {
             nodes: (0..n)
                 .map(|i| Node {
                     core: None,
-                    budget: mv::allocation::AllocationBudget::new(1 << 30),
+                    budget: iroha_allocation::AllocationBudget::new(1 << 30),
                     acquisitions: BTreeMap::new(),
                     key: v.key(u32::try_from(i).unwrap()),
                     record: None,

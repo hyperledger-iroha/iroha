@@ -13,11 +13,11 @@ use std::{
 };
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError, ChargedShared,
     PrepaidSharedError,
 };
+use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
 use norito::{
     codec::{Decode, Encode},
     core as ncore,
@@ -244,7 +244,8 @@ impl CommitCertificate {
         let qc = copy(self.commit_qc(), budget)?;
         let preimage = copy(self.result_preimage(), budget)?;
         let availability = copy(self.availability(), budget)?;
-        Self::from_charged_parts(header, qc, preimage, availability, budget).map_err(|(_parts, error)| error)
+        Self::from_charged_parts(header, qc, preimage, availability, budget)
+            .map_err(|(_parts, error)| error)
     }
 
     /// Whether this immutable owner retains original backing and control from this exact pool.
@@ -469,13 +470,18 @@ impl IntoSchema for CommitCertificate {
     fn update_schema_map(map: &mut MetaMap) {
         if !map.contains_key::<Self>() {
             map.insert::<Self>(Metadata::Struct(NamedFieldsMeta {
-                declarations: ["consensus_header", "commit_qc", "result_preimage", "availability"]
-                    .into_iter()
-                    .map(|name| Declaration {
-                        name: name.to_owned(),
-                        ty: std::any::TypeId::of::<Vec<u8>>(),
-                    })
-                    .collect(),
+                declarations: [
+                    "consensus_header",
+                    "commit_qc",
+                    "result_preimage",
+                    "availability",
+                ]
+                .into_iter()
+                .map(|name| Declaration {
+                    name: name.to_owned(),
+                    ty: std::any::TypeId::of::<Vec<u8>>(),
+                })
+                .collect(),
             }));
             Vec::<u8>::update_schema_map(map);
         }
@@ -483,7 +489,12 @@ impl IntoSchema for CommitCertificate {
 }
 impl norito::json::FastJsonWrite for CommitCertificate {
     fn json_object_field_order() -> Option<&'static [&'static str]> {
-        Some(&["consensus_header", "commit_qc", "result_preimage", "availability"])
+        Some(&[
+            "consensus_header",
+            "commit_qc",
+            "result_preimage",
+            "availability",
+        ])
     }
     fn write_json(&self, out: &mut String) {
         norito::json::FastJsonWrite::write_json(&self.json(), out);
@@ -602,7 +613,10 @@ mod tests {
         ));
         assert!(error.is_local_refusal());
         assert_eq!(returned.result_preimage.as_slice().as_ptr(), pointer);
-        assert_eq!(returned.availability.as_slice().as_ptr(), availability_pointer);
+        assert_eq!(
+            returned.availability.as_slice().as_ptr(),
+            availability_pointer
+        );
         assert_eq!(budget.reserved_bytes(), 50);
         drop(occupied);
         let cert = CommitCertificate::from_charged_owner(returned, &budget).unwrap();
@@ -727,7 +741,14 @@ mod tests {
         );
         assert_eq!(
             <CommitCertificate as norito::json::FastJsonWrite>::json_object_field_order(),
-            Some(&["consensus_header", "commit_qc", "result_preimage", "availability"][..])
+            Some(
+                &[
+                    "consensus_header",
+                    "commit_qc",
+                    "result_preimage",
+                    "availability"
+                ][..]
+            )
         );
     }
     #[test]
@@ -833,12 +854,18 @@ mod tests {
             result_preimage: vec![6; 40],
         };
         assert!(CommitCertificate::decode_all(&mut incomplete.encode().as_slice()).is_err());
-        assert!(norito::decode_canonical::<CommitCertificate>(
-            &norito::encode_canonical(&incomplete).unwrap()
-        ).is_err());
-        assert!(norito::json::from_str::<CommitCertificate>(
-            r#"{"consensus_header":"AQID","commit_qc":"BAU=","result_preimage":"Bg=="}"#
-        ).is_err());
+        assert!(
+            norito::decode_canonical::<CommitCertificate>(
+                &norito::encode_canonical(&incomplete).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            norito::json::from_str::<CommitCertificate>(
+                r#"{"consensus_header":"AQID","commit_qc":"BAU=","result_preimage":"Bg=="}"#
+            )
+            .is_err()
+        );
     }
     mod wire {
         use super::*;

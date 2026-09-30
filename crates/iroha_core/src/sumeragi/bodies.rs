@@ -21,11 +21,11 @@ use std::{
     sync::Arc,
 };
 
+use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, AvailableBody},
     types::Hash32,
 };
-use mv::allocation::AllocationBudget;
 use parking_lot::Mutex;
 
 use super::{

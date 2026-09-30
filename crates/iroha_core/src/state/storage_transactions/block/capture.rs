@@ -5,11 +5,11 @@ use super::*;
 // Capture keeps an actual acquired writer or that writer's original release,
 // never a synthetic notification inferred from an error.
 type OriginalMembershipGuard<'storage> =
-    concread::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Identity>>;
+    iroha_allocation::release::ReleaseGuard<'storage, MutexGuard<'storage, RawMutex, Identity>>;
 
 enum MembershipWriterPhase<'storage> {
     Attached(OriginalMembershipGuard<'storage>),
-    Released(concread::release::DeferredRelease),
+    Released(iroha_allocation::release::DeferredRelease),
 }
 
 pub(in crate::state::storage_transactions) struct MembershipWriter<'storage> {
@@ -68,12 +68,12 @@ impl<'storage> MembershipWriter<'storage> {
         }
     }
 
-    pub(super) fn into_writer_release(mut self) -> concread::release::DeferredRelease {
+    pub(super) fn into_writer_release(mut self) -> iroha_allocation::release::DeferredRelease {
         assert!(self.history.is_none(), "observation-only writer");
         self.take_writer_release()
     }
 
-    fn take_writer_release(&mut self) -> concread::release::DeferredRelease {
+    fn take_writer_release(&mut self) -> iroha_allocation::release::DeferredRelease {
         self.release();
         match self.phase.take() {
             Some(MembershipWriterPhase::Released(release)) => release,

@@ -144,7 +144,7 @@ mod tests {
         let unrelated_path = "unrelated/native/state".parse().expect("state path");
         let policy_bytes = norito::encode_canonical(&policy).expect("policy bytes");
         let marker_bytes = norito::encode_canonical(&marker).expect("marker bytes");
-        let budget = mv::allocation::AllocationBudget::new(1 << 20);
+        let budget = iroha_allocation::AllocationBudget::new(1 << 20);
         let mut map = ContractStateMapV1::new(&budget);
         map.replace(&policy_path, None, Some(&policy_bytes))
             .unwrap();

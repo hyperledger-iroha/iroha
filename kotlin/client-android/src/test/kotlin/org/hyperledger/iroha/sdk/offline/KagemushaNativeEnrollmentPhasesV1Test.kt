@@ -67,18 +67,18 @@ class KagemushaNativeEnrollmentPhasesV1Test {
     }
 
     @Test
-    fun `lost phase one response reads the exact native selection without dispatching another selection`() {
+    fun `uncertain phase one response revokes the native owner before selection recovery`() {
         val endpoint = Endpoint().apply { loseBegin = true }
         val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/enrollment", endpoint)
             .initialEnrollment()
         assertFailsWith<IllegalStateException> { phases.begin(account) }
-        val selected = phases.recoverExactSelection(account)!!
-        assertSame(selected, phases.recoverExactSelection(account))
-        assertContentEquals(ByteArray(32) { 1 }, selected.clientNonce())
+        assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) }
+        assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) }
         assertFailsWith<IllegalStateException> { phases.begin(account) }
-        assertEquals(3, endpoint.calls)
+        assertEquals(1, endpoint.calls)
+        assertEquals(1, endpoint.closeCalls)
         assertEquals(1, endpoint.selectionCalls)
-        assertEquals(2, endpoint.readSelectionCalls)
+        assertEquals(0, endpoint.readSelectionCalls)
     }
 
     @Test
@@ -118,7 +118,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
     }
 
     @Test
-    fun `lost proof response reads exact retained proof without redispatching device frame`() {
+    fun `uncertain proof response revokes the owner before proof recovery or redispatch`() {
         val endpoint = Endpoint().apply { loseProof = true }
         val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/enrollment", endpoint)
             .initialEnrollment()
@@ -127,8 +127,13 @@ class KagemushaNativeEnrollmentPhasesV1Test {
             phases.prepareProof(accepted, ByteArray(64) { 11 }, byteArrayOf(12))
         }
         assertEquals(1, endpoint.prepareCalls)
-        assertContentEquals(byteArrayOf(99), phases.recoverExactProof(accepted).canonicalProof())
+        assertFailsWith<IllegalStateException> { phases.recoverExactProof(accepted) }
+        assertFailsWith<IllegalStateException> {
+            phases.prepareProof(accepted, ByteArray(64) { 11 }, byteArrayOf(12))
+        }
         assertEquals(1, endpoint.prepareCalls)
+        assertEquals(3, endpoint.calls)
+        assertEquals(1, endpoint.closeCalls)
     }
 
     @Test
@@ -161,7 +166,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
     }
 
     @Test
-    fun `lost cancellation response permits only the original ticket retry`() {
+    fun `uncertain cancellation response revokes the owner before every ticket retry`() {
         val endpoint = Endpoint().apply { loseCancel = true }
         val native = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/cancel", endpoint)
         val phases = native.initialEnrollment()
@@ -178,15 +183,17 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         assertEquals(1, endpoint.cancelCalls)
 
         endpoint.loseCancel = false
-        phases.cancel(selected)
-        assertEquals(2, endpoint.cancelCalls)
+        assertFailsWith<IllegalStateException> { phases.cancel(selected) }
+        assertEquals(1, endpoint.cancelCalls)
+        assertEquals(1, endpoint.closeCalls)
         native.close()
         assertFailsWith<IllegalStateException> { phases.cancel(selected) }
-        assertEquals(2, endpoint.cancelCalls)
+        assertEquals(1, endpoint.cancelCalls)
+        assertEquals(1, endpoint.closeCalls)
     }
 
     @Test
-    fun `poisoned proof reply still permits original ticket cancellation and exact retry`() {
+    fun `uncertain cancellation after a poisoned proof revokes the native owner`() {
         val endpoint = Endpoint().apply {
             wrongProofChallenge = true
             loseCancel = true
@@ -202,12 +209,33 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         assertFailsWith<IllegalStateException> { phases.cancel(selected) }
         assertEquals(1, endpoint.cancelCalls)
         endpoint.loseCancel = false
-        phases.cancel(selected)
-        assertEquals(2, endpoint.cancelCalls)
+        assertFailsWith<IllegalStateException> { phases.cancel(selected) }
+        assertEquals(1, endpoint.cancelCalls)
+        assertEquals(1, endpoint.closeCalls)
         assertFailsWith<IllegalStateException> { phases.prepareProof(accepted, ByteArray(64) { 11 }, byteArrayOf(12)) }
         native.close()
         assertFailsWith<IllegalStateException> { phases.cancel(selected) }
+        assertEquals(1, endpoint.cancelCalls)
+        assertEquals(1, endpoint.closeCalls)
+    }
+
+    @Test
+    fun `locally poisoned proof permits only successful original ticket cancellation retries`() {
+        val endpoint = Endpoint().apply { wrongProofChallenge = true }
+        val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint(
+            "/durable/poison-cancel-success", endpoint,
+        ).initialEnrollment()
+        val selected = phases.begin(account)
+        val accepted = accept(phases, selected)
+        assertFailsWith<IllegalStateException> {
+            phases.prepareProof(accepted, ByteArray(64) { 11 }, byteArrayOf(12))
+        }
+        assertNull(phases.recoverExactSelection(account))
+        phases.cancel(selected)
+        phases.cancel(selected)
         assertEquals(2, endpoint.cancelCalls)
+        assertEquals(0, endpoint.closeCalls)
+        assertFailsWith<IllegalStateException> { phases.prepareProof(accepted, ByteArray(64) { 11 }, byteArrayOf(12)) }
     }
 
     @Test
@@ -270,6 +298,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         var loseCancel = false
         var wrongProofChallenge = false
         var cancelCalls = 0
+        var closeCalls = 0
         var selectionCalls = 0
         var readSelectionCalls = 0
         var changedSelectionField: Int? = null
@@ -277,8 +306,9 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         private var challengeId = ByteArray(32) { 7 }
         override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         override fun open(storagePath: String) = 31L
-        override fun close(handle: Long) = 0
+        override fun close(handle: Long): Int { closeCalls++; return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {
+            assertEquals(0, closeCalls, "revoked native owner must never be invoked")
             calls++
             assertEquals(31L, handle)
             assertEquals(12, method)

@@ -6,8 +6,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{ConfidentialTreeProfile, State, StateTransaction, World, WorldReadOnly},
-    zk::confidential_v2,
 };
+use iroha_core_zk::confidential_v2;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::NewAccount,

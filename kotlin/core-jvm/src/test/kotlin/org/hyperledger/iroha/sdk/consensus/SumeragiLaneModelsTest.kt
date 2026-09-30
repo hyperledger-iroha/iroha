@@ -74,6 +74,12 @@ class SumeragiLaneModelsTest {
         assertEquals("22".repeat(32), running.record.merged.blockHash)
         assertEquals("33".repeat(32), running.record.merged.result)
         assertEquals(listOf("bls_normal"), running.record.params.keyAllowedAlgorithms)
+        assertEquals("reed_solomon16", running.record.daLayout.encoding)
+        assertEquals(BigInteger.valueOf(262144), running.record.daLayout.chunkSizeBytes)
+        assertEquals(BigInteger.valueOf(4), running.record.daLayout.dataShards)
+        assertEquals(BigInteger.valueOf(2), running.record.daLayout.parityShards)
+        assertEquals(BigInteger.valueOf(16777216), running.record.daLayout.maxPayloadSizeBytes)
+        assertEquals(BigInteger.valueOf(1024), running.record.daLayout.maxChunkCount)
         val instance = assertNotNull(running.instance)
         assertEquals(1, instance.protocolVersion)
         assertEquals(running.record.committee[0].peer, instance.leader)
@@ -117,18 +123,51 @@ class SumeragiLaneModelsTest {
         for (retired in listOf("lane_finality_manifest", "merge_carrier", "queue_plan", "relay_envelope")) {
             assertFails(retired) { SumeragiLaneStatus.parseJsonList(changedRecord { it[retired] = null }) }
         }
-        for (owner in listOf("params", "merged")) {
+        for (owner in listOf("params", "da_layout", "merged")) {
             val nested = record[owner] as Map<String, Any?>
             for (field in nested.keys) assertFails("$owner.$field") {
                 SumeragiLaneStatus.parseJsonList(changedRecord { it[owner] = nested - field })
             }
             assertFails { SumeragiLaneStatus.parseJsonList(changedRecord { it[owner] = nested + ("legacy" to 0L) }) }
         }
+        val layout = record["da_layout"] as Map<String, Any?>
+        val encoding = layout["encoding"] as Map<String, Any?>
+        for (field in encoding.keys) assertFails("da_layout.encoding.$field") {
+            SumeragiLaneStatus.parseJsonList(changedRecord { it["da_layout"] = layout + ("encoding" to (encoding - field)) })
+        }
+        assertFails {
+            SumeragiLaneStatus.parseJsonList(changedRecord {
+                it["da_layout"] = layout + ("encoding" to (encoding + ("legacy" to null)))
+            })
+        }
         val member = (record["committee"] as List<Map<String, Any?>>)[0]
         for (field in member.keys) assertFails("committee.$field") {
             SumeragiLaneStatus.parseJsonList(changedRecord { it["committee"] = listOf(member - field) })
         }
         assertFails { SumeragiLaneStatus.parseJsonList(changed { it["instance"] = mapOf("protocol_version" to 1L) }) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    @Test fun `lane data availability keeps compact final stripes and rejects malformed RS16 geometry`() {
+        val record = (lanes()[0] as Map<String, Any?>)["record"] as Map<String, Any?>
+        val layout = record["da_layout"] as Map<String, Any?>
+        fun changedLayout(values: Map<String, Any?>): String = changedRecord { it["da_layout"] = layout + values }
+        val compact = mapOf("max_payload_size_bytes" to 4194305L, "max_chunk_count" to 30L)
+        assertEquals(BigInteger.valueOf(4194305), SumeragiLaneStatus.parseJsonList(changedLayout(compact))[0].record.daLayout.maxPayloadSizeBytes)
+        for ((field, bad) in listOf(
+            "chunk_size_bytes" to 0L, "chunk_size_bytes" to 1L, "chunk_size_bytes" to 3L, "chunk_size_bytes" to 262146L,
+            "data_shards" to 0L, "data_shards" to 17L, "data_shards" to 65536L, "parity_shards" to 0L, "parity_shards" to 17L,
+            "max_payload_size_bytes" to 0L, "max_payload_size_bytes" to 16777217L, "max_chunk_count" to 0L,
+            "max_chunk_count" to 1025L, "max_chunk_count" to 95L,
+        )) assertFails("$field=$bad") { SumeragiLaneStatus.parseJsonList(changedLayout(mapOf(field to bad))) }
+        for (bad in listOf(
+            mapOf("data_shards" to 1L, "parity_shards" to 2L),
+            mapOf("encoding" to mapOf("encoding" to "plain", "details" to null)),
+            mapOf("encoding" to mapOf("encoding" to "reed_solomon16", "details" to emptyMap<String, Any?>())),
+            compact + ("max_chunk_count" to 29L),
+        )) assertFails { SumeragiLaneStatus.parseJsonList(changedLayout(bad)) }
+        val params = record["params"] as Map<String, Any?>
+        assertFails { SumeragiLaneStatus.parseJsonList(changedRecord { it["params"] = params + ("max_block_bytes" to 16777217L) }) }
     }
 
     @Suppress("UNCHECKED_CAST")

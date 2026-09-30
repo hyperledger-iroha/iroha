@@ -38,7 +38,7 @@ fn musubi_live_linear_location_cut_includes_all_retired_rows_in_revision_and_evi
     assert_eq!(world.musubi_archive_locations.view().len(), 97);
     validate_musubi_live_projection_cut(
         &world.view(),
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -54,7 +54,7 @@ fn musubi_live_linear_location_cut_includes_all_retired_rows_in_revision_and_evi
     world.musubi_archives.insert(archive_id, archive);
     let error = validate_musubi_live_projection_cut(
         &world.view(),
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -81,7 +81,7 @@ fn musubi_live_linear_location_cut_includes_all_retired_rows_in_revision_and_evi
         .insert(retired.key(), retired);
     let error = validate_musubi_live_projection_cut(
         &world.view(),
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -116,7 +116,7 @@ fn musubi_live_linear_location_cut_rejects_missing_and_phantom_current_membershi
         world.musubi_archives.insert(archive_id, archive);
         let error = validate_musubi_live_projection_cut(
             &world.view(),
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -391,7 +391,7 @@ fn musubi_live_linear_location_cut_separates_two_populated_groups_across_an_empt
             if index == 0 { (1, 1) } else { (0, 0) }
         );
     }
-    validate_musubi_live_projection_cut(&world.view(), &mv::allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES)).map_err(crate::execution_attempt::expect_completed_rejection).expect("two populated archive groups with an empty group between have exact independent projections");
+    validate_musubi_live_projection_cut(&world.view(), &iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES)).map_err(crate::execution_attempt::expect_completed_rejection).expect("two populated archive groups with an empty group between have exact independent projections");
     for id in ids {
         let original = world.musubi_archives.view().get(&id).cloned().unwrap();
         let mut changed = original.clone();
@@ -399,7 +399,7 @@ fn musubi_live_linear_location_cut_separates_two_populated_groups_across_an_empt
         world.musubi_archives.insert(id, changed);
         let error = validate_musubi_live_projection_cut(
             &world.view(),
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -418,7 +418,7 @@ fn musubi_live_linear_location_cut_separates_two_populated_groups_across_an_empt
         world.musubi_archive_availability.insert(id, changed);
         let error = validate_musubi_live_projection_cut(
             &world.view(),
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -434,7 +434,7 @@ fn musubi_live_linear_location_cut_separates_two_populated_groups_across_an_empt
     }
     validate_musubi_live_projection_cut(
         &world.view(),
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -453,7 +453,7 @@ fn musubi_live_linear_location_cut_separates_two_populated_groups_across_an_empt
         .insert(retired.key(), retired);
     let error = validate_musubi_live_projection_cut(
         &world.view(),
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -509,7 +509,7 @@ fn musubi_live_funded_revision_merge_preserves_unsorted_and_duplicate_payload_se
     }
     let bytes = world.musubi_public_directory.view().len()
         * core::mem::size_of::<&MusubiOrderedPackageEntryV1>();
-    let budget = mv::allocation::AllocationBudget::new(bytes);
+    let budget = iroha_allocation::AllocationBudget::new(bytes);
     validate_musubi_live_projection_cut(&world.view(), &budget).unwrap();
     assert_eq!(budget.peak_reserved_bytes(), bytes);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -536,7 +536,7 @@ fn musubi_live_funded_revision_merge_preserves_unsorted_and_duplicate_payload_se
 
 #[test]
 fn musubi_live_revision_admission_preserves_prior_errors_and_empty_zero_budget() {
-    let budget = mv::allocation::AllocationBudget::new(0);
+    let budget = iroha_allocation::AllocationBudget::new(0);
     validate_musubi_live_projection_cut(&World::default().view(), &budget).unwrap();
     let (mut world, release, _, _) = seeded_musubi_publication_snapshot();
     assert!(matches!(
@@ -580,14 +580,14 @@ fn musubi_live_revision_capacity_wakes_only_from_original_pool_then_retries() {
     let (world, _, _, _) = seeded_musubi_publication_snapshot();
     let bytes = world.musubi_public_directory.view().len()
         * core::mem::size_of::<&MusubiOrderedPackageEntryV1>();
-    let budget = mv::allocation::AllocationBudget::new(bytes);
+    let budget = iroha_allocation::AllocationBudget::new(bytes);
     let held = budget.try_reserve_bytes(bytes).unwrap();
     let crate::execution_attempt::ExecutionAttemptError::Deferred(refusal) =
         validate_musubi_live_projection_cut(&world.view(), &budget).unwrap_err()
     else {
         panic!("local capacity refusal")
     };
-    let Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+    let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
         refusal.allocation_refusal()
     else {
         panic!("original release owner")
@@ -597,7 +597,7 @@ fn musubi_live_revision_capacity_wakes_only_from_original_pool_then_retries() {
     let waker = Waker::from(wakes.clone());
     let mut context = Context::from_waker(&waker);
     assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
-    let unrelated = mv::allocation::AllocationBudget::new(bytes);
+    let unrelated = iroha_allocation::AllocationBudget::new(bytes);
     drop(unrelated.try_reserve_bytes(bytes).unwrap());
     assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
     assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
@@ -630,7 +630,7 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
         ivm: &vm,
         _marker: PhantomData,
     };
-    let budget = mv::allocation::AllocationBudget::new(0);
+    let budget = iroha_allocation::AllocationBudget::new(0);
     assert!(matches!(
         parse_world(
             &budget,
@@ -665,7 +665,7 @@ fn musubi_world_overlay_scratch_refusal_rolls_back_current_and_replacement_cuts(
         .get(&release)
         .cloned()
         .unwrap();
-    let budget = mv::allocation::AllocationBudget::new(0);
+    let budget = iroha_allocation::AllocationBudget::new(0);
     let nexus = iroha_config::parameters::actual::Nexus::default();
     for replacement in [false, true] {
         let mut block = if replacement {

@@ -1,7 +1,7 @@
 //! Original-pool custody and unchanged commitment controls for final digest backing.
 
 use super::*;
-use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer};
+use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer};
 use std::{
     alloc::Layout,
     future::Future,

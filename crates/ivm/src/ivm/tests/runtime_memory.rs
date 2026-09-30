@@ -89,7 +89,7 @@ fn funded_template_demand(vm: &IVM) -> usize {
 
 #[test]
 fn funded_runtime_template_refusal_retry_and_final_owner_use_original_pool() {
-    use mv::allocation::{AllocationBudget, AllocationRefusal};
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
 
     let budget = AllocationBudget::new(64 * 1024 * 1024);
     let mut vm = IVM::try_new_with_memory_budget(1_000, &budget).unwrap();
@@ -153,7 +153,7 @@ fn funded_runtime_template_refusal_retry_and_final_owner_use_original_pool() {
 
 #[test]
 fn funded_runtime_template_partial_copy_refusal_refunds_original_lease() {
-    let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let mut vm = IVM::try_new_with_memory_budget(1_000, &budget).unwrap();
     vm.private_memory_bytes
         .try_insert(Memory::STACK_START..Memory::STACK_START + 8)
@@ -178,7 +178,7 @@ fn funded_runtime_template_partial_copy_refusal_refunds_original_lease() {
 
 #[test]
 fn funded_runtime_template_unwind_refunds_only_abandoned_snapshot() {
-    let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let mut vm = IVM::try_new_with_memory_budget(1_000, &budget).unwrap();
     let original_bytes = budget.reserved_bytes();
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -772,7 +772,7 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &insufficient),
         Err(VMError::AllocationDeferred(
-            mv::allocation::AllocationRefusal::ExceedsLimit { .. }
+            iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
         ))
     ));
     assert_eq!(insufficient.reserved_bytes(), 0);
@@ -783,7 +783,7 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &tree_insufficient),
         Err(VMError::AllocationDeferred(
-            mv::allocation::AllocationRefusal::Capacity { .. }
+            iroha_allocation::AllocationRefusal::Capacity { .. }
         ))
     ));
     assert_eq!(tree_insufficient.reserved_bytes(), 0);
@@ -797,7 +797,7 @@ fn funded_vm_image_leaves_bitmaps_and_register_tree_reserve_before_construction_
     assert!(matches!(
         IVM::try_new_with_memory_budget(gas_limit, &budget),
         Err(VMError::AllocationDeferred(
-            mv::allocation::AllocationRefusal::Capacity { .. }
+            iroha_allocation::AllocationRefusal::Capacity { .. }
         ))
     ));
     let code = crate::encoding::wide::encode_halt().to_le_bytes();

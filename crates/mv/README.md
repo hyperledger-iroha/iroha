@@ -11,7 +11,10 @@ Features:
 
 The storage layer uses concread's B-tree maps and epoch cells. Its dependency
 enables `maps`, `ebr`, and the existing `foldhash` backend explicitly; unused
-async and adaptive-cache defaults are disabled.
+async and adaptive-cache defaults are disabled. Finite credits, charged buffers,
+generic shared shells and release observations belong to the std-only sibling
+[`iroha_allocation`](../iroha_allocation/README.md). `mv::allocation::map` retains
+only the adapters that bind those credits to real storage-engine allocations.
 
 Block and transaction overlays expose borrowed preimages and touched entries for
 State projection. Storage entries are ordered by key; cell and map records keep
@@ -89,7 +92,7 @@ and wake retries after their physical guards are released. Other threads and
 pools keep notifying normally. Notification also preserves the remaining
 original waiters when one callback unwinds, without suppressing its panic.
 
-`allocation::ChargedBuffer<T>` admits one exact fixed backing layout for `Copy`
+`iroha_allocation::ChargedBuffer<T>` admits one exact fixed backing layout for `Copy`
 elements before allocation. Appending, reordering the initialized slice and
 truncating its prefix cannot grow the allocation or refund its charge early.
 Logical capacity also applies to zero-sized elements. Snapshot payload reads use
@@ -210,8 +213,8 @@ control storage, mutable access, concrete model payload policies
 and configured aggregate integration. Replacement and snapshot restoration admit
 each edit; they do not bound aggregate restoration work or complete State admission.
 
-Release observations use `concread::release`, the physical storage owner's single
-implementation. Native active-reader contention has its own source; releasing a
+Release observations use `iroha_allocation::release`, shared by physical storage
+and finite allocation owners. Native active-reader contention has its own source; releasing a
 writer cannot satisfy that wait. Published tree retirement retains the original
 reader notification after physical unlock, so the enclosing publisher can drop it
 after its visibility fences. Detached map preparation retains native active-reader

@@ -150,7 +150,7 @@ fn assert_members(
             .map(|(_, h)| height(*h));
         assert_eq!(root.read(&key(n), store).unwrap(), value, "key {n}");
     }
-    let mut reference = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut reference = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     for &(n, h) in expected.iter().rev() {
         reference
             .replace(

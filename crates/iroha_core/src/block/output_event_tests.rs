@@ -34,7 +34,7 @@ fn local_storage_recovery_emits_no_block_rejection() {
         MergeLedgerCommitError,
     };
     use iroha_data_model::block::error::BlockRejectionReason;
-    use mv::allocation::AllocationRefusal;
+    use iroha_allocation::AllocationRefusal;
 
     let header = BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),
@@ -99,7 +99,8 @@ fn npos_local_admission_keeps_all_resource_refusals_out_of_rejection() {
         StateStorageAdmissionError,
     };
     use concread::bptree::PlanningError;
-    use mv::{allocation::AllocationRefusal, storage::AdmittedStorageError};
+    use iroha_allocation::{AllocationRefusal};
+    use mv::{storage::AdmittedStorageError};
 
     let refusals = [
         StateAdmissionError::Storage(StateStorageAdmissionError::World(

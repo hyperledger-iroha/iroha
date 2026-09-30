@@ -8,8 +8,8 @@ use crate::{
     crypto::Crypto,
     message::{PayloadChunk, PayloadManifest},
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_primitives::erasure::rs16::compact::{CodecAllocationError, CompactShape};
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 /// Acquisition cannot confuse missing rows, a bad relay, signed invalidity and local refusal.
 #[derive(Debug)]

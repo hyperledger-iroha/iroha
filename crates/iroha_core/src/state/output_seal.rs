@@ -272,6 +272,21 @@ impl StateBlock<'_> {
         }
     }
 
+    /// Local telemetry classification belongs to the original authenticated output owner.
+    /// It cannot authorize an execution or relax any source, witness or finality check.
+    #[cfg(feature = "telemetry")]
+    pub(in crate::state) fn committed_telemetry_origin(
+        &self,
+    ) -> Result<crate::sumeragi::executor::CommitTelemetryOrigin, String> {
+        match self.execution_output_plan.as_ref() {
+            None => Ok(crate::sumeragi::executor::CommitTelemetryOrigin::Forward),
+            Some(ExecutionOutputPlanState::Finalized(finalized)) => {
+                Ok(finalized.authorized.native_execution.telemetry_origin())
+            }
+            _ => Err("telemetry origin lacks finalized execution authority".into()),
+        }
+    }
+
     /// Run the complete execution output owner and consume its actual sources.
     /// The caller still owes source/finality and non-output resource admission.
     /// The sealed output owner does not grant commit authority by itself: the

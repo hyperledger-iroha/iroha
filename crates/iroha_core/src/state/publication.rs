@@ -50,9 +50,9 @@ pub(super) struct StatePublication<'state> {
     published: bool,
     poisoned: bool,
     refunds: Option<(
-        mv::allocation::AllocationRefundBatch,
-        mv::allocation::AllocationRefundBatch,
-        mv::allocation::AllocationRefundBatch,
+        iroha_allocation::AllocationRefundBatch,
+        iroha_allocation::AllocationRefundBatch,
+        iroha_allocation::AllocationRefundBatch,
     )>,
 }
 
@@ -257,6 +257,10 @@ impl<'state> StateBlock<'state> {
             this.prune_axt_replay_ledger(current_axt_slot, axt_replay_retention_slots);
         }
         let state_ref = this.state_ref;
+        #[cfg(feature = "telemetry")]
+        let telemetry_origin = this
+            .committed_telemetry_origin()
+            .map_err(|_| TransactionsBlockError::WorldCommitPreparation)?;
         // Borrow disjoint fields; the original State keeps its complete inventory
         // armed through every refusal, preparation and publication unwind.
         let StateBlockFields {
@@ -805,7 +809,7 @@ impl<'state> StateBlock<'state> {
         {
             // Canonical Kura replay rebuilds exact gauges but must not count a
             // historical transition for a second time after node restart.
-            {
+            if telemetry_origin == crate::sumeragi::executor::CommitTelemetryOrigin::Forward {
                 for &(transition, no_result_kind) in pending_parliament_telemetry_events.iter() {
                     state_ref
                         .telemetry
@@ -822,8 +826,6 @@ impl<'state> StateBlock<'state> {
                 state_ref.telemetry.record_citizens_total(citizens_total);
             }
         }
-        // TODO: native replay must mark historical telemetry effects explicitly;
-        // that marker must never bypass source, witness, or publication checks.
         // Run the retained persistence plan outside the State writer lock.
         tiered_snapshot
             .take()
@@ -904,6 +906,17 @@ impl PublicationCaptureProbe {
 
 #[cfg(test)]
 impl StateBlock<'_> {
+    /// Stage a closed local observation for publication tests, without changing execution.
+    /// The real witness, certificate and journal publication remain required.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn stage_parliament_transition_observation_for_test(
+        &mut self,
+        transition: iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1,
+    ) {
+        self.pending_parliament_telemetry_events
+            .push((transition, None));
+    }
+
     /// Read the same retained preparation identities without giving mutation authority.
     pub(crate) fn publication_identity_for_test(&self) -> (usize, usize, bool) {
         let p = self

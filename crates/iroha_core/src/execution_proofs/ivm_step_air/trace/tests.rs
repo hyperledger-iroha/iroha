@@ -19,11 +19,11 @@ use crate::execution_proofs::stark::{
         verify_proof_managed_note_stark_v1,
     },
 };
+use iroha_allocation::AllocationBudget;
 use ivm::{
     IVM, ProgramMetadata, encoding::wide as enc, execution_step_recorder::DiagnosticStepRecorder,
     host::DefaultHost,
 };
-use mv::allocation::AllocationBudget;
 
 fn contract(body: &[u32]) -> PreparedContract {
     contract_with_cycle_policy(body, 0, 0)

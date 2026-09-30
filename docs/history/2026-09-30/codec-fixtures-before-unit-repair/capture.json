@@ -1,0 +1,49 @@
+{
+  "source_commit": "0993e1c83fe3a06e0f0b0fbf503fe79caeba3b7f",
+  "captured_on": "2026-09-30",
+  "scope": "Exact pre-repair committed fixture and source-coupled documentation bytes. Historical component evidence only; never decoder inputs or release qualification.",
+  "files": [
+    {
+      "source": "crates/iroha_data_model/tests/fixtures/model_generic_identity_frames.json",
+      "archive": "model_generic_identity_frames.json",
+      "bytes": 89340,
+      "sha256": "f90f7b52c37d931a7e16f5eaf213e7f431386a9e01682bae1779709fe5eff1a7"
+    },
+    {
+      "source": "crates/iroha_data_model/tests/fixtures/model_generic_identity_frames.md",
+      "archive": "model_generic_identity_frames.md",
+      "bytes": 3165,
+      "sha256": "945e407ee1e2041494cfd44a407b7b6184c2ea3e5e8d1bb2445227a7d51bab3d"
+    },
+    {
+      "source": "crates/iroha_data_model/tests/fixtures/query_generic_full_identity_frames.json",
+      "archive": "query_generic_full_identity_frames.json",
+      "bytes": 94685,
+      "sha256": "42ad4a32128727fdbddc7cabff5a1c39d3237a08667d2c4b2fa18a7eb7baf2c2"
+    },
+    {
+      "source": "crates/iroha_data_model/tests/fixtures/query_generic_ids_identity_frames.json",
+      "archive": "query_generic_ids_identity_frames.json",
+      "bytes": 110176,
+      "sha256": "a89b323adcd15fd420e32751c1ecc43e3b4da40eda4ab55b2e7b5578e2ff6a13"
+    },
+    {
+      "source": "crates/iroha_data_model/tests/fixtures/query_generic_identity_frames.md",
+      "archive": "query_generic_identity_frames.md",
+      "bytes": 3016,
+      "sha256": "cb823d743468786a3d7fefa019297742bc9332aaf77c49002965559426720bc9"
+    },
+    {
+      "source": "fixtures/privacy/exact12_v1.tsv",
+      "archive": "exact12_v1.tsv",
+      "bytes": 4051,
+      "sha256": "31e6f8246a0014c9ccacd523449f4812c93dd04231b16ceacac75ba6f97dfff7"
+    },
+    {
+      "source": "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64",
+      "archive": "exact12_typed_fixture_bundle_v1.norito.b64",
+      "bytes": 520701,
+      "sha256": "c2abd334c3bc9e5484d9085d418988e09b207c4eea906a63ae888685e94aa243"
+    }
+  ]
+}

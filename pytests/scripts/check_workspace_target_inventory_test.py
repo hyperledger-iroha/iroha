@@ -60,13 +60,13 @@ def test_external_software_signer_requires_explicit_release_opt_in() -> None:
 
     caller_markers = {
         "scripts/build_canonical_binaries.sh": (
-            "--features irohad/external-software-signer-bin,iroha_cli/cli"
+            'daemon_features="irohad/external-software-signer-bin,iroha_cli/cli"'
         ),
         "ci/check_sorafs_cli_release.sh": "--features external-software-signer-bin",
         ".github/workflows/sorafs-cli-release.yml": (
             "--features external-software-signer-bin"
         ),
-        "Dockerfile": 'ARG FEATURES="external-software-signer-bin"',
+        "Dockerfile": 'ARG FEATURES="external-software-signer-bin,irohad/ivm-cuda"',
     }
     for relative, expected in caller_markers.items():
         assert expected in (ROOT / relative).read_text(encoding="utf-8")

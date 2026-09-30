@@ -5,8 +5,10 @@ with explicit features `ebr`, `maps`, and `foldhash` and defaults disabled.
 The original crates.io archive checksum is
 `6588e9e68e11207fb9a5aabd88765187969e6bcba98763c40bcad87b2a73e9f5`;
 `vendor/concread/IROHA_PATCHES.md` records the local patch and retained license.
-These notes identify actual allocation owners and the finite requested-layout
-credit primitive. They do not establish a configured State-wide memory budget
+The std-only [`iroha_allocation`](../iroha_allocation/README.md) crate owns the
+finite requested-layout credit primitive, shared shells, fixed buffers and
+release notifications; MV owns their storage-engine integration. These notes
+identify the actual storage allocation and reclamation owners. They do not establish a configured State-wide memory budget
 or complete publication authority.
 
 ## Actual allocation and reclamation paths

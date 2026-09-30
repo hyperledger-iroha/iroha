@@ -1,7 +1,7 @@
 //! Caller-owned reacquisition of the exact admitted membership transition.
 
 use super::*;
-use concread::release::DeferredRelease;
+use iroha_allocation::release::DeferredRelease;
 use mv::PublicationPreparationError;
 
 enum Phase<'storage> {

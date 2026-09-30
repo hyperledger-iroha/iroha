@@ -297,6 +297,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 b"invalid result".to_vec(),
+                Vec::new(),
             )),
         ] {
             let changed = verified

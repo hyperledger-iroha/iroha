@@ -2,12 +2,12 @@
 //! The same read/restoration owner survives local refusals; only complete verification
 //! can return available custody to Core. File presence never grants execution authority.
 
+use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, AvailableBody, BodyRestoration, RestorationError},
     crypto::Crypto,
     message::ByteAdmissionError,
 };
-use mv::allocation::AllocationBudget;
 
 use crate::sumeragi::durable_artifact::{BodyReadError, BodyReadJob, BodyReadPoll, BodyReader};
 

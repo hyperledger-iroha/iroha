@@ -776,6 +776,6 @@ fn net_delta_hook_mentions_every_trigger_block_store() {
     }
 }
 
-fn capture_budget() -> mv::allocation::AllocationBudget {
-    mv::allocation::AllocationBudget::new(64 * 1024 * 1024)
+fn capture_budget() -> iroha_allocation::AllocationBudget {
+    iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)
 }

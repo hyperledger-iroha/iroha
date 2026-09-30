@@ -92,6 +92,9 @@ name = "hashmap_benchmark"
 path = "benches/hashmap_benchmark.rs"
 harness = false
 
+[dependencies]
+iroha_allocation = { workspace = true }
+
 [dependencies.ahash]
 version = "0.8.12"
 optional = true

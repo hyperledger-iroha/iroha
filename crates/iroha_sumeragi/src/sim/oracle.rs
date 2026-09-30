@@ -212,7 +212,7 @@ pub fn build_chain(
             header,
             &payload,
             &inst.config(h),
-            &mv::allocation::AllocationBudget::new(1 << 30),
+            &iroha_allocation::AllocationBudget::new(1 << 30),
             crypto,
             author,
         );

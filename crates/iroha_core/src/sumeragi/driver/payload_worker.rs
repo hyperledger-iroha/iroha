@@ -7,6 +7,7 @@ use super::{
     traits::{BlockStore, BodyStore, Net},
 };
 use crate::sumeragi::durable_artifact::BodyReadError;
+use iroha_allocation::AllocationBudget;
 use iroha_primitives::erasure::rs16::compact::{CodecAllocationError, Encoded};
 use iroha_sumeragi::{
     api::{Action, Event},
@@ -15,7 +16,6 @@ use iroha_sumeragi::{
     message::{BlockHeader, PayloadChunk, PayloadManifest, PayloadRequest, WireMessage},
     types::{Hash32, HeightConfig, PublicKey},
 };
-use mv::allocation::AllocationBudget;
 use std::{
     collections::{BTreeMap, VecDeque},
     io,

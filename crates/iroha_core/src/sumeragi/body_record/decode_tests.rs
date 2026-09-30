@@ -1,11 +1,11 @@
 //! Funded decoding and restoration retain the actual original raw and destination allocations.
 
 use crate::sumeragi::crypto::BlsCrypto;
+use iroha_allocation::ChargedShared;
 use iroha_sumeragi::{
     message::ByteAdmissionError,
     types::{MAX_COMMITTEE_SIZE, MAX_CONTROL_WITNESS_BYTES, MAX_PUBLIC_KEY_LEN},
 };
-use mv::allocation::ChargedShared;
 
 use super::*;
 use crate::sumeragi::body_record::tests::{decode_record, fixture};

@@ -71,7 +71,7 @@ pub(super) struct H {
     pub me: ValidatorIndex,
     pub core: Core,
     pub now: Millis,
-    pub budget: mv::allocation::AllocationBudget,
+    pub budget: iroha_allocation::AllocationBudget,
     pub remote_bodies: std::cell::RefCell<BTreeMap<Hash32, AvailableBody>>,
     pub withheld_rows: std::collections::BTreeSet<Hash32>,
     acquisitions: BTreeMap<Hash32, PayloadAcquisition>,
@@ -143,7 +143,7 @@ impl H {
             me,
             core,
             now: 0,
-            budget: mv::allocation::AllocationBudget::new(1 << 30),
+            budget: iroha_allocation::AllocationBudget::new(1 << 30),
             remote_bodies: std::cell::RefCell::new(BTreeMap::new()),
             withheld_rows: std::collections::BTreeSet::new(),
             acquisitions: BTreeMap::new(),
@@ -1249,7 +1249,7 @@ fn placeholder_core(
         boxed,
         Box::new(v.crypto.clone()),
         fake_attestation_ext(FakeAttestor::new()),
-        mv::allocation::AllocationBudget::new(1 << 30),
+        iroha_allocation::AllocationBudget::new(1 << 30),
         0,
     )
     .expect("valid test configuration")

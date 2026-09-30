@@ -150,6 +150,8 @@ See [Norito](norito.md), [schema identity](specs/norito_schema_identity.md),
 | P11 | Mochi, Kagami and governed compute | Tool owners, Core/Torii runtime | Reachability and dependency gates, descriptor-relative private custody/atomic publication on shipping platforms and measured startup/snapshot/query costs. Qualify prepared prover-key mounts/restart; compute requires governed manifest/catalog/auth, bounded replay, real IVM metering and Kiso pricing before its config can advertise execution. See [Mochi plan](specs/mochi_architecture_plan.md). |
 | P12 | SORA Economic Constitution | Economic design, oracle/governance and simulation owners | Specify purchasing-power basket, oracles/intervention/reserves before stability claims; capped term Phoenix certificates, one ring-fenced Producer Credit Facility, bounded governance lanes and reproducible run/default/capture/cartel stress simulations. Implementation is pending. |
 
+Taira deployment owners must qualify a fresh current-protocol cutover to resolve the September 30 d431 readiness failure. Current proof and beacon codecs cannot authenticate that retired runtime; do not add compatibility decoders or continue its expired forward lease. Finish explicit native first-boot safety-record initialization, admit its storage namespace, require 24-hour Linux fault soaks at committees 4 and 22, and then obtain the concrete shared-ledger replacement decision. Require fresh four-validator readiness/write/restart evidence and qualify the doctor readiness check. Retain the old Applied beacon envelope as incident evidence. See the [recovery record](docs/history/2026-09-30/taira-recovery.md).
+
 ## Candidate sealing, release and community
 
 | ID | Outstanding outcome | Component owner | Completion criteria |

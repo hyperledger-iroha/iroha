@@ -3411,7 +3411,7 @@ pub mod nexus {
             Option<(
                 iroha_data_model::block::consensus::ValidatorIndex,
                 iroha_model_base::peer::PeerId,
-                mv::allocation::AllocationCharge,
+                iroha_allocation::AllocationCharge,
             )>,
         );
         /// Exact fixed backing for the maximum retained pending penalty plan.
@@ -3450,7 +3450,7 @@ pub mod nexus {
             iroha_primitives::numeric::Quantity,
             iroha_primitives::numeric::Quantity,
         )>() + 3
-            * (1 + 32 + core::mem::size_of::<mv::allocation::AllocationCharge>());
+            * (1 + 32 + core::mem::size_of::<iroha_allocation::AllocationCharge>());
         /// Finite process-local pool for stake-index backings and nested account keys.
         pub const CONSENSUS_STAKE_INDEX_BYTES: usize = 64 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).

@@ -67,7 +67,7 @@ use std::sync::{OnceLock, TryLockError};
 mod retained_mutex;
 use retained_mutex::{Mutex, MutexGuard};
 
-use crate::shared::{Reserved, Shared};
+use iroha_allocation::shared::{Reserved, Shared};
 
 /// Explicitly unaccounted shell ownership; this provides no admission policy.
 #[derive(Debug)]
@@ -90,7 +90,7 @@ pub struct InitialLayouts {
 #[derive(Debug)]
 pub struct InitialCharges<Charge> {
     /// Original notification control owner, funded before cell construction.
-    pub notification: crate::release::ReleaseNotification,
+    pub notification: iroha_allocation::release::ReleaseNotification,
     /// Custody held until the last cell or detached writer destroys the root.
     pub root: Charge,
     /// Custody retained by the original first-reader generation.
@@ -171,11 +171,13 @@ pub struct LinCowCell<T, R, U, Charge = Untracked> {
     updater: PhantomData<U>,
     write: Shared<Mutex<WriteState<T, R, Charge>>, Charge>,
     active: Mutex<Shared<LinCowCellInner<R, Charge>, Charge>>,
-    active_released: crate::release::ReleaseNotification,
+    active_released: iroha_allocation::release::ReleaseNotification,
 }
 
-type ActiveGuard<'a, R, Charge> =
-    crate::release::ReleaseGuard<'a, MutexGuard<'a, Shared<LinCowCellInner<R, Charge>, Charge>>>;
+type ActiveGuard<'a, R, Charge> = iroha_allocation::release::ReleaseGuard<
+    'a,
+    MutexGuard<'a, Shared<LinCowCellInner<R, Charge>, Charge>>,
+>;
 
 /// Opaque custody of one original charged physical root allocation.
 /// Cloning this handle retains that allocation without allocating a new identity.
@@ -265,7 +267,7 @@ struct WriteState<T, R, Charge> {
     current: Shared<LinCowCellInner<R, Charge>, Charge>,
     // The same notification control survives with original detached/root owners.
     // This is a reference to the original allocation, not a replacement source.
-    _release_control: crate::release::ReleaseNotification,
+    _release_control: iroha_allocation::release::ReleaseNotification,
 }
 
 #[derive(Debug)]
@@ -403,7 +405,7 @@ where
         mut self,
     ) -> (
         LinCowCellWriteTxn<'a, T, R, U, Charge>,
-        Option<crate::release::DeferredRelease>,
+        Option<iroha_allocation::release::DeferredRelease>,
     ) {
         match self.phase.take().expect("original commit slot") {
             LinCowCellCommitPhase::Writer(writer) => (writer, None),
@@ -432,7 +434,7 @@ pub struct LinCowCellCommitRetirement<R, Retirement, Charge = Untracked> {
     _cursor_charge: Charge,
     // LAST: native wake callbacks follow real cursor/reader cleanup and remain
     // with the aggregate owner after both physical locks have been released.
-    active_release: Option<crate::release::DeferredRelease>,
+    active_release: Option<iroha_allocation::release::DeferredRelease>,
 }
 
 /// Published cell retaining both physical locks and all original cleanup custody.
@@ -644,13 +646,13 @@ impl<T, R, U, Charge> LinCowCell<T, R, U, Charge> {
     /// Observe the actual active-reader mutex before a nonblocking probe.
     /// Releasing a writer or a pinned reader does not complete this wait. Every
     /// successful active-reader acquisition notifies after its mutex unlocks.
-    pub fn observe_reader_release(&self) -> crate::release::ReleaseWait {
+    pub fn observe_reader_release(&self) -> iroha_allocation::release::ReleaseWait {
         self.active_released.observe()
     }
 
     /// Retain actual releases from this original active-reader mutex in constant
     /// space. The caller keeps the batch beyond every enclosing physical fence.
-    pub fn reader_release_batch(&self) -> crate::release::DeferredReleaseBatch {
+    pub fn reader_release_batch(&self) -> iroha_allocation::release::DeferredReleaseBatch {
         self.active_released.deferred_batch()
     }
 
@@ -701,7 +703,8 @@ where
     /// nested storage are separate allocations, not part of this layout pair.
     pub fn initial_allocation_layouts() -> InitialLayouts {
         InitialLayouts {
-            notification: crate::release::ReleaseNotification::allocation_layout::<Charge>(),
+            notification: iroha_allocation::release::ReleaseNotification::allocation_layout::<Charge>(
+            ),
             root: Reserved::<Mutex<WriteState<T, R, Charge>>, Charge>::layout(),
             reader: Self::reader_allocation_layout(),
         }
@@ -785,7 +788,7 @@ where
     /// anything. Poisoned acquisitions are also unlocked and recorded in the batch.
     pub fn read_retaining(
         &self,
-        releases: &mut crate::release::DeferredReleaseBatch,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<LinCowCellReadTxn<'_, T, R, U, Charge>, OwnedWriteError> {
         self.read_retaining_impl(releases, false)
     }
@@ -794,14 +797,14 @@ where
     /// Busy records no release. A foreign batch returns Changed before probing.
     pub fn try_read_retaining(
         &self,
-        releases: &mut crate::release::DeferredReleaseBatch,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<LinCowCellReadTxn<'_, T, R, U, Charge>, OwnedWriteError> {
         self.read_retaining_impl(releases, true)
     }
 
     fn read_retaining_impl(
         &self,
-        releases: &mut crate::release::DeferredReleaseBatch,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
         nonblocking: bool,
     ) -> Result<LinCowCellReadTxn<'_, T, R, U, Charge>, OwnedWriteError> {
         if !self.active_released.owns_batch(releases) {
@@ -1130,7 +1133,7 @@ where
         self,
     ) -> (
         LinCowCellWriteTxn<'a, T, R, U, Charge>,
-        crate::release::DeferredRelease,
+        iroha_allocation::release::DeferredRelease,
     ) {
         let Self {
             caller,
@@ -1293,7 +1296,7 @@ impl<T, R, U, Charge> LinCowCellOwned<T, R, U, Charge> {
     pub fn try_matches_current_retaining(
         &self,
         target: &LinCowCell<T, R, U, Charge>,
-    ) -> Result<(bool, Option<crate::release::DeferredRelease>), OwnedWriteError> {
+    ) -> Result<(bool, Option<iroha_allocation::release::DeferredRelease>), OwnedWriteError> {
         if !Shared::ptr_eq(&self.root, &target.write) {
             return Ok((false, None));
         }
@@ -1387,7 +1390,7 @@ where
         Self::new_charged(
             data,
             InitialCharges {
-                notification: crate::release::ReleaseNotification::default(),
+                notification: iroha_allocation::release::ReleaseNotification::default(),
                 root: Untracked,
                 reader: Untracked,
             },
@@ -1950,7 +1953,7 @@ mod writer_input_tests {
                 dropped: dropped.clone(),
             },
             InitialCharges {
-                notification: crate::release::ReleaseNotification::default(),
+                notification: iroha_allocation::release::ReleaseNotification::default(),
                 root: charge(true),
                 reader: charge(false),
             },
@@ -2300,7 +2303,7 @@ mod identity_preparation_tests {
         let cell = Cell::new_charged(
             Data(drops.clone()),
             InitialCharges {
-                notification: crate::release::ReleaseNotification::default(),
+                notification: iroha_allocation::release::ReleaseNotification::default(),
                 root: RootCharge {
                     _original: Some(root),
                 },

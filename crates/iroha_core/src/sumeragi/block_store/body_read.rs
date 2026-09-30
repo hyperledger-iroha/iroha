@@ -2,12 +2,12 @@
 
 use std::{io, sync::Arc};
 
+use iroha_allocation::AllocationBudget;
 use iroha_data_model::{block::SignedBlock, sumeragi_finality::result_of_preimage};
 use iroha_sumeragi::{
     availability::{AvailabilitySource, BodyRestoration},
     message::VoteKind,
 };
-use mv::allocation::AllocationBudget;
 
 use super::certificate_read::{CertificateRead, CertificateReadError, DecodedCertificate};
 use crate::sumeragi::{

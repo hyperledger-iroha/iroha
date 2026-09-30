@@ -26,13 +26,13 @@ use crate::{
     sumeragi::epoch::ValidatorEpochContextV1,
     transaction::{FeePaymentIntent, TransactionBuilder, TransactionResultInner},
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::{KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::{
     availability::{PayloadAuthoring, PayloadBytes},
     crypto::Signer,
     types::{Bitmap, ChainParams},
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
 
 // Only fixed public fixture keys enter this signer; it is never deployment custody.
@@ -53,6 +53,47 @@ impl Signer for FixtureSigner<'_> {
                 .unwrap(),
         )
     }
+}
+
+/// Author a genuine signed RS16 payload table for an independently selected fixture schedule.
+///
+/// The caller selects the complete height configuration, original allocation budget, ordered
+/// proof-of-possession-verified validators and proposer key. This helper uses the production
+/// authoring path; it executes no World transition and grants no deployment signing authority.
+///
+/// # Panics
+/// Panics if the fixture committee, proposer, payload, header or budget is invalid.
+#[must_use]
+pub fn author_payload(
+    header: CoreHeader,
+    payload: &[u8],
+    config: &iroha_sumeragi::types::HeightConfig,
+    budget: &AllocationBudget,
+    validators: &[FinalityValidator],
+    proposer: &KeyPair,
+) -> iroha_sumeragi::availability::AuthoredBody {
+    let (crypto, committee) = ProofCrypto::new(validators).expect("genuine fixture committee");
+    assert_eq!(
+        config.committee, committee,
+        "independently selected committee"
+    );
+    let public =
+        consensus_key(&PeerId::new(proposer.public_key().clone())).expect("fixture BLS proposer");
+    assert_eq!(config.committee.get(header.proposer), Some(&public));
+    let signer = FixtureSigner {
+        public,
+        key: proposer,
+    };
+    let mut bytes = ChargedBuffer::new(payload.len(), budget).expect("fixture payload backing");
+    bytes
+        .append(payload)
+        .expect("exact fixture payload capacity");
+    let payload = PayloadBytes::from_charged(bytes, budget)
+        .unwrap_or_else(|_| panic!("fixture proposal shared owner admission"));
+    let instance = header.instance;
+    PayloadAuthoring::new(header, payload)
+        .complete(instance, config, budget, &crypto, &signer)
+        .unwrap_or_else(|(_, error)| panic!("genuine fixture availability authoring: {error:?}"))
 }
 
 // Existing reviewed public multiples 1..4 of the Pasta generator; no private monetary keys.
@@ -357,7 +398,7 @@ impl NativeFinalityFixture {
         let scratch = NativeLaneStateProof::scratch_bytes(witness.writes.len()).unwrap();
         let proof = NativeLaneStateProof::from_witness(
             witness,
-            &mv::allocation::AllocationBudget::new(scratch),
+            &iroha_allocation::AllocationBudget::new(scratch),
         )
         .unwrap();
         let root = proof.computed_root().unwrap();
@@ -523,6 +564,51 @@ impl NativeFinalityFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_availability_binds_actual_proposer_payload_header_and_schedule() {
+        use iroha_sumeragi::availability::verify_availability;
+        let fixture = NativeFinalityFixture::new();
+        let certified = fixture.latest().decode_checked().unwrap();
+        let header = certified.header.clone().unwrap();
+        let config = ScheduledConfig {
+            height: header.height,
+            epoch: certified.commitment.schedule.current,
+            params: ChainParamsRecord::from_core(&ChainParams::default()),
+        }
+        .height_config()
+        .unwrap();
+        let payload = certified
+            .block
+            .canonical_resultless_proposal()
+            .encode_wire()
+            .unwrap();
+        let budget = AllocationBudget::new(128 * 1024 * 1024);
+        let authored = author_payload(
+            header,
+            &payload,
+            &config,
+            &budget,
+            &fixture.validators,
+            &fixture.keys[0],
+        );
+        let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
+        let header = authored.body.header();
+        let frame = authored.body.availability().as_slice();
+        verify_availability(header.instance, &config, header, frame, &crypto).unwrap();
+        assert_eq!(authored.body.payload().as_slice(), payload);
+        let mut changed = header.clone();
+        changed.parent_result.0[0] ^= 1;
+        assert!(verify_availability(header.instance, &config, &changed, frame, &crypto).is_err());
+        let mut changed_config = config.clone();
+        changed_config.epoch.id.context.0[0] ^= 1;
+        assert!(
+            verify_availability(header.instance, &changed_config, header, frame, &crypto).is_err()
+        );
+        let mut forged = frame.to_vec();
+        *forged.last_mut().unwrap() ^= 1;
+        assert!(verify_availability(header.instance, &config, header, &forged, &crypto).is_err());
+    }
+
     #[test]
     fn structural_work_binds_original_signature_network_and_header_time() {
         let mut fixture = NativeFinalityFixture::start("structural-work-fixture");

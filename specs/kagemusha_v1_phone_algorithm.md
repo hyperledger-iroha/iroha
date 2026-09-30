@@ -411,8 +411,10 @@ proof and issuer completion through six bounded phases. Its accepted challenge,
 prepared proof and completed admission are consuming Rust types tied to the
 original revocable selection; a restart cannot recreate them from app frames.
 The app-side phase owner correlates those six frames to one selected account and
-signed release; a lost cancellation reply permits only an exact retry of the
-same revocation ticket. No qualified issuer/app-evidence delegate or installed
+signed release. Successful reads and cancellation retries use the original live
+owner and ticket. A failed native dispatch or response publication revokes that
+process owner; uncertain state must be recovered by the qualified backend in a
+fresh process. No qualified issuer/app-evidence delegate or installed
 monetary backend is present, so these phase mechanics do not yet admit a wallet.
 
 ## Payment and recovery algorithm

@@ -1,6 +1,6 @@
 //! Fixed-capacity application control bytes carried and signed independently of transactions.
 
-use crate::bytes::{ByteSequence, InlineBytes, ByteDomain};
+use crate::bytes::{ByteDomain, ByteSequence, InlineBytes};
 
 /// Maximum occupied bytes in one signed application control witness.
 pub const MAX_CONTROL_WITNESS_BYTES: usize = 2048;

@@ -419,7 +419,7 @@ impl Qc {
     /// the original witness. The caller must preserve the source and retry local refusals.
     pub fn admit_attestation_witness(
         &mut self,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<(), ByteAdmissionError> {
         self.attestation_witness
             .as_mut()
@@ -689,7 +689,7 @@ impl WireMessage {
     /// This performs no allocation and does not validate signatures or require a witness
     /// where the protocol demands one; those remain independent cryptographic checks.
     #[must_use]
-    pub fn owned_bytes_admitted_to(&self, budget: &mv::allocation::AllocationBudget) -> bool {
+    pub fn owned_bytes_admitted_to(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
         self.witnesses().all(|witness| witness.admitted_to(budget))
             && self
                 .availability_frames()
@@ -709,7 +709,7 @@ impl WireMessage {
     /// not retain this message in the production ingress until every witness is admitted.
     pub fn admit_owned_bytes(
         &mut self,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<(), ByteAdmissionError> {
         self.witnesses_mut()
             .try_for_each(|witness| witness.admit(budget))?;
@@ -1746,7 +1746,7 @@ mod tests {
 
     #[test]
     fn every_nested_witness_is_admitted_before_retention_and_retry_preserves_wire() {
-        use mv::allocation::{AllocationBudget, ChargedBuffer};
+        use iroha_allocation::{AllocationBudget, ChargedBuffer};
         let witness = ResultWitness::from_untrusted(vec![7; 200]).unwrap();
         let qc = Qc {
             attestation_witness: Some(witness.clone()),

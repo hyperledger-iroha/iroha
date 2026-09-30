@@ -1,11 +1,11 @@
 //! Compact admission errors preserve allocation-free local conversion and retry ownership.
 
+use iroha_allocation::AllocationBudget;
 use ivm_abi::{
     VMError,
     error::{AllocationRefusal, ExecutionDeferral},
 };
 use ivm_artifact_admission::ContractArtifactError;
-use mv::allocation::AllocationBudget;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

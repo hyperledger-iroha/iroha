@@ -6163,12 +6163,22 @@ export interface ToriiSumeragiLaneFrontier {
   block_hash: string;
   result: string;
 }
+/** Mandatory signed RS16 geometry pinned into one lane incarnation. */
+export interface ToriiSumeragiDataAvailabilityLayout {
+  encoding: Readonly<{ encoding: "reed_solomon16"; details: null }>;
+  chunk_size_bytes: number;
+  data_shards: number;
+  parity_shards: number;
+  max_payload_size_bytes: ToriiU64;
+  max_chunk_count: number;
+}
 /** Committed lifecycle record of one lane incarnation; all nullable keys are mandatory. */
 export interface ToriiSumeragiLaneRecord {
   lane: number;
   dataspace: ToriiU64;
   incarnation: string;
   params: ToriiSumeragiParameters;
+  da_layout: ToriiSumeragiDataAvailabilityLayout;
   committee: ReadonlyArray<ToriiSumeragiLaneMember>;
   created_at: ToriiU64;
   active_from: ToriiU64;

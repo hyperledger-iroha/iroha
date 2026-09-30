@@ -4,6 +4,7 @@ use super::*;
 use crate::execution_proofs::stark::proof_managed_note_stark::{
     prove_proof_managed_note_stark_v1, verify_proof_managed_note_stark_v1,
 };
+use iroha_allocation::AllocationBudget;
 use ivm::{
     IVM,
     execution_step_recorder::{
@@ -11,7 +12,6 @@ use ivm::{
     },
     host::DefaultHost,
 };
-use mv::allocation::AllocationBudget;
 
 fn interpreter_statement(
     opcode: u8,

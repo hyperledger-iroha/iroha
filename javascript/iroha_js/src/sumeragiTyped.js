@@ -107,7 +107,8 @@ export function parseSumeragiStatusJson(text, context = "native status") {
   return parseSumeragiStatusPayload(parseStrictLosslessIntegerJson(text, context));
 }
 const LANE_STATUS = ["record", "instance"];
-const LANE_RECORD = "lane dataspace incarnation params committee created_at active_from closing anchor_freshness merged merged_at rescued".split(" ");
+const LANE_RECORD = "lane dataspace incarnation params da_layout committee created_at active_from closing anchor_freshness merged merged_at rescued".split(" ");
+const LANE_DA_LAYOUT = "encoding chunk_size_bytes data_shards parity_shards max_payload_size_bytes max_chunk_count".split(" ");
 const LANE_PARAMS = "block_cadence_ms max_clock_drift_ms key_activation_lead_blocks key_overlap_grace_blocks key_expiry_grace_blocks key_allowed_algorithms payload_retry_interval_ms exec_budget_ms apply_budget_ms max_block_bytes epoch_length_blocks demotion_window".split(" ");
 const LANE_NONZERO_PARAMS = new Set(["block_cadence_ms", "payload_retry_interval_ms", "exec_budget_ms", "apply_budget_ms", "max_block_bytes", "epoch_length_blocks", "demotion_window"]);
 const LANE_FRONTIER = ["height", "block_hash", "result"];
@@ -145,12 +146,43 @@ function laneFrontier(value) {
   const r = record(value, LANE_FRONTIER, "native lane frontier");
   return Object.freeze({ height: uint(r.height), block_hash: byte32(r.block_hash, "native lane block_hash"), result: byte32(r.result, "native lane result") });
 }
+function laneDataAvailabilityLayout(value) {
+  const r = record(value, LANE_DA_LAYOUT, "native lane data-availability layout");
+  const encoding = record(r.encoding, ["encoding", "details"], "native lane payload encoding");
+  if (encoding.encoding !== "reed_solomon16" || encoding.details !== null) {
+    throw new TypeError("native lane payload encoding must be Reed-Solomon16");
+  }
+  const chunk = uint(r.chunk_size_bytes, 32);
+  const data = uint(r.data_shards, 16);
+  const parity = uint(r.parity_shards, 16);
+  const payload = uint(r.max_payload_size_bytes);
+  const chunks = uint(r.max_chunk_count, 32);
+  if (chunk < 2 || chunk > 256 * 1024 || chunk % 2 || data < 1 || data > 16 ||
+      parity < 1 || parity > 16 || BigInt(payload) < 1n || BigInt(payload) > 16n * 1024n * 1024n ||
+      chunks < 1 || chunks > 1024) throw new RangeError("native lane data-availability layout exceeds protocol bounds");
+  const maximum = Number(payload);
+  const full = Math.floor(maximum / (data * chunk));
+  const remainder = maximum % (data * chunk);
+  const stripes = full + (remainder > 0 ? 1 : 0);
+  const terminalRow = 2 * Math.ceil(remainder / (2 * data));
+  if (stripes * (data + parity) > chunks || (full * chunk + terminalRow) * (data + parity) > 32 * 1024 * 1024) {
+    throw new RangeError("native lane data-availability geometry exceeds protocol bounds");
+  }
+  return Object.freeze({ encoding: Object.freeze({ encoding: "reed_solomon16", details: null }),
+    chunk_size_bytes: chunk, data_shards: data, parity_shards: parity,
+    max_payload_size_bytes: payload, max_chunk_count: chunks });
+}
 function laneRecord(value) {
   const r = record(value, LANE_RECORD, "native lane record");
   if (!Array.isArray(r.committee)) throw new TypeError("native lane committee must be an array");
+  const params = laneParams(r.params);
+  const layout = laneDataAvailabilityLayout(r.da_layout);
+  if (BigInt(params.max_block_bytes) > BigInt(layout.max_payload_size_bytes)) {
+    throw new RangeError("native lane block limit exceeds its data-availability payload limit");
+  }
   return Object.freeze({
     lane: uint(r.lane, 32), dataspace: uint(r.dataspace), incarnation: byte32(r.incarnation, "native lane incarnation"),
-    params: laneParams(r.params), committee: Object.freeze(r.committee.map(laneMember)),
+    params, da_layout: layout, committee: Object.freeze(r.committee.map(laneMember)),
     created_at: uint(r.created_at), active_from: uint(r.active_from), closing: optionalUint(r.closing),
     anchor_freshness: uint(r.anchor_freshness), merged: laneFrontier(r.merged), merged_at: uint(r.merged_at), rescued: uint(r.rescued),
   });

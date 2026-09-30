@@ -1751,9 +1751,10 @@ fn decode_framed_versioned_signed_block_inner(
         }
     }
     let mut canonical = CanonicalSource {
-        remaining: framed_payload,
+        remaining: raw_for_error,
     };
-    if norito::core::write_canonical_to_writer(&block, &mut canonical).is_err()
+    if std::io::Write::write_all(&mut canonical, &[version]).is_err()
+        || norito::core::write_canonical_to_writer(&block, &mut canonical).is_err()
         || !canonical.remaining.is_empty()
     {
         return Err(VersionError::from(NoritoFrameError::NonCanonicalEncoding));
@@ -1851,7 +1852,7 @@ mod tests {
     fn signed_transaction_with_log_type_name_alias(canonical: &[u8]) -> Vec<u8> {
         assert_eq!(canonical.first(), Some(&1), "signed transaction V1 prefix");
         let mut signed = split_default_norito_fields(&canonical[1..], 3);
-        let mut payload = split_default_norito_fields(&signed[1], 10);
+        let mut payload = split_default_norito_fields(&signed[1], 9);
 
         assert_eq!(&payload[3][..4], &0_u32.to_le_bytes());
         let executable_fields = split_default_norito_fields(&payload[3][4..], 1);
@@ -3194,7 +3195,12 @@ mod tests {
     }
 
     fn sample_commit_certificate() -> CommitCertificate {
-        CommitCertificate::from_untrusted_parts(vec![0xA1; 97], vec![0xB2; 140], vec![0xC3; 480])
+        CommitCertificate::from_untrusted_parts(
+            vec![0xA1; 97],
+            vec![0xB2; 140],
+            vec![0xC3; 480],
+            vec![0xD4; 320],
+        )
     }
     #[test]
     fn commit_certificate_accessors() {
@@ -3538,7 +3544,7 @@ mod tests {
             let expected = (u64::try_from(wire.len()).unwrap(), Hash::new(&wire));
             assert_eq!(block.executed_block_wire_identity().unwrap(), expected);
             let certified = block.clone().with_commit_certificate(Some(
-                CommitCertificate::from_untrusted_parts(vec![1], vec![2], vec![3]),
+                CommitCertificate::from_untrusted_parts(vec![1], vec![2], vec![3], vec![4]),
             ));
             assert_eq!(certified.executed_block_wire_identity().unwrap(), expected);
             assert_eq!(certified.executed_block_wire_hash().unwrap(), expected.1);

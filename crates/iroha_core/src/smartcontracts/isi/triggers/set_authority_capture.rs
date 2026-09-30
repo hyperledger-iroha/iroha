@@ -13,7 +13,7 @@ impl Set {
     pub(crate) fn capture_data_authority_table(
         &self,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> core::result::Result<CanonicalTablePairedSnapshot, LeafError> {
         let rows = self.data_triggers.view();
         CanonicalTableLeafSet::paired_semantic_table_from_rows(
@@ -30,7 +30,7 @@ impl Set {
     pub(crate) fn capture_pipeline_authority_table(
         &self,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> core::result::Result<CanonicalTablePairedSnapshot, LeafError> {
         let rows = self.pipeline_triggers.view();
         CanonicalTableLeafSet::paired_semantic_table_from_rows(
@@ -47,7 +47,7 @@ impl Set {
     pub(crate) fn capture_time_authority_table(
         &self,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> core::result::Result<CanonicalTablePairedSnapshot, LeafError> {
         let rows = self.time_triggers.view();
         CanonicalTableLeafSet::paired_semantic_table_from_rows(
@@ -64,7 +64,7 @@ impl Set {
     pub(crate) fn capture_by_call_authority_table(
         &self,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> core::result::Result<CanonicalTablePairedSnapshot, LeafError> {
         let rows = self.by_call_triggers.view();
         CanonicalTableLeafSet::paired_semantic_table_from_rows(
@@ -81,7 +81,7 @@ impl Set {
     pub(crate) fn capture_contracts_authority_table(
         &self,
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> core::result::Result<CanonicalTablePairedSnapshot, LeafError> {
         let view = self.view();
         view.validate_world_contract_rows()

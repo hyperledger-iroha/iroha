@@ -6,8 +6,8 @@ use crate::{
     error::ExecutionDeferral,
     execution_memory::{ExecutionMemoryLease, ExecutionMemoryPlan},
 };
+use iroha_allocation::AllocationCharge;
 use iroha_crypto::{HashOf, MerkleTree};
-use mv::allocation::AllocationCharge;
 use std::{alloc::Layout, ops::Deref};
 
 /// The backing is destroyed before either accounting owner is refunded.

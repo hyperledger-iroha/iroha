@@ -18,8 +18,8 @@ use crate::{
 pub use custody::{
     AvailabilitySource, AvailableBody, BodyRestoration, RestorationError, VerifiedMaterial,
 };
+use iroha_allocation::AllocationBudget;
 use iroha_primitives::erasure::rs16::compact::CompactShape;
-use mv::allocation::AllocationBudget;
 
 /// Maximum exact inner frame; the canonical Norito envelope is additional.
 pub const MAX_AVAILABILITY_FRAME_BYTES: usize =
@@ -856,7 +856,7 @@ mod tests {
         }
     }
     fn original_payload(f: &Fixture) -> PayloadBytes {
-        let mut bytes = mv::allocation::ChargedBuffer::new(f.payload.len(), &f.budget).unwrap();
+        let mut bytes = iroha_allocation::ChargedBuffer::new(f.payload.len(), &f.budget).unwrap();
         bytes.append(&f.payload).unwrap();
         PayloadBytes::from_charged(bytes, &f.budget)
             .unwrap_or_else(|(_, error)| panic!("original payload admission: {error}"))

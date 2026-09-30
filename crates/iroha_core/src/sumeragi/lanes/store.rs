@@ -11,13 +11,13 @@ use crate::sumeragi::{
     lanes::record::PreparedLaneWrite,
     records::{Faults, NoFaults},
 };
+use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, AvailableBody},
     crypto::AttestationVerifier,
     message::{PayloadManifest, Qc, SyncEntry},
     types::Hash32,
 };
-use mv::allocation::AllocationBudget;
 use parking_lot::{Condvar, Mutex};
 use std::{
     fs::{self, File, OpenOptions},

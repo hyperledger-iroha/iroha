@@ -20,11 +20,11 @@ use crate::{
     merkle_utils::compute_memory_leaf_digest,
     stack_policy::IvmStackPolicy,
 };
+use iroha_allocation::AllocationBudget;
 use iroha_crypto::{
     CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
 };
 use likely_stable::{likely, unlikely};
-use mv::allocation::AllocationBudget;
 use parking_lot::Mutex;
 use std::{
     convert::TryInto,

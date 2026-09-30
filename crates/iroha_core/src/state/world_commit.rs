@@ -84,7 +84,7 @@ impl<'state> PreparedWorldCommit<'state> {
     /// read-only owner; they cannot publish or make an unprepared World valid.
     pub(in crate::state) fn prepare_overlay(
         world: &mut WorldBlock<'state>,
-        execution_budget: &mv::allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
         block_height: u64,
         nexus: &iroha_config::parameters::actual::Nexus,
         activation_heights: &BTreeMap<LaneId, u64>,
@@ -145,7 +145,7 @@ impl<'state> PreparedWorldCommit<'state> {
     /// recreate quota writes, pin records, lifecycle pruning or their allocations.
     pub(in crate::state) fn validate_prepared_overlay(
         world: &WorldBlock<'state>,
-        execution_budget: &mv::allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<(), ExecutionAttemptError<String>> {
         super::retail_daily_limit_state::validate_immutable_policy_transition(world)
             .map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)?;

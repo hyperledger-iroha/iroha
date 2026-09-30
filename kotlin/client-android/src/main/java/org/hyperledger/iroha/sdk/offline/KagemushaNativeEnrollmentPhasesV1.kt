@@ -121,7 +121,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
             .also { selected = it }
     }
 
-    /** Recheck the exact live native selection, including after a lost phase-1 response. */
+    /** Recheck the exact selection while its native owner remains live; transport failure revokes it. */
     @Synchronized
     fun recoverExactSelection(accountI105: String): Selection? {
         val canonical = requireCanonicalI105Address(accountI105, "enrollment account")
@@ -195,7 +195,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         return checkedProof(accepted, bridge.invoke(METHOD, fields))
     }
 
-    /** Phase 4 reads only the original native proof after an uncertain phase-3 dispatch. */
+    /** Phase 4 reads only the original native proof through the same live native owner. */
     @Synchronized
     fun recoverExactProof(accepted: AcceptedChallenge): Proof {
         requireAccepted(accepted)
@@ -220,7 +220,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         return response[1].copyOf().also { enrollmentId = it.copyOf() }
     }
 
-    /** Revoke the original ticket, including after local response poisoning; only exact retry follows. */
+    /** Revoke the original ticket after local response poisoning; retry only successful dispatches. */
     @Synchronized
     fun cancel(selection: Selection) {
         check(selected === selection && (!cancelled || cancelledSelection === selection)) {

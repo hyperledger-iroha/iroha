@@ -5,7 +5,7 @@
 //! admission. EBR generations and their publication controls are separate resource obligations.
 
 use super::{ConsensusSchedule, ScheduleError};
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationReservation, ChargedShared, PrepaidSharedError, RetainedPayload,
 };
 use norito::{

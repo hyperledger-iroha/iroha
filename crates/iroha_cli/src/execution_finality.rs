@@ -764,6 +764,7 @@ mod tests {
             certificate.consensus_header().to_vec(),
             norito::encode_canonical(&qc).unwrap(),
             certificate.result_preimage().to_vec(),
+            certificate.availability().to_vec(),
         )));
         proof.block_wire = block.encode_wire().unwrap();
     }

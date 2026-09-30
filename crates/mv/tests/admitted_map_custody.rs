@@ -19,7 +19,7 @@ use concread::bptree::{
     AllocationDemand, BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, ClonePlanning,
     MapAdmissionError, NodeCloning, NodeFunding, OwnedWriteError, PlanningError, Prepaid,
 };
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
 };
 

@@ -32,7 +32,7 @@ impl Core {
         signers: Vec<std::sync::Arc<dyn Signer>>,
         crypto: Box<dyn Crypto>,
         attestation: Attestation,
-        body_budget: mv::allocation::AllocationBudget,
+        body_budget: iroha_allocation::AllocationBudget,
         now: Millis,
     ) -> Result<(Self, Vec<Action>), ConfigError> {
         let t = init.tip.height;
@@ -149,7 +149,7 @@ impl Core {
         (crypto, attestation, body_budget): (
             Box<dyn Crypto>,
             Attestation,
-            mv::allocation::AllocationBudget,
+            iroha_allocation::AllocationBudget,
         ),
         now: Millis,
         configs: BTreeMap<u64, ConfigSlot>,

@@ -625,7 +625,6 @@ fn checked_resultless_comparison_binds_complete_native_lane_merge() {
 fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
     use crate::consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
-        GlobalThresholdBeaconPulseContextV1,
     };
     let mut proposal = plain_signed_block();
     let original_header = proposal.hash();

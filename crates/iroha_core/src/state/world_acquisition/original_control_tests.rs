@@ -2,10 +2,8 @@
 
 use super::*;
 use crate::state::World;
-use mv::{
-    allocation::{AllocationBudget, AllocationRefusal},
-    cell::{Cell, CellPublicationSuccessor},
-};
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
+use mv::cell::{Cell, CellPublicationSuccessor};
 use std::{
     sync::{Arc, mpsc},
     time::Duration,

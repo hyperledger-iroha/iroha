@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 /// Failure to progress an original file read, without losing its source or partial backing.
 #[derive(Debug)]

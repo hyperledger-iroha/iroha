@@ -396,7 +396,7 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
             self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
-    let budget = mv::allocation::AllocationBudget::new(8);
+    let budget = iroha_allocation::AllocationBudget::new(8);
     let occupied = budget.try_reserve_bytes(8).unwrap();
     let refusal = budget.try_reserve_bytes(1).unwrap_err();
     let state = state(16_384);
@@ -430,7 +430,7 @@ fn capacity_refusal_keeps_original_release_after_rollback_seal_and_native_bounda
     drop(block);
     drop(state);
     drop(budget);
-    let Some(mv::allocation::AllocationRefusal::Capacity { release, .. }) =
+    let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
         owner.allocation_refusal()
     else {
         panic!("original release observation must survive rollback");
@@ -1008,7 +1008,7 @@ fn refused_output_apply_keeps_state_witness_and_auxiliary_rollback_armed() {
             _ => {
                 tx.arm_local_storage_refusal(StateStorageAdmissionError::World(
                     mv::storage::AdmittedStorageError::Allocation(
-                        mv::allocation::AllocationRefusal::DemandOverflow,
+                        iroha_allocation::AllocationRefusal::DemandOverflow,
                     ),
                 ));
                 "transaction local State storage admission was refused"

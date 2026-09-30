@@ -16,7 +16,7 @@ use concread::internals::lincowcell::{
     InitialCharges, InitialLayouts, LinCowCell, LinCowCellCapable, OwnedWriteError,
     WriterAdmission, WriterCharges, WriterLayouts,
 };
-use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 
 static SERIAL: Mutex<()> = Mutex::new(());
 const ROOT_ID: usize = 63;
@@ -237,7 +237,7 @@ fn initial_charges(budget: &AllocationBudget, layouts: InitialLayouts) -> Initia
     // This test observes the two exact prepaid root/reader allocations. Build
     // independent notification scaffolding before arming those slots: its
     // layout can equal the u64 reader shell, but it is a different live owner.
-    let notification = concread::release::ReleaseNotification::default();
+    let notification = iroha_allocation::release::ReleaseNotification::default();
     let mut prepaid = budget
         .try_reserve_layouts([layouts.root, layouts.reader])
         .unwrap();
@@ -1178,7 +1178,7 @@ fn shared_identity_allocation_is_freed_before_original_charge_refund() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     for panic_payload in [false, true] {
         reset();
-        type Shared = concread::shared::Shared<Reader, Charge>;
+        type Shared = iroha_allocation::shared::Shared<Reader, Charge>;
         let layout = Shared::layout();
         let budget = AllocationBudget::new(layout.size());
         let mut reservation = budget.try_reserve_layouts([layout]).unwrap();

@@ -10,11 +10,11 @@ import {
 import { _createNoritoInstructionApi } from "../src/norito.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
-import { hasNoritoBinding } from "./helpers/native.js";
+import { hasNoritoBinding, makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const DATA_SPACE_ID = "8648377547929788715";
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-const builderTest = hasNoritoBinding() ? test : test.skip;
+const builderTest = makeNativeTest(test, { require: noritoRequiredMethods });
 const ACCOUNT = hasNoritoBinding()
   ? AccountAddress.fromAccount({
       publicKey: Buffer.from("D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737", "hex"),

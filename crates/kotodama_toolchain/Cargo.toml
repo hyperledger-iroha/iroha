@@ -30,6 +30,7 @@ required-features = ["dev-tools"]
 dev-tools = []
 
 [dependencies]
+iroha_allocation = { workspace = true }
 ivm = { workspace = true }
 ivm_abi = { path = "../ivm_abi" }
 kotodama_lang = { workspace = true }

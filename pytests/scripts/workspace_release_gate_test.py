@@ -986,8 +986,8 @@ GATE_SETTINGS = (
         "release-gate must select tests by module path: /^state::tests::some_exact_test_name/",
     ),
     (
-        "test(/^proof::tests::/)",
-        "test(/^proof::tests::.*(limit|resource_profile)/)",
+        "test(/^(axt_binding|backend::compact_quantity_producer|proof)::tests::/)",
+        "test(/^(axt_binding|backend::compact_quantity_producer|proof)::tests::.*(limit|resource_profile)/)",
         "release-gate must select tests by module path",
     ),
     (

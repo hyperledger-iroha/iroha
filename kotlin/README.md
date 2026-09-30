@@ -396,8 +396,10 @@ Every JSON `u64` remains lossless as `BigInteger`. Responses are capped at 1 MiB
 and require an exact JSON content type, canonical matching `Content-Length`
 when supplied, fatal UTF-8 and closed fields and tags.
 
-Lane state is served by the operator route `GET /v1/sumeragi/lanes`
-(`specs/sumeragi_lanes.md` §8); SDK DTOs for it are pending.
+`getSumeragiLanes()` parses the operator route `GET /v1/sumeragi/lanes`
+(`specs/sumeragi_lanes.md` §8) into `SumeragiLaneStatus`. Each record requires
+its committed `daLayout` RS16 geometry, including the encoding and resource bounds.
+Lane observations do not confer finality.
 
 ### KAGEMUSHA peer transports
 
@@ -449,16 +451,19 @@ uncertain obligations. Acknowledged history is not charged against a lifetime op
 the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
 It checks the complete ABI-25 inventory and rejects substituted response bindings;
 missing JNI or an absent qualified native coordinator fails closed.
+Any failure after dispatch revokes the process-local handle before another JNI
+call. Uncertain monetary state remains the qualified backend's responsibility.
 `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
 wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
 codec handles bounded canonical preparation, candidate, recovery, and redemption
 receipt projections. The adapter checks public-input digests, operation identities,
 qualified creation context, retained recovery scope, and installed aggregate scope.
 The same adapter exposes `initialEnrollment()` for the bounded method-12 ceremony.
-It retains one phase-1 selection only in the original process; an ambiguous or lost
-selection response freezes that attempt because the native ABI has no phase-1 read.
-Phase-4 may read back only the original retained possession proof after a lost
-phase-3 response. Closing the native owner revokes cached enrollment phases before
+It retains one phase-1 selection only in the original process. Phase-7 rechecks
+that exact selection, and phase-4 reads its original possession proof, while the
+same native owner remains live. A failed dispatch or response publication revokes
+that owner and prevents readback or cancellation retries. Successful cancellation
+retries retain the original ticket. Closing the native owner revokes cached enrollment phases before
 another account can use them. These typed frames do not install a qualified backend.
 Device-reply admission retains the original 64-byte response authenticator so
 native Core independently verifies the exact response transcript.

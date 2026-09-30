@@ -1,7 +1,7 @@
 //! Cold-profile, ICU growth and stable-sort allocation custody in one fresh process.
 
+use iroha_allocation::AllocationBudget;
 use iroha_model_base::name::{MAX_NAME_BYTES, Name};
-use mv::allocation::AllocationBudget;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

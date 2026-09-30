@@ -1,7 +1,7 @@
 //! One original-pool byte owner shared by bounded semantic domains.
 
 use super::{ByteDomain, ByteSequence, ByteStorage};
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError, ChargedShared,
     PrepaidSharedError,
 };

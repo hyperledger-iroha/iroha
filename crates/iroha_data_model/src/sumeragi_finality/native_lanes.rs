@@ -5,8 +5,8 @@
 //! dynamic scratch allocation from the original execution pool.
 
 use crate::{NetworkId, block::consensus::ExecWitness};
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_crypto::Hash;
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use norito::{Decode, Encode};
 use thiserror::Error;
 
@@ -52,7 +52,7 @@ impl NativeLaneStateProofError {
         matches!(
             self,
             Self::Scratch(
-                ChargedBufferError::Admission(mv::allocation::AllocationRefusal::Capacity { .. })
+                ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { .. })
                     | ChargedBufferError::Allocator { .. }
             )
         )

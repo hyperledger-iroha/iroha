@@ -66,7 +66,7 @@ pub struct PreparedContractCache {
     inner: Arc<Mutex<PreparedContractStore>>,
     ready: Arc<Condvar>,
     _eviction: ivm::cache_memory::CacheEvictionRegistration,
-    execution_budget: mv::allocation::AllocationBudget,
+    execution_budget: iroha_allocation::AllocationBudget,
 }
 // The claim outlives preparation, including unwinding before publication. A
 // failed worker must never strand every later borrower behind its sentinel.
@@ -113,7 +113,7 @@ impl PreparedContractCache {
     pub fn with_capacity(capacity: usize) -> Self {
         Self::with_execution_budget(
             capacity,
-            mv::allocation::AllocationBudget::new(
+            iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
         )
@@ -124,7 +124,7 @@ impl PreparedContractCache {
     #[must_use]
     pub fn with_execution_budget(
         capacity: usize,
-        execution_budget: mv::allocation::AllocationBudget,
+        execution_budget: iroha_allocation::AllocationBudget,
     ) -> Self {
         let inner = Arc::new(Mutex::new(PreparedContractStore {
             index_memory: ivm::cache_memory::MemoryReservation::active(0),
@@ -170,7 +170,7 @@ impl PreparedContractCache {
     ///
     /// TODO: Enforce admission only after all construction, cloning, nested
     /// invocation and host scratch allocations consume the prepaid owner.
-    pub fn execution_budget(&self) -> &mv::allocation::AllocationBudget {
+    pub fn execution_budget(&self) -> &iroha_allocation::AllocationBudget {
         &self.execution_budget
     }
     /// Resolve or prepare the artifact identified by `code_hash`.
@@ -2298,7 +2298,7 @@ mod tests {
         const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
         let code_hash = ivm::contract_code_hash(&program);
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let cache = PreparedContractCache::with_execution_budget(2, budget.clone());
         let prepared = cache
             .get_or_prepare(code_hash, &program)
@@ -2356,7 +2356,7 @@ mod tests {
     #[test]
     fn cold_nested_template_refuses_when_only_vm_backing_fits() {
         const GAS_LIMIT: u64 = 10_000;
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let vm = ivm::IVM::try_new_with_memory_budget(GAS_LIMIT, &budget).unwrap();
         let vm_bytes = budget.reserved_bytes();
         drop(vm);
@@ -2389,7 +2389,7 @@ mod tests {
     fn nested_runtime_image_capacity_refusal_is_local_and_retryable() {
         let program = minimal_program();
         let code_hash = ivm::contract_code_hash(&program);
-        let budget = mv::allocation::AllocationBudget::new(0);
+        let budget = iroha_allocation::AllocationBudget::new(0);
         let cache = PreparedContractCache::with_execution_budget(1, budget.clone());
         let prepared = cache
             .get_or_prepare(code_hash, &program)
@@ -2397,7 +2397,7 @@ mod tests {
         assert!(matches!(
             cache.checkout_runtime(&prepared, 10_000, HEAP_LIMIT),
             Err(ivm::VMError::AllocationDeferred(
-                mv::allocation::AllocationRefusal::ExceedsLimit { .. }
+                iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
             ))
         ));
         assert_eq!(budget.reserved_bytes(), 0);

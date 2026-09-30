@@ -77,7 +77,9 @@ is never persisted as authority.
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
 schema-2 transport. It checks the complete ABI-25 inventory and correlates method
 responses with the caller's request. It fails closed when the native coordinator
-is unavailable. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
+is unavailable. Every failure after dispatch revokes the local handle before
+native teardown; uncertain monetary state remains owned by the qualified backend.
+`KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
 implements the wallet coordinator interface over that transport and the exact
 `KagemushaCoreCoordinatorArchiveV1` codecs. It binds preparations to the caller,
 original public inputs, and qualification; candidates retain that exact preparation.
@@ -1925,8 +1927,10 @@ complete canonical uncompressed Norito frame; bare payloads and retired status
 layouts are rejected. JSON and wire parity share the Rust-generated corpus at
 `fixtures/sumeragi/native_status_v1.tsv`.
 
-Lane state is served by the operator route `GET /v1/sumeragi/lanes`
-(`specs/sumeragi_lanes.md` §8); SDK DTOs for it are pending.
+`getSumeragiLanes()` parses the operator route `GET /v1/sumeragi/lanes`
+(`specs/sumeragi_lanes.md` §8) into `ToriiSumeragiLaneStatus`. Each record requires
+its committed `daLayout` RS16 geometry, including the encoding and resource bounds.
+Lane observations do not confer finality.
 
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated

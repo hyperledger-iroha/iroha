@@ -45,6 +45,7 @@ fn executed_wire_budget_ignores_an_attached_commit_certificate() {
         vec![1; 64],
         vec![2; 256],
         vec![3; 512],
+        vec![4; 1024],
     )));
     assert!(block.encode_wire().unwrap().len() as u64 > executed_len);
     assert_eq!(block.executed_block_wire_hash().unwrap(), executed_hash);

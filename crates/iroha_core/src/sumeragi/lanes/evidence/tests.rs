@@ -100,7 +100,7 @@ struct Fixture {
     prior: SumeragiLaneFrontier,
     body: AvailableBody,
     qc: Qc,
-    budget: mv::allocation::AllocationBudget,
+    budget: iroha_allocation::AllocationBudget,
     keys: Vec<KeyPair>,
 }
 const CHAIN: &str = "native-lane-entry-test";
@@ -170,7 +170,7 @@ impl Fixture {
                     .map(|member| (member.peer.public_key(), member.pop.as_slice())),
             )
             .unwrap();
-        let budget = mv::allocation::AllocationBudget::new(1 << 25);
+        let budget = iroha_allocation::AllocationBudget::new(1 << 25);
         let payload = batch.to_payload();
         let header = BlockHeader {
             control_witness: ControlWitness::empty(),
@@ -187,7 +187,7 @@ impl Fixture {
             skipped_leaders: Vec::new(),
             attest: false,
         };
-        let mut charged = mv::allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
+        let mut charged = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
         charged.append(&payload).unwrap();
         let payload = PayloadBytes::from_charged(charged, &budget)
             .unwrap_or_else(|_| panic!("original fixture payload"));
@@ -262,7 +262,7 @@ impl Fixture {
         let mut header = self.body.header().clone();
         header.payload_len = u32::try_from(bytes.len()).unwrap();
         header.payload_hash = payload_hash(&crypto, bytes);
-        let mut charged = mv::allocation::ChargedBuffer::new(bytes.len(), &self.budget).unwrap();
+        let mut charged = iroha_allocation::ChargedBuffer::new(bytes.len(), &self.budget).unwrap();
         charged.append(bytes).unwrap();
         let payload = PayloadBytes::from_charged(charged, &self.budget)
             .unwrap_or_else(|_| panic!("original replacement fixture payload"));

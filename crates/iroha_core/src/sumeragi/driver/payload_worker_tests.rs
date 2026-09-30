@@ -8,6 +8,7 @@ use crate::sumeragi::{
         traits::{BlockStore, BodyStore},
     },
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::{
     api::Event,
@@ -16,7 +17,6 @@ use iroha_sumeragi::{
     message::{Qc, SyncEntry, WireMessage},
     types::Hash32,
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 use std::{
     io,
     sync::{

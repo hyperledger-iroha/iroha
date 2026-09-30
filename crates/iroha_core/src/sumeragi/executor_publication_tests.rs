@@ -212,6 +212,76 @@ fn original_overlay(worker: &Worker<'_>) -> usize {
     std::ptr::from_ref(worker.live.as_ref().unwrap().overlay.as_deref().unwrap()) as usize
 }
 
+#[cfg(feature = "telemetry")]
+#[test]
+fn canonical_replay_origin_retains_transition_idempotence_through_publication_retry() {
+    use iroha_data_model::isi::governance::ParliamentLifecycleTransitionKindV1 as Transition;
+
+    for origin in [
+        CommitTelemetryOrigin::Forward,
+        CommitTelemetryOrigin::HistoricalReplay,
+    ] {
+        with_worker(move |chain, worker, blocks, _| {
+            let (block, qc) = executed(chain, worker);
+            worker.prepare_with_origin(&block, &qc, origin).unwrap();
+            let original = original_overlay(worker);
+            let other = match origin {
+                CommitTelemetryOrigin::Forward => CommitTelemetryOrigin::HistoricalReplay,
+                CommitTelemetryOrigin::HistoricalReplay => CommitTelemetryOrigin::Forward,
+            };
+            assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
+            assert_eq!(original_overlay(worker), original);
+            // Local closed-label fixture only: all execution, witness, original pool,
+            // genuine quorum and durable source admission still run in production.
+            worker
+                .live
+                .as_mut()
+                .unwrap()
+                .overlay
+                .as_mut()
+                .unwrap()
+                .stage_parliament_transition_observation_for_test(
+                    Transition::CompleteQualification,
+                );
+            blocks.append(&block, &qc).unwrap();
+            let metric = chain
+                .state()
+                .telemetry
+                .governance_parliament_transitions_total
+                .with_label_values(&["complete_qualification"]);
+            assert_eq!(metric.get(), 0);
+            for _ in 0..2 {
+                chain.state().with_publication_blocked_for_test(|| {
+                    assert!(matches!(
+                        worker.commit(&block, &qc),
+                        Err(PublicationError::Retryable(_))
+                    ));
+                });
+                assert_eq!(
+                    metric.get(),
+                    0,
+                    "refusal cannot publish transition observations"
+                );
+                assert_eq!(original_overlay(worker), original);
+                assert_eq!(
+                    worker.prepare_with_origin(&block, &qc, origin).unwrap(),
+                    Some(qc.result)
+                );
+                assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
+            }
+            worker.commit(&block, &qc).unwrap();
+            let expected = u64::from(origin == CommitTelemetryOrigin::Forward);
+            assert_eq!(metric.get(), expected);
+            worker.commit(&block, &qc).unwrap();
+            assert_eq!(
+                metric.get(),
+                expected,
+                "the original publication completes once"
+            );
+        });
+    }
+}
+
 #[test]
 fn reversible_publication_refusal_retains_original_overlay_capture_and_certified_frame() {
     with_worker(|chain, worker, blocks, events| {
@@ -766,8 +836,8 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
         assert!(matches!(
             refusal,
             Some(NativeLaneStateProofError::Scratch(
-                mv::allocation::ChargedBufferError::Admission(
-                    mv::allocation::AllocationRefusal::Capacity { .. }
+                iroha_allocation::ChargedBufferError::Admission(
+                    iroha_allocation::AllocationRefusal::Capacity { .. }
                 )
             ))
         ));
@@ -852,8 +922,8 @@ fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custod
             pending.encoding_refusal,
             Some(
                 crate::sumeragi::commitment::ResultPreimageError::Allocation(
-                    mv::allocation::ChargedBufferError::Admission(
-                        mv::allocation::AllocationRefusal::Capacity { .. }
+                    iroha_allocation::ChargedBufferError::Admission(
+                        iroha_allocation::AllocationRefusal::Capacity { .. }
                     )
                 )
             )
@@ -924,7 +994,7 @@ fn result_encoding_foreign_pool_requires_recovery_and_retains_original_execution
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
         let outcome = worker.run_execution_with_encoder(&block, block_hash, |original, budget| {
-            let foreign = mv::allocation::AllocationBudget::new(budget.limit_bytes());
+            let foreign = iroha_allocation::AllocationBudget::new(budget.limit_bytes());
             encode_result_preimage(original, &foreign)
         });
         assert!(matches!(outcome, ExecOutcome::Failed(_)));
@@ -968,36 +1038,41 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
         let mut header_pointer = None;
         let mut qc_pointer = None;
         let mut availability_pointer = None;
-        let outcome = worker.prepare_with_encoder(&block, &qc, |part, budget| {
-            let bytes = crate::sumeragi::commitment::encode_certificate_part(
-                part,
-                budget,
-                crate::sumeragi::commitment::MAX_RESULT_PREIMAGE_BYTES,
-            )?;
-            encoded += 1;
-            if encoded == 1 {
-                header_pointer = Some(bytes.as_slice().as_ptr());
-            }
-            if encoded == 2 {
-                qc_pointer = Some(bytes.as_slice().as_ptr());
-            }
-            if encoded == 3 {
-                availability_pointer = Some(bytes.as_slice().as_ptr());
-            }
-            if encoded == occupy_after_part {
-                occupied = Some(
-                    budget
-                        .try_reserve_bytes(
-                            budget
-                                .limit_bytes()
-                                .checked_sub(budget.reserved_bytes())
-                                .unwrap(),
-                        )
-                        .expect("occupy actual remaining original capacity"),
-                );
-            }
-            Ok(bytes)
-        });
+        let outcome = worker.prepare_with_encoder(
+            &block,
+            &qc,
+            CommitTelemetryOrigin::Forward,
+            |part, budget| {
+                let bytes = crate::sumeragi::commitment::encode_certificate_part(
+                    part,
+                    budget,
+                    crate::sumeragi::commitment::MAX_RESULT_PREIMAGE_BYTES,
+                )?;
+                encoded += 1;
+                if encoded == 1 {
+                    header_pointer = Some(bytes.as_slice().as_ptr());
+                }
+                if encoded == 2 {
+                    qc_pointer = Some(bytes.as_slice().as_ptr());
+                }
+                if encoded == 3 {
+                    availability_pointer = Some(bytes.as_slice().as_ptr());
+                }
+                if encoded == occupy_after_part {
+                    occupied = Some(
+                        budget
+                            .try_reserve_bytes(
+                                budget
+                                    .limit_bytes()
+                                    .checked_sub(budget.reserved_bytes())
+                                    .unwrap(),
+                            )
+                            .expect("occupy actual remaining original capacity"),
+                    );
+                }
+                Ok(bytes)
+            },
+        );
         assert!(matches!(outcome, Err(PublicationError::Retryable(_))));
         assert_eq!(encoded, occupy_after_part);
         for _ in 0..2 {
@@ -1017,8 +1092,8 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
                     qc_wire: None,
                     refusal:
                         Some(crate::sumeragi::commitment::ResultPreimageError::Allocation(
-                            mv::allocation::ChargedBufferError::Admission(
-                                mv::allocation::AllocationRefusal::Capacity { .. },
+                            iroha_allocation::ChargedBufferError::Admission(
+                                iroha_allocation::AllocationRefusal::Capacity { .. },
                             ),
                         )),
                     ..
@@ -1033,8 +1108,8 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
                     availability_wire: None,
                     refusal:
                         Some(crate::sumeragi::commitment::ResultPreimageError::Allocation(
-                            mv::allocation::ChargedBufferError::Admission(
-                                mv::allocation::AllocationRefusal::Capacity { .. },
+                            iroha_allocation::ChargedBufferError::Admission(
+                                iroha_allocation::AllocationRefusal::Capacity { .. },
                             ),
                         )),
                     ..
@@ -1047,7 +1122,7 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
                     parts: Some(parts),
                     refusal:
                         Some(iroha_data_model::block::CertificateAdmissionError::ControlAdmission(
-                            mv::allocation::AllocationRefusal::Capacity { .. },
+                            iroha_allocation::AllocationRefusal::Capacity { .. },
                         )),
                     ..
                 } if occupy_after_part == 3 => {
@@ -1575,7 +1650,7 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
             assert!(worker.prepare(&block, &decoded).is_err());
             assert_eq!(original_overlay(worker), original_overlay_pointer);
             assert!(worker.context.staging.get(&block_hash).is_none());
-            let foreign = mv::allocation::AllocationBudget::new(1024 * 1024);
+            let foreign = iroha_allocation::AllocationBudget::new(1024 * 1024);
             let mut foreign_qc = decoded;
             foreign_qc.admit_attestation_witness(&foreign).unwrap();
             assert!(require_qc_witness_admission(&foreign_qc, &budget).is_err());
@@ -1585,10 +1660,12 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
             blocks.append(&block, &qc).unwrap();
             // Measure the actual immutable table control separately; admission below still
             // uses only the original State pool and retains its own real backing and control.
-            let measure = mv::allocation::AllocationBudget::new(original_limit);
-            let mut measured =
-                mv::allocation::ChargedBuffer::new(block.availability().as_slice().len(), &measure)
-                    .unwrap();
+            let measure = iroha_allocation::AllocationBudget::new(original_limit);
+            let mut measured = iroha_allocation::ChargedBuffer::new(
+                block.availability().as_slice().len(),
+                &measure,
+            )
+            .unwrap();
             measured.append(block.availability().as_slice()).unwrap();
             let measured =
                 iroha_sumeragi::availability::AvailabilityFrame::from_charged(measured, &measure)
@@ -1932,7 +2009,7 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
     with_worker(|chain, worker, _blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
-        let foreign_budget = mv::allocation::AllocationBudget::new(1 << 20);
+        let foreign_budget = iroha_allocation::AllocationBudget::new(1 << 20);
         let foreign = NativeContextArchive::open(
             chain.kura(),
             foreign_budget.clone(),

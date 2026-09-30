@@ -1088,6 +1088,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             b"not a native result".to_vec(),
+            Vec::new(),
         );
         foreign.set_commit_certificate(Some(malformed));
         assert!(project_native_pulse(&foreign, &mut Projection::default()).is_err());

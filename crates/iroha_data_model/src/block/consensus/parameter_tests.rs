@@ -1,6 +1,5 @@
 //! Signed native consensus metadata and RS16 layout contracts.
 use super::*;
-use norito::codec::DecodeAll as _;
 #[test]
 fn consensus_modes_project_canonical_protocol_identities() {
     assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);

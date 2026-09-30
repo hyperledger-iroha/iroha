@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
-use mv::allocation::{AllocationBudget, ChargedBuffer};
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 
 use super::*;
 use crate::sumeragi::records::NoFaults;

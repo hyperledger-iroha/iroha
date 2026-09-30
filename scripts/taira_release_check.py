@@ -1171,6 +1171,7 @@ TORII_UNIT_STAGES = (("released State snapshots and exact canonical outcome auth
 )), ) + TORII_UNIT_STAGES
 
 HARNESS_TARGETS = {
+    "allocation": ("native finite allocation custody", "iroha_allocation", "lib", ["-p", "iroha_allocation", "--lib"]),
     "mv": ("native MV ownership", "mv", "lib", ["-p", "mv", "--lib"]),
     "mv-ebr": ("native EBR allocation custody", "ebr_allocation_custody", "test", ["-p", "mv", "--test", "ebr_allocation_custody"]),
     "mv-map": ("native owned map generations", "map_owned_generations", "test", ["-p", "mv", "--test", "map_owned_generations"]),
@@ -1703,7 +1704,43 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_STATE_ACQUISITION_STAGES
 
 
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
-MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
+MV_OWNERSHIP_HARNESSES = ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
+
+ALLOCATION_OWNERSHIP_STAGES = (('finite resident allocation pool', (
+    'tests::charge_keeps_original_pool_alive_after_budget_handle_is_dropped',
+    'tests::concurrent_reservations_cannot_oversubscribe_the_same_finite_pool',
+    'tests::exact_pool_release_wakes_waiters_including_before_their_first_poll',
+    'tests::finite_limit_overflow_and_zero_never_change_credit_on_refusal',
+    'tests::splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges',
+    'tests::partition_retains_exact_original_pool_and_conserves_real_credits',
+)),
+    ('native physical release ownership', (
+        'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
+        'release::tests::first_registered_wake_can_reenter_both_initialized_notification_locks',
+        'release::tests::panicking_first_waker_still_notifies_the_remaining_original_cohort',
+        'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
+        'release::tests::replacing_a_waker_allows_its_destructor_to_observe_the_same_source',
+        'release::tests::ready_wait_releases_its_last_waker_outside_the_notification_lock',
+        'release::tests::release_racing_first_poll_cannot_be_lost',
+        'release::tests::ownership_phase_transfer_defers_original_release_until_final_owner_drops',
+        'release::tests::ownership_phase_transfer_unwind_releases_and_poisons_original_observation',
+        'release::tests::physical_release_disarms_only_later_retirement_poisoning',
+        'release::tests::paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind',
+        'release::tests::observed_release_reports_existing_physical_poison_and_excludes_later_wake_panic',
+        'release::tests::pair_construction_transfers_both_original_guards_without_early_release',
+        'release::tests::deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind',
+        'release::tests::fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup',
+        'release::tests::release_batch_empty_and_foreign_transfer_preserve_original_custody',
+        'release::tests::release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes',
+        'release::tests::release_batch_records_actual_physical_poison_without_later_cleanup_poison',
+        'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
+        'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
+        'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
+        'release::tests::charged_notification_retains_original_control_through_observers_and_deferred_releases',
+        'release::tests::deferred_notice_merge_retains_exact_source_and_never_wakes_early',
+        'release::tests::deferred_notice_merge_preserves_poison_after_rejected_transfer',
+    )),
+)
 
 MV_OWNERSHIP_STAGES = (
     ("caller-owned capture and original notification custody", (
@@ -1734,14 +1771,8 @@ MV_OWNERSHIP_STAGES = (
     ('funded publication identity release', (
         'publication::nonblocking_tests::funded_identity_refund_observes_unlocked_publication_even_on_release_unwind',
     )),
-    ('finite resident allocation pool', (
-        'allocation::tests::charge_keeps_original_pool_alive_after_budget_handle_is_dropped',
-        'allocation::tests::concurrent_reservations_cannot_oversubscribe_the_same_finite_pool',
-        'allocation::tests::exact_pool_release_wakes_waiters_including_before_their_first_poll',
-        'allocation::tests::finite_limit_overflow_and_zero_never_change_credit_on_refusal',
-        'allocation::tests::real_epoch_reclamation_returns_capacity_and_its_release_notification',
-        'allocation::tests::splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges',
-        'allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits',
+    ('actual epoch allocation reclamation', (
+        'allocation_runtime_tests::real_epoch_reclamation_returns_capacity_and_its_release_notification',
     )),
     ('actual writer release observations', (
         'release_tests::a_nonpoisoning_guard_unwind_does_not_poison_later_contention',
@@ -2076,32 +2107,6 @@ CONCREAD_STAGES = (
         'bptree::acquisition_tests::acquired_map_validation_retains_stale_and_poisoned_physical_writers',
         'bptree::acquisition_tests::acquired_map_foreign_busy_success_and_unwind_preserve_original_custody',
     )),
-    ('native physical release ownership', (
-        'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
-        'release::tests::first_registered_wake_can_reenter_both_initialized_notification_locks',
-        'release::tests::panicking_first_waker_still_notifies_the_remaining_original_cohort',
-        'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
-        'release::tests::replacing_a_waker_allows_its_destructor_to_observe_the_same_source',
-        'release::tests::ready_wait_releases_its_last_waker_outside_the_notification_lock',
-        'release::tests::release_racing_first_poll_cannot_be_lost',
-        'release::tests::ownership_phase_transfer_defers_original_release_until_final_owner_drops',
-        'release::tests::ownership_phase_transfer_unwind_releases_and_poisons_original_observation',
-        'release::tests::physical_release_disarms_only_later_retirement_poisoning',
-        'release::tests::paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind',
-        'release::tests::observed_release_reports_existing_physical_poison_and_excludes_later_wake_panic',
-        'release::tests::pair_construction_transfers_both_original_guards_without_early_release',
-        'release::tests::deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind',
-        'release::tests::fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup',
-        'release::tests::release_batch_empty_and_foreign_transfer_preserve_original_custody',
-        'release::tests::release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes',
-        'release::tests::release_batch_records_actual_physical_poison_without_later_cleanup_poison',
-        'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
-        'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
-        'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
-        'release::tests::charged_notification_retains_original_control_through_observers_and_deferred_releases',
-        'release::tests::deferred_notice_merge_retains_exact_source_and_never_wakes_early',
-        'release::tests::deferred_notice_merge_preserves_poison_after_rejected_transfer',
-    )),
     ('failed native cursor retains cleanup after unlock', (
         'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
     )),
@@ -2291,6 +2296,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
     if qualification_scope not in QUALIFICATION_SCOPES:
         raise CheckError("native qualification scope must be basic or full")
     selected = {
+        "allocation": ALLOCATION_OWNERSHIP_STAGES,
         "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
         "mv-admitted-map": MV_ADMITTED_MAP_STAGES, "concread": CONCREAD_STAGES,
         "config": CONFIG_STAGES, "config-fixtures": CONFIG_FIXTURE_STAGES, "config-unit": CONFIG_UNIT_STAGES, "genesis": GENESIS_STAGES, "data-model": DATA_MODEL_STAGES,
@@ -3960,7 +3966,7 @@ def validate_mv_test_registration(root: Path) -> None:
     """
     owners = (
         ("publication::nonblocking_tests::", "publication.rs", "publication_nonblocking_tests.rs", "nonblocking_tests"),
-        ("allocation::tests::", "allocation.rs", "allocation_tests.rs", "tests"),
+        ("allocation_runtime_tests::", "lib.rs", "allocation_runtime_tests.rs", "allocation_runtime_tests"),
         ("release_tests::", "lib.rs", "release_tests.rs", "release_tests"),
         ("capture_tests::", "lib.rs", "capture_tests.rs", "capture_tests"),
         ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
@@ -4019,6 +4025,25 @@ def validate_mv_test_registration(root: Path) -> None:
         missing = [name for name in selected if available.count(name) != 1]
         if len(selected) != len(set(selected)) or missing:
             raise ValueError("registered MV test lacks one actual source definition: " + ", ".join(missing))
+        # Generic allocation custody belongs below MV and its epoch/storage
+        # dependencies. Its original selected leaves retain their actual owner.
+        package = root / "crates/iroha_allocation/src"
+        sources.clear()
+        edge("lib.rs", "allocation_tests.rs", "tests")
+        if len(re.findall(r'^pub mod release;$', source("lib.rs")[1], re.MULTILINE)) != 1:
+            raise ValueError("registered allocation crate module differs: release")
+        edge("release.rs", "release_tests.rs", "tests")
+        available = []
+        for prefix, child in (("tests::", "allocation_tests.rs"),
+                              ("release::tests::", "release_tests.rs")):
+            masked = source(child)[1]
+            available.extend(prefix + match.group(1) for match in re.finditer(
+                r'^#\[test\]\s*\nfn (\w+)\s*\(', masked, re.MULTILINE
+            ) if masked[:match.start()].count("{") == masked[:match.start()].count("}"))
+        selected = [name for _, names in ALLOCATION_OWNERSHIP_STAGES for name in names]
+        missing = [name for name in selected if available.count(name) != 1]
+        if len(selected) != len(set(selected)) or missing:
+            raise ValueError("registered allocation test lacks one actual source definition: " + ", ".join(missing))
     except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
         raise CheckError("MV test source registration failed: " + str(error)) from error
 

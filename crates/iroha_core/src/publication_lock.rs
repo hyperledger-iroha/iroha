@@ -8,7 +8,7 @@
 #[derive(Default)]
 pub(crate) struct PublicationMutex<T = ()> {
     inner: parking_lot::Mutex<T>,
-    released: concread::release::ReleaseNotification,
+    released: iroha_allocation::release::ReleaseNotification,
     /// Successful ordinary acquisitions invalidate earlier readonly observations.
     mutation_epoch: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
@@ -29,7 +29,7 @@ pub(crate) struct PublicationReadPermitMismatch;
 
 /// An original storage mutex guard, retaining the established lock-order boundary.
 pub(crate) struct PublicationGuard<'state, T = ()> {
-    inner: concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,
+    inner: iroha_allocation::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,
     mutation_epoch: Option<u64>,
 }
 
@@ -62,7 +62,7 @@ impl<T> PublicationGuard<'_, T> {
     /// A foreign batch returns the original guard without unlocking or notifying.
     pub(crate) fn try_release_into(
         self,
-        batch: &mut concread::release::DeferredReleaseBatch,
+        batch: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<(), Self> {
         let mutation_epoch = self.mutation_epoch;
         self.inner
@@ -75,7 +75,7 @@ impl<T> PublicationGuard<'_, T> {
 
     /// Unlock the actual mutex and retain its original notification until the
     /// enclosing aggregate has released every other physical fence.
-    pub(crate) fn release_deferred(self) -> concread::release::DeferredRelease {
+    pub(crate) fn release_deferred(self) -> iroha_allocation::release::DeferredRelease {
         self.inner.release_deferred(drop).1
     }
 
@@ -109,7 +109,7 @@ impl<T> std::ops::DerefMut for PublicationGuard<'_, T> {
 
 impl<T> PublicationMutex<T> {
     /// An empty, allocation-free release batch bound to this actual mutex.
-    pub(crate) fn deferred_releases(&self) -> concread::release::DeferredReleaseBatch {
+    pub(crate) fn deferred_releases(&self) -> iroha_allocation::release::DeferredReleaseBatch {
         self.released.deferred_batch()
     }
 
@@ -117,7 +117,7 @@ impl<T> PublicationMutex<T> {
     pub(crate) fn new(value: T) -> Self {
         Self {
             inner: parking_lot::Mutex::new(value),
-            released: concread::release::ReleaseNotification::default(),
+            released: iroha_allocation::release::ReleaseNotification::default(),
             mutation_epoch: None,
         }
     }
@@ -175,7 +175,7 @@ impl<T> PublicationMutex<T> {
     /// No publication, height change, timer, or scheduled polling is required.
     pub(crate) fn try_lock_or_wait(
         &self,
-    ) -> Result<PublicationGuard<'_, T>, concread::release::ReleaseWait> {
+    ) -> Result<PublicationGuard<'_, T>, iroha_allocation::release::ReleaseWait> {
         let wait = self.released.observe();
         self.try_lock().ok_or(wait)
     }
@@ -227,13 +227,13 @@ impl<T> std::fmt::Debug for PublicationMutex<T> {
 /// The batch never accepts a caller-selected notification source.
 pub(crate) struct DeferredPublicationFence<'state, T> {
     mutex: &'state PublicationMutex<T>,
-    releases: concread::release::DeferredReleaseBatch,
+    releases: iroha_allocation::release::DeferredReleaseBatch,
 }
 
 /// Physical guard whose original notification stays with its enclosing fence.
 pub(crate) struct DeferredPublicationGuard<'fence, 'state, T> {
     guard: Option<PublicationGuard<'state, T>>,
-    releases: &'fence mut concread::release::DeferredReleaseBatch,
+    releases: &'fence mut iroha_allocation::release::DeferredReleaseBatch,
 }
 
 impl<'state, T> DeferredPublicationFence<'state, T> {

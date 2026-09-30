@@ -52,6 +52,8 @@ packages = [
   "ivm_artifact_admission",
   "kaigi_zk",
   "kotodama_lang",
+  "kotodama_surface",
+  "kotodama_toolchain",
   "zk_ace_prover",
 ]
 
@@ -166,7 +168,7 @@ paths = ["defaults/**", "scripts/tests/consistency.sh"]
 binaries = ["iroha", "kagami"]
 
 [consumers.kotodama_docs]
-packages = ["ivm", "kotodama_lang"]
+packages = ["ivm", "kotodama_lang", "kotodama_toolchain"]
 # Source projections use the checker's exact fence/heredoc parser and Git base.
 # New, changed, deleted, or malformed executable inputs require the compiler;
 # prose and docs/history evidence do not. Inventory edits also select this job.

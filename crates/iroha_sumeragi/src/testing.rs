@@ -1138,7 +1138,7 @@ pub fn author_body(
     header: crate::message::BlockHeader,
     payload: &[u8],
     config: &crate::types::HeightConfig,
-    budget: &mv::allocation::AllocationBudget,
+    budget: &iroha_allocation::AllocationBudget,
     crypto: &dyn crate::crypto::Crypto,
     signer: &dyn crate::crypto::Signer,
 ) -> crate::availability::AvailableBody {

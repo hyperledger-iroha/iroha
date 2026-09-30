@@ -11,7 +11,7 @@ use crate::{
     },
     metadata::ProgramMetadata,
 };
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 const SECRET: u64 = 0x1122_3344_5566_7788;
 const PUBLIC: u64 = 0xAABB_CCDD;

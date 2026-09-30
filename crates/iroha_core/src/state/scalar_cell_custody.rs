@@ -9,8 +9,8 @@
 mod snapshot;
 pub(super) use snapshot::decode_snapshot;
 
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use mv::{
-    allocation::{AllocationBudget, AllocationCharge},
     cell::{Cell, CellInitialization, CellInitializationError},
     storage::AdmittedStorageError,
 };

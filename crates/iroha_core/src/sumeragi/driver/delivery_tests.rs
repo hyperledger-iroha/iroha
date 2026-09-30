@@ -783,7 +783,7 @@ fn source_bound_fetch_rotation_keeps_intersection_receipts_and_reaches_new_peer(
 #[test]
 fn retained_core_cache_releases_codewords_before_small_pool_authoring() {
     let f = Fixture::new();
-    let budget = mv::allocation::AllocationBudget::new(32 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(32 * 1024);
     let net = RankOne::default();
     let crypto = Arc::new(crate::sumeragi::crypto::BlsCrypto::new());
     let mut worker = PayloadWorker::new(

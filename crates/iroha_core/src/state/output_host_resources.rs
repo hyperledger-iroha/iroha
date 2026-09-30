@@ -6,7 +6,7 @@
 
 use super::{ExecutionOutputV1, OwnedExecutionSource};
 use crate::queue::RoutingDecision;
-use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use std::alloc::Layout;
 
 /// Exact requested layouts for the producer's four fixed vectors.

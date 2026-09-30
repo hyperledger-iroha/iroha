@@ -234,7 +234,7 @@ fn busy_identity_wait_is_signaled_after_the_actual_metadata_guard_releases() {
 
 #[test]
 fn funded_identity_refund_observes_unlocked_publication_even_on_release_unwind() {
-    use crate::allocation::{AllocationBudget, AllocationRefusal};
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
     use std::{
         future::Future,
         panic::{AssertUnwindSafe, catch_unwind},

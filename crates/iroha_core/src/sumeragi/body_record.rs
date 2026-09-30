@@ -6,13 +6,13 @@
 use super::durable_record_codec::{BytesRef, FieldRef, FixedWriter};
 use std::fmt;
 
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use iroha_sumeragi::{
     availability::{
         AvailabilityFrame, AvailabilitySource, AvailableBody, BodyRestoration, PayloadBytes,
     },
     message::BlockHeader,
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 #[path = "body_record/decode.rs"]
 mod decode;

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::sumeragi::{crypto::KeyPairSigner, lanes::record::tests::fixture};
+use iroha_allocation::ChargedBuffer;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_sumeragi::{
     availability::{AvailabilitySource, AvailableBody, PayloadAuthoring, PayloadBytes},
@@ -9,7 +10,6 @@ use iroha_sumeragi::{
     message::Qc,
     types::HeightConfig,
 };
-use mv::allocation::ChargedBuffer;
 use std::{
     fs,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},

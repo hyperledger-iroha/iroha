@@ -157,6 +157,7 @@ impl Fixture {
                     certificate.consensus_header().to_vec(),
                     norito::encode_canonical(&qc).unwrap(),
                     certificate.result_preimage().to_vec(),
+                    certificate.availability().to_vec(),
                 );
             });
         }
@@ -171,6 +172,7 @@ impl Fixture {
                 certificate.consensus_header().to_vec(),
                 norito::encode_canonical(&qc).unwrap(),
                 certificate.result_preimage().to_vec(),
+                certificate.availability().to_vec(),
             );
         });
     }
@@ -858,6 +860,7 @@ fn authenticated_height_rejects_invalid_current_and_parent_witnesses() {
             norito::encode_canonical(&header).unwrap(),
             certificate.commit_qc().to_vec(),
             certificate.result_preimage().to_vec(),
+            certificate.availability().to_vec(),
         );
     });
     assert!(
@@ -1275,6 +1278,7 @@ mod deployment_prefix {
                         norito::encode_canonical(&header).unwrap(),
                         certificate.commit_qc().to_vec(),
                         certificate.result_preimage().to_vec(),
+                        certificate.availability().to_vec(),
                     );
                 }),
                 _ => unreachable!(),

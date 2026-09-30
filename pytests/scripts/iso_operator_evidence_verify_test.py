@@ -7678,7 +7678,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             extra_export_dir = root / "audit-export-extra"
             extra_export_dir.mkdir()
             extra_index = {
-                "version": 1,
+                "version": audit_test.ADAPTER.INDEX_VERSION,
                 "record_count": 1,
                 "records": [audit_test.sample_record("extra-msg-1")],
             }

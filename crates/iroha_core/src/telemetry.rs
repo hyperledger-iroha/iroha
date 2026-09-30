@@ -6610,7 +6610,7 @@ fn refresh_ivm_cache_metrics(metrics: &Metrics) {
 }
 fn refresh_ivm_execution_budget_metrics(
     metrics: &Metrics,
-    budget: &mv::allocation::AllocationBudget,
+    budget: &iroha_allocation::AllocationBudget,
 ) {
     let as_metric = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
     metrics
@@ -10428,7 +10428,7 @@ mod tests {
     #[test]
     fn ivm_execution_memory_metrics_follow_original_pool_through_shrink_and_release() {
         let metrics = Metrics::default();
-        let budget = mv::allocation::AllocationBudget::new(128);
+        let budget = iroha_allocation::AllocationBudget::new(128);
         let held = budget.try_reserve_bytes(80).expect("initial reservation");
         budget.set_limit_bytes(64);
         refresh_ivm_execution_budget_metrics(&metrics, &budget);
