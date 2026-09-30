@@ -4,6 +4,7 @@
 //! on-demand path borrows target values from the same locked World overlay and
 //! funds every retained snapshot entry with the original finite operation pool.
 
+use super::world_state_cut::CutCapsule;
 use super::*;
 use crate::{
     state::{State, StateReadOnly, StateView, is_stable_state_view_generation},
@@ -20,7 +21,6 @@ use iroha_data_model::{
     },
 };
 use std::alloc::Layout;
-use super::world_state_cut::CutCapsule;
 
 /// Private move-only snapshot owner; payload fields drop before their exact charges.
 pub(super) struct SnapshotCollector<'a> {
@@ -161,42 +161,75 @@ fn capture(
 
 // Complete reconstruction uses only private native journal preimages. The
 // stored complete World is first independently cold-checked by `capture`.
-fn reconstruct(captured:&CapturedSnapshot,cut:&CutCapsule,budget:&AllocationBudget)->Result<CapturedSnapshot,String> {
-    let index=field_index().as_ref().map_err(Clone::clone)?;
-    let count=usize::try_from(cut.entries).map_err(|e|e.to_string())?;
-    let mut collector=SnapshotCollector::new(budget,count,0)?;
-    let mut seen=ChargedBuffer::new(cut.changes().len(),budget).map_err(|e|e.to_string())?;
-    for _ in 0..cut.changes().len() {seen.push_reserved(false);}
+fn reconstruct(
+    captured: &CapturedSnapshot,
+    cut: &CutCapsule,
+    budget: &AllocationBudget,
+) -> Result<CapturedSnapshot, String> {
+    let index = field_index().as_ref().map_err(Clone::clone)?;
+    let count = usize::try_from(cut.entries).map_err(|e| e.to_string())?;
+    let mut collector = SnapshotCollector::new(budget, count, 0)?;
+    let mut seen = ChargedBuffer::new(cut.changes().len(), budget).map_err(|e| e.to_string())?;
+    for _ in 0..cut.changes().len() {
+        seen.push_reserved(false);
+    }
     for entry in &captured.snapshot.entries {
-        let value=if let Some((position,before,after))=cut.change_for(&entry.field_id,entry.kind,entry.key_hash) {
-            if seen.as_slice()[position] || after!=Some(entry.value_hash) {
+        let value = if let Some((position, before, after)) =
+            cut.change_for(&entry.field_id, entry.kind, entry.key_hash)
+        {
+            if seen.as_slice()[position] || after != Some(entry.value_hash) {
                 return Err("World cut tail differs from the complete applied preimage".into());
             }
-            seen.as_mut_slice()[position]=true;
+            seen.as_mut_slice()[position] = true;
             before
-        } else {Some(entry.value_hash)};
-        if let Some(value)=value {collector.push(&entry.field_id,entry.kind,entry.key_hash,value)?;}
-    }
-    for (position,(id,kind,key,before,after)) in cut.changes().enumerate() {
-        match after {
-            Some(_) if !seen.as_slice()[position] => return Err("World cut tail omits a complete applied element".into()),
-            None if seen.as_slice()[position] => return Err("World cut absent tail appears in the applied World".into()),
-            None => if let Some(value)=before {collector.push(id,kind,key,value)?;},
-            Some(_) => {},
+        } else {
+            Some(entry.value_hash)
+        };
+        if let Some(value) = value {
+            collector.push(&entry.field_id, entry.kind, entry.key_hash, value)?;
         }
     }
-    let reconstructed=collector.finish(index.schema)?;
-    if reconstructed.snapshot.root().map_err(|e|e.to_string())?!=cut.root {
+    for (position, (id, kind, key, before, after)) in cut.changes().enumerate() {
+        match after {
+            Some(_) if !seen.as_slice()[position] => {
+                return Err("World cut tail omits a complete applied element".into());
+            }
+            None if seen.as_slice()[position] => {
+                return Err("World cut absent tail appears in the applied World".into());
+            }
+            None => {
+                if let Some(value) = before {
+                    collector.push(id, kind, key, value)?;
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    let reconstructed = collector.finish(index.schema)?;
+    if reconstructed.snapshot.root().map_err(|e| e.to_string())? != cut.root {
         return Err("World cut complete preimages do not reconstruct certified R".into());
     }
     Ok(reconstructed)
 }
 
-fn require_target(snapshot:&WorldStateSnapshotV1,id:&str,kind:WorldStateElementKindV1,key:Option<Hash>,value:Hash)->Result<(),String> {
-    let row=snapshot.entries.binary_search_by(|entry| (entry.field_id.as_str(),entry.kind,entry.key_hash).cmp(&(id,kind,key)))
-        .ok().and_then(|index|snapshot.entries.get(index));
-    if row.is_none_or(|entry|entry.value_hash!=value) {
-        return Err(format!("World cut exact typed target {id} differs from certified execution"));
+fn require_target(
+    snapshot: &WorldStateSnapshotV1,
+    id: &str,
+    kind: WorldStateElementKindV1,
+    key: Option<Hash>,
+    value: Hash,
+) -> Result<(), String> {
+    let row = snapshot
+        .entries
+        .binary_search_by(|entry| {
+            (entry.field_id.as_str(), entry.kind, entry.key_hash).cmp(&(id, kind, key))
+        })
+        .ok()
+        .and_then(|index| snapshot.entries.get(index));
+    if row.is_none_or(|entry| entry.value_hash != value) {
+        return Err(format!(
+            "World cut exact typed target {id} differs from certified execution"
+        ));
     }
     Ok(())
 }
@@ -263,11 +296,17 @@ impl State {
         }
         let cut = self.native_world_cut.lock().as_ref().cloned()
             .ok_or("World snapshot has no original certified pre-tail capture; restored state requires native replay")?;
-        if cut.generation!=generation || cut.tip.height()!=tip.height()
-            || cut.tip.iroha_hash()!=tip.block_hash() || cut.tip.core_hash()!=tip.core_hash()
-            || cut.tip.result()!=tip.result() || cut.tip.creation_time_ms()!=tip.block_time_ms()
-            || cut.root!=tip.commitment().execution.world_state_root {
-            return Err("World snapshot original journal belongs to another certified generation".into());
+        if cut.generation != generation
+            || cut.tip.height() != tip.height()
+            || cut.tip.iroha_hash() != tip.block_hash()
+            || cut.tip.core_hash() != tip.core_hash()
+            || cut.tip.result() != tip.result()
+            || cut.tip.creation_time_ms() != tip.block_time_ms()
+            || cut.root != tip.commitment().execution.world_state_root
+        {
+            return Err(
+                "World snapshot original journal belongs to another certified generation".into(),
+            );
         }
         let result = {
             // Acquire only storage overlays, under the caller's original pool.
@@ -277,7 +316,7 @@ impl State {
                 .try_block(budget)
                 .map_err(|error| error.to_string())?;
             let expected = world.state_accumulator.get();
-            if expected.root()? != cut.applied_root || expected.entries()!=cut.applied_entries {
+            if expected.root()? != cut.applied_root || expected.entries() != cut.applied_entries {
                 return Err("World snapshot acquired another complete applied World".into());
             }
             let definition = world
@@ -289,13 +328,28 @@ impl State {
                 .get(asset_id)
                 .ok_or("World snapshot exact asset incarnation is absent")?;
             let captured = capture(&world, expected, budget)?;
-            let certified = reconstruct(&captured,&cut,budget)?;
-            require_target(&certified.snapshot,"world.asset_definitions",WorldStateElementKindV1::Table,
-                Some(hash_value(asset_id)?),hash_value(definition)?)?;
-            require_target(&certified.snapshot,"world.axt_asset_incarnations",WorldStateElementKindV1::Table,
-                Some(hash_value(asset_id)?),hash_value(incarnation)?)?;
-            require_target(&certified.snapshot,"world.kagemusha_verifier_registry",WorldStateElementKindV1::Cell,
-                None,hash_value(world.kagemusha_verifier_registry.get())?)?;
+            let certified = reconstruct(&captured, &cut, budget)?;
+            require_target(
+                &certified.snapshot,
+                "world.asset_definitions",
+                WorldStateElementKindV1::Table,
+                Some(hash_value(asset_id)?),
+                hash_value(definition)?,
+            )?;
+            require_target(
+                &certified.snapshot,
+                "world.axt_asset_incarnations",
+                WorldStateElementKindV1::Table,
+                Some(hash_value(asset_id)?),
+                hash_value(incarnation)?,
+            )?;
+            require_target(
+                &certified.snapshot,
+                "world.kagemusha_verifier_registry",
+                WorldStateElementKindV1::Cell,
+                None,
+                hash_value(world.kagemusha_verifier_registry.get())?,
+            )?;
             consume(
                 &certified.snapshot,
                 definition,

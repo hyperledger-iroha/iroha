@@ -266,7 +266,8 @@ fn carries_final_product_and_workspace_ownership_reject_coherent_forgeries() {
     let mut old_rows = old.witness_rows(&records).unwrap();
     let digits = multiply::product_digits(left, right);
     old_rows[0][BIT_COUNT..MULTIPLY].copy_from_slice(&digits);
-    old_rows[0][MULTIPLY..ABSOLUTE].copy_from_slice(&multiply::witness(left, right, &digits, false));
+    old_rows[0][MULTIPLY..ABSOLUTE]
+        .copy_from_slice(&multiply::witness(left, right, &digits, false));
     assert!(
         rejects(&old, &old_rows),
         "multiply digits in nonmultiply workspace"
