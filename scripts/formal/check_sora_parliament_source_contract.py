@@ -701,10 +701,17 @@ def require_parliament_event_capture(state: str) -> None:
     state_path = "crates/iroha_core/src/state.rs"
     parliament_event_capture = section(
         state,
-        "    fn apply_without_execution_inner(",
-        "    fn pin_new_autoscale_lane_committee(",
+        "    fn prepare_carrier_publication_events(",
+        "    fn ensure_prospective_autoscale_lane_committee(",
         state_path,
     )
+    compact = re.sub(r"\s+", "", re.sub(r"/\*.*?\*/|//[^\n]*", "", state, flags=re.S))
+    require_all(state_path, compact, (
+        "let(events,authorization)=state.apply_without_execution_inner(block,committee);authorization.map(|()|events)",
+        "let events = match self.prepare_carrier_publication_events(block.as_ref().header()) {"
+        "Ok(events) => events, Err(error) => return (Vec::new(), Err(error)), }; (events, Ok(()))".replace(" ", ""),
+        'ifheader!=self._curr_block{returnErr(MergeLedgerCommitError::ExecutionBatchInvalid("eventpreparationbelongstoadifferentcarrier".to_owned(),));}',
+    ))
     require_all(
         state_path,
         parliament_event_capture,

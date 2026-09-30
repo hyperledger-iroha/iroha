@@ -630,8 +630,8 @@ def test_parliament_event_capture_rejects_early_drain_or_lost_projection(mutatio
     """No second drain, replacement result or omitted retained projection is accepted."""
     source = guard.read(STATE_PATH)
     guard.require_parliament_event_capture(source)
-    capture = guard.section(source, "    fn apply_without_execution_inner(",
-                            "    fn pin_new_autoscale_lane_committee(", STATE_PATH)
+    capture = guard.section(source, "    fn prepare_carrier_publication_events(",
+                            "    fn ensure_prospective_autoscale_lane_committee(", STATE_PATH)
     if mutation == "early_drain":
         changed = capture.replace("let parliament_transitions = self",
                                   "let _ = self.world.take_external_events();\n            let parliament_transitions = self", 1)
