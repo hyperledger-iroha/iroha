@@ -390,26 +390,19 @@ fn project_request_routes(
             ledger_time_ms,
         };
         // A fixed lane created by genesis first admits at H3, and is first merged at H4.
-        let lane = inputs.route(
-            request.signed.payload(),
-            header
-                .height()
-                .get()
-                .checked_add(3)
-                .ok_or_else(|| eyre!("staged routing height overflow"))?,
-        );
-        let dataspace = if lane == LaneId::SINGLE {
-            DataSpaceId::UNIVERSAL
-        } else {
-            lanes
-                .lane(lane)
-                .ok_or_else(|| eyre!("planned native lane has no staged record"))?
-                .dataspace
-        };
-        check_route(
-            RoutingPlan::single(RoutingDecision::new(lane, dataspace)),
-            request.identity.route,
-        )?;
+        let routing_height = header
+            .height()
+            .get()
+            .checked_add(3)
+            .ok_or_else(|| eyre!("staged routing height overflow"))?;
+        let route = inputs
+            .execution_route(request.signed.payload(), routing_height)
+            .ok_or_else(|| {
+                eyre!(
+                    "original signed request has no admitted native execution route at staged height {routing_height}"
+                )
+            })?;
+        check_route(RoutingPlan::single(route), request.identity.route)?;
         routes.push(request.identity);
     }
     Ok(routes)

@@ -25,7 +25,7 @@ use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
-        BlockHeader, SignedBlock,
+        BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
         builder::BlockBuilder,
         execution_output::{
             ExecutionOutputV1, PipelineEventPositionV1, PipelineInvocationV1, TimeInvocationV1,
@@ -48,7 +48,7 @@ use iroha_data_model::{
     },
 };
 use iroha_logger::Level;
-use iroha_model_base::domain::DomainId;
+use iroha_model_base::{domain::DomainId, topology::LaneId};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -100,7 +100,8 @@ fn fixture_with_effects(
         fees.per_byte_fee = Quantity::zero();
         fees.per_instruction_fee = Quantity::zero();
         fees.per_gas_unit_fee = Quantity::zero();
-        fees.fee_asset_id = asset.to_string();
+        // Nexus admission retains the canonical XOR identity even when its fee
+        // is zero. The independently signed PipelineGas charge uses this asset.
         fees.fee_sink_account_id = BOB_ID.to_string();
         state.pipeline.gas.tech_account_id = BOB_ID.to_string();
         state.pipeline.gas.accepted_assets = vec![asset.canonical_address()];
@@ -223,6 +224,7 @@ fn fixture_with_effects(
     setup.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
     let mut builder = BlockBuilder::new(header);
+    let mut routes = Vec::new();
     // A successful and an actually rejected Network input both remain sources.
     for body in [
         vec![InstructionBox::from(Log::new(
@@ -249,8 +251,17 @@ fn fixture_with_effects(
             ),
         );
         tx.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
-        builder.push_transaction(tx.with_instructions(body).sign(ALICE_KEYPAIR.private_key()));
+        let signed = tx.with_instructions(body).sign(ALICE_KEYPAIR.private_key());
+        routes.push(ExternalExecutionContext::new(
+            signed.hash_as_entrypoint(),
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        builder.push_transaction(signed);
     }
+    // Freeze each original input's route before signing the carrier and opening
+    // its recorder; neither execution nor sealing may invent missing routing.
+    builder.set_execution_context(Some(BlockExecutionContextBundle::new(routes)));
     (
         state,
         builder.build_with_signature(0, ALICE_KEYPAIR.private_key()),
@@ -416,6 +427,15 @@ fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
     assert_eq!(release.to_balance_after, Quantity::from(1_000_000_011_u64));
     let asset = release.asset_definition.clone();
     execute(&mut block, &source);
+    let outputs = block.retained_execution_outputs_for_test().unwrap();
+    let ExecutionOutputV1::Network(success) = &outputs[0] else {
+        panic!("Network output")
+    };
+    assert!(success.result.is_ok(), "{:?}", success.result);
+    let ExecutionOutputV1::Network(rejected) = &outputs[1] else {
+        panic!("Network output")
+    };
+    assert!(rejected.result.is_err());
     assert_eq!(
         block
             .world

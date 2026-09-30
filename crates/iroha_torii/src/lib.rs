@@ -67,6 +67,7 @@ mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_commands;
+mod kagemusha_mobile_bootstrap_issuer_v1;
 mod ledger_state_finality;
 mod nft_market;
 mod operator_auth;

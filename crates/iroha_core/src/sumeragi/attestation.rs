@@ -711,7 +711,17 @@ mod tests {
         let certified = reader.certified(10).unwrap();
         let header = certified.header().unwrap();
         assert!(header.attest);
-        assert_eq!(header.payload_len, 0);
+        // Empty refers to the mint result; the boundary still executes original signed work.
+        assert!(header.payload_len > 0);
+        assert_eq!(certified.block().external_transactions().len(), 1);
+        assert_eq!(certified.commitment().execution.kagemusha_top_up_count, 0);
+        assert!(
+            certified
+                .commitment()
+                .execution
+                .kagemusha_top_up_root
+                .is_none()
+        );
         let qc = certified.commit_qc().unwrap();
         let current = &certified.commitment().schedule.current;
         let config = super::super::schedule::ScheduledConfig {

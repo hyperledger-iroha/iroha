@@ -119,7 +119,7 @@ impl KagemushaMobileBootstrapIssuerV1 {
         let signers = validate_authority_signers(&authority, signers)?;
         let (mut store, archive) = HighWaterStore::recover(directory)?;
         let package = KagemushaMobileBootstrapPackageV1::decode_canonical_exact(&archive)?;
-        let checkpoint = package.checkpoint;
+        let checkpoint = &package.checkpoint;
         // This is archival signature/structure validation, never a current-time admission.
         let digest = package.authenticate(&KagemushaMobileBootstrapPinsV1 {
             authority_policy: &authority.policy,

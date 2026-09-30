@@ -930,6 +930,89 @@ mod generated {
         });
     }
     #[test]
+    fn private_request_without_an_admitted_lane_never_falls_back_to_global() {
+        use iroha_data_model::{
+            smart_contract::ContractAddress,
+            transaction::{
+                Executable, FeePaymentIntent, TransactionBuilder, executable::ContractInvocation,
+            },
+        };
+
+        with_facts_assembly_stack(|| {
+            let fixture = Fixture::new(4);
+            let _guard = ChainDiscriminantGuard::enter(fixture.discriminant);
+            let manifest =
+                parse_manifest(original(&fixture.paths[0], &fixture.originals[0])).unwrap();
+            let configs = fixture.parse_configs();
+            let raw = Zeroizing::new(
+                fs::read_to_string(
+                    fixture
+                        ._temp
+                        .path()
+                        .join("generated")
+                        .join("workload-account-00.toml"),
+                )
+                .unwrap(),
+            );
+            let table = crate::secret_toml::Table::new(
+                crate::secret_toml::parse_table(&raw, "original private route test signer")
+                    .unwrap(),
+            );
+            let account = table["account"].as_table().unwrap();
+            let key = KeyPair::new(
+                account["public_key"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<PublicKey>()
+                    .unwrap(),
+                account["private_key"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<PrivateKey>()
+                    .unwrap(),
+            )
+            .unwrap();
+            let authority = fixture.accounts[0].clone();
+            assert_eq!(authority, AccountId::new(key.public_key().clone()));
+            let invocation = ContractInvocation {
+                contract_address: ContractAddress::derive(
+                    &fixture.network_id,
+                    &authority,
+                    0,
+                    DataSpaceId::new(777),
+                )
+                .unwrap(),
+                expected_code_hash: Hash::new(b"private-route-refusal"),
+                entrypoint: "call".to_owned(),
+                arguments: None,
+            };
+            let signed = TransactionBuilder::new(
+                fixture.network_id,
+                authority,
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(Executable::ContractCall(invocation))
+            .sign(key.private_key());
+            let requests = [DecodedRequest {
+                identity: RequestRoute {
+                    signed_sha256: iroha_crypto::sha256(
+                        &norito::encode_canonical(&signed).unwrap(),
+                    ),
+                    // A supplied global-route claim must not authorize this private target.
+                    route: RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL),
+                },
+                signed,
+            }];
+            let result = crate::genesis::staged_signed_native_genesis_with_projection(
+                &manifest,
+                &fixture.originals[1],
+                &configs[0],
+                |genesis, staged| project_request_routes(genesis, staged, &requests),
+            );
+            failure(result, "no admitted native execution route");
+        });
+    }
+    #[test]
     fn all_four_original_peer_identities_routing_and_sumeragi_limits_are_checked_before_staging() {
         with_facts_assembly_stack(|| {
             let fixture = Fixture::new(4);

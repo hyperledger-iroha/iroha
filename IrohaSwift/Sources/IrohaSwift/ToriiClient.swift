@@ -24088,7 +24088,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 || (500...599).contains(code):
             return error
         case .invalidURL, .httpStatus, .stream, .dataModelMismatch,
-             .transactionSchemaMismatch:
+             .transactionSchemaMismatch, .ramLfeEncryptionUnavailable:
             return nil
         }
     }

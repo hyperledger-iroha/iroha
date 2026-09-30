@@ -71,6 +71,12 @@ def test_daemon_recoverable_workers_have_no_bare_blocking(relative: str) -> None
         "crates/iroha_core/src/executor_final_promotion_permission_tests.rs",
         "crates/iroha_core/src/executor_final_promotion_account_permission_tests.rs",
         "crates/iroha_core/src/executor_stream_token_custody_permission_tests.rs",
+        "crates/iroha_core/src/executor_stream_token_direct_source_tests.rs",
+        "crates/iroha_core/src/executor_contract_owner_permission_tests.rs",
+        "crates/iroha_core/src/executor_fastpq_rejection_tail.rs",
+        "crates/iroha_core/src/executor_fastpq_rejection_tail/tests.rs",
+        "crates/iroha_core/src/executor_fastpq_rejection_tail/sponsored_alias_tests.rs",
+        "crates/iroha_core/src/executor/resource_return_tests.rs",
     ),
 )
 def test_core_recovery_support_seals_exact_permission_include(
@@ -79,8 +85,9 @@ def test_core_recovery_support_seals_exact_permission_include(
     module = load_guard_module()
     included = tmp_path / relative
     included.parent.mkdir(parents=True)
-    executor = included.parent / "executor.rs"
-    executor.write_text(f'include!("{included.name}");\n', encoding="utf-8")
+    executor = tmp_path / "crates/iroha_core/src/executor.rs"
+    reference = included.relative_to(executor.parent).as_posix()
+    executor.write_text(f'include!("{reference}");\n', encoding="utf-8")
     included.write_text("fn reviewed_permission() {}\n", encoding="utf-8")
 
     sources, failures = module.torii_rust_source_closure(tmp_path)

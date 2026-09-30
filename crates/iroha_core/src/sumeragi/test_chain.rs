@@ -688,6 +688,20 @@ impl CertifiedTestChain {
             ..SumeragiNposParameters::default()
         };
         policy.validate().expect("bounded ten-block fixture policy");
+        // Boundary selection authenticates the network currency even when there are no
+        // funded candidates. Register its exact global nine-decimal schema in signed genesis.
+        config.genesis_instructions.push(
+            iroha_data_model::isi::Register::asset_definition(
+                iroha_data_model::asset::AssetDefinition::new(
+                    policy.xor_asset_definition_id.clone(),
+                    "Network XOR",
+                    iroha_primitives::numeric::NumericSpec::fractional(9),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ),
+            )
+            .into(),
+        );
         config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 policy.epoch_length_blocks,

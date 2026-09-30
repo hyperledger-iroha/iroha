@@ -209,6 +209,12 @@ func tcBodyJSON(from request: URLRequest) -> [String: Any] {
 }
 
 final class ToriiClientTests: XCTestCase {
+    func testRamLfeEncryptionRefusalDoesNotImplyUncertainAssetTransferSubmission() {
+        XCTAssertNil(ToriiClient.uncertainDetachedAssetTransferPostCause(
+            ToriiClientError.ramLfeEncryptionUnavailable
+        ))
+    }
+
     private static let operatorSigningContext: ToriiOperatorSigningContext = {
         let signingKey = try! SigningKey.ed25519(
             privateKey: Data(repeating: 0x5A, count: 32)
@@ -15521,9 +15527,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertTrue(snapshot.isSigning)
         XCTAssertFalse(snapshot.isHalted)
 
+        XCTAssertEqual(payload.first, 0x7B, "Rust fixture begins with its root object")
+        var duplicateProtocolVersion = Data(#"{"protocol_version":1,"#.utf8)
+        duplicateProtocolVersion.append(payload.dropFirst())
         var invalidResponses: [(Data, Int, [String: String], String)] = [
             (
-                duplicateSumeragiRootField(#"{"protocol_version":4,"#, in: payload),
+                duplicateProtocolVersion,
                 200, ["Content-Type": "application/json"], "duplicate object keys"
             ),
             (Data([0xff]), 200, ["Content-Type": "application/json"], "UTF-8 JSON"),
@@ -15577,7 +15586,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         ]
         let exactSnapshot = try await makeClient().getSumeragiStatus()
         XCTAssertEqual(exactSnapshot.height, 15)
-        XCTAssertEqual(exactSnapshot.liveness.generation, 2)
+        XCTAssertEqual(exactSnapshot, snapshot)
     }
 
     func testNativeStatusRejectsRetiredExecutionAndCertificateProjections() throws {

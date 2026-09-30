@@ -1198,6 +1198,9 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     )
     .unpack(|_| {})
     .map_err(|(block, error)| {
+        // Preserve the validator's concrete error through the report context. Only the
+        // unpublished signing draft may consume its exact derived policy commitments.
+        let error = *error;
         let transaction_errors = block
             .execution_outputs()
             .iter()
@@ -2798,6 +2801,25 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             creation_time_ms,
         )
         .expect("sign the exact unbound provisional genesis");
+        let provisional_error =
+            restage_signed_sumeragi_v2_context_hashes(&raw, Some(&config), &provisional.0)
+                .err()
+                .expect("the original unbound draft must report its exact policy mismatch");
+        assert!(
+            matches!(
+                provisional_error.downcast_ref::<iroha_core::block::BlockValidationError>(),
+                Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+                    expected_execution,
+                    actual_execution,
+                    expected_nexus,
+                    actual_nexus,
+                }) if *expected_execution == Hash::prehashed(unbound_parameters.execution_policy_hash)
+                    && *expected_nexus == Hash::prehashed(unbound_parameters.nexus_amx_context_hash)
+                    && actual_execution != expected_execution
+                    && actual_nexus != expected_nexus
+            ),
+            "the report must retain the validator's concrete draft mismatch: {provisional_error:#}"
+        );
         let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_v2_context(
             raw,
             &genesis_key_pair,
@@ -2887,9 +2909,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )
         .expect_err("a final-identity Nexus/AMX policy mismatch must fail closed");
         assert!(
-            nexus_error
-                .to_string()
-                .contains("changed the signed Nexus/AMX context"),
+            matches!(
+                nexus_error.downcast_ref::<iroha_core::block::BlockValidationError>(),
+                Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+                    expected_nexus,
+                    actual_nexus,
+                    ..
+                }) if *expected_nexus == Hash::prehashed(signed_parameters.nexus_amx_context_hash)
+                    && actual_nexus != expected_nexus
+            ),
             "unexpected Nexus/AMX tamper error: {nexus_error:#}"
         );
 
@@ -2910,9 +2938,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )
         .expect_err("a final-identity execution-policy mismatch must fail closed");
         assert!(
-            execution_error
-                .to_string()
-                .contains("changed the signed execution policy"),
+            matches!(
+                execution_error.downcast_ref::<iroha_core::block::BlockValidationError>(),
+                Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+                    expected_execution,
+                    actual_execution,
+                    ..
+                }) if *expected_execution == Hash::prehashed(signed_parameters.execution_policy_hash)
+                    && actual_execution != expected_execution
+            ),
             "unexpected execution-policy tamper error: {execution_error:#}"
         );
     }

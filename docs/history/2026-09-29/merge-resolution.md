@@ -1,7 +1,11 @@
 # First-release merge resolution — September 29
 
 This record concerns the merge of `2478995058` into `d7dfb1eaa8`, initially
-containing 209 unmerged paths. It does not supersede the separate
+containing 209 unmerged paths, and the subsequent merge of `5f96a983a3` into
+`a828b9f26a`, which introduced seven further conflicts. All are resolved.
+The latter merge was committed externally as `a43bfb38f1`; its tree exactly
+matches the reviewed staged tree `34dbf83296b9791ead18faf9c5ae556d48099e23`.
+This record does not supersede the separate
 [earlier merge validation](merge-validation.md) or qualify a release.
 
 ## Decisions
@@ -67,6 +71,10 @@ containing 209 unmerged paths. It does not supersede the separate
   of silently defaulting removed consensus fields to zero.
 
 ## Completed scoped evidence
+
+Unless explicitly identified below as subsequent-merge evidence, these checks
+ran before the second merge. Their pass counts do not qualify its additional
+routing, configuration, cryptography or SDK changes.
 
 | Check | Result |
 | --- | --- |
@@ -153,11 +161,52 @@ bash scripts/check_no_legacy_codec.sh
 
 ## Validation in progress
 
-The merged Core/Torii test graph, daemon/network harness and integration targets
-are being rebuilt against native fixtures. The final simulator, specification,
-mutation and current release-inventory checks above pass. Fresh storage,
-snapshot, node, daemon and Torii runtimes remain in progress. Final unchanged-source
-results will be recorded here after they complete.
+The second merge preserves original native execution fixtures, the active native
+lane-incarnation map, authenticated queue diagnostics and strict SDK wire cuts.
+Private-dataspace routing now returns an explicit refusal when no active fixed
+lane exists; every caller must handle that refusal without routing privately
+scoped work onto the global lane. The incoming configuration, identifier and
+RAM-LFE changes require fresh evidence.
+
+The tenth combined build overlapped the external merge and is invalid as current
+compilation evidence. The eleventh build captured identical file trees before
+and after execution, while recording the external HEAD change separately. It
+found six real Kagami caller errors after the routing return type changed to
+`Option<LaneId>`; those callers require repair before qualification.
+
+Subsequent-merge scoped checks so far:
+
+- All three OpenAPI mirrors are identical (3,762,213 bytes, SHA-256
+  `83f2f03ed991840f19c2f6b8d2749fa04b759e34aa08a4d5f63b18e443f3fff3`).
+  The five OpenAPI/static-contract suites pass 98 tests.
+- JavaScript native build-profile tests pass 123 tests; this is build-owner
+  coverage, not evidence of a newly built native module or the full SDK runtime.
+- Python identifier and strict-wire controls pass 28 tests.
+- The immutable eleventh-build harnesses pass model fixture controls (4), CLI
+  ballot custody (35), bridge Parliament custody (8), CLI dataspace/definition/
+  operator controls (116), and Mochi current lane/status views (5). Actual model
+  captures reproduce the original chain, network and both checkpoint byte strings;
+  this remains structural checkpoint evidence, not World execution qualification.
+- Core native source-context (15), routing (3), physical-policy (2), and merge
+  (5) tests pass. The private-dataspace runtime test passes with original signed
+  activation, certified private input and actual global merge. Inventory tests
+  pass 94 and fail five fixtures missing original signed routing context; that
+  context is being bound before signing, without changing producer validation.
+- Current Kotlin identifier/RAM-LFE/Java-consumer scopes pass 117 tests without
+  skips. Current C# source passes 5,865 tests without skips against the existing
+  host bridge; this does not establish a new native artifact's source provenance.
+- Compile-only Swift checks pass all 160 shipping source files against the
+  maintained C header after completing the unavailable-encryption error case.
+  This is neither Apple framework publication nor Swift runtime evidence.
+- The combined FASTPQ build, panic-boundary and OpenAPI-call suites pass 124
+  tests and fail the current panic-boundary inventory check. Its stale inventory,
+  four undeclared executor support files and missing bootstrap issuer test module
+  require source review and repair, not an exception to the guard.
+
+Fresh native fixture, private-dataspace, API, configuration and SDK runs remain
+in progress. The final Apple artifact and JavaScript native build must be produced
+from their final frozen source inputs; older native binaries do not qualify the
+new cryptographic boundary.
 
 Native full-body transport does not supply the required
 signed RS16 PayloadManifest/PayloadChunk availability proof; that qualification

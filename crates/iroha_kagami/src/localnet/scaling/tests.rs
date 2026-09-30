@@ -571,10 +571,12 @@ fn fixed_command_signed_genesis_authenticates_every_lane_and_funded_account() {
                     };
                     assert_eq!(
                         inputs.route(transaction.payload(), 2),
-                        LaneId::new(0),
+                        Some(LaneId::new(0)),
                         "fixed lane cannot receive work before activation"
                     );
-                    Ok(inputs.route(transaction.payload(), 4))
+                    Ok(inputs
+                        .route(transaction.payload(), 4)
+                        .expect("the original generated workload has an admitted native route"))
                 },
             )
             .unwrap();

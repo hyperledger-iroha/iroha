@@ -194,7 +194,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_without_uaid() {
-    let (state, kura, local_peer_id) = minimal_state();
+    let state = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
@@ -236,7 +236,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_dataspace() {
-    let (state, kura, local_peer_id) = minimal_state();
+    let state = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
@@ -736,7 +736,7 @@ async fn nexus_dataspaces_summary_endpoint_joins_multiple_bound_accounts_and_por
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
-    let (state, kura, local_peer_id) = minimal_state();
+    let state = minimal_state();
     let router = build_test_router(state);
     let (status, body) = request_summary(
         &router,
@@ -752,7 +752,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
-    let (state, kura, local_peer_id) = minimal_state();
+    let state = minimal_state();
     let router = build_test_router(state);
     let (status, body) =
         request_summary(&router, "/v1/nexus/dataspaces/accounts/%20%20/summary").await;
@@ -765,7 +765,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account() {
-    let (state, kura, local_peer_id) = minimal_state();
+    let state = minimal_state();
     let router = build_test_router(state);
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
@@ -774,13 +774,12 @@ async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account
     assert_eq!(status, StatusCode::NOT_FOUND);
     router.shutdown().await;
 }
-fn minimal_state() -> (Arc<State>, Arc<Kura>, PeerId) {
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+fn minimal_state() -> Arc<State> {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let world = World::default();
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
-    (Arc::new(state), kura, local_peer_id)
+    Arc::new(state)
 }
 async fn request_summary(router: &axum::Router, uri: &str) -> (StatusCode, String) {
     let response = router
