@@ -3411,7 +3411,7 @@ evidence.
 > merge-carrier implementation. Independent lane proposal, DA/RBC, QC, durable
 > sidecar recovery, and exact global-carrier application are implemented. The
 > canonical current design and remaining validation gates are documented in
-> `nexus_cross_lane.md`, `merge_ledger.md`, `status.md`, and `roadmap.md`.
+> `sumeragi_lanes.md`, `status.md`, and `roadmap.md`.
 > References below to direct WSV application describe retired intermediate
 > work and are retained only as implementation history.
 

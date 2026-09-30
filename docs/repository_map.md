@@ -19,6 +19,7 @@ boundaries and where to make changes.
 | [`iroha`](../crates/iroha) | Rust SDK. Uses protocol models and shared HTTP contracts without Core, Torii, daemon, IVM, storage-runtime, or telemetry-implementation dependencies. Canonical async context migration remains active. |
 | [`iroha_cli`](../crates/iroha_cli) | The `iroha` executable, CLI configuration and command flows. Owns `iroha app sorafs toolkit compile` and archive packing. |
 | [`iroha_config`](../crates/iroha_config), `iroha_config_base` | Node configuration versus shared configuration-reading infrastructure. Client code uses the infrastructure directly, without importing node configuration. |
+| [`iroha_sumeragi`](../crates/iroha_sumeragi) | Sans-IO Sumeragi consensus core and deterministic simulator ([contract](../specs/sumeragi.md), [lanes](../specs/sumeragi_lanes.md)); depends only on `norito` and `mv`. `iroha_core::sumeragi` drives it in the node. |
 | [`iroha_core`](../crates/iroha_core) | Ledger execution, World state, block coordination, consensus, persistence integration, and node invariant enforcement. |
 | [`iroha_torii`](../crates/iroha_torii) | HTTP/stream handlers and routing around Core capabilities. Construction, route decomposition, and runtime service extraction remain in the redesign. |
 | [`irohad`](../crates/irohad) | The `iroha3d` process: configuration, startup, node runtime ownership, and shutdown. |
@@ -33,7 +34,7 @@ boundaries and where to make changes.
 | `iroha_p2p`, `iroha_logger`, `iroha_telemetry` | Node networking, logging, and runtime metrics. Shared wire records belong below these implementations. |
 | [`iroha_panic_hook`](../crates/iroha_panic_hook) | The single process-wide panic-hook suppression state shared by Core, its ZK verifiers, Torii and `irohad`, whose panic hook reads it. Recovery boundaries depend on this crate; copying it would create suppression the hook never observes. |
 | `iroha_zkp_halo2`, `fastpq_prover`, `zk_ace_prover` | Proof primitives or execution engines according to their feature-resolved graph. Shipping SDK checks reject node proof-execution features. |
-| `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI explicitly; the first two also receive a separately compiled message-control daemon. Qualified corridors retain their own binary/provenance runners. |
+| `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI explicitly. Qualified corridors retain their own binary/provenance runners. |
 | [`mochi`](../mochi) | Local sandbox application using account-bound SDK streams. The supervisor coordinates generation and peer lifecycles; [genesis artifacts](../mochi/mochi-core/src/supervisor/genesis_material.rs) and [snapshot transactions/recovery](../mochi/mochi-core/src/supervisor/snapshot_restore.rs) have distinct runtime owners. Node orchestration dependencies stay with the application. |
 | [`xtask`](../xtask), [`tools`](../tools) | Repository automation, fixture generation, and deployment/service tools. Their manifests declare their actual runtime dependencies. |
 
@@ -67,10 +68,9 @@ after consolidation. The Kotlin constraints are in
 
 ## Source, evidence, and checks
 
-- [`status.md`](../status.md) and [`roadmap.md`](../roadmap.md) are bounded current
-  views. [Historical evidence](history/README.md) is indexed by subsystem and date;
-  manifests reconstruct the original dirty sources without treating old claims
-  as current release qualification.
+- [`status.md`](../status.md) summarizes current health and blockers;
+  [`roadmap.md`](../roadmap.md) lists remaining outcomes, owners and completion
+  criteria. Routine progress and validation results belong in PRs and CI artifacts.
 - [`specs`](../specs), [`formal`](../formal), and
   [`fixtures`](../fixtures) own implementation contracts, proofs, and executable
   shared evidence. Public guides belong in the optional sibling `iroha-docs`.
@@ -80,8 +80,6 @@ after consolidation. The Kotlin constraints are in
 - [`ci/dependency_budget.json`](../ci/dependency_budget.json) defines dependency
   ownership and forbidden resolved normal/build edges. Run
   `python3 scripts/check_dependency_budget.py --check-boundaries --offline`.
-- [`ci/source_file_budget.json`](../ci/source_file_budget.json) retains the
-  5,000-line production and 3,000-line test-file limits.
 - [Build profiling](profile_build.md) records source-sealed compiler memory.
   A passing compilation alone does not establish a memory or release budget.
 - [CI routing](../ci/README.md) separates binary-free tests from consumers of

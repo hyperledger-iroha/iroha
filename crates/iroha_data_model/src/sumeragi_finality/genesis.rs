@@ -117,6 +117,7 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, S
         )
         .collect();
     let epoch = ValidatorEpochContextV1 {
+        da_layout: metadata.sumeragi_context.da_layout,
         version: 1,
         network_id,
         mode,

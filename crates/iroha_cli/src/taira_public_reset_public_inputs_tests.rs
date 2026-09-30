@@ -3,7 +3,7 @@
 use super::*;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
-    block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
+    block::{SignedBlock, consensus::SumeragiGenesisContextParameters},
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityGenesisParametersV1,
@@ -77,7 +77,7 @@ impl Fixture {
         let mut validators: Vec<_> = (110..114)
             .map(|seed| {
                 let peer = PeerId::new(key(seed, Algorithm::BlsNormal).public_key().clone());
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[seed; 32], 0, peer,
                 ).expect("native public mint-finality fixture keys")
             })
@@ -106,7 +106,7 @@ impl Fixture {
         npos.slashing_delay_blocks = 1;
         npos.validate().unwrap();
         let mut builder = iroha_genesis::GenesisBuilder::new_without_executor(CHAIN_ID.into(), ".")
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(mint)
             .set_topology(topology)
             .append_parameter(Parameter::Sumeragi(
@@ -137,11 +137,11 @@ impl Fixture {
             execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
                 .map(|(_, nexus, execution)| (nexus, execution))
                 .unwrap_or_else(|derived_policies| derived_policies);
-        let mut context = manifest.sumeragi_v2_context_parameters();
+        let mut context = manifest.sumeragi_context_parameters();
         context.nexus_amx_context_hash = nexus_hash.into();
         context.execution_policy_hash = execution_hash.into();
         let manifest = manifest
-            .with_sumeragi_v2_context_parameters(context)
+            .with_sumeragi_context_parameters(context)
             .with_consensus_meta();
         let (mut block, final_nexus_hash, final_execution_hash) =
             execute_fixture_genesis(&manifest, &genesis, citizenship_escrow.as_ref())
@@ -403,7 +403,7 @@ fn execute_fixture_genesis(
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &state,
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+        iroha_data_model::block::consensus::ConsensusMode::Npos,
     )
     .unpack(|_| {});
     let (valid, staged) = match validation {
@@ -525,7 +525,7 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
 fn native_fixture_rejects_changed_signed_policies_after_draft_binding() {
     let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
     let fixture = Fixture::new();
-    let bound = fixture.manifest.sumeragi_v2_context_parameters();
+    let bound = fixture.manifest.sumeragi_context_parameters();
     let expected = (
         Hash::prehashed(bound.nexus_amx_context_hash),
         Hash::prehashed(bound.execution_policy_hash),
@@ -542,7 +542,7 @@ fn native_fixture_rejects_changed_signed_policies_after_draft_binding() {
         let manifest = fixture
             .manifest
             .clone()
-            .with_sumeragi_v2_context_parameters(changed)
+            .with_sumeragi_context_parameters(changed)
             .with_consensus_meta();
         assert_eq!(
             execute_fixture_genesis(&manifest, &fixture.genesis, None).unwrap_err(),
@@ -604,6 +604,7 @@ fn rejects_wrong_network_key_and_resultless_genesis() {
     let resultless = fixture
         .block
         .canonical_resultless_proposal()
+        .expect("valid original proposal")
         .encode_wire()
         .unwrap();
     assert!(

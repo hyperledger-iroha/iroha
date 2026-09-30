@@ -75,20 +75,16 @@ use iroha::{
         isi::InstructionBox,
     },
 };
-use iroha_core::{
-    governance::timed_ovn::{
-        TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
-    },
-    tle_release::{
-        PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
-        ParliamentTimedOvnCastingContextArchiveV1, ParliamentTimedOvnCastingPhaseV1,
-        ValidatedParliamentTimedOvnCastingContextArchiveV1,
-    },
-};
+use iroha_core_timed_ovn::casting::PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1;
+use iroha_core_timed_ovn::casting::ParliamentTimedOvnCastingContextArchiveV1;
+use iroha_core_timed_ovn::casting::ParliamentTimedOvnCastingPhaseV1;
+use iroha_core_timed_ovn::casting::ValidatedParliamentTimedOvnCastingContextArchiveV1;
 use iroha_crypto::timed_ovn::{
     TimedOvnChoiceV1, TimedOvnCommittedRegistrationCacheV1, TimedOvnMaskedBallotV1,
     TimedOvnRegistrationSecretV1,
 };
+use iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1 as TIMED_OVN_BALLOT_RECORD_BYTES_V1;
+use iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 as TIMED_OVN_REGISTRATION_RECORD_BYTES_V1;
 use iroha_data_model::{
     NetworkId,
     governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,

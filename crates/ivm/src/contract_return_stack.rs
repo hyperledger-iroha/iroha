@@ -6,7 +6,7 @@
 
 use std::ops::Deref;
 
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 use crate::{
     VMError,

@@ -6,7 +6,6 @@
 //! to the canonical compiler session.
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
-    builtins::{Builtin, BuiltinSurface},
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourceSpan,
         phase_for_semantic_failure,
@@ -19,6 +18,8 @@ use crate::{
     spanned_ast::SpannedProgram,
 };
 use iroha_crypto::Hash;
+use kotodama_surface::builtins::{Builtin, BuiltinSurface};
+use kotodama_surface::source_policy::LINKED_SYMBOL_PREFIX;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     error::Error,
@@ -26,7 +27,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 mod editor;
-const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 const MAX_PARSED_CACHE_ENTRIES: usize = 64;
 const MAX_PARSED_CACHE_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum number of source units in one typed module graph.
@@ -2538,7 +2538,7 @@ fn resolve_imports(
 /// Package frontends use the same predicate as the typed linker so a manifest
 /// cannot accept an alias that will only fail later during seiyaku linking.
 pub fn is_reserved_import_alias(alias: &str) -> bool {
-    semantic::is_reserved_source_declaration(alias, false)
+    kotodama_surface::source_policy::is_reserved_source_declaration(alias, false)
         || Builtin::registry().any(|(builtin, spec)| {
             matches!(
                 spec.surface,
@@ -2628,9 +2628,9 @@ fn validate_program_symbols(module: &ModuleUnit) -> Result<(), LinkError> {
             });
         }
         let reserved = if is_type {
-            semantic::is_reserved_source_type_declaration(name)
+            kotodama_surface::source_policy::is_reserved_source_type_declaration(name)
         } else {
-            semantic::is_reserved_source_declaration(name, is_function)
+            kotodama_surface::source_policy::is_reserved_source_declaration(name, is_function)
         };
         if reserved {
             return Err(LinkError::ReservedSymbol {

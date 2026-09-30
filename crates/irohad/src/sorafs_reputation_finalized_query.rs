@@ -6,7 +6,7 @@
 //! activation floor fail with a distinct payload-free receipt. The daemon
 //! launcher opens this archive from explicit `iroha_config` bounds, reconciles
 //! the authenticated Kura tip before constructing the adapter, and passes the
-//! same archive to Sumeragi so every fresh v2 commit captures its immutable
+//! same archive to Sumeragi so every fresh Sumeragi commit captures its immutable
 //! post-execution view after the Kura/WSV checkpoint boundary and before live
 //! State publication.
 //!
@@ -381,10 +381,6 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
         }
         Ok(())
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the snapshot authenticates one cohesive finalized retention boundary"
-    )]
     fn authorization_snapshot(
         &self,
     ) -> std::result::Result<

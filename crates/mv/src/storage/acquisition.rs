@@ -1,10 +1,8 @@
 //! Caller-owned original map-pair acquisition before any constructor work.
 
 use super::*;
-use concread::{
-    bptree::{BptreeMapAbandonment, BptreeMapWriterAcquisition},
-    release::DeferredReleaseBatch,
-};
+use concread::bptree::{BptreeMapAbandonment, BptreeMapWriterAcquisition};
+use iroha_allocation::release::DeferredReleaseBatch;
 
 /// Original mode-specific storage slot, owning partial construction through unwind.
 /// Construct every slot of an aggregate before initializing any of them.
@@ -275,7 +273,8 @@ where
     /// Neither the slot nor its returned block can escape the scope:
     /// ```compile_fail
     /// use concread::bptree::{ClonePlanning, Prepaid};
-    /// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy, Block, Storage}, BlockMode};
+    /// use iroha_allocation::{AllocationBudget};
+    /// use mv::{storage::{AdmittedStoragePolicy, Block, Storage},BlockMode};
     /// fn escape<'a, P>(budget: &'a AllocationBudget, storage: &'a Storage<u64,u64,Prepaid<P>>)
     ///     -> Block<'a,u64,u64,Prepaid<P>>
     /// where P: AdmittedStoragePolicy + ClonePlanning<u64,u64> + ClonePlanning<u64,Option<u64>> {
@@ -289,7 +288,8 @@ where
     /// The acquisition slot itself is confined to the same borrow:
     /// ```compile_fail
     /// use concread::bptree::{ClonePlanning, Prepaid};
-    /// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy, BlockAcquisitionSlot, Storage}};
+    /// use iroha_allocation::{AllocationBudget};
+    /// use mv::{storage::{AdmittedStoragePolicy, BlockAcquisitionSlot, Storage}};
     /// fn escape<'a, P>(budget: &'a AllocationBudget, storage: &'a Storage<u64,u64,Prepaid<P>>)
     ///     -> BlockAcquisitionSlot<'a,u64,u64,Prepaid<P>>
     /// where P: AdmittedStoragePolicy + ClonePlanning<u64,u64> + ClonePlanning<u64,Option<u64>> {
@@ -301,7 +301,8 @@ where
     /// Transferring publication ownership preserves that physical lifetime:
     /// ```compile_fail
     /// use concread::bptree::{ClonePlanning, Prepaid};
-    /// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy, BlockPublicationSlot, Storage}, BlockMode};
+    /// use iroha_allocation::{AllocationBudget};
+    /// use mv::{storage::{AdmittedStoragePolicy, BlockPublicationSlot, Storage},BlockMode};
     /// fn escape<'a, P>(budget: &'a AllocationBudget, storage: &'a Storage<u64,u64,Prepaid<P>>)
     ///     -> BlockPublicationSlot<'a,u64,u64,Prepaid<P>>
     /// where P: AdmittedStoragePolicy + ClonePlanning<u64,u64> + ClonePlanning<u64,Option<u64>> {
@@ -315,7 +316,8 @@ where
     /// A scoped thread cannot take the original executing physical owner:
     /// ```compile_fail
     /// use concread::bptree::{ClonePlanning, Prepaid};
-    /// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy, Storage}, BlockMode};
+    /// use iroha_allocation::{AllocationBudget};
+    /// use mv::{storage::{AdmittedStoragePolicy, Storage},BlockMode};
     /// fn send<P>(budget: &AllocationBudget, storage: &Storage<u64,u64,Prepaid<P>>)
     /// where P: AdmittedStoragePolicy + ClonePlanning<u64,u64> + ClonePlanning<u64,Option<u64>> {
     ///     budget.with_deferred_refund_notifications(|scope| {
@@ -339,7 +341,7 @@ where
     /// ```
     pub fn try_block_acquisition_admitted<'a>(
         &'a self,
-        scope: &'a crate::allocation::AllocationScope<'a>,
+        scope: &'a iroha_allocation::AllocationScope<'a>,
     ) -> Result<BlockAcquisitionSlot<'a, K, V, concread::bptree::Prepaid<P>>, AdmittedStorageError>
     {
         let budget = self
@@ -375,7 +377,7 @@ where
     /// clone until every sibling writer has released, including untracked fields.
     pub fn try_block_acquisition_owned(
         &self,
-        scope: &crate::allocation::OwnedAllocationScope,
+        scope: &iroha_allocation::OwnedAllocationScope,
     ) -> Result<BlockAcquisitionSlot<'_, K, V, concread::bptree::Prepaid<P>>, AdmittedStorageError>
     {
         let budget = self.allocation.as_ref().expect("original admitted pool");

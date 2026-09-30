@@ -30,7 +30,7 @@ INTEGRATION_TESTS_BUILD = REPO_ROOT / "integration_tests" / "build.rs"
 TEST_SAMPLES_BUILD = REPO_ROOT / "crates" / "iroha_test_samples" / "build.rs"
 TEST_SAMPLES_LIBRARY = REPO_ROOT / "crates" / "iroha_test_samples" / "src" / "lib.rs"
 RELEASE_PROCESS_POLICY = (
-    REPO_ROOT / "scripts" / "sumeragi_v2_release_process_policy.sh"
+    REPO_ROOT / "scripts" / "sumeragi_release_process_policy.sh"
 )
 OPENAPI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "openapi.yml"
 OPENAPI_README = REPO_ROOT / "tools" / "openapi" / "README.md"
@@ -694,7 +694,7 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         "ci/check_openapi_spec.sh",
         "ci/run_openapi_generator.sh",
         "scripts/seal_workspace_source.py",
-        "scripts/sumeragi_v2_release_process_policy.sh",
+        "scripts/sumeragi_release_process_policy.sh",
         "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
         "tools/openapi/scripts/generate-unsigned-openapi.mjs",
         "tools/openapi/scripts/verify-openapi-release-inputs.mjs",
@@ -1031,7 +1031,7 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
 
     assert policy.count("acquire_invocation_cargo_lock() {") == 1
     assert policy.count("release_invocation_cargo_lock() {") == 1
-    assert 'lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"' in policy
+    assert 'lock_path="${artifact_root}/.sumeragi-cargo.lock"' in policy
     assert "lock.mkdir(mode=0o700)" in policy
     assert "wait_for_external_cargo" not in policy
     assert "ps -" not in policy

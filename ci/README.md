@@ -21,7 +21,7 @@ packages are `iroha_test_network`, `izanami`, and `integration_tests`, which
 receive `iroha3d` and `iroha`. The first and third also receive
 `iroha3d_private_settlement_routes` through `TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES`.
 Its `irohad/test-network-private-settlement-route-control` feature is compiled separately under
-`target/ci-binaries/message-control`; shipping artifacts use
+`target/ci-binaries/private-settlement-route-control`; shipping artifacts use
 `target/ci-binaries/shipping`. Staging preserves both distinct daemon files.
 Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries for other package tests.
 
@@ -44,15 +44,14 @@ parser: it compares source bytes and `zk` modes against the PR merge base
 (`HEAD` for explicit local paths). Added, changed, deleted, or malformed
 executable examples request `koto`; prose edits around unchanged examples do
 not. Inventory changes and missing Git/read evidence select the check
-conservatively. `docs/history` is excluded from executable qualification and
-cannot supply required or normative examples.
+conservatively. Required and normative examples belong in the maintained
+document inventory.
 
-The Parliament lifecycle, Nexus cross-dataspace and Nexus cross-lane proof
-corridors are separately selected consumers. Each declares its existing
-`qualified_runner` and retains that runner's owned binary construction and
-provenance checks. They do not download the PR shipping bundle. Ordinary prose
-and foundation-only changes do not run these corridors; direct corridor inputs,
-affected non-foundation owners and full selection do.
+The Parliament lifecycle corridor is a separately selected consumer. It
+declares its existing `qualified_runner` and retains that runner's owned binary
+construction and provenance checks. It does not download the PR shipping
+bundle. Ordinary prose and foundation-only changes do not run this corridor;
+direct corridor inputs, affected non-foundation owners and full selection do.
 The required result checks both Rust matrices, binary production,
 and every selected consumer, accepting a skipped job only when classification
 explicitly did not select it. Classifier failure never becomes a passing skip.
@@ -73,15 +72,12 @@ scripts/dev_workflow.sh --full
 python3 scripts/rust_ci.py validate
 ```
 
-## Current documentation and historical evidence
+## Current documentation
 
-The PR classification job verifies the dated project archive before any node
-binary build. It reconstructs the exact captured dirty roots, checks page and
-occurrence hashes, and enforces the current 300-line status/roadmap limits and
-structured roadmap coverage. The archive integrity tests also exercise link
-rewriting, concurrent-edit protection and corruption rejection. Historical
-paragraphs never serve as current release assertions; executable component
-contracts and current outcome ownership remain authoritative.
+`status.md` summarizes current health and blockers; `roadmap.md` lists remaining
+outcomes, owners and completion criteria. Update them when those facts change.
+Routine progress and validation results belong in PR descriptions and CI
+artifacts. Executable component checks qualify the current source candidate.
 
 ## Compile-unit ratchet
 
@@ -113,20 +109,19 @@ therefore runs the guard with Rust 1.93.1.
 pinned implementation, donor, source-budget, protected-integration, and lock
 anchor commits from local full-history Git objects. It checks their exact
 trees, ordered parents, ancestry, historical Rust counts, and 14 selected path
-states before dependency, source-budget, or release Cargo work. The historical
+states before dependency or release Cargo work. The historical
 anchor lock remains byte-pinned. The current `HEAD` lock is independently
 verified and reported by blob identity and SHA-256, so approved dependency
 boundaries can refresh it. Release source seals bind each candidate's lock to
-its own artifacts. The current source policy retains the 5,000-line production
-and 3,000-line test limits; historical aggregate targets are evidence only.
+its own artifacts. Schema 4 retains source-budget records only as authenticated
+history; candidate source files have no line-count limits.
 
 The anchor's OpenPGP issuer fingerprint is structural metadata bound by the
 pinned commit object. No trusted public key is part of this contract, so the
 guard does **not** claim cryptographic signer authentication. It disables Git
 configuration injection, replacement objects, and lazy fetching; callers must
-provide the required history locally. Production Sumeragi records the result
-with pinned isolated Python between identity checkpoints and seals its log
-read-only.
+provide the required history locally. The PR workflow and
+`ci/check_sorafs_cli_release.sh` run it before any Cargo work.
 
 ## Focused dependency-graph ratchet
 
@@ -199,23 +194,10 @@ python3 scripts/check_dependency_budget.py \
   --max-total-packages <reviewed-limit>
 ```
 
-## Repository structure ratchets
+## Repository structure checks
 
-Six fast, read-only checks keep structural and provisioning debt from returning:
+Five fast, read-only checks keep structural and provisioning debt from returning:
 
-- `python3 scripts/check_source_file_budget.py` caps production and test source
-  files across the complete non-ignored candidate tree, including files not
-  yet staged, and applies an exact no-growth ratchet to existing files that are
-  still above the limit. Intentional splits should lower
-  `ci/source_file_budget.json`; unexplained growth must not refresh it. The
-  production and test limits remain 5,000 and 3,000 lines. CI and release use
-  the same command. Schema 2 has no aggregate target: total Rust lines in JSON
-  reports are descriptive. `--write-baseline` only reduces or removes existing
-  exceptions and refuses new oversized files or exception growth. Source is
-  counted with UTF-8 `splitlines()` and the reviewed exclusions; moving or
-  leaving a file unstaged does not hide it from measurement. Historical Rust
-  line counts remain recorded on the pinned lineage commits, without carrying
-  the retired global objective into active provenance policy.
 - `python3 scripts/check_compile_time_table_assets.py` verifies the exact size
   and SHA-256 of the versioned binary tables decoded into Rust constants,
   reconstructs every removed declaration from its pinned Git preimage, rejects
@@ -314,7 +296,6 @@ See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
-- `check_nexus_cross_dataspace_localnet.sh` – runs the Nexus 12-peer cross-dataspace proof on ten fresh deterministic seeds (`nexus-cross-dataspace-v1-seed-00` through `-09`). Each seed is a separate network/test process with no retry, and the launcher rejects missing or zero-test transcripts before publishing exact 10/10 completion accounting. Production release also invokes the launcher's ignored `--cross-dataspace-fault-soak` path, whose validated duration is exactly 7,200 seconds.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present and with the bridge intentionally missing. The complete artifact must build and the missing-artifact case must fail with the mandatory-bridge diagnostic. Writes a summary + logs under `artifacts/swift_spm_validation`.
 - `check_swift_pod_bridge.sh` – requires CocoaPods, authenticates the final
   packaged ZIP, generated binary podspec, checksum inventory, and package

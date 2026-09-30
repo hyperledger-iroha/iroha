@@ -1,13 +1,11 @@
 //! Retain the exact funded hash successor through direct State publication.
 
 use super::*;
-use concread::{
-    bptree::{
-        BptreeMapAbandonment, BptreeMapCommitRetirement, BptreeMapCommitSlot,
-        BptreeMapOwnedAcquisition, BptreeMapPublished, OwnedWriteError,
-    },
-    release::{DeferredRelease, ReleaseGuard},
+use concread::bptree::{
+    BptreeMapAbandonment, BptreeMapCommitRetirement, BptreeMapCommitSlot,
+    BptreeMapOwnedAcquisition, BptreeMapPublished, OwnedWriteError,
 };
+use iroha_allocation::release::{DeferredRelease, ReleaseGuard};
 use std::ops::{Deref, DerefMut};
 
 type Acquired<'a> =
@@ -48,8 +46,8 @@ pub struct BlockHashField<'a> {
     attempted: bool,
     released: bool,
     retry_metadata: Option<OriginalHashMetadata>,
-    retry_readers: Option<concread::release::DeferredReleaseBatch>,
-    retry_writers: concread::release::DeferredReleaseBatch,
+    retry_readers: Option<iroha_allocation::release::DeferredReleaseBatch>,
+    retry_writers: iroha_allocation::release::DeferredReleaseBatch,
 }
 
 #[derive(Clone, Copy)]
@@ -257,7 +255,7 @@ impl<'a> BlockHashField<'a> {
 
     fn refusal(
         error: OwnedWriteError,
-        wait: concread::release::ReleaseWait,
+        wait: iroha_allocation::release::ReleaseWait,
     ) -> mv::PublicationPreparationError<std::convert::Infallible> {
         match error {
             OwnedWriteError::Changed => mv::PublicationPreparationError::Changed,

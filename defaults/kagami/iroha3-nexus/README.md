@@ -12,8 +12,8 @@
 
 Files:
 - genesis.template.json — non-signable topology source; deployable public Nexus genesis must be generated with explicit operator-provisioned mint-finality public parameters and the canonical XOR asset definition
-- `sumeragi_v2.nexus_amx_context_hash` is the config-only template projection; the production signer replaces it with the exact staged roster commitment only after the operator supplies that XOR identity
-- `sumeragi_v2.execution_policy_hash` is likewise a template value; the production signer replaces it with the exact staged V1 execution-policy commitment before refreshing the fingerprint and signing
+- `sumeragi_context.nexus_amx_context_hash` is the config-only template projection; the production signer replaces it with the exact staged roster commitment only after the operator supplies that XOR identity
+- `sumeragi_context.execution_policy_hash` is likewise a template value; the production signer replaces it with the exact staged V1 execution-policy commitment before refreshing the fingerprint and signing
 - verify.txt — policy note; profile verification requires a regenerated genesis with the operator-supplied canonical XOR id
 - config.toml — non-deployable public-only Nexus configuration template; validator, SoraNet transport, and streaming signing keys must be supplied through the named per-peer files under `/run/secrets/iroha`
 - docker-compose.yml — inert marker; no validator service is emitted until the

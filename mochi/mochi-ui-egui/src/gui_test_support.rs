@@ -1,6 +1,6 @@
 //! Shared test fixtures for the desktop supervisor shell.
 use iroha_data_model::{
-    block::consensus_v2::SumeragiV2GenesisContextParameters,
+    block::consensus::SumeragiGenesisContextParameters,
     parameter::{
         Parameter, Parameters,
         system::{SumeragiConsensusMode, SumeragiNposParameters},
@@ -187,8 +187,8 @@ fn fixture_manifest(consensus_mode: SumeragiConsensusMode, chain: &str) -> Strin
         Value::Number(u64::from(PROTOCOL_VERSION).into()),
     );
     manifest.insert(
-        "sumeragi_v2".to_owned(),
-        json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+        "sumeragi_context".to_owned(),
+        json::value::to_value(&SumeragiGenesisContextParameters::recommended())
             .expect("encode signed Sumeragi v2 context"),
     );
     manifest.insert(

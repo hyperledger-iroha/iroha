@@ -265,7 +265,7 @@ impl<'a> RecursiveLowerer<'a> {
     ) -> BindingId {
         let id =
             BindingId(u32::try_from(self.arena.bindings.len()).expect("binding budget fits u32"));
-        let reserved = crate::semantic::is_reserved_source_declaration(name, false);
+        let reserved = kotodama_surface::source_policy::is_reserved_source_declaration(name, false);
         let previous = visible.get(name).copied();
         let global = self.globals.all.contains_key(name);
         if name == "_" {
@@ -330,7 +330,7 @@ impl<'a> RecursiveLowerer<'a> {
             Some(ResolvedValueTarget::Const(*symbol))
         } else if let Some(code) = self.globals.error_codes.get(name) {
             Some(ResolvedValueTarget::ErrorCode(*code))
-        } else if crate::semantic::V1_ROUNDING_PATHS.contains(&name)
+        } else if kotodama_surface::source_policy::V1_ROUNDING_PATHS.contains(&name)
             || name == "null"
             || crate::testing::REJECTION_SELECTORS.contains(&name)
         {

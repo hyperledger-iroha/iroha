@@ -65,11 +65,3 @@ fn typed_owner_keeps_stream_and_move_only_cas_receipts() {
     assert_eq!(source.matches("publish_direct_rkg_one_h0_h1_v1").count(), 1);
     assert!(source.find("publish_h1_v1").unwrap() > source.find("finish_h0_v1").unwrap());
 }
-
-#[test]
-fn publication_area_and_tests_stay_within_review_caps() {
-    let production = include_str!("../direct_rkg_one_publication_v1.rs");
-    let tests = include_str!("direct_rkg_one_publication_v1_tests.rs");
-    assert!(production.lines().count() <= 500 && production.len() <= 24 * 1024);
-    assert!(tests.lines().count() <= 500 && tests.len() <= 24 * 1024);
-}

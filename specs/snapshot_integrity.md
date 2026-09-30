@@ -48,7 +48,7 @@ index must reconstruct both projections from the corresponding authoritative
 histories, including deletions and absence preimages. Rebuilding only its current
 map loses latest-block replacement semantics. The remaining coverage and
 publication requirements are tracked in the
-[liveness goals](sumeragi_liveness_redesign_goals.md); this rule is not a claim
+[Sumeragi goals](sumeragi_goals.md); this rule is not a claim
 that every derived store is already qualified.
 
 Network identity, governed SCCP state, runtime policy and the actual rollback

@@ -11,8 +11,8 @@
 //! registers are interpreted as vectors.  This module implements that design.
 use crate::zk::{RegEvent, with_reg_logger};
 use crate::{VMError, error::ExecutionDeferral, parallel::REGISTER_COUNT};
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
-use mv::allocation::{AllocationBudget, AllocationCharge};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use std::{
@@ -469,7 +469,7 @@ mod tests {
         assert!(matches!(
             Registers::try_new_with_memory_budget(&insufficient),
             Err(VMError::AllocationDeferred(
-                mv::allocation::AllocationRefusal::ExceedsLimit { .. }
+                iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
             ))
         ));
         assert_eq!(insufficient.reserved_bytes(), 0);
@@ -480,7 +480,7 @@ mod tests {
         assert!(matches!(
             Registers::try_new_with_memory_budget(&budget),
             Err(VMError::AllocationDeferred(
-                mv::allocation::AllocationRefusal::Capacity { .. }
+                iroha_allocation::AllocationRefusal::Capacity { .. }
             ))
         ));
         worker.set(7, 81);

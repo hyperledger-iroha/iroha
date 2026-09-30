@@ -5,7 +5,7 @@ use super::super::decode_tests::{
 };
 use super::*;
 use iroha_data_model::musubi::{MusubiArchiveLocationIdV1, MusubiContentDigestV1};
-use mv::allocation::AllocationRefusal;
+use iroha_allocation::AllocationRefusal;
 use std::{
     future::Future,
     pin::pin,

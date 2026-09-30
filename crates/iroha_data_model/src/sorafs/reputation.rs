@@ -3879,10 +3879,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one request-context matrix mutates every canonical field and exercises all resource bounds"
-    )]
     fn stream_token_request_context_rejects_bounds_and_binds_every_field() {
         const HEADER: &[u8] = b"Q2Fub25pY2FsVG9rZW4=";
         let base = stream_token_request_context(
@@ -4076,10 +4072,6 @@ mod tests {
         }
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one token-status matrix binds validation identity, counter effects, journal material, and JSON hard cuts"
-    )]
     fn token_status_material_is_exact_and_counter_effect_is_typed() {
         let policy = policy();
         let accepted = StreamTokenValidationOutcomeV1 {
@@ -4409,10 +4401,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one dispute-lifecycle matrix verifies exact predecessor continuity and every semantic substitution"
-    )]
     fn dispute_revision_requires_exact_predecessor() {
         let opened_policy = policy();
         let opened = ReputationJournalEntryV1::try_new(

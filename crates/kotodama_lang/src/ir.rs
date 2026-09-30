@@ -7,7 +7,6 @@
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
     ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
-    builtins::{Builtin, BuiltinLowering, PointerConstructor},
     semantic::{
         self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedParam, TypedProgram,
         TypedStateDecl, TypedStatement,
@@ -15,6 +14,7 @@ use super::{
 };
 use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
 use iroha_model_base::state_path::StatePath;
+use kotodama_surface::builtins::{Builtin, BuiltinLowering, PointerConstructor};
 use std::collections::{BTreeSet, HashMap};
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
     if let semantic::ExprKind::Ident(name) = expr.kind() {
@@ -4126,7 +4126,10 @@ fn lower_state_page_intrinsic(
         after,
         limit,
         dynamic_access_hint: DynamicAccessHint {
-            base_key: format!("{}{base_name}", semantic::V1_DYNAMIC_ACCESS_BASE_PREFIX),
+            base_key: format!(
+                "{}{base_name}",
+                kotodama_surface::source_policy::V1_DYNAMIC_ACCESS_BASE_PREFIX
+            ),
             key_type: semantic::type_name(&key_ty),
             bound_kind: if take { "take" } else { "page" }.into(),
             max_keys: 64,

@@ -120,8 +120,8 @@ fn register<M>(
 ) -> (
     crate::ReleaseWait,
     crate::ReleaseWait,
-    concread::release::ReleaseFuture,
-    concread::release::ReleaseFuture,
+    iroha_allocation::release::ReleaseFuture,
+    iroha_allocation::release::ReleaseFuture,
 )
 where
     M: StorageMode<u64, u64> + Send + Sync + 'static,
@@ -142,7 +142,7 @@ where
     (undo, current, undo_future, current_future)
 }
 
-fn ready<M>(future: &mut concread::release::ReleaseFuture, probe: &Arc<Probe<M>>) -> bool
+fn ready<M>(future: &mut iroha_allocation::release::ReleaseFuture, probe: &Arc<Probe<M>>) -> bool
 where
     M: StorageMode<u64, u64> + Send + Sync + 'static,
     M::Charge: Send + Sync,

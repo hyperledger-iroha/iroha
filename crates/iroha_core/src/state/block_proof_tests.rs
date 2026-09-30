@@ -404,7 +404,10 @@ fn block_proofs_require_published_finality_and_attached_outputs() {
     for resultless in [false, true] {
         let fixture = proof_fixture();
         let altered = if resultless {
-            fixture.target().canonical_resultless_proposal()
+            fixture
+                .target()
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
         } else {
             let mut block = fixture.target().clone();
             block.set_commit_certificate(None);

@@ -41,14 +41,14 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         network
             .consensus_profile
             .params
-            .v2_context
+            .sumeragi_context
             .nexus_amx_context_hash,
     );
     let expected_execution = CryptoHash::prehashed(
         network
             .consensus_profile
             .params
-            .v2_context
+            .sumeragi_context
             .execution_policy_hash,
     );
 
@@ -121,7 +121,12 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         // Test fresh execution of the signed inputs under the invalid config.
         // Replaying the successful output claim would instead correctly reject
         // its committed fragment count before recording the new rejection.
-        let proposal = GenesisBlock(genesis.0.canonical_resultless_proposal());
+        let proposal = GenesisBlock(
+            genesis
+                .0
+                .canonical_resultless_proposal()
+                .expect("valid original proposal"),
+        );
         assert!(proposal.0.is_resultless_proposal());
         assert_eq!(proposal.0.header(), genesis.0.header());
         assert_eq!(proposal.0.hash(), genesis.0.hash());
@@ -201,7 +206,7 @@ fn generated_genesis_pasta_authority_matches_each_held_validator_seed_by_default
             .disposable_mint_finality_candidate(network.network_id(), 1)
             .expect("later generation possession from the same held seed");
         assert_eq!(keys.validator, peer.id());
-        iroha_core::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1(
+        iroha_core_zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_candidate_possession_v1(
             network.network_id(),
             1,
             &keys,

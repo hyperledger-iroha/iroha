@@ -12,7 +12,7 @@ use super::{
     validate_domain, validate_interval, validate_limits,
 };
 use crate::Hash;
-use mv::allocation::ChargedShared;
+use iroha_allocation::ChargedShared;
 use std::io::{self, Write};
 
 struct ExactFrameWriter<'a> {
@@ -300,7 +300,7 @@ impl NoritoKeyDigestRangeProofV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::AllocationBudget;
+    use iroha_allocation::AllocationBudget;
 
     fn test_budget() -> AllocationBudget {
         AllocationBudget::new(64 * 1024 * 1024)

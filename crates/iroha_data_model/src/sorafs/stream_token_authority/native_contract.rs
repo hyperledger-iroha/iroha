@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize, account::AccountId,
-    block::consensus_v2::HeightContextId, sorafs::capacity::ProviderId,
+    block::consensus::HeightContextId, sorafs::capacity::ProviderId,
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

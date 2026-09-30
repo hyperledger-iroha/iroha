@@ -1,8 +1,8 @@
 //! Borrowed callback parity, consumed failures and exact ordered geometry.
 
 use super::*;
+use iroha_allocation::AllocationBudget;
 use iroha_data_model::prelude::TransactionEntrypoint;
-use mv::allocation::AllocationBudget;
 type Key = iroha_crypto::HashOf<TransactionEntrypoint>;
 
 fn allowance() -> TypedPairedRowAllowance {

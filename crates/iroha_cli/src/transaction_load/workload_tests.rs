@@ -130,9 +130,9 @@ fn workload_executable_is_one_self_owned_real_metadata_write() {
     assert_eq!(&set.object, owner.id());
     assert_eq!(
         set.key.as_ref(),
-        format!("gscale_{}", plans[0].plan.logical_id)
+        format!("scaling_{}", plans[0].plan.logical_id)
     );
-    assert_eq!(set.key.as_ref().len(), 71);
+    assert_eq!(set.key.as_ref().len(), 72);
     assert_eq!(set.value.as_ref().len(), 64);
     assert_eq!(
         norito::json::to_json(&set.value)
@@ -192,7 +192,7 @@ fn baseline_rejects_existing_workload_keys_aliases_wrong_identity_and_large_maps
     let mut reused = owner.clone();
     reused
         .metadata
-        .insert("gscale_old".parse().unwrap(), Json::new("old"));
+        .insert("scaling_old".parse().unwrap(), Json::new("old"));
     assert!(require_baseline(&reused, owner.id()).is_err());
     let mut aliased = owner.clone();
     aliased.label = Some(AccountAlias::domainless(
@@ -249,7 +249,7 @@ fn complete_effect_check_rejects_missing_wrong_extra_and_final_overwrite_states(
     let mut extra = expected.clone();
     extra
         .metadata
-        .insert("gscale_unexpected".parse().unwrap(), Json::new("extra"));
+        .insert("scaling_unexpected".parse().unwrap(), Json::new("extra"));
     assert!(verify_account(&expected, &extra).is_err());
     let mut changed_baseline = expected.clone();
     changed_baseline

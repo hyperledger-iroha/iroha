@@ -21,7 +21,7 @@ use super::privacy_exact12_network_support::{privacy_capabilities, wait_for_tran
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::blocking::Client;
-use iroha_core::privacy_profiles::{
+use iroha_core_privacy::privacy_profiles::{
     CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
     compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
 };

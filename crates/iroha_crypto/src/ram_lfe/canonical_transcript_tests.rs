@@ -165,7 +165,7 @@ fn bfv_policy_normalizes_explicit_layout_before_committing() {
     .unwrap();
     let canonical_affine = norito::encode_canonical(&encryption).unwrap();
     let canonical_programmed = norito::encode_canonical(&public).unwrap();
-    let affine = bfv_affine_policy_commitment(secret, canonical_affine.clone()).unwrap();
+    let affine = bfv_affine_policy_commitment(secret, &canonical_affine).unwrap();
     let programmed =
         bfv_programmed_policy_commitment_with_program(secret, &canonical_programmed, &program)
             .unwrap();
@@ -177,7 +177,7 @@ fn bfv_policy_normalizes_explicit_layout_before_committing() {
             assert_ne!(other_affine, canonical_affine);
             assert_ne!(other_programmed, canonical_programmed);
         }
-        let actual_affine = bfv_affine_policy_commitment(secret, other_affine).unwrap();
+        let actual_affine = bfv_affine_policy_commitment(secret, &other_affine).unwrap();
         assert_eq!(actual_affine, affine);
         assert_eq!(actual_affine.public_parameters, canonical_affine);
         let actual_programmed =
@@ -186,7 +186,7 @@ fn bfv_policy_normalizes_explicit_layout_before_committing() {
         assert_eq!(actual_programmed, programmed);
         assert_eq!(actual_programmed.public_parameters, canonical_programmed);
     }
-    assert!(bfv_affine_policy_commitment(secret, b"invalid parameters".to_vec()).is_err());
+    assert!(bfv_affine_policy_commitment(secret, b"invalid parameters").is_err());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 fn complete_test_builder(builder: GenesisBuilder) -> GenesisBuilder {
     builder
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )
@@ -11,7 +11,7 @@ fn complete_test_builder_for_peers(
     peers: Vec<iroha_model_base::peer::PeerId>,
 ) -> GenesisBuilder {
     builder
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             deterministic_test_kagemusha_mint_finality_genesis_parameters_for(peers),
         )

@@ -657,5 +657,5 @@ project the canonical outer carrier.
   outputs. These are complementary evidence, not replacements for proof review,
   cryptographic test vectors, implementation tests, or multi-peer execution.
 - Complete the candidate-native ABI-23 Swift and Android replay, capacity/rekey/
-  validation-fee restore scenarios, same-source benchmark archive, strict TLAPS
-  and pinned-Verus gates, chaos/soak qualification, and external release signing.
+  validation-fee restore scenarios, same-source benchmark archive,
+  chaos/soak qualification, and external release signing.

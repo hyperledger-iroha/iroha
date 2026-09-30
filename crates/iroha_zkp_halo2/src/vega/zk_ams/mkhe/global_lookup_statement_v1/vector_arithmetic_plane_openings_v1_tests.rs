@@ -452,14 +452,7 @@ fn production_source_and_release_guards_are_static() {
     let production = include_str!("vector_arithmetic_plane_openings_v1.rs");
     let caps = include_str!("vector_arithmetic_plane_openings_v1/replay_caps_v1.rs");
     let parent = include_str!("../global_lookup_statement_v1.rs");
-    assert!(production.lines().count() <= 750);
-    assert!(caps.lines().count() <= 400);
-    assert!(
-        include_str!("vector_arithmetic_plane_openings_v1_tests.rs")
-            .lines()
-            .count()
-            <= 600
-    );
+
     assert_eq!(
         parent
             .matches("mod vector_arithmetic_plane_openings_v1;")

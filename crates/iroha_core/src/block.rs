@@ -117,11 +117,11 @@ mod external_entrypoint_count_tests {
     #[test]
     fn configured_block_limit_is_enforced_before_expensive_validation() {
         let max = NonZeroU64::new(1).expect("one is non-zero");
-        assert_eq!(validate_external_entrypoint_count(1, max), Ok(()));
-        assert_eq!(
+        assert!(validate_external_entrypoint_count(1, max).is_ok());
+        assert!(matches!(
             validate_external_entrypoint_count(2, max),
             Err(BlockValidationError::TooManyTransactions { actual: 2, max: 1 })
-        );
+        ));
     }
 }
 #[cfg(feature = "bls")]
@@ -1539,12 +1539,15 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
             crate::state::StateBlockStartError::Membership(error) => {
                 Self::MembershipAdmission(error)
             }
+            crate::state::StateBlockStartError::ExecutionDeferred(error) => {
+                Self::ExecutionDeferred(error)
+            }
             crate::state::StateBlockStartError::Stage(error) => error,
         }
     }
 }
 /// Errors occurred on block validation
-#[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
+#[derive(Debug, displaydoc::Display, Error)]
 pub enum BlockValidationError {
     /// Local World storage admission failed before State execution: {0}
     StateStorageAdmission(crate::state::StateStorageAdmissionError),
@@ -1587,6 +1590,8 @@ pub enum BlockValidationError {
     MerkleRootMismatch,
     /// Execution context invalid: {0}
     ExecutionContextInvalid(String),
+    /// Local lane storage failed before candidate validation: {0}
+    LaneStorage(#[source] std::io::Error),
     /// Local storage observation requires recovery before candidate validation: {reason}
     LocalStorageRecoveryRequired {
         /// Diagnostic from the failed local observation, never rejection authority.
@@ -1627,17 +1632,17 @@ pub enum BlockValidationError {
     BlockInThePast,
     /// Block's creation time is later than the current node local time
     BlockInTheFuture,
-    /// Sumeragi v2 block creation time is not the canonical logical time. Expected: {expected_ms} ms, actual: {actual_ms} ms
-    NonCanonicalV2BlockTime {
+    /// Sumeragi block creation time is not the canonical logical time. Expected: {expected_ms} ms, actual: {actual_ms} ms
+    NonCanonicalBlockTime {
         /// Deterministic timestamp derived from the parent, cadence, and transactions.
         expected_ms: u64,
         /// Timestamp committed by the proposed block.
         actual_ms: u64,
     },
-    /// Sumeragi v2 logical block time exceeded the canonical u64-millisecond range
-    V2BlockTimeOverflow,
-    /// Sumeragi v2 finality authority does not bind this block and execution: {0}
-    V2FinalityAuthorityInvalid(String),
+    /// Sumeragi logical block time exceeded the canonical u64-millisecond range
+    BlockTimeOverflow,
+    /// Sumeragi finality authority does not bind this block and execution: {0}
+    FinalityAuthorityInvalid(String),
     /// Some transaction in the block is created after the block itself
     TransactionInTheFuture,
     /// Block confidential feature digest mismatch. Expected: {expected:?}, actual: {actual:?}
@@ -1764,6 +1769,22 @@ impl BlockValidationError {
         }
     }
 }
+/// Preserve the original local storage failure across native lane expansion.
+impl From<crate::sumeragi::lanes::merge::MergeError> for BlockValidationError {
+    fn from(error: crate::sumeragi::lanes::merge::MergeError) -> Self {
+        use crate::sumeragi::lanes::merge::MergeError;
+        match error {
+            MergeError::Storage(source) => Self::LaneStorage(source),
+            MergeError::Pending(reason) => Self::LocalStorageRecoveryRequired { reason },
+            MergeError::Invalid(reason) => Self::ExecutionContextInvalid(reason),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "block/lane_storage_error_tests.rs"]
+mod lane_storage_error_tests;
+
 /// Preserve the original epoch-allocation refusal before any diagnostic formatting.
 impl From<crate::sumeragi::schedule::ScheduleError> for BlockValidationError {
     fn from(error: crate::sumeragi::schedule::ScheduleError) -> Self {
@@ -1785,7 +1806,7 @@ impl From<crate::sumeragi::schedule::ScheduleError> for BlockValidationError {
 #[test]
 fn epoch_schedule_capacity_preserves_original_local_release() {
     use crate::sumeragi::schedule::ScheduleError;
-    let budget = mv::allocation::AllocationBudget::new(8);
+    let budget = iroha_allocation::AllocationBudget::new(8);
     let occupied = budget.try_reserve_bytes(8).expect("occupy original pool");
     let refusal = budget
         .try_reserve_bytes(1)
@@ -1798,7 +1819,7 @@ fn epoch_schedule_capacity_preserves_original_local_release() {
     assert_eq!(owner.allocation_refusal(), Some(&refusal));
     assert!(matches!(
         owner.allocation_refusal(),
-        Some(mv::allocation::AllocationRefusal::Capacity { .. })
+        Some(iroha_allocation::AllocationRefusal::Capacity { .. })
     ));
     drop(occupied);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -1841,7 +1862,7 @@ fn epoch_schedule_allocator_refusal_and_invalid_context_stay_distinct() {
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
         // These errors arise while replaying already committed local history,
-        // including its cursors. Preserve that context so the v2 validator does
+        // including its cursors. Preserve that context so block validation does
         // not mistake local reconstruction failure for a malformed candidate.
         Self::DaIndexHydration(error.to_string())
     }
@@ -1851,7 +1872,7 @@ impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
 fn native_resource_refusal_is_a_local_certified_merge_staging_error() {
     let error = BlockValidationError::from_certified_merge_stage_error(
         crate::state::MergeLedgerCommitError::NativeResourceAdmission(
-            mv::allocation::AllocationRefusal::DemandOverflow,
+            iroha_allocation::AllocationRefusal::DemandOverflow,
         ),
     );
     assert!(matches!(
@@ -1906,8 +1927,12 @@ pub enum SignatureVerificationError {
     /// Miscellaneous
     Other,
 }
+#[path = "block/genesis_output_rejection.rs"]
+mod genesis_output_rejection;
+pub use genesis_output_rejection::GenesisOutputRejection;
+
 /// Errors occurred on genesis block validation
-#[derive(Debug, Copy, Clone, displaydoc::Display, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum InvalidGenesisError {
     /// Genesis block must be signed with genesis private key and not signed by any peer
     InvalidSignature,
@@ -1926,8 +1951,8 @@ pub enum InvalidGenesisError {
         /// Number of attached Network output rows.
         actual: usize,
     },
-    /// Genesis execution outputs must not contain errors, including internal invocations
-    ContainsErrors,
+    /// Genesis execution output rejected: {0}
+    RejectedOutput(#[source] GenesisOutputRejection),
     /// Genesis proposal commitments do not match their complete source payload
     ProposalCommitmentMismatch,
     /// Genesis typed outputs have malformed source ownership, phase or metadata
@@ -1960,6 +1985,26 @@ pub enum InvalidGenesisError {
     /// Genesis DA pin intent hash does not match embedded bundle
     DaPinIntentMismatch,
 }
+/// Authenticate a genesis proposal's original signed inputs and payload commitments.
+///
+/// This validates the configured genesis authority, the sole index-zero block
+/// signature, and every original transaction's domain, authority and signature.
+/// It does not execute instructions, require outputs, or grant execution authority.
+///
+/// # Errors
+///
+/// Returns [`InvalidGenesisError`] for an invalid original header, signature,
+/// transaction, or payload commitment, even when the proposal has no outputs yet.
+pub fn check_genesis_block_intents(
+    block: &SignedBlock,
+    genesis_account: &iroha_data_model::account::AccountId,
+) -> Result<(), InvalidGenesisError> {
+    authenticate_genesis_block_intents(block, genesis_account)?;
+    block
+        .validate_proposal_commitments()
+        .map_err(|_| InvalidGenesisError::ProposalCommitmentMismatch)
+}
+
 /// Validate the structural correctness of a genesis block before submitting it to the pipeline.
 ///
 /// # Errors
@@ -2181,8 +2226,8 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
     block
         .validate_output_merkle_cache()
         .map_err(|_| InvalidGenesisError::OutputMerkleCacheMismatch)?;
-    if outputs.iter().any(|output| output.result().is_err()) {
-        return Err(InvalidGenesisError::ContainsErrors);
+    if let Some(rejection) = GenesisOutputRejection::first(outputs) {
+        return Err(InvalidGenesisError::RejectedOutput(rejection));
     }
     // Every successful root invocation applies at least one fragment; retained
     // protocol fragments can make the actual count larger than the output count.
@@ -3018,7 +3063,7 @@ pub(crate) mod valid {
         /// A block ordered by the Sumeragi core (`specs/sumeragi.md` §4): the certified
         /// core header binds the nonempty payload, so block signatures are not checked;
         /// block time is canonical from the parent and
-        /// the cadence; nothing depends on a v2 height context.
+        /// the cadence; nothing depends on a separate height context.
         Sumeragi {
             block_cadence: Duration,
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
@@ -4459,14 +4504,7 @@ pub(crate) mod valid {
                 Err((block, error)) => {
                     return WithEvents::new(Err((
                         Box::new(block),
-                        Box::new(match error {
-                            crate::sumeragi::lanes::merge::MergeError::Pending(reason) => {
-                                BlockValidationError::LocalStorageRecoveryRequired { reason }
-                            }
-                            crate::sumeragi::lanes::merge::MergeError::Invalid(reason) => {
-                                Self::execution_context_error(reason)
-                            }
-                        }),
+                        Box::new(BlockValidationError::from(error)),
                     )));
                 }
             };
@@ -4864,12 +4902,12 @@ pub(crate) mod valid {
         }
 
         /// All static checks that require a state snapshot.
-        fn canonical_v2_block_time(
+        fn canonical_block_time(
             block: &SignedBlock,
             prev_block: &SignedBlock,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            Self::canonical_v2_block_time_from_parent_time(
+            Self::canonical_block_time_from_parent_time(
                 block,
                 prev_block.header().creation_time(),
                 block_cadence,
@@ -4886,20 +4924,16 @@ pub(crate) mod valid {
             parent_creation_time: Duration,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            Self::canonical_v2_block_time_from_parent_time(
-                block,
-                parent_creation_time,
-                block_cadence,
-            )
+            Self::canonical_block_time_from_parent_time(block, parent_creation_time, block_cadence)
         }
-        fn canonical_v2_block_time_from_parent_time(
+        fn canonical_block_time_from_parent_time(
             block: &SignedBlock,
             parent_creation_time: Duration,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
             let minimum = parent_creation_time
                 .checked_add(block_cadence)
-                .ok_or(BlockValidationError::V2BlockTimeOverflow)?;
+                .ok_or(BlockValidationError::BlockTimeOverflow)?;
             // Merged lane transactions do not set the time: the merge section's floor does
             // (`specs/sumeragi_lanes.md` §4.2), so the proposal alone fixes its time.
             let floor = Duration::from_millis(
@@ -4911,7 +4945,7 @@ pub(crate) mod valid {
             let own = &external[..external.len() - block.merged_entrypoint_count()];
             let natives = block.network_entrypoints().skip(external.len());
             creation_time_after_inputs(minimum.max(floor), own.iter().chain(natives))
-                .ok_or(BlockValidationError::V2BlockTimeOverflow)
+                .ok_or(BlockValidationError::BlockTimeOverflow)
         }
         #[allow(
             clippy::too_many_arguments,
@@ -5043,14 +5077,14 @@ pub(crate) mod valid {
                     let prev_block_time = prev_block.header().creation_time();
                     if let Some(block_cadence) = validation_profile.block_cadence() {
                         let expected =
-                            Self::canonical_v2_block_time(block, &prev_block, block_cadence)?;
+                            Self::canonical_block_time(block, &prev_block, block_cadence)?;
                         let actual = block.header().creation_time();
                         if actual != expected {
-                            return Err(BlockValidationError::NonCanonicalV2BlockTime {
+                            return Err(BlockValidationError::NonCanonicalBlockTime {
                                 expected_ms: u64::try_from(expected.as_millis())
-                                    .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                                    .map_err(|_| BlockValidationError::BlockTimeOverflow)?,
                                 actual_ms: u64::try_from(actual.as_millis())
-                                    .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                                    .map_err(|_| BlockValidationError::BlockTimeOverflow)?,
                             });
                         }
                     }
@@ -6149,6 +6183,10 @@ pub(crate) mod valid {
                     .advance_requested_sumeragi_schedule()
                     .map_err(BlockValidationError::from)?;
                 state.advance_requested_sumeragi_lanes();
+                // AMX deadline decisions (`specs/sumeragi.md` §11.5) are World writes too.
+                state
+                    .advance_sumeragi_amx()
+                    .map_err(Self::execution_context_error)?;
                 Self::validate_native_genesis_policy(source, state)?;
                 Self::finalize_owned_execution_metadata(
                     source,
@@ -6176,8 +6214,10 @@ pub(crate) mod valid {
                 crate::state::ExecutionOutputSealError::Deferred(reason) => {
                     BlockValidationError::ExecutionDeferred(reason)
                 }
-                crate::state::ExecutionOutputSealError::RejectedGenesis => {
-                    BlockValidationError::InvalidGenesis(InvalidGenesisError::ContainsErrors)
+                crate::state::ExecutionOutputSealError::RejectedGenesis(rejection) => {
+                    BlockValidationError::InvalidGenesis(InvalidGenesisError::RejectedOutput(
+                        rejection,
+                    ))
                 }
                 crate::state::ExecutionOutputSealError::Finalizer(error) => error,
             })?;
@@ -6686,15 +6726,15 @@ pub(crate) mod valid {
         #[test]
         fn da_sidecar_validation_rejects_noncanonical_empty_bundles() {
             let commitments = raw_block_with_da_sidecars(Some(DaCommitmentBundle::default()), None);
-            assert_eq!(
+            assert!(matches!(
                 ValidBlock::validate_da_sidecar_hashes(&commitments),
                 Err(BlockValidationError::NonCanonicalEmptyDaCommitmentBundle)
-            );
+            ));
             let pin_intents = raw_block_with_da_sidecars(None, Some(DaPinIntentBundle::default()));
-            assert_eq!(
+            assert!(matches!(
                 ValidBlock::validate_da_sidecar_hashes(&pin_intents),
                 Err(BlockValidationError::NonCanonicalEmptyDaPinIntentBundle)
-            );
+            ));
         }
         fn state_confidential_features_at_height(
             state: &State,
@@ -6935,11 +6975,9 @@ pub(crate) mod valid {
             .expect_err(
                 "a missing authenticated route must refuse the source before policy routing",
             );
-            assert_eq!(
-                error,
-                BlockValidationError::ExecutionContextInvalid(
-                    "Network source lacks its authenticated execution route".to_owned()
-                )
+            assert!(
+                matches!(error, BlockValidationError::ExecutionContextInvalid(reason)
+                if reason == "Network source lacks its authenticated execution route")
             );
             assert_eq!(
                 state_block.transactions.get(&entrypoint_hash),
@@ -7106,14 +7144,15 @@ pub(crate) mod valid {
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             block.sign(&key_pairs[4], &topology);
             let err = block.commit(&topology).unpack(|_| {}).unwrap_err().1;
+            let BlockValidationError::SignatureVerification(actual) = err.as_ref() else {
+                panic!("unexpected validation failure: {err:?}");
+            };
             assert_eq!(
-                err.as_ref(),
-                &BlockValidationError::SignatureVerification(
-                    SignatureVerificationError::NotEnoughSignatures {
-                        votes_count: 2,
-                        min_votes_for_commit: topology.min_votes_for_commit(),
-                    }
-                )
+                actual,
+                &SignatureVerificationError::NotEnoughSignatures {
+                    votes_count: 2,
+                    min_votes_for_commit: topology.min_votes_for_commit(),
+                }
             );
         }
         #[test]
@@ -7132,14 +7171,15 @@ pub(crate) mod valid {
             assert_eq!(tally.counted, 2);
             assert_eq!(tally.present, 2);
             let err = block.commit(&topology).unpack(|_| {}).unwrap_err().1;
+            let BlockValidationError::SignatureVerification(actual) = err.as_ref() else {
+                panic!("unexpected validation failure: {err:?}");
+            };
             assert_eq!(
-                err.as_ref(),
-                &BlockValidationError::SignatureVerification(
-                    SignatureVerificationError::NotEnoughSignatures {
-                        votes_count: 2,
-                        min_votes_for_commit: 3
-                    }
-                )
+                actual,
+                &SignatureVerificationError::NotEnoughSignatures {
+                    votes_count: 2,
+                    min_votes_for_commit: 3
+                }
             );
         }
         #[test]
@@ -7687,7 +7727,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validation_profiles_always_carry_an_explicit_consensus_mode() {
-            use iroha_data_model::block::consensus_v2::ConsensusMode;
+            use iroha_data_model::block::consensus::ConsensusMode;
             // World/Parameters defaults do not authenticate a consensus mode.
             assert!(World::new().view().sumeragi_npos_parameters().is_none());
             assert_eq!(
@@ -7895,14 +7935,15 @@ pub(crate) mod valid {
                 .try_for_each(|signature| block.add_signature(signature, &topology))
                 .expect("Failed to add signatures");
             let err = block.commit(&topology).unpack(|_| {}).unwrap_err().1;
+            let BlockValidationError::SignatureVerification(actual) = err.as_ref() else {
+                panic!("unexpected validation failure: {err:?}");
+            };
             assert_eq!(
-                err.as_ref(),
-                &BlockValidationError::SignatureVerification(
-                    SignatureVerificationError::NotEnoughSignatures {
-                        votes_count: topology.min_votes_for_commit() - 1,
-                        min_votes_for_commit: topology.min_votes_for_commit(),
-                    }
-                )
+                actual,
+                &SignatureVerificationError::NotEnoughSignatures {
+                    votes_count: topology.min_votes_for_commit() - 1,
+                    min_votes_for_commit: topology.min_votes_for_commit(),
+                }
             );
         }
         #[test]
@@ -7973,7 +8014,14 @@ pub(crate) mod valid {
             );
             assert_eq!(
                 map_block_err_to_reason(&BlockValidationError::InvalidGenesis(
-                    InvalidGenesisError::ContainsErrors
+                    InvalidGenesisError::RejectedOutput(GenesisOutputRejection {
+                        output_index: 0,
+                        reason: Box::new(TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted(
+                                "rejected genesis mapping fixture".into()
+                            ),
+                        )),
+                    })
                 )),
                 Some(Reason::InvalidGenesis)
             );
@@ -7993,7 +8041,7 @@ pub(crate) mod valid {
                 Some(Reason::DaProofPolicyMismatch)
             );
             assert_eq!(
-                map_block_err_to_reason(&BlockValidationError::V2FinalityAuthorityInvalid(
+                map_block_err_to_reason(&BlockValidationError::FinalityAuthorityInvalid(
                     "certificate does not bind the canonical execution".to_owned(),
                 )),
                 Some(Reason::ConsensusBlockRejection)
@@ -8097,7 +8145,9 @@ pub(crate) mod valid {
                 None,
                 None,
             );
-            let proposal = block.canonical_resultless_proposal();
+            let proposal = block
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection");
             assert!(proposal.is_resultless_proposal());
             authenticate_genesis_block_intents(&proposal, &genesis_account)
                 .expect("the configured genesis key must authenticate a resultless proposal");
@@ -8202,7 +8252,13 @@ pub(crate) mod valid {
                 "the last ordered genesis parameter wins in actual execution",
             );
             assert!(valid.as_ref().output_results().all(|result| result.is_ok()));
-            assert_eq!(valid.as_ref().canonical_resultless_proposal(), genesis);
+            assert_eq!(
+                valid
+                    .as_ref()
+                    .canonical_resultless_proposal()
+                    .expect("valid fixture proposal projection"),
+                genesis
+            );
             drop((valid, overlay));
             assert_eq!(prepared.state.view().height(), 0);
             assert_eq!(prepared.kura.blocks_count(), 0);
@@ -8213,35 +8269,9 @@ pub(crate) mod valid {
             );
         }
     }
-    #[test]
-    fn rejected_genesis_outputs_fail_before_schedule_finalization() {
-        use crate::{
-            state::{StateReadOnly, World},
-            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
-        };
-        use iroha_data_model::prelude::{Domain, Register};
-        use iroha_model_base::domain::DomainId;
-
-        let mut config = TestChainConfig::new(World::new(), 1_000);
-        let domain = DomainId::try_new("duplicate", "universal").unwrap();
-        config.genesis_instructions = vec![
-            Register::domain(Domain::new(domain.clone())).into(),
-            Register::domain(Domain::new(domain)).into(),
-        ];
-        let failure = CertifiedTestChain::start(config)
-            .err()
-            .expect("duplicate registration must reject original signed genesis");
-        let error = failure.error.to_string();
-        assert!(
-            error.contains(&InvalidGenesisError::ContainsErrors.to_string()),
-            "report actual rejected outputs before rolled-back schedule state: {error}"
-        );
-        assert_eq!(
-            failure.state.view().height(),
-            0,
-            "genesis was not published"
-        );
-    }
+    #[cfg(test)]
+    #[path = "genesis_rejection_tests.rs"]
+    mod genesis_rejection_tests;
     #[test]
     fn insufficient_commit_quorum_maps_to_a_rejection_reason() {
         let keypairs = (0..4)
@@ -8506,6 +8536,7 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
+            | BlockValidationError::LaneStorage(_)
             | BlockValidationError::StateStorageAdmission(_)
             | BlockValidationError::EvidencePreparation(_)
             | BlockValidationError::ExecutionDeferred(_)
@@ -8541,9 +8572,9 @@ mod event {
             | BlockValidationError::GenesisPolicyMismatch { .. } => Reason::InvalidGenesis,
             BlockValidationError::BlockInThePast => Reason::BlockInThePast,
             BlockValidationError::BlockInTheFuture => Reason::BlockInTheFuture,
-            BlockValidationError::NonCanonicalV2BlockTime { .. }
-            | BlockValidationError::V2BlockTimeOverflow => Reason::BlockInTheFuture,
-            BlockValidationError::V2FinalityAuthorityInvalid(_) => Reason::ConsensusBlockRejection,
+            BlockValidationError::NonCanonicalBlockTime { .. }
+            | BlockValidationError::BlockTimeOverflow => Reason::BlockInTheFuture,
+            BlockValidationError::FinalityAuthorityInvalid(_) => Reason::ConsensusBlockRejection,
             BlockValidationError::TransactionInTheFuture => Reason::TransactionInTheFuture,
             BlockValidationError::ConfidentialFeaturesMismatch { .. } => {
                 Reason::ConfidentialFeatureDigestMismatch
@@ -9629,7 +9660,7 @@ seiyaku GuardedOverlay {
   }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile protected overlay contract");
         let interface = ivm::ProgramMetadata::parse(&program)
@@ -9802,7 +9833,7 @@ seiyaku DynamicAccessCounter {
   }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile dynamic StateMap counter");
         let contract_interface = ivm::ProgramMetadata::parse(&program)
@@ -10001,7 +10032,7 @@ seiyaku DynamicTarget {
   }
 }
 "#;
-        let (program, manifest) = ivm::KotodamaCompiler::new()
+        let (program, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile dynamic-target contract");
         let contract_interface = ivm::ProgramMetadata::parse(&program)
@@ -10764,6 +10795,7 @@ seiyaku DynamicTarget {
             SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
         };
         let lane_policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 64,
             max_merge_blocks: 16,
             stall_window: 1_000,

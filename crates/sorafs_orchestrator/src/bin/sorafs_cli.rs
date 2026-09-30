@@ -11549,7 +11549,7 @@ mod manifest_tests {
         };
 
         let temp = TempDir::new().expect("tempdir");
-        let output_path = temp.path().join("proxy-bootstrap.json");
+        let output_path = canonical_temp_path(&temp).join("proxy-bootstrap.json");
         fs::write(&output_path, b"existing owner-private contents")
             .expect("write existing destination");
         fs::set_permissions(&output_path, fs::Permissions::from_mode(0o600))
@@ -20365,12 +20365,24 @@ mod tests {
     }
     #[test]
     fn reputation_http_client_never_follows_redirects() {
+        use std::io::Read as _;
         let redirect_listener = TcpListener::bind("127.0.0.1:0").expect("bind redirect listener");
         let redirect_address = redirect_listener.local_addr().expect("redirect address");
         let target_listener = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
         let target_address = target_listener.local_addr().expect("target address");
         let server = thread::spawn(move || {
             let (mut stream, _) = redirect_listener.accept().expect("accept one request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("bounded request read");
+            let mut request = Vec::new();
+            let mut bytes = [0u8; 1024];
+            while !request.ends_with(b"\r\n\r\n") {
+                let count = stream.read(&mut bytes).expect("read redirect request");
+                assert!(count > 0 && request.len() + count <= 16 * 1024);
+                request.extend_from_slice(&bytes[..count]);
+            }
+            assert!(request.starts_with(b"GET /initial HTTP/1.1\r\n"));
             write!(
                 stream,
                 "HTTP/1.1 302 Found\r\nLocation: http://{target_address}/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -20416,6 +20428,13 @@ mod tests {
         ])
         .expect_err("private key file is mandatory");
         assert!(error.contains("missing required `--auth-private-key-file=PATH`"));
+        let error = reputation_snapshot(vec![
+            "--torii-url=http://127.0.0.1:9/".to_owned(),
+            format!("--auth-account={account_literal}"),
+            "--auth-private-key-file=/does/not/matter".to_owned(),
+        ])
+        .expect_err("network identity is mandatory before opening authentication secrets");
+        assert!(error.contains("missing required `--network-id=NETWORK_ID`"));
         let inline_secret = "secret-inline-value";
         let error = reputation_snapshot(vec![
             "--torii-url=http://127.0.0.1:9/".to_owned(),
@@ -20436,6 +20455,7 @@ mod tests {
             "--torii-url=http://127.0.0.1:9/".to_owned(),
             "--auth-account=merchant@paynet".to_owned(),
             "--auth-private-key-file=/does/not/matter".to_owned(),
+            format!("--network-id={}", fixture_reputation_network_id()),
         ])
         .expect_err("account aliases are retired");
         assert!(error.contains("exact canonical I105 literal"));

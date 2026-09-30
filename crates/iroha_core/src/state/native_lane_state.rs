@@ -123,7 +123,7 @@ pub(crate) fn validate_sumeragi_lane_state(
         {
             return Err("invalid lane incarnation or lifecycle bounds".into());
         }
-        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(lane.committee.len())
+        if !iroha_data_model::block::consensus::is_valid_committee_size(lane.committee.len())
             || lane
                 .committee
                 .windows(2)
@@ -186,6 +186,7 @@ mod tests {
             .collect::<Vec<_>>();
         committee.sort();
         let mut record = SumeragiLaneRecord {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             lane: LaneId::new(1),
             dataspace: DataSpaceId::new(0),
             incarnation: [1; 32],

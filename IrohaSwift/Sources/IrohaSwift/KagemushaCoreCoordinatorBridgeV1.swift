@@ -38,7 +38,8 @@ public struct KagemushaAppAttestCoreCommitAcknowledgmentV1: Equatable, Sendable 
 
 /// Serialized transport to the process-owned native coordinator, without a software backend.
 /// Contract matching proves ABI compatibility only; native Core must admit its qualified hardware.
-/// Returned Norito archives remain opaque. Close revokes the handle; a new open needs a fresh process.
+/// Returned Norito archives remain opaque. Close and every post-dispatch failure revoke the handle;
+/// a new open needs a fresh process. Uncertain monetary state remains owned by the qualified backend.
 public final class KagemushaCoreCoordinatorBridgeV1 {
   private let endpoint: any KagemushaCoreCoordinatorEndpointV1
   private var handle: UInt64
@@ -77,8 +78,16 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     defer { lock.unlock() }
     guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: fields)
-    let response = try endpoint.invoke(handle: handle, method: method.rawValue, request: request)
-    return try KagemushaCoreCoordinatorFrameV1.decodeResponse(method, requestFrame: request, responseFrame: response)
+    do {
+      let response = try endpoint.invoke(handle: handle, method: method.rawValue, request: request)
+      return try KagemushaCoreCoordinatorFrameV1.decodeResponse(method, requestFrame: request, responseFrame: response)
+    } catch {
+      // Native dispatch or publication may have advanced hardware before the response failed.
+      let closing = handle
+      handle = 0
+      try? endpoint.close(handle: closing)
+      throw error
+    }
   }
 
   /// Query native Core's retained committed terminal and original assertion before lane advance.

@@ -39,7 +39,7 @@ class RegisteredScopeIntegrationTests(unittest.TestCase):
             self.write(path,runner.build_configuration(n,seeds=list(range(10)),warmups=5,measured=30))
             ref=runner.file_binding(path,relative_to=root);digests[n]=ref['sha256']
             refs.append({'participants':n,'validators_per_dataspace':4,'quorum':runner.QUORUM,
-                         'mandatory_signed_rs16_da_rbc':True,**ref})
+                         'mandatory_signed_rs16_da':True,**ref})
         self.write(root/'configuration-manifest.json',{'version':1,'protocol':control.PROTOCOL,
             'commit':self.commit,'configurations':refs,'passed':True})
         workloads=runner.publish_workload_manifests(root)

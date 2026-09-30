@@ -7,8 +7,7 @@ use crate::{
     state::{
         SmartContractCodeUploadChunkKey, SmartContractCodeUploadDescriptor,
         SmartContractCodeUploadKey, WorldTransaction, fee_sponsor_revision_safe_activation_height,
-        nexus_active_lane_dataspace, nexus_active_lane_dataspace_at_height,
-        nexus_catalog_geometry_lane_dataspace, public_lane_reward_record_matches_key,
+        nexus_active_lane_dataspace, public_lane_reward_record_matches_key,
         public_lane_validator_record_matches_key,
     },
 };
@@ -109,7 +108,6 @@ pub mod isi {
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::topology::DataSpaceId;
-    use iroha_model_base::topology::LaneId;
     use std::{
         collections::{BTreeMap, BTreeSet},
         str::FromStr,
@@ -4574,7 +4572,7 @@ pub mod isi {
             }
             let proof_box =
                 iroha_data_model::proof::ProofBox::new(vk_id.backend.clone(), proof_bytes.clone());
-            let verify_report = crate::zk::verify_backend_with_timing_checked(
+            let verify_report = crate::zk_guardrails::verify_backend_with_timing_checked(
                 backend,
                 &proof_box,
                 Some(&vk_box),
@@ -13230,7 +13228,7 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
-        let report = crate::zk::verify_backend_with_timing_checked(
+        let report = crate::zk_guardrails::verify_backend_with_timing_checked(
             attachment.backend.as_str(),
             proof,
             Some(&vk_box),
@@ -14600,7 +14598,7 @@ pub mod isi {
             let proof_len = self.ballot_proof.proof.bytes.len();
             enforce_vk_max_proof_bytes("ballot", &vk_rec, proof_len)?;
             state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing_checked(
+            let report = crate::zk_guardrails::verify_backend_with_timing_checked(
                 backend,
                 &self.ballot_proof.proof,
                 Some(&vk_box),
@@ -14790,7 +14788,7 @@ pub mod isi {
             let proof_len = att.proof.bytes.len();
             enforce_vk_max_proof_bytes("tally", &vk_rec, proof_len)?;
             state_transaction.register_confidential_proof(proof_len)?;
-            let report = crate::zk::verify_backend_with_timing_checked(
+            let report = crate::zk_guardrails::verify_backend_with_timing_checked(
                 backend,
                 &att.proof,
                 Some(&vk_box),
@@ -25605,7 +25603,7 @@ pub mod isi {
             contract_artifact_with_max_cycles(4)
         }
         fn governance_lifecycle_artifact() -> (Vec<u8>, ContractManifest) {
-            let (artifact, _) = ivm::KotodamaCompiler::new()
+            let (artifact, _) = kotodama_lang::compiler::Compiler::new()
                 .compile_source_with_manifest(
                     r#"
 seiyaku GovernanceLifecycle {

@@ -1,12 +1,10 @@
 [package]
-name = "irohad"
+name = "irohad_lib"
 autobins = false
 
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
-
-build = "../build-support/script.rs"
 
 description.workspace = true
 repository.workspace = true
@@ -16,6 +14,10 @@ documentation.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+
+[lib]
+name = "irohad"
+path = "src/lib.rs"
 
 [lints]
 workspace = true
@@ -39,7 +41,6 @@ daemon = [
     "norito/node-codec",
 ]
 # Build the standalone external signer only in release lanes that request it.
-external-software-signer-bin = ["daemon"]
 dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
 # Canonical Linux daemon release feature: IVM CUDA alone uses a runtime driver
@@ -109,35 +110,6 @@ telegram-alerts = ["telemetry", "iroha_telemetry/telegram"]
 schema-endpoint = ["iroha_torii/schema"]
 # Enable profiling endpoint
 profiling-endpoint = ["iroha_torii/profiling"]
-[[bin]]
-name = "iroha3d"
-path = "src/bin/iroha3d.rs"
-required-features = ["daemon"]
-
-[[bin]]
-name = "iroha3d_taira"
-path = "src/bin/iroha3d_taira.rs"
-required-features = ["daemon"]
-
-[[bin]]
-name = "sorafs_governance_dag"
-path = "src/bin/sorafs_governance_dag.rs"
-required-features = ["daemon"]
-
-[[bin]]
-name = "taira_bootle_lantern_broker"
-path = "src/bin/taira_bootle_lantern_broker.rs"
-required-features = ["daemon"]
-
-[[bin]]
-name = "sorafs_external_software_signer"
-path = "src/bin/sorafs_external_software_signer.rs"
-required-features = ["external-software-signer-bin"]
-
-[[bin]]
-name = "iroha_test_runtime_provider_broker"
-path = "src/bin/iroha_test_runtime_provider_broker.rs"
-required-features = ["test-network-disposable-broker"]
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
@@ -145,10 +117,14 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
+iroha_core_privacy = { workspace = true }
+iroha_core_timed_ovn = { workspace = true }
+iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 iroha_musubi_service = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_core = { workspace = true, default-features = false }
+iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
 iroha_logger = { workspace = true }
 iroha_futures = { workspace = true }
 iroha_panic_hook = { workspace = true }
@@ -211,9 +187,6 @@ rcgen = "0.14.5"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process"] }
-
-[build-dependencies]
-build-support = { path = "../build-support", default-features = false }
 
 [package.metadata.cargo-all-features]
 denylist = [

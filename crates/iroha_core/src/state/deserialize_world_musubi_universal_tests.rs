@@ -6,14 +6,14 @@ fn musubi_universal_authority_is_revision_only_after_exact_source_checks() {
         authority_registry::world::musubi_universal_policy::{
             MusubiDirectoryAuthorityV1, MusubiResolverAuthorityV1,
         },
-        world_projection::WorldStateBaseline,
+        world_projection::WorldStateAccumulator,
     };
     use norito::NoritoSchema;
 
     let (world, release, _, selector) = seeded_musubi_publication_snapshot();
     musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -61,11 +61,7 @@ fn musubi_universal_authority_is_revision_only_after_exact_source_checks() {
         directory_authority
     );
     let mut block = world.block();
-    let baseline = WorldStateBaseline::capture_current(
-        &block,
-        &mv::allocation::AllocationBudget::new(64 * 1024 * 1024),
-    )
-    .unwrap();
+    let baseline = WorldStateAccumulator::capture(&block).unwrap();
     let before_journal = block.publication_state_delta().unwrap();
     let mut changed_resolver = resolver.clone();
     changed_resolver.source_digest = MusubiContentDigestV1::new([0xD8; 32]);
@@ -78,12 +74,7 @@ fn musubi_universal_authority_is_revision_only_after_exact_source_checks() {
         .musubi_public_directory
         .insert(selector.clone(), changed_directory.clone());
     assert_eq!(
-        WorldStateBaseline::capture_current(
-            &block,
-            &mv::allocation::AllocationBudget::new(64 * 1024 * 1024)
-        )
-        .unwrap()
-        .root(),
+        WorldStateAccumulator::capture(&block).unwrap().root(),
         baseline.root(),
         "duplicated source fields do not become independent authority"
     );
@@ -106,12 +97,7 @@ fn musubi_universal_authority_is_revision_only_after_exact_source_checks() {
         .musubi_resolver_index
         .insert(release, revised_resolver.clone());
     assert_ne!(
-        WorldStateBaseline::capture_current(
-            &block,
-            &mv::allocation::AllocationBudget::new(64 * 1024 * 1024)
-        )
-        .unwrap()
-        .root(),
+        WorldStateAccumulator::capture(&block).unwrap().root(),
         baseline.root(),
         "independent resolver revision changes the authority baseline"
     );
@@ -148,7 +134,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     mutation.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -163,7 +149,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     repair.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -191,7 +177,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     mutation.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -206,7 +192,7 @@ fn musubi_universal_source_substitution_fails_on_current_and_predecessor() {
     repair.commit();
     let error = musubi_universal::validate_musubi_universal_projection_cuts(
         &world,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -237,7 +223,7 @@ fn musubi_universal_directory_rejects_colliding_package_selector() {
     let error = musubi_universal::validate_musubi_universal_projection_cut(
         &world.view(),
         ProjectionCut::Current,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
     )
@@ -265,7 +251,7 @@ fn musubi_publication_refuses_substituted_universal_row_without_committing_it() 
         .insert(release.clone(), substituted);
     let Err(error) = crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
         &mut block,
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         2,

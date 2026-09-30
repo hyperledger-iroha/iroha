@@ -32,7 +32,7 @@ async fn vk_list_filters_by_backend_and_status() {
     {
         let name = format!("vk_{i}");
         let vk = VerifyingKeyBox::new(backend.into(), vec![u8::try_from(i).unwrap()]);
-        let commitment = iroha_core::zk::hash_vk(&vk);
+        let commitment = iroha_core_zk::hash_vk(&vk);
         let mut rec = VerifyingKeyRecord::new(
             1,
             format!("{backend}:{name}"),

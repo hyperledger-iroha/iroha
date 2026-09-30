@@ -6,7 +6,7 @@
 use aead::{Nonce, Tag};
 use iroha_crypto::{Algorithm, KeyPair, encryption::ChaCha20Poly1305};
 pub use iroha_data_model::{
-    block::consensus_v2::ConsensusMode, confidential::ConfidentialFeatureDigest,
+    block::consensus::ConsensusMode, confidential::ConfidentialFeatureDigest,
 };
 pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};

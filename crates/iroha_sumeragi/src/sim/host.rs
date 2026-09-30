@@ -29,8 +29,9 @@ use super::driver::{Barrier, Lanes};
 use crate::{
     Core,
     api::{Action, ConfigError, Event, ExecOutcome, Init, LocalParams},
+    availability::AvailableBody,
     crypto::{Attestation, Crypto, Signer},
-    message::{Block, Qc, TrafficClass, WireMessage},
+    message::{Qc, TrafficClass, WireMessage},
     safety::SafetyRecord,
     types::{AppliedConfig, Hash32, Millis, PublicKey},
 };
@@ -51,14 +52,14 @@ pub enum Op {
         /// Operation id.
         op: u64,
         /// The block.
-        block: Box<Block>,
+        block: Box<AvailableBody>,
     },
     /// Execute a block on its parent's post-state (the applied state or a cached post-state).
     Execute {
         /// Operation id.
         op: u64,
         /// The block.
-        block: Box<Block>,
+        block: Box<AvailableBody>,
     },
     /// Drop the cached post-states of the blocks at `height` other than `keep`.
     Discard {
@@ -75,7 +76,7 @@ pub enum Op {
         /// Operation id.
         op: u64,
         /// The committed block.
-        block: Box<Block>,
+        block: Box<AvailableBody>,
         /// Its `CommitQC`.
         qc: Box<Qc>,
     },
@@ -84,7 +85,7 @@ pub enum Op {
         /// Operation id.
         op: u64,
         /// The committed block.
-        block: Box<Block>,
+        block: Box<AvailableBody>,
         /// Its `CommitQC`.
         qc: Box<Qc>,
     },
@@ -93,7 +94,7 @@ pub enum Op {
         /// Operation id.
         op: u64,
         /// The committed block.
-        block: Box<Block>,
+        block: Box<AvailableBody>,
         /// Its `CommitQC`.
         qc: Box<Qc>,
     },
@@ -109,7 +110,7 @@ pub enum Op {
     },
     /// Quarantine the transactions of a rejected block (no completion).
     Reject {
-        /// Block hash.
+        /// AvailableBody hash.
         block_hash: Hash32,
     },
     /// An externally visible effect the host's barrier released — `Send`, `Broadcast`,
@@ -165,7 +166,7 @@ pub enum Done {
 pub struct Backlog {
     /// Effects held behind a pending record (O2).
     pub held: usize,
-    /// Block payload bytes of the held effects.
+    /// AvailableBody payload bytes of the held effects.
     pub held_bytes: u64,
     /// Safety records queued and not yet handed to the write device.
     pub records: usize,
@@ -188,7 +189,7 @@ pub struct Backlog {
 pub struct BacklogBound {
     /// Held effects.
     pub held: usize,
-    /// Block payload bytes of the held effects.
+    /// AvailableBody payload bytes of the held effects.
     pub held_bytes: u64,
     /// Queued safety records.
     pub records: usize,
@@ -205,7 +206,7 @@ pub struct BacklogBound {
 impl BacklogBound {
     /// Held effects of a host.
     pub const HELD: usize = 4_096;
-    /// Block payload bytes of a host's held effects.
+    /// AvailableBody payload bytes of a host's held effects.
     pub const HELD_BYTES: u64 = 64 << 20;
     /// Queued executor operations of a host other than `Execute`s.
     pub const EXEC_OPS: usize = 128;
@@ -267,9 +268,11 @@ pub struct Start {
     /// Startup input built from the durable stores (§7.4).
     pub init: Init,
     /// The configured signing keys.
-    pub signers: Vec<Box<dyn Signer>>,
+    pub signers: Vec<std::sync::Arc<dyn Signer>>,
     /// Crypto (counting, with provenance).
     pub crypto: Box<dyn Crypto>,
+    /// Original pool shared by Core and its worker jobs.
+    pub budget: iroha_allocation::AllocationBudget,
     /// The commit-attestation extension (§3.7).
     pub attestation: Attestation,
     /// Local time of the start.
@@ -364,6 +367,7 @@ impl Host for FakeHost {
             start.signers,
             start.crypto,
             start.attestation,
+            start.budget,
             start.now,
         )?;
         self.core = Some(core);
@@ -442,7 +446,7 @@ mod tests {
     use super::*;
     use crate::{
         api::HaltReason,
-        message::{BlockRequest, WireMessage},
+        message::{PayloadRequest, WireMessage},
         sim::{Scenario, World},
         types::Hash32,
     };
@@ -509,7 +513,7 @@ mod tests {
         let wake = host.next_wakeup();
         assert!(wake < Millis::MAX);
         let key = PublicKey::new(vec![7; 32]).unwrap();
-        let request = WireMessage::BlockRequest(BlockRequest {
+        let request = WireMessage::PayloadRequest(PayloadRequest {
             instance: Hash32::ZERO,
             height: 1,
             block_hash: Hash32::ZERO,
@@ -634,7 +638,7 @@ mod tests {
     #[allow(clippy::too_many_lines)] // one scripted walk through every device operation
     fn owned_host_ops_and_completions() {
         use crate::{
-            message::{Block, BlockHeader, Qc, VoteKind},
+            message::{BlockHeader, Qc, VoteKind},
             preimage::payload_hash,
             safety::SafetyRecord,
             sim::{crypto::SimCrypto, driver::reference_exec},
@@ -655,27 +659,41 @@ mod tests {
         let inst = world.instances[0].clone();
         let key = world.replicas[0].keys[0].clone();
         let crypto = SimCrypto::new();
-        let block_at = |height: u64, parent: Hash32, parent_result: Hash32| Block {
-            header: BlockHeader {
-                control_witness: crate::types::ControlWitness::empty(),
-                epoch: crate::testing::TEST_EPOCH.id,
-                instance: inst.id,
-                height,
-                origin_view: 0,
-                parent_hash: parent,
-                parent_result,
-                payload_hash: payload_hash(&crypto, &[]),
-                payload_len: 0,
-                proposer: 0,
-                skipped_leaders: Vec::new(),
-                attest: false,
-            },
-            payload: Vec::new(),
+        let payload = super::super::driver::encode_tx(1, false, 0);
+        let budget = world.replicas[0].budget.clone();
+        let signer = super::super::crypto::SimSigner::new(
+            inst.committee(1).get(0).unwrap().clone(),
+            None,
+            std::sync::Arc::clone(&world.log),
+        );
+        let block_at = |height: u64, parent: Hash32, parent_result: Hash32| {
+            crate::testing::author_body(
+                BlockHeader {
+                    control_witness: crate::types::ControlWitness::empty(),
+                    epoch: crate::testing::TEST_EPOCH.id,
+                    instance: inst.id,
+                    height,
+                    origin_view: 0,
+                    parent_hash: parent,
+                    parent_result,
+                    payload_hash: payload_hash(&crypto, &payload),
+                    availability_digest: crate::types::Hash32::ZERO,
+                    payload_len: payload.len() as u32,
+                    proposer: 0,
+                    skipped_leaders: Vec::new(),
+                    attest: false,
+                },
+                &payload,
+                &inst.config(height),
+                &budget,
+                &crypto,
+                &signer,
+            )
         };
         let b1 = block_at(1, inst.genesis_hash, inst.genesis_result);
         let bh1 = b1.hash(&crypto);
-        let ExecOutcome::Valid(r1) = reference_exec(&inst.genesis_result, &[]) else {
-            unreachable!("an empty payload is valid")
+        let ExecOutcome::Valid(r1) = reference_exec(&inst.genesis_result, &payload) else {
+            unreachable!("ordinary setup transaction is valid")
         };
         let orphan = block_at(2, Hash32([9; 32]), Hash32([9; 32]));
         let qc = Qc {
@@ -844,7 +862,7 @@ mod tests {
         world.restart(0);
         let packets = world.stats.packets[0];
         let to = world.replicas[1].keys[0].clone();
-        let msg = WireMessage::BlockRequest(BlockRequest {
+        let msg = WireMessage::PayloadRequest(PayloadRequest {
             instance: inst.id,
             height: 1,
             block_hash: bh1,
@@ -895,6 +913,7 @@ mod tests {
             crypto: Box::new(world.replicas[0].crypto.clone()),
             attestation: Attestation::none(),
             now: 0,
+            budget: world.replicas[0].budget.clone(),
             fifo_ingress: false,
         };
         let mut host = FakeHost::default();

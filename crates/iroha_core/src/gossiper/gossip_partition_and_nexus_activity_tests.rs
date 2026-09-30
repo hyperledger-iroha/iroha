@@ -203,14 +203,16 @@ fn partition_gossip_batch_keeps_sealed_commitments() {
     ));
 }
 #[test]
-fn gossip_transaction_len_hints_include_explicit_payload_tag() {
+fn gossip_transaction_len_hints_match_the_canonical_entrypoint_frame() {
     let (signed, _accepted) = build_transaction("hint");
     let payload = payload_for(&signed);
     let tx = GossipTransaction::with_encoded(signed, Arc::clone(&payload));
-    let wire_len = tx.encode().len();
-    assert!(
-        wire_len > payload.len(),
-        "wire includes the explicit item discriminant"
+    let encoded = tx.encode();
+    let wire_len = encoded.len();
+    assert_eq!(
+        encoded.as_slice(),
+        payload.as_slice(),
+        "gossip retains exactly one canonical entrypoint frame"
     );
     assert_eq!(
         ncore::SerializePayload::encoded_len_hint(&tx),

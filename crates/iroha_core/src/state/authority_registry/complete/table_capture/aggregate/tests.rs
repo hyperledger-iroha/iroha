@@ -20,10 +20,10 @@ use crate::{
         authority_registry::{Canonical, Field, Role, schema},
     },
 };
+use iroha_allocation::AllocationBudget;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::{AccountDetails, AccountId, rekey::AccountAlias};
 use iroha_model_base::topology::DataSpaceId;
-use mv::allocation::AllocationBudget;
 use std::{
     alloc::Layout,
     cell::Cell,

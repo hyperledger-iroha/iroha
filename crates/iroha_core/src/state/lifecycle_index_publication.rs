@@ -6,8 +6,8 @@ use crate::publication_rwlock::DeferredPublicationRwLock;
 /// Retains original index releases outside the calling operation's physical fences.
 /// Short read/write guards unlock normally; their notifications stay in this owner.
 pub(super) struct LaneLifecycleReleases<'state> {
-    pub(super) hashes: Option<concread::release::DeferredReleaseBatch>,
-    pub(super) membership: concread::release::DeferredReleaseBatch,
+    pub(super) hashes: Option<iroha_allocation::release::DeferredReleaseBatch>,
+    pub(super) membership: iroha_allocation::release::DeferredReleaseBatch,
     pub(super) header: DeferredPublicationRwLock<'state, Option<BlockHeader>>,
     pub(super) manifests: DeferredPublicationRwLock<'state, LaneManifestRegistryHandle>,
     pub(super) privacy: DeferredPublicationRwLock<'state, LanePrivacyRegistryHandle>,

@@ -66,7 +66,7 @@ DEFAULT_TRACKED_FIXTURE = (
     / "fixtures"
     / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
 )
-DEFAULT_CARGO_PROXY = REPO_ROOT / "scripts" / "sumeragi_v2_release_cargo_proxy.sh"
+DEFAULT_CARGO_PROXY = REPO_ROOT / "scripts" / "sumeragi_release_cargo_proxy.sh"
 CODEGEN_PATH_DIAGNOSTIC = (
     "SoraFS Android codegen fixture paths must not contain secret-looking, "
     "control-character, parent, current, drive-prefix, or platform-specific "

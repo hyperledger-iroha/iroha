@@ -14,7 +14,7 @@ use std::{sync::Arc, time::Duration};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::AccountId,
-    block::consensus_v2::HeightContextId,
+    block::consensus::HeightContextId,
     isi::sorafs::MutateSorafsFinalPromotionAuthority,
     sorafs::final_promotion_authority::{
         FINAL_PROMOTION_CUSTODY_MAX_REVISIONS_V1, FINAL_PROMOTION_MAX_OPERATIONS_V1,

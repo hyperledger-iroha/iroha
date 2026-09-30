@@ -4,7 +4,7 @@
 use super::*;
 use crate::kagemusha_core_coordinator_v1::startup_qualification::tests as fixture;
 use crate::kagemusha_device_bridge_v1::QualificationProjectionV1;
-use iroha_core::zk::kagemusha_v1_state::{
+use iroha_core_zk::kagemusha_v1_state::{
     DevicePolicyBindingV1, HardwareEpochV1, KagemushaLaneIdV1,
 };
 use iroha_crypto::{Hash, HashOf, KeyPair};

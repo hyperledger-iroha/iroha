@@ -14,15 +14,16 @@ use iroha_data_model::{
         PrivateSettlementDeltaV1, PrivateSettlementPhaseBodyV1,
         PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1,
         PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
-        PrivateSettlementReceiptV1,
+        PrivateSettlementReceiptV1, PrivateSettlementRouteV1,
     },
+    sumeragi_lanes::{SumeragiLaneRecord, SumeragiLaneState},
 };
 use iroha_model_base::peer::PeerId;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use thiserror::Error;
 
-use crate::state::{LaneAuthorityRoute, StateReadOnly, peer_has_live_consensus_key_for_role};
+use crate::state::{StateReadOnly, WorldReadOnly, peer_has_live_consensus_key_for_role};
 
 /// Reserved digest carried by Prepare bodies before the all-leg barrier exists.
 pub(crate) fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
@@ -170,12 +171,33 @@ pub(super) fn validate_authority_cryptography_v1(
 #[error("private-settlement committee authority is not authoritative")]
 pub struct PrivateSettlementCommitteeAuthorityErrorV1;
 
+/// Resolve the sole native incarnation authorized at the requested global anchor.
+///
+/// Physical lane catalogs describe deployment and never grant execution authority.
+/// Pool mutation and participant certificates share this exact committed-record check.
+pub(crate) fn native_private_settlement_route_v1(
+    lanes: &SumeragiLaneState,
+    route: PrivateSettlementRouteV1,
+    authority_height: u64,
+) -> Result<&SumeragiLaneRecord, PrivateSettlementCommitteeAuthorityErrorV1> {
+    lanes
+        .lane(route.lane_id)
+        .filter(|record| {
+            authority_height != 0
+                && record.lane != iroha_model_base::topology::LaneId::SINGLE
+                && record.dataspace == route.dataspace_id
+                && record.admits_anchor(authority_height)
+                && Hash::from_marked_bytes(record.incarnation) == Some(route.lane_incarnation)
+        })
+        .ok_or(PrivateSettlementCommitteeAuthorityErrorV1)
+}
+
 /// Validate one private-settlement authority against the consensus state.
 ///
 /// This is the authorization boundary behind restricted upload, Prepare, and
 /// global receipt application. In addition to validating the supplied BLS
 /// keys and proofs of possession, it requires the exact canonical ordered
-/// validator roster resolved for the lane/dataspace route at
+/// validator roster and PoPs pinned by the native committed lane record at
 /// `authority_context_height`, the exact active lane incarnation, and the V1
 /// four-validator/`f = 1` geometry. Every member must also hold a live
 /// purpose-specific [`ConsensusKeyRole::Committee`] key at that height.
@@ -197,24 +219,22 @@ pub fn validate_private_settlement_committee_authority_v1(
     validate_authority_cryptography_v1(authority)
         .map_err(|_| PrivateSettlementCommitteeAuthorityErrorV1)?;
 
-    let route = LaneAuthorityRoute::new(authority.route.lane_id, authority.route.dataspace_id);
-    if state.lane_incarnation_at_height(authority.route.lane_id, authority_context_height)
-        != Some(authority.route.lane_incarnation)
-    {
-        return Err(PrivateSettlementCommitteeAuthorityErrorV1);
-    }
-    let resolved = state
-        .resolve_lane_committee_at_height(route, authority_context_height)
-        .map_err(|_| PrivateSettlementCommitteeAuthorityErrorV1)?;
-    if resolved.route() != route
-        || resolved.authority_height() != authority_context_height
-        || resolved.fault_tolerance() != 1
-        || resolved.validators().len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
-        || resolved.validators() != authority.validators.as_slice()
-        || resolved.validators().iter().any(|validator| {
+    let record = native_private_settlement_route_v1(
+        state.world().sumeragi_lanes(),
+        authority.route,
+        authority_context_height,
+    )?;
+    if record.committee.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
+        || record
+            .committee
+            .iter()
+            .zip(&authority.validators)
+            .zip(&authority.validator_pops)
+            .any(|((member, validator), pop)| member.peer != *validator || member.pop != *pop)
+        || record.committee.iter().any(|member| {
             !peer_has_live_consensus_key_for_role(
                 state.world(),
-                validator,
+                &member.peer,
                 authority_context_height,
                 ConsensusKeyRole::Committee,
             )

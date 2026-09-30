@@ -22,11 +22,11 @@ OPAQUE_OWNERS = (
         guard.require_opaque_release_authorizations,
     ),
     (
-        "crates/iroha_core/src/tle_release.rs",
+        "crates/iroha_core_timed_ovn/src/tle.rs",
         "ValidatedTleReleaseProjectionV1",
         "/// Closed failures while validating a public authenticated-broker projection.",
         "validated broker projection",
-        guard.require_opaque_release_authorizations,
+        guard.require_opaque_release_projection,
     ),
     (
         "crates/iroha_core/src/tle_release/casting.rs",
@@ -78,6 +78,7 @@ def test_opaque_checks_are_connected_to_production_entrypoint() -> None:
     calls = [node.func.id for node in ast.walk(body) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Name)]
     assert calls.count("require_opaque_release_authorizations") == 1
+    assert calls.count("require_opaque_release_projection") == 1
     assert calls.count("require_opaque_casting_authorization") == 1
 
 
@@ -94,58 +95,133 @@ def test_complete_source_contract_baseline() -> None:
     assert guard.main() == 0
 
 
-def test_beacon_parliament_fixture_module_is_connected_to_production_guard() -> None:
-    """The full checker follows the compiled module and both canonical admissions."""
+BEACON_CORE_PATH = "crates/iroha_core/src/beacon.rs"
+STATE_TESTS_PATH = "crates/iroha_core/src/state/tests.rs"
+PULSE_FIXTURE_PATHS = (
+    BEACON_CORE_PATH,
+    "crates/iroha_core/src/beacon/tests.rs",
+    STATE_TESTS_PATH,
+    guard.BEACON_PRODUCER_PATH,
+    guard.BEACON_PRODUCER_TESTS_PATH,
+    guard.BEACON_EXECUTION_TESTS_PATH,
+)
+
+
+def _pulse_fixture_sources() -> dict[str, str]:
+    return {path: guard.read(path) for path in PULSE_FIXTURE_PATHS}
+
+
+def _check_pulse_fixtures(sources: dict[str, str]) -> None:
     guard.require_beacon_parliament_pulse_fixtures(
-        guard.read("crates/iroha_core/src/beacon.rs"),
-        guard.read("crates/iroha_core/src/beacon/tests.rs"),
+        *(sources[path] for path in PULSE_FIXTURE_PATHS)
     )
+
+
+def test_beacon_parliament_fixture_module_is_connected_to_production_guard() -> None:
+    """The full checker follows the compiled modules, admission and both consumers."""
+    _check_pulse_fixtures(_pulse_fixture_sources())
     body = ast.parse(inspect.getsource(guard.main))
     calls = [node.func.id for node in ast.walk(body)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
     assert calls.count("require_beacon_parliament_pulse_fixtures") == 1
 
 
-@pytest.mark.parametrize("replacement", (
-    "",
-    "#[cfg(any())]\npub(crate) mod tests;",
-    '#[path = "disconnected.rs"]\n#[cfg(test)]\npub(crate) mod tests;',
-    "#[cfg(test)]\npub(crate) mod other_tests;",
+BEACON_TEST_MODULE = "#[cfg(test)]\npub(crate) mod tests;"
+PRODUCER_TEST_MODULE = "#[cfg(test)]\nmod tests;"
+EXECUTION_TEST_MODULE = '#[path = "execution_tests.rs"]\nmod execution_tests;'
+
+
+@pytest.mark.parametrize("path,anchor,replacement", (
+    (BEACON_CORE_PATH, BEACON_TEST_MODULE, ""),
+    (BEACON_CORE_PATH, BEACON_TEST_MODULE, "#[cfg(any())]\npub(crate) mod tests;"),
+    (BEACON_CORE_PATH, BEACON_TEST_MODULE,
+     '#[path = "disconnected.rs"]\n#[cfg(test)]\npub(crate) mod tests;'),
+    (BEACON_CORE_PATH, BEACON_TEST_MODULE, "#[cfg(test)]\npub(crate) mod other_tests;"),
+    (guard.BEACON_PRODUCER_PATH, PRODUCER_TEST_MODULE, ""),
+    (guard.BEACON_PRODUCER_PATH, PRODUCER_TEST_MODULE, "#[cfg(any())]\nmod tests;"),
+    (guard.BEACON_PRODUCER_TESTS_PATH, EXECUTION_TEST_MODULE, ""),
+    (guard.BEACON_PRODUCER_TESTS_PATH, EXECUTION_TEST_MODULE,
+     '#[path = "disconnected.rs"]\nmod execution_tests;'),
 ))
-def test_beacon_parliament_fixture_module_cannot_be_disconnected(replacement: str) -> None:
+def test_beacon_parliament_fixture_module_cannot_be_disconnected(
+    path: str, anchor: str, replacement: str,
+) -> None:
     """Intact fixture text is insufficient when its compiled owner is removed."""
-    core = guard.read("crates/iroha_core/src/beacon.rs")
-    anchor = "#[cfg(test)]\npub(crate) mod tests;"
-    assert core.count(anchor) == 1
+    sources = _pulse_fixture_sources()
+    assert sources[path].count(anchor) == 1
+    sources[path] = sources[path].replace(anchor, replacement, 1) + "\n/* " + anchor + " */\n"
     with pytest.raises(RuntimeError, match="original test module"):
-        guard.require_beacon_parliament_pulse_fixtures(
-            core.replace(anchor, replacement, 1) + "\n/* " + anchor + " */\n",
-            guard.read("crates/iroha_core/src/beacon/tests.rs"),
-        )
+        _check_pulse_fixtures(sources)
 
 
-@pytest.mark.parametrize("declaration", (
-    "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
-    "fn assert_same_block_key_rotation_persists_requested_pulse(",
-))
-@pytest.mark.parametrize("original,replacement", (
-    (".put_parliament_attempt(attempt)", ".unchecked_parliament_attempt(attempt)"),
-    ('expect("persist the Parliament request and its beacon-slot index")', 'unwrap()'),
+INDEX_ADMISSION_TEST = "fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal()"
+
+
+@pytest.mark.parametrize("path,declaration,original,replacement", (
+    (guard.BEACON_PRODUCER_TESTS_PATH,
+     "fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse()",
+     "Err(NativeBeaconError::AwaitingShares { height: 9 })", "Err(NativeBeaconError::Context)"),
+    (guard.BEACON_PRODUCER_TESTS_PATH,
+     "fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse()",
+     "control::verify_result(&witness, None).is_err()", "true"),
+    (guard.BEACON_PRODUCER_TESTS_PATH,
+     "fn native_active_session_from_a_foreign_real_committee_refuses_before_signing()",
+     "Err(NativeBeaconError::Source(_))", "Ok(None)"),
+    (guard.BEACON_PRODUCER_TESTS_PATH,
+     "fn native_active_session_from_a_foreign_real_committee_refuses_before_signing()",
+     "count.load(Ordering::SeqCst) == 0", "true"),
+    (guard.BEACON_EXECUTION_TESTS_PATH,
+     "fn transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_result()",
+     'expect("cold executor reproduces the original certified pulse writes")', "unwrap()"),
+    (guard.BEACON_EXECUTION_TESTS_PATH,
+     "fn transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_result()",
+     'expect("completed publication is idempotent")', "unwrap()"),
+    (STATE_TESTS_PATH, INDEX_ADMISSION_TEST,
+     ".put_parliament_attempt(attempt.clone())", ".unchecked_parliament_attempt(attempt.clone())"),
+    (STATE_TESTS_PATH, INDEX_ADMISSION_TEST,
+     'expect("persist the live sortition request")', "unwrap()"),
+    (STATE_TESTS_PATH, INDEX_ADMISSION_TEST,
+     "crate::beacon::tests::pending_batched_sortition_attempt(", "other_pending_attempt("),
+    (STATE_TESTS_PATH, INDEX_ADMISSION_TEST,
+     ".fail_body_election_no_roster(", ".retain_live_request("),
+    (guard.BEACON_PRODUCER_TESTS_PATH, "fn fixture() -> Fixture {",
+     "(BeaconSessionId::for_network_v1(&chain.network_id()), 9)",
+     "(BeaconSessionId::for_network_v1(&chain.network_id()), 10)"),
+    (guard.BEACON_PRODUCER_TESTS_PATH, "fn fixture() -> Fixture {",
+     ".put_parliament_attempt(attempt)", ".unchecked_parliament_attempt(attempt)"),
+    (guard.BEACON_PRODUCER_TESTS_PATH, "fn fixture() -> Fixture {",
+     "crate::beacon::tests::pending_batched_sortition_attempt(", "other_pending_attempt("),
+    (guard.BEACON_EXECUTION_TESTS_PATH,
+     "fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {",
+     ".put_parliament_attempt(attempt)", ".unchecked_parliament_attempt(attempt)"),
+    (guard.BEACON_EXECUTION_TESTS_PATH,
+     "fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {",
+     "crate::beacon::tests::pending_batched_sortition_attempt(", "other_pending_attempt("),
+    (guard.BEACON_PRODUCER_TESTS_PATH,
+     "fn wrong_source_sender_and_proof_never_change_the_owned_round()",
+     ".parliament_unavailable_beacon_pulse_slots", ".global_beacon_pulse_slots"),
+    (guard.BEACON_EXECUTION_TESTS_PATH,
+     "fn transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_result()",
+     "invalid(&mut worker, &replay, &missing);", "let _ = &missing;"),
+    (guard.BEACON_EXECUTION_TESTS_PATH,
+     "fn native_pulse_refusals_preserve_the_exact_predecessor_and_require_actual_work()",
+     "let unrequested = same_predecessor(&fixture, false);",
+     "let unrequested = same_predecessor(&fixture, true);"),
+    (guard.BEACON_EXECUTION_TESTS_PATH,
+     "fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {",
+     "if demand {", "if true {"),
 ))
 def test_beacon_parliament_fixture_admission_cannot_be_moved_to_disconnected_text(
-    declaration: str, original: str, replacement: str,
+    path: str, declaration: str, original: str, replacement: str,
 ) -> None:
-    """Each actual consumer retains its own admission and persistence assertion."""
-    path = "crates/iroha_core/src/beacon/tests.rs"
-    fixtures = guard.read(path)
-    body = guard.section(fixtures, declaration, "\n}\n", path)
-    assert body.count(original) == 1
-    changed = fixtures.replace(body, body.replace(original, replacement, 1), 1)
-    changed += "\n/* " + original + " */\n"
-    with pytest.raises(RuntimeError, match="missing modeled source binding"):
-        guard.require_beacon_parliament_pulse_fixtures(
-            guard.read("crates/iroha_core/src/beacon.rs"), changed,
-        )
+    """Each actual fixture retains its own admission, demand and refusal assertion."""
+    sources = _pulse_fixture_sources()
+    body = guard.rust_item(sources[path], declaration, path)
+    assert original in body
+    changed = sources[path].replace(body, body.replace(original, replacement), 1)
+    sources[path] = changed + "\n/* " + original + " */\n"
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        _check_pulse_fixtures(sources)
 
 
 def test_encrypted_beacon_dkg_source_baseline() -> None:
@@ -468,6 +544,8 @@ CONSTRUCTION_PATH = "crates/iroha_core/src/state/state_block_construction.rs"
     ("fields", "                world,", "                world: World::default().block(),"),
     ("fields", "transactions: storage_transactions::TransactionsBlockField::new(transactions),",
      "transactions: storage_transactions::TransactionsBlockField::new(other_transactions),"),
+    ("fields", "native_execution_tip: block_field::BlockField::new(native_execution_tip),",
+     "native_execution_tip: block_field::BlockField::new(other_tip),"),
     ("fields", "_curr_block: curr_block,", "_curr_block: other_header,"),
     ("fields", "start_of_block_effects_applied: false,", "start_of_block_effects_applied: true,"),
     ("fields", "pending_parliament_telemetry_events\n                    .take()",
@@ -482,7 +560,7 @@ CONSTRUCTION_PATH = "crates/iroha_core/src/state/state_block_construction.rs"
 ), ids=(
     "foreign-acquisition", "foreign-header", "substitute-continuation", "foreign-helper-module",
     "substitute-held-owner", "move-owned-finish", "substitute-world", "substitute-membership",
-    "substitute-carrier-header", "premature-start-flag", "substitute-parliament-buffer",
+    "substitute-native-tip", "substitute-carrier-header", "premature-start-flag", "substitute-parliament-buffer",
     "unarmed-final-handoff", "discard-final-original", "disconnected-outlined-finish",
     "empty-executing-owner", "lost-executing-retirement",
 ))
@@ -612,7 +690,7 @@ def test_production_checker_requires_the_extracted_start_phase_call(
 
 
 def test_parliament_direct_event_return_preserves_projection_before_drain() -> None:
-    """The actual direct-return boundary still owns the sole event drain."""
+    """The committed carrier's original preparation still owns the sole event drain."""
     guard.require_parliament_event_capture(guard.read(STATE_PATH))
     body = ast.parse(inspect.getsource(guard.main))
     calls = [node.func.id for node in ast.walk(body)
@@ -620,23 +698,65 @@ def test_parliament_direct_event_return_preserves_projection_before_drain() -> N
     assert calls.count("require_parliament_event_capture") == 1
 
 
-@pytest.mark.parametrize("mutation", ("early_drain", "substituted_return", "missing_projection"))
+EVENT_PREPARATION = "    fn prepare_carrier_publication_events("
+EVENT_CARRIER = "    fn apply_without_execution_inner("
+EVENT_PRODUCTION = "    pub(crate) fn apply_without_execution_with_sumeragi_commit("
+
+
+@pytest.mark.parametrize("declaration,original,replacement", (
+    (EVENT_PRODUCTION, "authorization.map(|()| events)", "Ok(events)"),
+    (EVENT_CARRIER, "Err(error) => return (Vec::new(), Err(error)),",
+     "Err(error) => Vec::new(),"),
+))
+@pytest.mark.parametrize("decoy", ("", "/* {original} */", 'let _ = "{original}";'))
+def test_carrier_events_keep_original_authorization_and_preparation_refusals(
+    declaration: str, original: str, replacement: str, decoy: str,
+) -> None:
+    """Only live propagation in the original carrier can authorize its events."""
+    source = guard.read(STATE_PATH)
+    body = guard.rust_item(source, declaration, STATE_PATH)
+    assert body.count(original) == 1
+    changed = body.replace(original, decoy.format(original=original) + replacement, 1)
+    with pytest.raises(RuntimeError, match=STATE_PATH):
+        guard.require_parliament_event_capture(source.replace(body, changed, 1))
+
+
+@pytest.mark.parametrize("mutation", (
+    "early_drain", "substituted_return", "missing_projection", "foreign_carrier",
+    "disconnected_preparation", "caller_drain",
+))
 def test_parliament_event_capture_rejects_early_drain_or_lost_projection(mutation: str) -> None:
-    """No second drain, replacement result or omitted retained projection is accepted."""
+    """No second drain, replacement result, foreign carrier or omitted projection is accepted."""
     source = guard.read(STATE_PATH)
     guard.require_parliament_event_capture(source)
-    capture = guard.section(source, "    fn apply_without_execution_inner(",
-                            "    fn pin_new_autoscale_lane_committee(", STATE_PATH)
-    if mutation == "early_drain":
-        changed = capture.replace("let parliament_transitions = self",
-                                  "let _ = self.world.take_external_events();\n            let parliament_transitions = self", 1)
-    elif mutation == "substituted_return":
-        changed = capture.replace("Ok(self.world.take_external_events())", "Ok(Vec::new())", 1)
+    if mutation in ("disconnected_preparation", "caller_drain"):
+        capture = guard.rust_item(source, EVENT_CARRIER, STATE_PATH)
+        if mutation == "disconnected_preparation":
+            changed = capture.replace(
+                "self.prepare_carrier_publication_events(block.as_ref().header())",
+                "Ok(self.world.take_external_events())", 1)
+        else:
+            changed = capture.replace(
+                "        (events, Ok(()))",
+                "        let _ = self.world.take_external_events();\n        (events, Ok(()))", 1)
     else:
-        changed = capture.replace(".extend(parliament_transitions);", ".extend(Vec::new());", 1)
+        capture = guard.rust_item(source, EVENT_PREPARATION, STATE_PATH)
+        if mutation == "early_drain":
+            changed = capture.replace(
+                "let parliament_transitions = self",
+                "let _ = self.world.take_external_events();\n"
+                "            let parliament_transitions = self", 1)
+        elif mutation == "substituted_return":
+            changed = capture.replace(
+                "Ok(self.world.take_external_events())", "Ok(Vec::new())", 1)
+        elif mutation == "missing_projection":
+            changed = capture.replace(
+                ".extend(parliament_transitions);", ".extend(Vec::new());", 1)
+        else:
+            changed = capture.replace("if header != self._curr_block {", "if false {", 1)
     assert changed != capture
     with pytest.raises(RuntimeError, match=STATE_PATH):
-        guard.require_parliament_event_capture(source.replace(capture, changed))
+        guard.require_parliament_event_capture(source.replace(capture, changed, 1))
 
 
 def test_prepared_parliament_commit_publication_baseline_and_entrypoint() -> None:
@@ -648,11 +768,20 @@ def test_prepared_parliament_commit_publication_baseline_and_entrypoint() -> Non
     assert calls.count("require_parliament_commit_publication") == 1
 
 
+def _replace_propagated_refusal(commit: str, call: str, anchor: str) -> str:
+    """Unwrap the first propagated refusal after one call, whatever its layout."""
+    start = commit.index(call)
+    refusal = commit.index(anchor, commit.index("TransactionsBlockError::ExecutionDeferred(reason)", start))
+    return commit[:refusal] + anchor.replace("?", ".unwrap()") + commit[refusal + len(anchor):]
+
+
 @pytest.mark.parametrize("mutation", (
-    "world_refusal", "world_validation_refusal", "geometry_refusal", "world_drop", "hash_drop", "swapped_commits",
+    "world_refusal", "world_validation_refusal", "foreign_world_effects", "shadowed_world_effects", "geometry_refusal", "world_drop", "hash_drop", "swapped_commits",
     "writer_removed", "generation_removed", "writer_early_drop", "conditional_world",
+    "conditional_transitions", "transitions_after_snapshot",
     "replay_prevalidation", "authenticated_replay", "transitions_outside_replay_guard",
-    "gauges_inside_replay_guard", "duplicate_publisher", "early_telemetry", "missing_cfg",
+    "gauges_inside_replay_guard",
+    "duplicate_publisher", "early_telemetry", "missing_cfg",
     "hash_prepare_refusal", "commit_lock_early_drop", "commit_lock_after_prepare",
     "state_commit_unlock_before_publication", "effect_owner_declared_after_commit_lock",
     "kagemusha_runtime_refusal", "kagemusha_certificate_check", "kagemusha_unowned_refusal",
@@ -660,23 +789,35 @@ def test_prepared_parliament_commit_publication_baseline_and_entrypoint() -> Non
 def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
     mutation: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Complete Rust statements cannot bypass refusals, publish early, or recount replay."""
+    """Complete statements cannot bypass refusal, publish early or recount historical replay."""
     state = guard.read(STATE_PATH)
     guard.require_parliament_commit_publication(state)
     commit = guard.read(PUBLICATION_PATH)
-    telemetry_start = commit.index('        #[cfg(feature = "telemetry")]\n        if !*replay_prevalidation {',
+    telemetry_start = commit.index('        #[cfg(feature = "telemetry")]\n        {\n',
                                    commit.index("pending_public_lane_slash_observability.iter()"))
     telemetry_end = commit.index("        // Run the retained persistence plan", telemetry_start)
     telemetry = commit[telemetry_start:telemetry_end]
+    transition = (
+        "state_ref\n                        .telemetry\n"
+        "                        .record_committed_parliament_transition(transition, no_result_kind);"
+    )
     changed = commit
     if mutation == "world_refusal":
-        anchor = "TransactionsBlockError::ExecutionDeferred(reason)\n                        }\n                    }\n                })?,"
-        assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, anchor.replace("})?,", "}).unwrap(),"), 1)
+        changed = _replace_propagated_refusal(
+            commit, "world_commit::PreparedWorldCommit::prepare_overlay_mutations(", "})?")
     elif mutation == "world_validation_refusal":
-        anchor = "TransactionsBlockError::ExecutionDeferred(reason)\n            }\n        })?;"
-        assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, anchor.replace("})?;", "}).unwrap();"), 1)
+        changed = _replace_propagated_refusal(
+            commit, "world_commit::PreparedWorldCommit::validate_prepared_overlay(", "})?;")
+    elif mutation == "foreign_world_effects":
+        original = "*world_effects = Some(effects);"
+        assert commit.count(original) == 1
+        changed = commit.replace(original,
+                                 "/* " + original + " */ *world_effects = Some(other_effects);", 1)
+    elif mutation == "shadowed_world_effects":
+        original = "*world_effects = Some(effects);"
+        assert commit.count(original) == 1
+        changed = commit.replace(original,
+                                 "let effects = replacement_effects;\n            " + original, 1)
     elif mutation == "geometry_refusal":
         geometry = guard.section(commit, "if let Err(err) = geometry_result {",
                                  "autoscale_start.elapsed()", STATE_PATH)
@@ -741,28 +882,39 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
             replacement = publication.replace("world.publish_prepared();",
                                               "if false { world.publish_prepared(); }", 1)
         changed = commit.replace(publication, replacement, 1)
-    elif mutation in ("replay_prevalidation", "authenticated_replay", "missing_cfg", "duplicate_publisher"):
+    elif mutation == "replay_prevalidation":
+        old = "let telemetry_origin = this\n            .committed_telemetry_origin()\n            .map_err(|_| TransactionsBlockError::WorldCommitPreparation)?;"
+        assert commit.count(old) == 1
+        changed = commit.replace(old,
+                                "let telemetry_origin = crate::sumeragi::executor::CommitTelemetryOrigin::Forward;", 1)
+    elif mutation == "authenticated_replay":
+        old = "if telemetry_origin == crate::sumeragi::executor::CommitTelemetryOrigin::Forward {"
+        assert telemetry.count(old) == 1
+        changed = commit.replace(telemetry, telemetry.replace(old, "if true {", 1), 1)
+    elif mutation == "transitions_outside_replay_guard":
+        declaration = "            if telemetry_origin == crate::sumeragi::executor::CommitTelemetryOrigin::Forward {"
+        original = guard.rust_item(telemetry, declaration, PUBLICATION_PATH)
+        assert original.endswith("}")
+        moved = original.removeprefix(declaration).removesuffix("}")
+        changed = commit.replace(telemetry, telemetry.replace(original, moved, 1), 1)
+    elif mutation == "gauges_inside_replay_guard":
+        boundary = "                }\n            }\n            if let Some(counts)"
+        assert telemetry.count(boundary) == 1
+        citizen = guard.rust_item(telemetry, "            if let Some(citizens_total)", PUBLICATION_PATH)
+        moved = telemetry.replace(boundary, "                }\n            if let Some(counts)", 1)
+        moved = moved.replace(citizen, citizen + "\n            }", 1)
+        changed = commit.replace(telemetry, moved, 1)
+    elif mutation in ("conditional_transitions", "missing_cfg", "duplicate_publisher"):
+        assert telemetry.count(transition) == 1
         old, new = {
-            "replay_prevalidation": ("if !*replay_prevalidation {", "if true {"),
-            "authenticated_replay": ("if !*authenticated_replay_commit {", "if true {"),
+            "conditional_transitions": (transition, "if false {\n" + transition + "\n}"),
             "missing_cfg": ('#[cfg(feature = "telemetry")]', ""),
-            "duplicate_publisher": (
-                ".record_committed_parliament_transition(transition, no_result_kind);",
-                ".record_committed_parliament_transition(transition, no_result_kind);\n"
-                "                    state_ref.telemetry.record_committed_parliament_transition(transition, no_result_kind);"),
+            "duplicate_publisher": (transition, transition + "\n" + transition),
         }[mutation]
         changed = commit.replace(telemetry, telemetry.replace(old, new, 1), 1)
-    elif mutation == "transitions_outside_replay_guard":
-        old = "            if !*authenticated_replay_commit {\n"
-        moved = telemetry.replace(old, "", 1).replace(
-            "                }\n            }\n            if let Some(counts)",
-            "                }\n            if !*authenticated_replay_commit {}\n            if let Some(counts)", 1)
-        changed = commit.replace(telemetry, moved, 1)
-    elif mutation == "gauges_inside_replay_guard":
-        moved = telemetry.replace("                }\n            }\n            if let Some(counts)",
-                                  "                }\n            if !*authenticated_replay_commit {\n            if let Some(counts)", 1).replace(
-            "            if let Some(citizens_total)", "            }\n            if let Some(citizens_total)", 1)
-        changed = commit.replace(telemetry, moved, 1)
+    elif mutation == "transitions_after_snapshot":
+        changed = commit.replace(telemetry, "", 1).replace(
+            "        drop(_state_commit_lock);", telemetry + "        drop(_state_commit_lock);", 1)
     else:
         changed = commit.replace(telemetry, "", 1).replace(
             "        let _state_commit_lock = commit_fence.lock();", telemetry + "        let _state_commit_lock = commit_fence.lock();", 1)
@@ -775,13 +927,13 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
 
 
 @pytest.mark.parametrize("original,replacement", (
-    ("self.try_publish_inner(None, None)", "self.try_publish_inner(None, None).discard()"),
-    ("self.try_publish_inner(authorization, veto).into_result()", "Ok(())"),
-    (".unwrap_or_else(|| StatePublication::new(self.state_ref, authorization))",
-     ".unwrap_or_else(|| StatePublication::new(other_state, authorization))"),
+    ("        self.try_publish_inner()\n    }", "        self.try_publish_inner().discard()\n    }"),
+    ("self.try_publish_inner().into_result()", "Ok(())"),
+    (".unwrap_or_else(|| StatePublication::new(self.state_ref))",
+     ".unwrap_or_else(|| StatePublication::new(other_state))"),
     ("if original.published {", "if false {"),
-    ("self.attempt_original_publication(&mut original, veto)",
-     "self.attempt_original_publication(&mut replacement, veto)"),
+    ("self.attempt_original_publication(&mut original)",
+     "self.attempt_original_publication(&mut replacement)"),
     ("self.recover_original_publication_fields();", ""),
     ("self.retire_original_publication_notices();", ""),
     ("self.publication = Some(original);\n        if terminal {",
@@ -834,45 +986,193 @@ def test_sccp_heartbeat_keeps_the_original_ordered_start_owner(
         guard.require_block_start_enactment_phases(source.replace(original, replacement, 1))
 
 
-BEACON_PATH = "crates/iroha_core/src/sumeragi/v2_beacon.rs"
+@pytest.mark.parametrize("path,original,replacement", (
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     ".prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)",
+     ".prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::Forward)"),
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     "pending.matches(block, qc) && pending.telemetry_origin == origin",
+     "pending.matches(block, qc)"),
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     "|original| original != origin", "|original| false"),
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     '.expect("original prepared telemetry origin")',
+     ".unwrap_or(CommitTelemetryOrigin::Forward)"),
+    ("crates/iroha_core/src/sumeragi/startup.rs",
+     "Some(_) => super::executor::CommitTelemetryOrigin::HistoricalReplay",
+     "Some(_) => super::executor::CommitTelemetryOrigin::Forward"),
+    ("crates/iroha_core/src/state/output_seal.rs",
+     "finalized.authorized.native_execution.telemetry_origin()",
+     "crate::sumeragi::executor::CommitTelemetryOrigin::Forward"),
+))
+def test_parliament_replay_origin_retains_actual_authenticated_execution(
+    path: str, original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay classification cannot be manufactured, overwritten, or detached from finality."""
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    source = guard.read(path)
+    assert original in source
+    changed = source.replace(original, replacement)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda target:
+                        changed if target == path else original_read(target))
+    with pytest.raises(RuntimeError, match=path):
+        guard.require_parliament_commit_publication(state)
 
 
-def test_indexed_beacon_requirement_survives_deferred_activation() -> None:
-    """Both constructors, activation, and candidate attachment retain the original demand."""
-    guard.require_parliament_beacon_requirement(guard.read(BEACON_PATH))
+BEACON_SOURCE_PATHS = (guard.EPOCH_BEACON_PATH, guard.BEACON_PRODUCER_PATH)
+
+
+def _beacon_sources() -> dict[str, str]:
+    return {path: guard.read(path) for path in BEACON_SOURCE_PATHS}
+
+
+def test_indexed_beacon_requirement_gates_native_admission_and_production() -> None:
+    """One committed demand gates follower admission, activation and witness building."""
+    guard.require_parliament_beacon_requirement(*_beacon_sources().values())
     body = ast.parse(inspect.getsource(guard.main))
     calls = [node.func.id for node in ast.walk(body)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
     assert calls.count("require_parliament_beacon_requirement") == 1
 
 
-@pytest.mark.parametrize("old,new", (
-    ("npos_boundary_requested || parliament_requested", "npos_boundary_requested && parliament_requested"),
-    ("context.height.checked_add(1)", "context.height.checked_add(2)"),
-    (".get(&(logical_beacon_id, context.height))", ".get(&(logical_beacon_id, context.height + 1))"),
-    (".is_some_and(|attempts| !attempts.is_empty())", ".is_some_and(|attempts| attempts.is_empty())"),
-    ("let required_for_consensus = Self::required_for_height(context, state);",
-     "let required_for_consensus = false;"),
-    ("local_validator.is_some() && Self::required_for_height(context, state.as_ref())", "false"),
-    ("deferred_state: required_for_consensus.then_some(state)", "deferred_state: None"),
-    ("Err(error) => return Err(error),", "Err(_) => None,"),
-    ("if self.active.is_some() || !self.required_for_consensus", "if true"),
-    ("&self.context,\n            state,", "&self.context,\n            &replacement_state,"),
-    ("self.signer.clone(),\n        )?;", "self.signer.clone(),\n        ).unwrap();"),
-    ("        *self = activated;", "        drop(activated);"),
-    ("pub(crate) const fn pulse_required_for_consensus(&self) -> bool {\n        self.required_for_consensus",
-     "pub(crate) const fn pulse_required_for_consensus(&self) -> bool {\n        false"),
-    ("if self.pulse_required_for_consensus() && pulse.is_none()", "if false"),
-    ("effects.finalized_global_beacon_pulse = pulse;", "effects.finalized_global_beacon_pulse = None;"),
+@pytest.mark.parametrize("path,old,new", (
+    (guard.EPOCH_BEACON_PATH,
+     "record.session.adaptive_dkg.session.authority_generation != current.authority.generation",
+     "false"),
+    (guard.EPOCH_BEACON_PATH, "pulse: Some(pulse),", "pulse: None,"),
+    (guard.BEACON_PRODUCER_PATH,
+     "let parent = committed_block(state, applied.0)",
+     "let parent = committed_block(other, applied.0)"),
+    (guard.BEACON_PRODUCER_PATH,
+     "if parent.core_hash() != context.parent_hash || parent.result() != context.parent_result",
+     "if false"),
+    (guard.BEACON_PRODUCER_PATH, "block_hash: parent.block_hash(),", "block_hash: other.block_hash(),"),
+    (guard.EPOCH_BEACON_PATH, "(current.mode == ConsensusMode::Npos\n",
+     "(current.mode != ConsensusMode::Npos\n"),
+    (guard.EPOCH_BEACON_PATH, "height.checked_add(1) == Some(current.authorization.last_height))",
+     "height.checked_add(2) == Some(current.authorization.last_height))"),
+    (guard.EPOCH_BEACON_PATH, "Some(current.authorization.last_height))\n        ||",
+     "Some(current.authorization.last_height))\n        &&"),
+    (guard.EPOCH_BEACON_PATH, ".get(&(BeaconSessionId::for_network_v1(&current.network_id), height))",
+     ".get(&(BeaconSessionId::for_network_v1(&current.network_id), height + 1))"),
+    (guard.EPOCH_BEACON_PATH, "            .is_some_and(|attempts| !attempts.is_empty())\n}",
+     "            .is_some_and(|attempts| attempts.is_empty())\n}"),
+    (guard.EPOCH_BEACON_PATH, "let demanded = required(world, current, height);",
+     "let demanded = false;"),
+    (guard.EPOCH_BEACON_PATH, "        return if demanded {", "        return if false {"),
+    (guard.EPOCH_BEACON_PATH,
+     '    if !demanded {\n        return Err("native beacon control witness was not requested".into());\n    }\n',
+     ""),
+    (guard.EPOCH_BEACON_PATH, "    validate_pending_slot(world, current, height)?;\n", ""),
+    (guard.EPOCH_BEACON_PATH,
+     "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)",
+     "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &foreign_peers)"),
+    (guard.EPOCH_BEACON_PATH,
+     ".parliament_unavailable_beacon_pulse_slots()\n        .get(&slot)\n"
+     "        .is_some_and(|attempts| !attempts.is_empty())",
+     ".parliament_unavailable_beacon_pulse_slots()\n        .get(&slot)\n"
+     "        .is_some_and(|attempts| attempts.is_empty())"),
+    (guard.BEACON_PRODUCER_PATH,
+     "let active = if super::required(state.world(), current, context.height) {",
+     "let active = if true {"),
+    (guard.BEACON_PRODUCER_PATH,
+     "            super::validate_pending_slot(state.world(), current, context.height)\n"
+     "                .map_err(NativeBeaconError::Source)?;\n", ""),
+    (guard.BEACON_PRODUCER_PATH,
+     "        if self.prepared.as_ref() == Some(context) {\n            return Ok(());\n        }\n", ""),
+    (guard.BEACON_PRODUCER_PATH, "        self.active = active;\n", "        self.active = None;\n"),
+    (guard.BEACON_PRODUCER_PATH,
+     "            Some(active) => Some(active.finalized.ok_or(NativeBeaconError::AwaitingShares {\n"
+     "                height: context.height,\n            })?),",
+     "            Some(active) => active.finalized,"),
+    (guard.BEACON_PRODUCER_PATH,
+     "        if self.prepared.as_ref() != Some(&source) {\n"
+     "            return Err(NativeBeaconError::Context);\n        }\n", ""),
+    (guard.BEACON_PRODUCER_PATH, "        let active = if super::required(",
+     "        let _ = attempt.requires_beacon_pulse_at(slot);\n        let active = if super::required("),
 ))
-def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(old: str, new: str) -> None:
-    """Demand, original State activation, and missing-pulse refusal cannot be bypassed."""
-    source = guard.read(BEACON_PATH)
-    guard.require_parliament_beacon_requirement(source)
-    assert source.count(old) == 1
-    changed = source.replace(old, new, 1)
-    with pytest.raises(RuntimeError, match=BEACON_PATH):
-        guard.require_parliament_beacon_requirement(changed)
+def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(
+    path: str, old: str, new: str,
+) -> None:
+    """Demand, admission refusals, activation and missing-pulse refusal cannot be bypassed."""
+    sources = _beacon_sources()
+    guard.require_parliament_beacon_requirement(*sources.values())
+    assert sources[path].count(old) == 1
+    sources[path] = sources[path].replace(old, new, 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_parliament_beacon_requirement(*sources.values())
+
+
+BLOCK_PATH = "crates/iroha_core/src/block.rs"
+PULSE_APPLICATION_PATHS = (BLOCK_PATH, guard.NATIVE_HEADER_SOURCE_PATH, guard.SCHEDULE_EXECUTION_PATH)
+
+
+def _pulse_application_sources() -> dict[str, str]:
+    return {path: guard.read(path) for path in PULSE_APPLICATION_PATHS}
+
+
+def test_native_beacon_pulse_application_baseline_and_entrypoint() -> None:
+    """The header witness is the sole pulse owner and is applied once after admission."""
+    guard.require_native_beacon_pulse_application(*_pulse_application_sources().values())
+    body = ast.parse(inspect.getsource(guard.main))
+    calls = [node.func.id for node in ast.walk(body)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    assert calls.count("require_native_beacon_pulse_application") == 1
+
+
+@pytest.mark.parametrize("path,old,new", (
+    (guard.SCHEDULE_EXECUTION_PATH, "source.header() != self._curr_block", "false"),
+    (guard.SCHEDULE_EXECUTION_PATH,
+     "authenticate_successor_context(self, &self._curr_block, expected)?;", ""),
+    (guard.SCHEDULE_EXECUTION_PATH, ".insert(value.pulse_id, value);", ".insert(value.pulse_id, other);"),
+    (guard.SCHEDULE_EXECUTION_PATH, "                value.height,", "                value.height + 1,"),
+    (guard.SCHEDULE_EXECUTION_PATH, ".insert(slot, value.pulse_id);", ".insert(slot, other.pulse_id);"),
+    (guard.SCHEDULE_EXECUTION_PATH,
+     "self.sumeragi_schedule = ScheduleStep::Requested { captured, pulse };\n        Ok(())", "Ok(())"),
+    (BLOCK_PATH,
+     "            if block.global_beacon_pulse().is_some()\n"
+     "                || block.header().global_beacon_pulse_hash().is_some()\n",
+     "            if block.header().global_beacon_pulse_hash().is_some()\n"),
+    (BLOCK_PATH,
+     "            Self::validate_sumeragi_consensus_effects(block)?;\n"
+     "            state\n                .block_with_recorded_pristine_carrier_stage(",
+     "            state\n                .block_with_recorded_pristine_carrier_stage("),
+    (BLOCK_PATH, "                                    profile.sumeragi_pulse(),\n",
+     "                                    None,\n"),
+    (BLOCK_PATH, '    include!("block/native_header_source.rs");',
+     '    // include!("block/native_header_source.rs");'),
+    (guard.NATIVE_HEADER_SOURCE_PATH,
+     "crate::sumeragi::epoch_beacon::control::decode(&native_header.control_witness)",
+     "crate::sumeragi::epoch_beacon::control::decode(&ControlWitness::empty())"),
+    (guard.SCHEDULE_EXECUTION_PATH,
+     "                &epoch,\n                height,\n                supplied_pulse,",
+     "                &epoch,\n                height,\n                None,"),
+    (guard.SCHEDULE_EXECUTION_PATH,
+     "                current,\n                height,\n                supplied_pulse,",
+     "                current,\n                height,\n                None,"),
+    (guard.SCHEDULE_EXECUTION_PATH, "let current = &schedule.ready(height)?.epoch;",
+     "let current = &schedule.ready(height + 1)?.epoch;"),
+    (guard.SCHEDULE_EXECUTION_PATH,
+     "if let (Some(value), Some(link)) = (pulse.pulse(), pulse.link()) {",
+     "if let (Some(value), Some(link)) = (supplied_pulse, pulse.link()) {"),
+    (guard.SCHEDULE_EXECUTION_PATH,
+     "                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);\n", ";\n"),
+))
+def test_native_beacon_pulse_application_rejects_second_owner_or_unverified_write(
+    path: str, old: str, new: str,
+) -> None:
+    """No payload pulse, skipped admission, foreign epoch or unverified write is accepted."""
+    sources = _pulse_application_sources()
+    owner = (
+        guard.rust_item(sources[path], "    pub(crate) fn request_sumeragi_schedule(", path)
+        if path == guard.SCHEDULE_EXECUTION_PATH else sources[path]
+    )
+    assert owner.count(old) == 1
+    sources[path] = sources[path].replace(owner, owner.replace(old, new, 1), 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_native_beacon_pulse_application(*sources.values())
 
 
 STORAGE_PATH = "crates/mv/src/storage.rs"

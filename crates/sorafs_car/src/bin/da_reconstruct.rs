@@ -471,8 +471,7 @@ mod tests {
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
             types::{
                 BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-                ExtraMetadata, FecScheme, MetadataEntry, MetadataVisibility, RetentionPolicy,
-                StorageTicketId,
+                ExtraMetadata, FecScheme, RetentionPolicy, StorageTicketId,
             },
         },
         sorafs::pin_registry::ManifestDigest,
@@ -483,7 +482,7 @@ mod tests {
         json::{self as norito_json, Map as JsonMap, Value as JsonValue},
         to_bytes,
     };
-    use sorafs_car::{CarBuildPlan, CarChunk, ChunkStore, build_plan_from_da_manifest};
+    use sorafs_car::{CarBuildPlan, ChunkStore, build_plan_from_da_manifest};
     use sorafs_chunker::ChunkProfile;
     use std::path::PathBuf;
     use tempfile::{TempDir, tempdir};
@@ -535,7 +534,7 @@ mod tests {
     }
     #[test]
     fn decode_manifest_accepts_canonical_hex_payloads() {
-        let (manifest, _) = sample_manifest();
+        let (manifest, _, _) = sample_manifest();
         let bytes = to_bytes(&manifest).expect("encode manifest");
         let encoded = hex::encode(&bytes);
         let decoded = decode_manifest_bytes(encoded.as_bytes()).expect("decode hex");
@@ -560,7 +559,7 @@ mod tests {
     }
     #[test]
     fn reconstructs_payload_from_chunks() {
-        let (manifest, payload) = sample_manifest();
+        let (manifest, payload, parity_payloads) = sample_manifest();
         let plan = build_plan_from_da_manifest(&manifest).expect("plan");
         let (_dir, dir_path) = canonical_tempdir();
         for (index, chunk) in plan.chunks.iter().enumerate() {
@@ -570,12 +569,24 @@ mod tests {
             let end = start + chunk.length as usize;
             fs::write(path, &payload[start..end]).expect("write chunk");
         }
+        for (index, bytes) in parity_payloads {
+            let path = dir_path.join(
+                render_chunk_template(DEFAULT_CHUNK_TEMPLATE, index as usize)
+                    .expect("render parity"),
+            );
+            fs::write(path, bytes).expect("write parity chunk");
+        }
         let out_path = dir_path.join("reconstructed.bin");
         let summary = reconstruct_payload(&manifest, &dir_path, &out_path, DEFAULT_CHUNK_TEMPLATE)
             .expect("reconstruct");
         let reconstructed = fs::read(&out_path).expect("read reconstructed");
         assert_eq!(reconstructed, payload);
-        assert_eq!(summary.chunk_count, plan.chunks.len());
+        assert_eq!(summary.chunk_count, manifest.chunks.len());
+        assert_eq!(summary.data_chunks, plan.chunks.len());
+        assert_eq!(
+            summary.parity_chunks,
+            usize::from(manifest.erasure_profile.parity_shards)
+        );
         assert_eq!(summary.payload_bytes, payload.len() as u64);
     }
     #[test]
@@ -631,7 +642,7 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = temp_path.join("summary.json");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-        let (manifest, _) = sample_manifest();
+        let (manifest, _, _) = sample_manifest();
         let summary = sample_summary();
         let err = write_summary_json(&summary, &manifest, &output_path)
             .expect_err("reject symlink output");
@@ -915,83 +926,21 @@ mod tests {
             output_path: "payload.bin".to_owned(),
         }
     }
-    fn sample_manifest() -> (DaManifestV1, Vec<u8>) {
+    fn sample_manifest() -> (DaManifestV1, Vec<u8>, Vec<(u32, Vec<u8>)>) {
         let payload = b"chunked payload example bytes for reconstruction harness".to_vec();
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-        (manifest_from_plan(&plan, payload.len() as u64), payload)
-    }
-    fn manifest_from_plan(plan: &CarBuildPlan, total_size: u64) -> DaManifestV1 {
+        let mut chunk_store = ChunkStore::with_profile(ChunkProfile::DEFAULT);
+        chunk_store
+            .ingest_plan(&payload, &plan)
+            .expect("ingest plan");
         let profile = ErasureProfile::default();
-        let data_shards = usize::from(profile.data_shards);
-        let mut chunks = Vec::with_capacity(plan.chunks.len());
-        for (
-            index,
-            CarChunk {
-                offset,
-                length,
-                digest,
-                ..
-            },
-        ) in plan.chunks.iter().enumerate()
-        {
-            let stripe_id = u32::try_from(index / data_shards).unwrap_or(u32::MAX);
-            chunks.push(ChunkCommitment::new_with_role(
-                index as u32,
-                *offset,
-                *length,
-                ChunkDigest::new(*digest),
-                ChunkRole::Data,
-                stripe_id,
-            ));
-        }
-        let total_stripes = plan.chunks.len().div_ceil(data_shards) as u32;
-        let shards_per_stripe =
-            u32::from(profile.data_shards.saturating_add(profile.parity_shards));
-        let metadata = ExtraMetadata {
-            items: vec![
-                MetadataEntry::new(
-                    "taikai.event_id",
-                    b"demo-event".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.stream_id",
-                    b"demo-stream".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.rendition_id",
-                    b"demo-rendition".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.segment.sequence",
-                    b"1".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-            ],
-        };
-        DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: BlobDigest::new(*plan.payload_digest.as_bytes()),
-            lane_id: LaneId::new(0),
-            epoch: 0,
-            blob_class: BlobClass::TaikaiSegment,
-            codec: BlobCodec::new("test.binary"),
-            blob_hash: BlobDigest::new(*plan.payload_digest.as_bytes()),
-            chunk_root: BlobDigest::new([0u8; 32]),
-            storage_ticket: StorageTicketId::new([0u8; 32]),
-            total_size,
-            chunk_size: plan.chunks.first().map(|chunk| chunk.length).unwrap_or(0),
-            total_stripes,
-            shards_per_stripe,
-            erasure_profile: profile,
-            retention_policy: RetentionPolicy::default(),
-            rent_quote: DaRentQuote::default(),
-            chunks,
-            ipa_commitment: BlobDigest::new([0u8; 32]),
-            metadata,
-            issued_at_unix: 0,
-        }
+        let (manifest, _, parity_payloads) = build_fixture_manifest(
+            &payload,
+            &chunk_store,
+            64,
+            profile.data_shards,
+            profile.parity_shards,
+        );
+        (manifest, payload, parity_payloads)
     }
 }

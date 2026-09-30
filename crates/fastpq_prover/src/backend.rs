@@ -58,17 +58,17 @@ mod quotient_pair_masking;
 #[path = "backend/secret_polynomial.rs"]
 mod secret_polynomial;
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) use air_quotient::{AirQuotientDomain, AirQuotientWeights};
+pub use air_quotient::{AirQuotientDomain, AirQuotientWeights};
 #[path = "backend/joint_fri.rs"]
 #[cfg(any(test, feature = "dev-tools"))]
 mod joint_fri;
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) use joint_fri::JointFriBatch;
+pub use joint_fri::JointFriBatch;
 #[path = "backend/merkle_cache.rs"]
 #[cfg(any(test, feature = "dev-tools"))]
 mod merkle_cache;
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) use merkle_cache::MerkleNodeCache;
+pub use merkle_cache::MerkleNodeCache;
 #[cfg(test)]
 #[path = "backend/compact_axt_air.rs"]
 mod compact_axt_air;
@@ -1264,7 +1264,7 @@ fn metal_library_path() -> Option<String> {
 /// Internal backend configuration used by the FASTPQ prover.
 #[derive(Debug, Clone, Copy)]
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) struct BackendConfig {
+pub struct BackendConfig {
     /// Canonical parameter set driving this backend instance.
     params: StarkParameterSet,
     /// Execution mode used for FFT/LDE computations.
@@ -1327,7 +1327,7 @@ impl BackendConfig {
 /// reconstruct the Fiat–Shamir transcript and query openings.
 #[derive(Debug, Clone)]
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) struct BackendArtifact {
+pub struct BackendArtifact {
     /// Canonical parameter set name.
     pub(crate) parameter: String,
     /// Canonical commitment over the parameterised trace.
@@ -1366,7 +1366,7 @@ pub(crate) struct BackendArtifact {
 /// Concrete backend implementing the deterministic FASTPQ STARK pipeline.
 #[derive(Debug, Clone)]
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) struct StarkBackend {
+pub struct StarkBackend {
     config: BackendConfig,
 }
 #[cfg(any(test, feature = "dev-tools"))]
@@ -1812,7 +1812,7 @@ impl AirColumnLayout {
 
 /// Number of independent coefficients required by the canonical column schema.
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) fn air_composition_alpha_count<S: AsRef<str>>(column_names: &[S]) -> usize {
+pub fn air_composition_alpha_count<S: AsRef<str>>(column_names: &[S]) -> usize {
     AIR_COMPOSITION_ALPHA_COUNT
         + contiguous_limb_columns(column_names, "value_old_limb_")
             .len()
@@ -1967,7 +1967,7 @@ fn air_constraint_residues_for_rows(
 
 /// Field operations needed to combine base-field AIR residues.
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) trait AirCombinationField: Copy {
+pub trait AirCombinationField: Copy {
     /// Additive identity.
     const ZERO: Self;
     /// Add one combined residue.
@@ -2044,7 +2044,7 @@ fn combine_air_quotients<F: AirCombinationField>(
 
 /// Evaluate the quotient relation at a sampled authenticated coset point.
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) fn air_quotient_value_for_rows<F: AirCombinationField>(
+pub fn air_quotient_value_for_rows<F: AirCombinationField>(
     column_names: &[String],
     current: &[u64],
     next: &[u64],

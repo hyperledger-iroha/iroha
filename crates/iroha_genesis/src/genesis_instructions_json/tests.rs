@@ -861,19 +861,26 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
     super::super::init_instruction_registry();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../defaults/kagami/iroha3-dev/genesis.template.json");
-    let template: Value = norito::json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let template: Value = norito::json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let fields = template.as_object().unwrap();
     let discriminant: u16 =
         norito::json::value::from_value(fields["chain_discriminant"].clone()).unwrap();
     let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
     let definition: AssetDefinitionId = staking::stake_asset_id().parse().unwrap();
     assert_eq!(definition.to_string(), fees::fee_asset_id());
+    // The NPoS source leaves its XOR pin to the operator: materialize it with the dev XOR.
+    let manifest = super::super::GenesisSourceTemplate::from_path(&path)
+        .unwrap()
+        .materialize(
+            super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            Some(definition.clone()),
+        )
+        .unwrap();
     let escrow = parse_account_id(&staking::stake_escrow_account_id(), "staking escrow").unwrap();
     let mut registered = false;
     let mut prefunded = std::collections::BTreeMap::new();
     let mut registrations = 0;
-    for value in fields["transactions"].as_array().unwrap() {
-        let transaction: RawGenesisTx = norito::json::value::from_value(value.clone()).unwrap();
+    for transaction in manifest.transactions() {
         if let Some(parameters) = &transaction.parameters {
             let custom = parameters
                 .custom()
@@ -882,7 +889,7 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
             let npos = super::super::SumeragiNposParameters::from_custom_parameter(custom).unwrap();
             assert_eq!(npos.xor_asset_definition_id, definition);
         }
-        for instruction in transaction.instructions {
+        for instruction in &transaction.instructions {
             if let Some(RegisterBox::AssetDefinition(register)) =
                 instruction.as_any().downcast_ref::<RegisterBox>()
             {
@@ -952,9 +959,9 @@ fn parse_allows_null_executor_in_canonical_manifest() {
         Value::String("Permissioned".to_string()),
     );
     manifest_fields.insert(
-        "sumeragi_v2".to_string(),
-        norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
-            .expect("serialize v2 genesis context"),
+        "sumeragi_context".to_string(),
+        norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
+            .expect("serialize Sumeragi genesis context"),
     );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
@@ -983,18 +990,25 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         .maximum_network_inputs(ExecutionOutputPolicyV1::bootstrap())
         .unwrap();
     for (path, expected) in [
-        ("../../defaults/genesis.template.json", 6),
-        ("../../defaults/nexus/genesis.template.json", 5),
-        ("../../defaults/kagami/iroha3-dev/genesis.template.json", 7),
+        ("../../defaults/genesis.template.json", 5),
+        ("../../defaults/nexus/genesis.template.json", 4),
+        ("../../defaults/kagami/iroha3-dev/genesis.template.json", 6),
         (
             "../../defaults/kagami/iroha3-nexus/genesis.template.json",
-            5,
+            4,
         ),
-        ("../../configs/soranexus/nexus/genesis.template.json", 5),
-        ("../../configs/soranexus/taira/genesis.template.json", 5),
+        ("../../configs/soranexus/nexus/genesis.template.json", 4),
+        ("../../configs/soranexus/taira/genesis.template.json", 4),
     ] {
         // Public Nexus forbids the Taira XOR definition; its operator provisions a mainnet one.
-        let xor = if path.contains("nexus/") {
+        // Match whole directory names: public Taira under `soranexus/` requires the Taira XOR.
+        let nexus = std::path::Path::new(path).components().any(|component| {
+            matches!(
+                component.as_os_str().to_str(),
+                Some("nexus" | "iroha3-nexus")
+            )
+        });
+        let xor = if nexus {
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::parse_fully_qualified("mainnet-fixture.universal")
                     .expect("fixture domain"),
@@ -1024,10 +1038,11 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
 fn generated_genesis_group_shapes_have_finite_source_capacity() {
     super::super::init_instruction_registry();
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        block::consensus::SumeragiGenesisContextParameters,
         parameter::{
-            ExecutionOutputPolicyV1, FastpqSourcePolicyV1, custom::CustomParameter,
-            system::confidential_metadata,
+            ExecutionOutputPolicyV1, FastpqSourcePolicyV1,
+            custom::CustomParameter,
+            system::{confidential_metadata, crypto_metadata},
         },
     };
     use iroha_model_base::chain::ChainId;
@@ -1038,15 +1053,17 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
     // Match the canonical builder group owners: Kagami's optional synthetic/XOR
     // groups, or four-validator NetworkBuilder base/topology/staking/Soracloud
     // groups with the explicit registry parameter and optional committee group.
-    // More groups than the bootstrap capacity are packed into adjacent transactions.
+    // Authored groups remain separate. Only generated global metadata shares a
+    // tail; an excessive authored source count is refused before signing.
     for (groups, registry, executor, expected) in [
-        (2, false, false, 5),
-        (4, false, true, 8),
-        (7, true, false, 9),
-        (8, true, false, 10),
-        (8, true, true, 11),
-        (9, true, true, 11),
-        (20, true, true, 11),
+        (2, false, false, Some(4)),
+        (4, false, true, Some(7)),
+        (7, true, false, Some(9)),
+        (8, true, false, Some(10)),
+        (8, true, true, Some(11)),
+        (9, true, true, None),
+        (10, true, true, None),
+        (20, true, true, None),
     ] {
         let chain = ChainId::from("00000000-0000-0000-0000-000000000001");
         let builder = if executor {
@@ -1059,7 +1076,7 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
             super::super::GenesisBuilder::new_without_executor(chain, root.join("defaults"))
         };
         let mut builder = builder
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(
                 super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
             );
@@ -1078,9 +1095,58 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
                 Json::new(Value::Object(payload)),
             )));
         }
-        let sources = builder.build_raw().unwrap().parse().unwrap().len();
-        assert_eq!(sources, expected);
-        assert!(sources <= capacity as usize);
+        let manifest = builder.build_raw().unwrap();
+        let original = norito::json::to_json(&manifest).unwrap();
+        let parsed = manifest.clone().parse();
+        let Some(expected) = expected else {
+            assert!(
+                parsed
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exceeding the FASTPQ bootstrap limit 11")
+            );
+            assert_eq!(norito::json::to_json(&manifest).unwrap(), original);
+            continue;
+        };
+        let batches = parsed.unwrap();
+        assert_eq!(batches.len(), expected);
+        assert!(batches.len() <= capacity as usize);
+        let log_groups = batches
+            .iter()
+            .filter_map(|batch| {
+                let logs = batch
+                    .iter()
+                    .filter_map(|instruction| instruction.as_any().downcast_ref::<Log>())
+                    .collect::<Vec<_>>();
+                (!logs.is_empty()).then_some(logs)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(log_groups.len(), groups);
+        assert!(log_groups.iter().all(|group| group.len() == 1));
+        if !registry {
+            let generated = batches.last().unwrap();
+            let ids = generated
+                .iter()
+                .map(|instruction| {
+                    let Parameter::Custom(custom) = instruction
+                        .as_any()
+                        .downcast_ref::<SetParameter>()
+                        .unwrap()
+                        .inner()
+                    else {
+                        panic!("generated tail must contain custom parameters");
+                    };
+                    custom.id().clone()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                ids,
+                [
+                    crypto_metadata::manifest_meta_id(),
+                    confidential_metadata::registry_root_id()
+                ]
+            );
+        }
     }
     assert_eq!(capacity, FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS);
 }

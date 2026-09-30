@@ -8,7 +8,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    Level, asset::AssetDefinition, block::consensus_v2::is_valid_committee_size, isi::Register,
+    Level, asset::AssetDefinition, block::consensus::is_valid_committee_size, isi::Register,
     parameter::BlockParameter, prelude::*,
 };
 use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
@@ -385,14 +385,14 @@ fn non_faulty_sync_timeout(
     if faulty_peers == 0 {
         return sync_timeout;
     }
-    // Keep relay partitions within the v2 liveness windows so fault injection does not span
+    // Keep relay partitions within the Sumeragi liveness windows so fault injection does not span
     // unnecessary view rotations.
     let cap = if faulty_peers > 1 {
         pipeline_time
             .saturating_mul(2)
             .saturating_add(Duration::from_secs(2))
     } else {
-        // One faulty validator is within quorum tolerance. Allow one absolute v2 round timeout
+        // One faulty validator is within quorum tolerance. Allow one absolute round timeout
         // for a faulty leader to rotate, followed by one normal pipeline window to finalize.
         pipeline_time
             .saturating_mul(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER)

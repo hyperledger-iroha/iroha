@@ -61,7 +61,7 @@ pub const MAX_AXT_FINALIZED_TRANSACTIONS_V1: usize = 65_536;
 ///
 /// The consensus executed-block hard ceiling also bounds its transaction wires.
 pub const MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1: u64 =
-    crate::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES;
+    crate::block::consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES;
 // Every supported target must represent the same consensus-implied count cap.
 const _: () = assert!(MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1 <= usize::MAX as u64);
 

@@ -1,8 +1,8 @@
 //! Generation-bound diagnostics from the sole native pulse custodian.
 
 use super::*;
+use iroha_allocation::{AllocationBudget, ChargedShared};
 use iroha_data_model::{governance::types::BeaconSessionId, sumeragi::BeaconHorizonStatusV1};
-use mv::allocation::{AllocationBudget, ChargedShared};
 use std::sync::Mutex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

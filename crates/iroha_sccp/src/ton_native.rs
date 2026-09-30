@@ -684,7 +684,7 @@ fn ton_crc32c(bytes: &[u8]) -> u32 {
 
 /// One raw `BoC` cell: descriptors, data bytes and child indices.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TonBocCell {
+pub struct TonBocCell {
     pub(crate) descriptor: u8,
     pub(crate) data_descriptor: u8,
     pub(crate) data: Vec<u8>,
@@ -694,7 +694,7 @@ pub(crate) struct TonBocCell {
 
 /// A parsed `BoC`: root indices and cells.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TonBoc {
+pub struct TonBoc {
     pub(crate) roots: Vec<usize>,
     pub(crate) cells: Vec<TonBocCell>,
 }
@@ -973,10 +973,6 @@ fn ton_parse_pruned_branch(cell: &TonBocCell) -> Option<TonPrunedBranch> {
 }
 
 /// Parse a bounded `BoC` header and cell table, or `None` when it is malformed.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one linear canonical BoC header and cell-table parser"
-)]
 /// Parse a bounded TON bag of cells, rejecting malformed headers, cells and references.
 pub fn parse_ton_boc(bytes: &[u8]) -> Option<TonBoc> {
     if bytes.len() < 6 || bytes.len() > TON_MAX_BOC_BYTES || bytes.get(..4)? != TON_BOC_MAGIC {
@@ -1323,10 +1319,6 @@ fn ton_boc_child_for_hash_level(
 }
 
 /// Compute every cell's level mask, per-level hashes and depths bottom-up.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one bottom-up pass computing every level hash and depth per cell"
-)]
 /// Compute the level hashes and depths of every cell, rejecting invalid cell structure.
 pub fn ton_boc_cell_hashes(boc: &TonBoc) -> Option<Vec<TonComputedCell>> {
     let empty = TonComputedCell {
@@ -2791,7 +2783,7 @@ const TON_MAX_SNAKE_BYTES: usize = 4 * 1024;
 
 /// An opened masterchain block header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TonMcHeaderV1 {
+pub struct TonMcHeaderV1 {
     /// Block id (the signed identity).
     pub(crate) block_id: TonBlockIdExtV1,
     /// Generation time (seconds).
@@ -2810,7 +2802,7 @@ pub(crate) struct TonMcHeaderV1 {
 
 /// Validator epoch read from a key block's state.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TonEpochConfigV1 {
+pub struct TonEpochConfigV1 {
     /// Config 34 (with the config-28 shuffle flag).
     pub(crate) validators: TonValidatorConfigV1,
     /// Config 15 `stake_held_for` (seconds).
@@ -2819,7 +2811,7 @@ pub(crate) struct TonEpochConfigV1 {
 
 /// An opened shard block header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TonShardHeaderV1 {
+pub struct TonShardHeaderV1 {
     /// Block id.
     pub(crate) block_id: TonBlockIdExtV1,
     /// Predecessor (after a split: in the parent shard).
@@ -2832,7 +2824,7 @@ pub(crate) struct TonShardHeaderV1 {
 
 /// An SCCP external-out message of the minter.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TonSccpEventV1 {
+pub enum TonSccpEventV1 {
     /// `sccp_transfer_to_taira`.
     TransferToTaira {
         /// Message id the minter computed.
@@ -2875,7 +2867,7 @@ fn ton_open_canonical(
 /// Open a masterchain block header proof rooted at `block_id.root_hash`; when `account` is
 /// given, also select the shard block registered for that basechain account (the proof must
 /// include the `ShardHashes` path).
-pub(crate) fn ton_open_masterchain_block(
+pub fn ton_open_masterchain_block(
     block_id: TonBlockIdExtV1,
     header_proof: &[u8],
     account: Option<H256>,
@@ -2935,7 +2927,7 @@ pub(crate) fn ton_open_masterchain_block(
 
 /// Verify `signatures` over `header` by the masterchain subset of `epoch` for the header's
 /// catchain session (more than two thirds of the subset weight).
-pub(crate) fn ton_verify_masterchain_signatures(
+pub fn ton_verify_masterchain_signatures(
     header: &TonMcHeaderV1,
     epoch: &TonValidatorConfigV1,
     signatures: &TonBlockSignaturesV1,
@@ -2977,7 +2969,7 @@ fn ton_mc_state_extra(boc: &TonBoc, root: usize) -> Option<usize> {
 
 /// Open the validator epoch (configs 34, 28 and 15) from a masterchain state proof rooted at
 /// `state_hash`.
-pub(crate) fn ton_open_state_config(
+pub fn ton_open_state_config(
     state_hash: &H256,
     config_proof: &[u8],
 ) -> Result<TonEpochConfigV1, TonNativeSourceError> {
@@ -3019,7 +3011,7 @@ pub(crate) fn ton_open_state_config(
 
 /// Look up masterchain block `seqno` in `OldMcBlocksInfo` of a masterchain state proof rooted
 /// at `state_hash` (the back-link from a fresh block to an older one).
-pub(crate) fn ton_open_previous_masterchain_block(
+pub fn ton_open_previous_masterchain_block(
     state_hash: &H256,
     state_proof: &[u8],
     seqno: u32,
@@ -3067,7 +3059,7 @@ pub(crate) fn ton_open_previous_masterchain_block(
 }
 
 /// Open a basechain shard block header proof rooted at `block_id.root_hash`.
-pub(crate) fn ton_open_shard_block(
+pub fn ton_open_shard_block(
     block_id: TonBlockIdExtV1,
     header_proof: &[u8],
 ) -> Result<TonShardHeaderV1, TonNativeSourceError> {
@@ -3231,7 +3223,7 @@ fn ton_transaction_ref_in_block(
 /// Open the SCCP event of `minter` in the event block: the transaction at `transaction_lt`
 /// (whose cell the block proof may prune; `transaction_boc` supplies it), which must have
 /// succeeded, and its external-out message `message_index`.
-pub(crate) fn ton_open_sccp_event(
+pub fn ton_open_sccp_event(
     block_id: TonBlockIdExtV1,
     block_proof: &[u8],
     transaction_boc: &[u8],

@@ -236,9 +236,7 @@ fn trace_clears_populated_snapshots_metadata_and_partial_error() {
                 0,
                 "malformed final row was not copied"
             );
-            if unwind {
-                panic!("trace-owner unwind control");
-            }
+            assert!(!unwind, "trace-owner unwind control");
         });
         assert_eq!(result.is_err(), unwind);
     }

@@ -769,8 +769,6 @@ Root {
             ),
             public_target_reshuffle: 1s,
             restricted_target_reshuffle: 1s,
-            restricted_fallback: Drop,
-            restricted_public_payload: Refuse,
         },
     },
     live_query_store: LiveQueryStore {

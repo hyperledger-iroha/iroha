@@ -1,5 +1,6 @@
 //! Kotodama function calls and calling convention tests (nested calls, multi-returns).
-use ivm::{IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use ivm::IVM;
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 #[test]
 fn nested_function_calls_work() {

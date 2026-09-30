@@ -57,19 +57,19 @@ final class NativeSumeragiStatusWireTests: XCTestCase {
     }
 
     func testBeaconSessionRequiresCanonicalNestedFixedArrayLayout() throws {
-        var payload = try NativeExecutionEvidenceFixtures.Reader(XCTUnwrap(noritoDecodeFrame(sample())).payload)
+        var payload = try NoritoFieldFrames.Reader(XCTUnwrap(noritoDecodeFrame(sample())).payload)
         var fields = try (0..<21).map { _ in try payload.field() }
         try payload.finish()
-        var option = NativeExecutionEvidenceFixtures.Reader(fields[2])
+        var option = NoritoFieldFrames.Reader(fields[2])
         XCTAssertEqual(try option.raw(1), Data([1]))
-        var horizon = try NativeExecutionEvidenceFixtures.Reader(option.field())
+        var horizon = try NoritoFieldFrames.Reader(option.field())
         try option.finish()
         var nested = try (0..<5).map { _ in try horizon.field() }
         try horizon.finish()
         // Option<[u8;32]> frames each element; raw32 is a different layout even
         // when the enclosing frame has a correct schema and checksum.
-        nested[2] = Data([1]) + NativeExecutionEvidenceFixtures.record([Data(repeating: 0xab, count: 32)])
-        fields[2] = Data([1]) + NativeExecutionEvidenceFixtures.record([NativeExecutionEvidenceFixtures.record(nested)])
-        XCTAssertThrowsError(try SumeragiStatusWire.decodeCanonical(frame(NativeExecutionEvidenceFixtures.record(fields))))
+        nested[2] = Data([1]) + NoritoFieldFrames.record([Data(repeating: 0xab, count: 32)])
+        fields[2] = Data([1]) + NoritoFieldFrames.record([NoritoFieldFrames.record(nested)])
+        XCTAssertThrowsError(try SumeragiStatusWire.decodeCanonical(frame(NoritoFieldFrames.record(fields))))
     }
 }

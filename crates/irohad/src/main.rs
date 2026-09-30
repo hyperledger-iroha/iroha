@@ -74,7 +74,7 @@ pub mod taira_runtime_signer;
 use crate::soracloud_runtime::{
     QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
 };
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use error_stack::{Report, ResultExt};
 use eyre::Result as EyreResult;
 use fastpq_prover::MetalOverrides;
@@ -189,7 +189,7 @@ use tokio::{sync::broadcast, task};
 
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
-const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
+use iroha_core::release_identity::CompiledBuildMetadata;
 /// Emit a startup-stage timing at debug level; the configured logger level controls it.
 fn log_startup_trace(stage: &'static str, started_at: Instant) {
     iroha_logger::debug!(
@@ -395,7 +395,7 @@ fn complete_test_genesis_builder_for_topology(
 ) -> iroha_genesis::GenesisBuilder {
     topology.sort_by(|left, right| left.peer.cmp(&right.peer));
     assert!(
-        iroha_data_model::block::consensus_v2::is_valid_committee_size(topology.len()),
+        iroha_data_model::block::consensus::is_valid_committee_size(topology.len()),
         "irohad genesis fixtures require an exact supported 3f + 1 topology"
     );
     assert!(
@@ -418,7 +418,7 @@ fn complete_test_genesis_builder_for_topology(
             let seed_byte = 0xA0_u8.wrapping_add(
                 u8::try_from(index).expect("test genesis validator index fits in one byte"),
             );
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
                 0,
                 validator,
@@ -440,9 +440,8 @@ fn complete_test_genesis_builder_for_topology(
         .expect("test genesis topology must form a canonical mint-finality roster");
     builder
         .set_topology(topology)
-        .with_sumeragi_v2_context_parameters(
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
-            ),
+        .with_sumeragi_context_parameters(
+            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         )
         .with_kagemusha_mint_finality_genesis_parameters(parameters)
 }
@@ -635,10 +634,21 @@ pub fn is_coloring_supported() -> bool {
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
 }
+/// Feed zk verifier-key cache events into `zk_verifier_cache_events_total`.
+#[cfg(feature = "telemetry")]
+fn record_zk_vk_cache_event(cache: &'static str, event: &'static str) {
+    if let Some(metrics) = iroha_telemetry::metrics::global() {
+        metrics
+            .zk_verifier_cache_events_total
+            .with_label_values(&[cache, event])
+            .inc();
+    }
+}
 #[cfg(feature = "telemetry")]
 fn init_global_metrics_handle(
     panic_on_duplicate_metrics: bool,
 ) -> Arc<iroha_telemetry::metrics::Metrics> {
+    let _ = iroha_core_zk::install_vk_cache_event_observer(record_zk_vk_cache_event);
     set_duplicate_metrics_panic(panic_on_duplicate_metrics);
     iroha_telemetry::metrics::global().map_or_else(
         || {
@@ -1395,7 +1405,7 @@ mod snapshot_read_error_tests {
             BlockHashAdmissionError, MembershipAdmissionError, StateAdmissionError,
             StateStorageAdmissionError,
         };
-        let budget = mv::allocation::AllocationBudget::new(1);
+        let budget = iroha_allocation::AllocationBudget::new(1);
         let _occupied = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         for admission in [
@@ -2146,6 +2156,7 @@ impl Iroha {
     /// - Telemetry setup
     /// - Initialization of the native Sumeragi node and [`Kura`]
     pub async fn start(
+        build: CompiledBuildMetadata,
         config: Config,
         genesis: Option<GenesisBlock>,
         logger: LoggerHandle,
@@ -2158,6 +2169,7 @@ impl Iroha {
         StartError,
     > {
         Box::pin(Self::start_with_runtime_deps(
+            build,
             config,
             genesis,
             logger,
@@ -2192,6 +2204,7 @@ impl Iroha {
     #[allow(clippy::too_many_lines)]
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
     pub(crate) async fn start_with_runtime_deps(
+        build: CompiledBuildMetadata,
         mut config: Config,
         genesis: Option<GenesisBlock>,
         logger: LoggerHandle,
@@ -2207,19 +2220,22 @@ impl Iroha {
         ),
         StartError,
     > {
-        let build_identity = compiled_build_identity()
+        let build_identity = build
+            .identity()
             .map_err(|error| Report::new(StartError::BuildIdentity).attach(error))?;
         // Compile and validate immutable privacy profiles before any public
         // service begins accepting requests. In particular, the ZK-X.509
         // profile validates six fixed algebraic schedules; doing that work in
         // a Torii handler would make the first capability request CPU-bound.
         let privacy_catalog_started = Instant::now();
-        let privacy_catalog = iroha_core::privacy_profiles::compiled_privacy_profile_catalog_v1()
-            .map_err(|error| {
-            Report::new(StartError::StartTorii).attach(format!(
-                "failed to initialize compiled privacy profile catalog: {error}"
-            ))
-        })?;
+        let privacy_catalog =
+            iroha_core_privacy::privacy_profiles::compiled_privacy_profile_catalog_v1().map_err(
+                |error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to initialize compiled privacy profile catalog: {error}"
+                    ))
+                },
+            )?;
         iroha_logger::info!(
             protocol_count = privacy_catalog.protocols.len(),
             elapsed_ms = privacy_catalog_started.elapsed().as_millis(),
@@ -2598,7 +2614,7 @@ impl Iroha {
         })?;
         startup_trust_root.verify(genesis_to_verify)?;
         let signed_genesis_context = Some(
-            signed_v2_genesis_context_metadata(genesis_to_verify)
+            signed_genesis_context_metadata(genesis_to_verify)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?,
         );
         let effective_genesis_public_key = config.genesis.public_key.clone();
@@ -2615,8 +2631,8 @@ impl Iroha {
         };
         let mut loaded_state_from_snapshot = false;
         let state_execution_budget =
-            mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
-        let operation_index_budget = mv::allocation::AllocationBudget::new(
+            iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        let operation_index_budget = iroha_allocation::AllocationBudget::new(
             usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
                 |_| {
                     Report::new(StartError::InitKura)
@@ -2625,7 +2641,7 @@ impl Iroha {
             )?,
         );
         let snapshot_read_buffer_budget =
-            mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
+            iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
             try_read_snapshot_with_limits(
                 &state_execution_budget,
@@ -2811,7 +2827,7 @@ impl Iroha {
             }
         };
         if config.nexus.uses_multilane_catalogs()
-            && signed_consensus_mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+            && signed_consensus_mode != iroha_data_model::block::consensus::ConsensusMode::Npos
         {
             return Err(Report::new(StartError::InitKura).attach(
                 "custom Nexus lane topology requires the authenticated consensus mode to be NPoS",
@@ -7188,15 +7204,18 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-        let args = parse_args_from([
-            "iroha3d",
-            "--sora",
-            "--config",
-            config_file
-                .path()
-                .to_str()
-                .expect("temp config path to string"),
-        ]);
+        let args = parse_args_from(
+            test_build_metadata(),
+            [
+                "iroha3d",
+                "--sora",
+                "--config",
+                config_file
+                    .path()
+                    .to_str()
+                    .expect("temp config path to string"),
+            ],
+        );
         let (config, _) = read_config_and_genesis(&args).expect("parse config with --sora");
         assert!(
             !config.torii.sorafs_storage.enabled,
@@ -7246,15 +7265,18 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-        let args = parse_args_from([
-            "iroha3d",
-            "--sora",
-            "--config",
-            config_file
-                .path()
-                .to_str()
-                .expect("temp config path to string"),
-        ]);
+        let args = parse_args_from(
+            test_build_metadata(),
+            [
+                "iroha3d",
+                "--sora",
+                "--config",
+                config_file
+                    .path()
+                    .to_str()
+                    .expect("temp config path to string"),
+            ],
+        );
         let (config, _) =
             read_config_and_genesis(&args).expect("parse config with explicit storage opt-out");
         assert!(
@@ -7310,15 +7332,18 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-        let args = parse_args_from([
-            "iroha3d",
-            "--sora",
-            "--config",
-            config_file
-                .path()
-                .to_str()
-                .expect("temp config path to string"),
-        ]);
+        let args = parse_args_from(
+            test_build_metadata(),
+            [
+                "iroha3d",
+                "--sora",
+                "--config",
+                config_file
+                    .path()
+                    .to_str()
+                    .expect("temp config path to string"),
+            ],
+        );
         let (config, _) =
             read_config_and_genesis(&args).expect("parse explicit storage configuration");
         assert!(
@@ -7348,14 +7373,17 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-        let args = parse_args_from([
-            "iroha3d",
-            "--config",
-            config_file
-                .path()
-                .to_str()
-                .expect("temp config path to string"),
-        ]);
+        let args = parse_args_from(
+            test_build_metadata(),
+            [
+                "iroha3d",
+                "--config",
+                config_file
+                    .path()
+                    .to_str()
+                    .expect("temp config path to string"),
+            ],
+        );
         let (config, _) = read_config_and_genesis(&args).expect("parse config without --sora");
         assert_eq!(config.nexus.lane_catalog.lane_count().get(), 1);
         assert!(!nexus_topology_is_custom(&config.nexus));
@@ -7900,14 +7928,14 @@ fn configure_reports(args: &Args) {
 /// configured authenticated local broker running under the same effective service UID.
 /// The broker is not contacted when the validated configuration contains no
 /// runtime-provider bindings.
-pub fn main_entry() {
+pub fn main_entry(build: CompiledBuildMetadata) {
     #[cfg(unix)]
     if external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
         return;
     }
     soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
-    let _ = std::hint::black_box(BUILD_SOURCE_ID);
-    if let Err(report) = run_main(None, None) {
+    let _ = std::hint::black_box(build.sealed_source_commit());
+    if let Err(report) = run_main(build, None, None) {
         eprintln!("{report:?}");
         std::process::exit(1);
     }
@@ -7929,9 +7957,10 @@ pub fn main_entry() {
 /// Returns a launcher error if configuration, provider resolution, subsystem
 /// startup, or supervised execution fails.
 pub fn run_with_runtime_provider_registry(
+    build: CompiledBuildMetadata,
     registry: &dyn IrohaRuntimeProviderRegistryV1,
 ) -> ReportResult<(), MainError> {
-    run_main(Some(registry), None)
+    run_main(build, Some(registry), None)
 }
 /// Deployment-launcher guard evaluated over the parsed daemon configuration.
 type IrohaLauncherConfigGuardV1 = fn(&Config) -> Result<(), String>;
@@ -7949,9 +7978,10 @@ type IrohaLauncherRuntimeFactoryV1 = fn(
 /// `--check-config` operation must enforce a pinned public network profile
 /// without opening runtime-only credentials.
 pub(crate) fn run_with_config_guard(
+    build: CompiledBuildMetadata,
     guard: IrohaLauncherConfigGuardV1,
 ) -> ReportResult<(), MainError> {
-    run_main_with_config_guard(None, None, Some(guard), None)
+    run_main_with_config_guard(build, None, None, Some(guard), None)
 }
 /// Run the standard CLI launcher with a deployment-owned provider registry and
 /// configuration guard.
@@ -7959,11 +7989,18 @@ pub(crate) fn run_with_config_guard(
 /// The guard remains authoritative over the parsed public network profile,
 /// while the registry remains authoritative over runtime-only providers.
 pub(crate) fn run_with_runtime_provider_registry_and_config_guard(
+    build: CompiledBuildMetadata,
     registry: &dyn IrohaRuntimeProviderRegistryV1,
     guard: IrohaLauncherConfigGuardV1,
     runtime_factory: IrohaLauncherRuntimeFactoryV1,
 ) -> ReportResult<(), MainError> {
-    run_main_with_config_guard(Some(registry), None, Some(guard), Some(runtime_factory))
+    run_main_with_config_guard(
+        build,
+        Some(registry),
+        None,
+        Some(guard),
+        Some(runtime_factory),
+    )
 }
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
@@ -7981,9 +8018,10 @@ pub(crate) fn run_with_runtime_provider_registry_and_config_guard(
 ///
 /// Returns a launcher error if configuration, subsystem startup, or supervised execution fails.
 pub fn run_with_musubi_publication(
+    build: CompiledBuildMetadata,
     factory: Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError> {
-    run_main(None, Some(factory))
+    run_main(build, None, Some(factory))
 }
 /// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
 /// publication factory.
@@ -8003,10 +8041,11 @@ pub fn run_with_musubi_publication(
 /// Returns a launcher error if configuration, provider resolution, subsystem startup, or
 /// supervised execution fails.
 pub fn run_with_runtime_provider_registry_and_musubi_publication(
+    build: CompiledBuildMetadata,
     registry: &dyn IrohaRuntimeProviderRegistryV1,
     factory: Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError> {
-    run_main(Some(registry), Some(factory))
+    run_main(build, Some(registry), Some(factory))
 }
 fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, String> {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -8022,10 +8061,13 @@ fn parse_fastpq_poseidon_mode(value: &str) -> Result<FastpqPoseidonMode, String>
         _ => Err("expected MODE to be one of: cpu, gpu".to_string()),
     }
 }
-fn parse_args() -> Args {
-    parse_args_from(env::args_os())
+fn args_command(build: CompiledBuildMetadata) -> clap::Command {
+    Args::command().version(build.version())
 }
-fn parse_args_from<I, T>(args: I) -> Args
+fn parse_args(build: CompiledBuildMetadata) -> Args {
+    parse_args_from(build, env::args_os())
+}
+fn parse_args_from<I, T>(build: CompiledBuildMetadata, args: I) -> Args
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
@@ -8051,7 +8093,19 @@ where
             Cow::Owned(_) => Some(arg),
         }
     }));
-    Args::parse_from(filtered)
+    let matches = args_command(build).get_matches_from(filtered);
+    Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+#[cfg(test)]
+fn test_build_metadata() -> CompiledBuildMetadata {
+    CompiledBuildMetadata::from_compiled_parts(
+        env!("CARGO_PKG_VERSION"),
+        Some("local-fast-build"),
+        None,
+        None,
+        None,
+        None,
+    )
 }
 #[cfg(feature = "telemetry")]
 #[derive(Clone)]
@@ -8288,7 +8342,7 @@ fn verify_signed_genesis_mint_finality_custody(
     local_validator: &iroha_model_base::peer::PeerId,
     authenticated_authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     held_authority: Option<
-        &iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+        &iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
     >,
 ) -> Result<(), String> {
     authenticated_authority
@@ -8311,7 +8365,7 @@ fn verify_signed_genesis_mint_finality_custody(
         .map_err(|_| "signed-genesis Pasta seat index exceeds u32".to_owned())?;
     if held_authority.authority() != Some(authenticated_authority)
         || held_authority.signer().map(
-            iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::validator_index,
+            iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::validator_index,
         ) != Some(expected_index)
     {
         return Err("held Pasta seed does not match this signed-genesis validator seat".to_owned());
@@ -8320,20 +8374,22 @@ fn verify_signed_genesis_mint_finality_custody(
 }
 
 fn run_main(
+    build: CompiledBuildMetadata,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
     musubi_publication_factory: Option<
         Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
     >,
 ) -> ReportResult<(), MainError> {
     run_main_with_config_guard(
+        build,
         runtime_provider_registry,
         musubi_publication_factory,
         None,
         None,
     )
 }
-#[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
 fn run_main_with_config_guard(
+    build: CompiledBuildMetadata,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
     musubi_publication_factory: Option<
         Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
@@ -8341,7 +8397,7 @@ fn run_main_with_config_guard(
     launcher_config_guard: Option<IrohaLauncherConfigGuardV1>,
     launcher_runtime_factory: Option<IrohaLauncherRuntimeFactoryV1>,
 ) -> ReportResult<(), MainError> {
-    let args = parse_args();
+    let args = parse_args(build);
     let lang = i18n::detect_language(args.language.as_deref());
     i18n::init(lang);
     configure_reports(&args);
@@ -8631,6 +8687,7 @@ fn run_main_with_config_guard(
         .map_err(Report::from)
         .change_context(MainError::IrohaStart)?;
     let result = rt.block_on(run_node(
+        build,
         config,
         genesis,
         runtime_deps,
@@ -8744,14 +8801,14 @@ fn validate_available_genesis_for_check(
     iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
         .map_err(Report::new)
         .change_context(MainError::Config)?;
-    let (signed_mode, signed_parameters) = signed_v2_genesis_context_metadata(genesis)
+    let (signed_mode, signed_parameters) = signed_genesis_context_metadata(genesis)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
     let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms, _maximum_validator_roster_len) =
         consensus_caps_from_genesis(genesis, &config_caps).ok_or_else(|| {
             Report::new(MainError::Config).attach(
-                "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
+                "local genesis does not contain one valid canonical Sumeragi handshake context",
             )
         })?;
     verify_genesis_metadata(
@@ -8857,8 +8914,8 @@ fn validate_genesis_execution_offline(
     config: &Config,
     genesis: &GenesisBlock,
     genesis_authority: &AccountId,
-    signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-    _signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    signed_mode: iroha_data_model::block::consensus::ConsensusMode,
+    _signed_parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
     expected_block_cadence_ms: u64,
     required_inrou_deployment_authority: Option<&AccountId>,
 ) -> ReportResult<crate::authenticated_genesis::AuthenticatedGenesis, MainError> {
@@ -8869,12 +8926,12 @@ fn validate_genesis_execution_offline(
     })?;
     let kura = open_disposable_validation_kura(config, &validation_root)?;
     let execution_budget =
-        mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
     let mut world = World::try_with_resource_budgets(
         [genesis_domain(config.genesis.public_key.clone())],
         [genesis_account(config.genesis.public_key.clone())],
         [],
-        mv::allocation::AllocationBudget::new(
+        iroha_allocation::AllocationBudget::new(
             usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
                 |_| {
                     Report::new(MainError::Config)
@@ -8923,7 +8980,9 @@ fn validate_genesis_execution_offline(
         None,
     )
     .map_err(|error| {
-        Report::new(MainError::Config).attach(format!("native genesis execution failed: {error}"))
+        Report::new(error)
+            .change_context(MainError::Config)
+            .attach("native genesis execution failed")
     })?;
     let executed = state.world_view();
     if required_inrou_deployment_authority.is_some_and(|authority| {
@@ -8948,8 +9007,8 @@ fn validate_genesis_execution_offline(
             .map_err(|error| Report::new(MainError::Config).attach(error))?;
     // The native genesis path checked the exact signed epoch and both policy commitments
     // against original execution before publishing this disposable State.
-    let execution_policy_hash = Hash::prehashed(metadata.sumeragi_v2.execution_policy_hash);
-    let nexus_amx_context_hash = Hash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash);
+    let execution_policy_hash = Hash::prehashed(metadata.sumeragi_context.execution_policy_hash);
+    let nexus_amx_context_hash = Hash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash);
     Ok(crate::authenticated_genesis::AuthenticatedGenesis {
         network_id: epoch.network_id,
         execution_policy_hash,
@@ -9046,12 +9105,12 @@ fn consensus_caps_from_genesis(
     }
     let (expected_mode, expected_domain) = match entry.mode {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-            iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN,
+            iroha_data_model::block::consensus::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::PERMISSIONED_BLS_DOMAIN,
         ),
         iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
-            iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN,
+            iroha_data_model::block::consensus::ConsensusMode::Npos,
+            iroha_data_model::block::consensus::NPOS_BLS_DOMAIN,
         ),
     };
     params.sumeragi.block_cadence_ms = entry.block_cadence_ms;
@@ -9062,8 +9121,7 @@ fn consensus_caps_from_genesis(
     }
     let (permissioned_roster_len, npos_max_validators) = match &consensus_params.mode {
         iroha_data_model::block::consensus::ConsensusGenesisModeParams::Permissioned
-            if expected_mode
-                == iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned =>
+            if expected_mode == iroha_data_model::block::consensus::ConsensusMode::Permissioned =>
         {
             (
                 iroha_core::sumeragi::schedule::genesis_validators(genesis)
@@ -9073,7 +9131,7 @@ fn consensus_caps_from_genesis(
             )
         }
         iroha_data_model::block::consensus::ConsensusGenesisModeParams::Npos(npos)
-            if expected_mode == iroha_data_model::block::consensus_v2::ConsensusMode::Npos =>
+            if expected_mode == iroha_data_model::block::consensus::ConsensusMode::Npos =>
         {
             (0, Some(npos.max_validators))
         }
@@ -9086,7 +9144,7 @@ fn consensus_caps_from_genesis(
     )
     .ok()?;
     let mut config_caps = *config_caps;
-    config_caps.execution_policy_hash = entry.sumeragi_v2.execution_policy_hash;
+    config_caps.execution_policy_hash = entry.sumeragi_context.execution_policy_hash;
     config_caps.native_config_fingerprint =
         iroha_core::sumeragi::node::consensus_configuration_fingerprint(&genesis.0)
             .ok()?
@@ -9105,12 +9163,12 @@ fn consensus_caps_from_genesis(
     ))
 }
 
-fn signed_v2_genesis_context_metadata(
+fn signed_genesis_context_metadata(
     genesis: &GenesisBlock,
 ) -> core::result::Result<
     (
-        iroha_data_model::block::consensus_v2::ConsensusMode,
-        iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+        iroha_data_model::block::consensus::ConsensusMode,
+        iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
     ),
     String,
 > {
@@ -9118,7 +9176,7 @@ fn signed_v2_genesis_context_metadata(
     for transaction in genesis.0.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(
-                "Sumeragi v2 genesis metadata must be carried by instruction batches".to_owned(),
+                "Sumeragi genesis metadata must be carried by instruction batches".to_owned(),
             );
         };
         for set_parameter in instructions
@@ -9138,27 +9196,27 @@ fn signed_v2_genesis_context_metadata(
     }
     let [metadata] = metadata_entries.as_slice() else {
         return Err(format!(
-            "Sumeragi v2 genesis requires exactly one signed handshake metadata entry, found {}",
+            "Sumeragi genesis requires exactly one signed handshake metadata entry, found {}",
             metadata_entries.len()
         ));
     };
     let expected_protocol = u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION);
     if metadata.wire_protocol_version != expected_protocol {
         return Err(format!(
-            "Sumeragi v2 genesis requires wire_protocol_version = {expected_protocol}, got {}",
+            "Sumeragi genesis requires wire_protocol_version = {expected_protocol}, got {}",
             metadata.wire_protocol_version
         ));
     }
     metadata.validate()?;
     let mode = match metadata.mode {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+            iroha_data_model::block::consensus::ConsensusMode::Permissioned
         }
         iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => {
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+            iroha_data_model::block::consensus::ConsensusMode::Npos
         }
     };
-    Ok((mode, metadata.sumeragi_v2))
+    Ok((mode, metadata.sumeragi_context))
 }
 fn consensus_entry_caps(
     entry: &ConsensusHandshakeMeta,
@@ -9170,11 +9228,11 @@ fn consensus_entry_caps(
 )> {
     let (mode, mode_tag) = match entry.mode {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+            iroha_data_model::block::consensus::ConsensusMode::Npos,
             iroha_core::sumeragi::consensus::NPOS_TAG,
         ),
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus::ConsensusMode::Permissioned,
             iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
         ),
     };
@@ -9184,7 +9242,7 @@ fn consensus_entry_caps(
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &params,
-            entry.sumeragi_v2,
+            entry.sumeragi_context,
         )
         .map_err(|error| eyre::eyre!(error))?;
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
@@ -9325,15 +9383,15 @@ fn verify_genesis_metadata(
     ensure_crypto_snapshot_matches_config(&manifest_crypto, config)
         .map_err(|err| Report::new(MainError::Config).attach(err))?;
     let mode = if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+        iroha_data_model::block::consensus::ConsensusMode::Npos
     } else {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned
     };
     let consensus_params =
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &params,
-            matched_meta.sumeragi_v2,
+            matched_meta.sumeragi_context,
         )
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
@@ -9466,6 +9524,7 @@ fn verify_genesis_metadata(
     Ok(())
 }
 async fn run_node(
+    build: CompiledBuildMetadata,
     config: Config,
     genesis: Option<GenesisBlock>,
     runtime_deps: IrohaRuntimeDeps,
@@ -9484,9 +9543,9 @@ async fn run_node(
         log_norito_banner(&config);
     }
     iroha_logger::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        git_commit_sha = VERGEN_GIT_SHA,
-        build_features = VERGEN_CARGO_FEATURES,
+        version = build.version(),
+        git_commit_sha = build.source_commit_label(),
+        build_features = build.cargo_features_label(),
         peer = %config.common.peer,
         chain = %config.common.chain,
         listening_on = %config.torii.address.value(),
@@ -9530,6 +9589,7 @@ async fn run_node(
         )?;
     }
     let start = Iroha::start_with_runtime_deps(
+        build,
         config,
         genesis,
         logger,
@@ -10575,13 +10635,13 @@ mod tests {
         );
         assert!(
             run_main_source.contains(
-                "rt.block_on(run_node(config,genesis,runtime_deps,musubi_publication_factory,))"
+                "rt.block_on(run_node(build,config,genesis,runtime_deps,musubi_publication_factory,))"
             ),
             "standard CLI startup must forward the resolved dependency set and private publication factory"
         );
         assert!(
             run_node_source.contains(
-                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_factory,)"
+                "Iroha::start_with_runtime_deps(build,config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_factory,)"
             ),
             "daemon startup must consume the resolved dependency set and private publication factory"
         );
@@ -10622,19 +10682,19 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         assert!(
-            compact_source.contains("run_main(None,None)"),
+            compact_source.contains("run_main(build,None,None)"),
             "the stock launcher must not construct or start a private publication service"
         );
         assert!(
-            compact_source.contains("run_main(Some(registry),None)"),
+            compact_source.contains("run_main(build,Some(registry),None)"),
             "the existing custom registry launcher must preserve fail-closed publication defaults"
         );
         assert!(
-            compact_source.contains("run_main(None,Some(factory))"),
+            compact_source.contains("run_main(build,None,Some(factory))"),
             "the standalone publication launcher must not require an unrelated provider registry"
         );
         assert!(
-            compact_source.contains("run_main(Some(registry),Some(factory))"),
+            compact_source.contains("run_main(build,Some(registry),Some(factory))"),
             "the combined custom launcher must inject both deployment-owned dependencies and the late-bound publication factory"
         );
         let startup_source = compact_source
@@ -11135,6 +11195,13 @@ mod tests {
             let second = super::init_global_metrics_handle(false);
             assert!(Arc::ptr_eq(&first, &second));
         }
+        #[test]
+        #[serial]
+        fn init_global_metrics_handle_installs_zk_vk_cache_observer() {
+            fn noop(_: &'static str, _: &'static str) {}
+            let _ = super::init_global_metrics_handle(false);
+            assert!(!iroha_core_zk::install_vk_cache_event_observer(noop));
+        }
     }
     mod cli_args {
         #[allow(unused_imports)]
@@ -11160,29 +11227,54 @@ mod tests {
             );
         }
         #[test]
+        fn version_is_supplied_by_the_executable() {
+            let build = CompiledBuildMetadata::from_compiled_parts(
+                "executable-version",
+                Some("local-fast-build"),
+                None,
+                None,
+                None,
+                None,
+            );
+            let error = args_command(build)
+                .try_get_matches_from(["iroha3d", "--version"])
+                .expect_err("version display exits through clap");
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+            assert_eq!(error.render().to_string(), "iroha3d executable-version\n");
+        }
+        #[test]
         fn whitespace_only_arguments_are_ignored() {
-            let parsed = parse_args_from(vec![
-                OsString::from("iroha3d"),
-                OsString::from(" "),
-                OsString::from("--trace-config"),
-            ]);
+            let parsed = parse_args_from(
+                test_build_metadata(),
+                vec![
+                    OsString::from("iroha3d"),
+                    OsString::from(" "),
+                    OsString::from("--trace-config"),
+                ],
+            );
             assert!(parsed.startup.trace_config);
         }
         #[test]
         fn surrounding_whitespace_is_trimmed() {
-            let parsed = parse_args_from(vec![
-                OsString::from("iroha3d"),
-                OsString::from("   --trace-config  "),
-            ]);
+            let parsed = parse_args_from(
+                test_build_metadata(),
+                vec![
+                    OsString::from("iroha3d"),
+                    OsString::from("   --trace-config  "),
+                ],
+            );
             assert!(parsed.startup.trace_config);
         }
         #[test]
         fn meaningful_arguments_are_preserved() {
-            let parsed = parse_args_from(vec![
-                OsString::from("iroha3d"),
-                OsString::from("--config"),
-                OsString::from("config.toml"),
-            ]);
+            let parsed = parse_args_from(
+                test_build_metadata(),
+                vec![
+                    OsString::from("iroha3d"),
+                    OsString::from("--config"),
+                    OsString::from("config.toml"),
+                ],
+            );
             assert_eq!(
                 parsed.config,
                 Some(PathBuf::from("config.toml")),
@@ -11325,12 +11417,12 @@ mod tests {
             let root = DisposableValidationRoot::create().expect("temporary genesis storage");
             let kura = open_disposable_validation_kura(config, &root).expect("genesis Kura");
             let budget =
-                mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+                iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
             let mut world = World::try_with_resource_budgets(
                 [genesis_domain(signer.public_key().clone())],
                 [genesis_account(signer.public_key().clone())],
                 [],
-                mv::allocation::AllocationBudget::new(
+                iroha_allocation::AllocationBudget::new(
                     usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get())
                         .expect("operation-index budget"),
                 ),
@@ -11370,7 +11462,7 @@ mod tests {
                 .expect("signed genesis voters");
             let topology = Topology::new(voters.into_keys());
             let (mode, _) =
-                signed_v2_genesis_context_metadata(&provisional).expect("signed genesis mode");
+                signed_genesis_context_metadata(&provisional).expect("signed genesis mode");
             match ValidBlock::validate_signed_genesis(
                 provisional.0,
                 &topology,
@@ -11503,11 +11595,11 @@ mod tests {
                 .expect("handshake meta should be present in genesis");
             let (mode, mode_tag) = match handshake_meta.mode {
                 iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
-                    iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                    iroha_data_model::block::consensus::ConsensusMode::Permissioned,
                     iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
                 ),
                 iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
-                    iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                    iroha_data_model::block::consensus::ConsensusMode::Npos,
                     iroha_core::sumeragi::consensus::NPOS_TAG.to_string(),
                 ),
             };
@@ -11560,8 +11652,8 @@ mod tests {
             config: Config,
             genesis: GenesisBlock,
             authority: AccountId,
-            mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-            parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+            mode: iroha_data_model::block::consensus::ConsensusMode,
+            parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
             cadence_ms: u64,
         }
         fn offline_semantic_genesis_fixture(
@@ -11616,12 +11708,12 @@ mod tests {
                 .expect("build complete offline semantic genesis manifest");
             let (context_hash, execution_policy_hash) =
                 staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
-            let mut parameters = base_raw.sumeragi_v2_context_parameters();
+            let mut parameters = base_raw.sumeragi_context_parameters();
             parameters.nexus_amx_context_hash = context_hash.into();
             parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
-                .with_sumeragi_v2_context_parameters(parameters);
+                .with_sumeragi_context_parameters(parameters);
             // These fixtures add ordinary world-state instructions only; they
             // deliberately do not alter the signed Nexus/AMX projection.
             for instruction in extra_instructions {
@@ -11634,7 +11726,7 @@ mod tests {
             );
             config.genesis.expected_hash = genesis.0.hash();
             let (mode, parameters) =
-                signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
+                signed_genesis_context_metadata(&genesis).expect("signed genesis context metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
             let (_, _, _, cadence_ms, _) = consensus_caps_from_genesis(&genesis, &config_caps)
@@ -11911,11 +12003,16 @@ mod tests {
                 )
                 .err()
                 .expect("same-named malformed token must never qualify");
-                assert!(
-                    format!("{error:?}").contains(
-                        &iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()
-                    )
-                );
+                let startup = error
+                    .downcast_ref::<iroha_core::sumeragi::startup::StartupError>()
+                    .expect("offline failure retains the native startup error");
+                assert!(matches!(
+                    startup,
+                    iroha_core::sumeragi::startup::StartupError::InvalidGenesis(error)
+                        if matches!(error.as_ref(), iroha_core::block::BlockValidationError::InvalidGenesis(
+                            iroha_core::block::InvalidGenesisError::RejectedOutput(_)
+                        ))
+                ));
             }
         }
         #[test]
@@ -11994,7 +12091,8 @@ mod tests {
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let duplicate_domain =
-                DomainId::try_new("duplicate", "universal").expect("valid domain id");
+                iroha_model_base::domain::DomainId::try_new("duplicate", "universal")
+                    .expect("valid domain id");
             let instructions = [
                 Register::domain(Domain::new(duplicate_domain.clone())).into(),
                 Register::domain(Domain::new(duplicate_domain)).into(),
@@ -12011,15 +12109,29 @@ mod tests {
             )
             .err()
             .expect("duplicate genesis registration must fail semantic execution");
-            let rendered = format!("{error:?}");
-            assert!(
-                rendered
-                    .contains(&iroha_core::block::InvalidGenesisError::ContainsErrors.to_string()),
-                "unexpected offline validation error: {rendered}"
-            );
+            let startup = error
+                .downcast_ref::<iroha_core::sumeragi::startup::StartupError>()
+                .expect("offline failure retains the native startup error");
+            let iroha_core::sumeragi::startup::StartupError::InvalidGenesis(error) = startup else {
+                panic!("unexpected offline validation error: {startup:?}");
+            };
+            let iroha_core::block::BlockValidationError::InvalidGenesis(
+                iroha_core::block::InvalidGenesisError::RejectedOutput(rejection),
+            ) = error.as_ref()
+            else {
+                panic!("unexpected native validation error: {error:?}");
+            };
+            assert!(matches!(
+                rejection.reason.as_ref(),
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InstructionFailed(
+                        iroha_data_model::isi::error::InstructionExecutionError::Repetition(_)
+                    )
+                )
+            ));
         }
         #[test]
-        fn consensus_config_caps_use_canonical_v2_fields() {
+        fn consensus_config_caps_use_canonical_fields() {
             let config = sample_config();
             let caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("config caps should build");
@@ -12067,7 +12179,7 @@ mod tests {
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, consensus_caps, _, _) =
                 consensus_caps_from_genesis(&permissioned_genesis, &config_caps)
-                    .expect("permissioned signed genesis must produce canonical v2 caps");
+                    .expect("permissioned signed genesis must produce canonical consensus caps");
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err =
                 verify_genesis_metadata(&npos_genesis, &config, &consensus_caps, &mode_tag, proto)
@@ -12096,7 +12208,7 @@ mod tests {
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, mut consensus_caps, _, _) =
                 consensus_caps_from_genesis(&genesis_block, &config_caps)
-                    .expect("signed genesis must produce canonical v2 caps");
+                    .expect("signed genesis must produce canonical consensus caps");
             // Raw manifest fingerprints are normalized during signing. Mutate
             // the expected admission fingerprint after deriving it from the
             // actual signed genesis so this exercises the mismatch gate.
@@ -12535,20 +12647,6 @@ mod tests {
 }
 /// Result type returned by daemon launcher and startup operations.
 pub type ReportResult<T, E> = core::result::Result<T, Report<E>>;
-fn compiled_build_identity() -> core::result::Result<
-    iroha_core::release_identity::BuildIdentity,
-    iroha_core::release_identity::BuildIdentityError,
-> {
-    iroha_core::compiled_build_identity!()
-}
-const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
-    Some(value) => value,
-    None => "unknown",
-};
-const VERGEN_CARGO_FEATURES: &str = match option_env!("VERGEN_CARGO_FEATURES") {
-    Some(value) => value,
-    None => "unknown",
-};
 
 fn preflight_empty_state_snapshot_fallback(
     kura: &Kura,
@@ -12569,15 +12667,14 @@ fn preflight_empty_state_snapshot_fallback(
 }
 
 fn authenticated_maximum_validator_roster_len(
-    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    mode: iroha_data_model::block::consensus::ConsensusMode,
     permissioned_roster_len: usize,
     npos_max_validators: Option<u32>,
 ) -> Result<usize, String> {
     match mode {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
-            if !iroha_data_model::block::consensus_v2::is_valid_committee_size(
-                permissioned_roster_len,
-            ) {
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned => {
+            if !iroha_data_model::block::consensus::is_valid_committee_size(permissioned_roster_len)
+            {
                 return Err(
                     "authenticated permissioned roster is not a bounded 3f + 1 committee"
                         .to_owned(),
@@ -12585,14 +12682,14 @@ fn authenticated_maximum_validator_roster_len(
             }
             Ok(permissioned_roster_len)
         }
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
+        iroha_data_model::block::consensus::ConsensusMode::Npos => {
             let maximum = npos_max_validators.ok_or_else(|| {
                 "authenticated NPoS state is missing signed election parameters".to_owned()
             })?;
             let maximum = usize::try_from(maximum).map_err(|_| {
                 "authenticated NPoS maximum validator roster does not fit this platform".to_owned()
             })?;
-            if !iroha_data_model::block::consensus_v2::is_valid_committee_size(maximum) {
+            if !iroha_data_model::block::consensus::is_valid_committee_size(maximum) {
                 return Err(
                     "authenticated NPoS maximum validator roster is not a bounded 3f + 1 committee"
                         .to_owned(),
@@ -12606,7 +12703,7 @@ fn authenticated_maximum_validator_roster_len(
 #[cfg(test)]
 mod authenticated_roster_capacity_tests {
     use super::authenticated_maximum_validator_roster_len;
-    use iroha_data_model::block::consensus_v2::ConsensusMode;
+    use iroha_data_model::block::consensus::ConsensusMode;
 
     #[test]
     fn native_roster_capacity_requires_the_bounded_signed_committee() {

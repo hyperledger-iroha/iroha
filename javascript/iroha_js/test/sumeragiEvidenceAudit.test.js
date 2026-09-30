@@ -366,7 +366,7 @@ test("listSumeragiEvidence rejects malformed exact evidence shapes", async () =>
     [{ ...equivocation, offenders: [{ ...equivocation.offenders[0], signer: 1024 }] }, /\.signer must be at most 1023/],
     [{ ...equivocation, context_id: "AA".repeat(32) }, /exact lowercase 32-byte hex/],
     [{ ...equivocation, artifact_hash_2: "22".repeat(32) }, /unexpected artifact_hash_2/],
-    [{ ...equivocation, kind: "SumeragiV2Equivocation" }, /kind must be NativeSumeragiEvidence/],
+    [{ ...equivocation, kind: "SumeragiEquivocation" }, /kind must be NativeSumeragiEvidence/],
     [{ ...equivocation, offenders: [] }, /offenders must contain/],
     [{ ...equivocation, offenders: [equivocation.offenders[0], equivocation.offenders[0]] }, /signer must increase/],
     [{ ...equivocation, offenders: [equivocation.offenders[0], { ...equivocation.offenders[0], signer: 4 }] }, /peer_id must be unique/],

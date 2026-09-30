@@ -90,11 +90,8 @@ DEFAULT_DIR = Path("/var/lib/iroha-taira-devnet")
 DEFAULT_API_PORT = 29_080
 DEFAULT_P2P_PORT = 33_337
 DEFAULT_OPERATION_TIMEOUT_SECONDS = 300
-# Four optimized daemons plus the Nexus/AMX lane pipeline routinely need more
-# than the ten-second view-zero deadline derived from Kagami's generic
-# one-second localnet cadence.  The five-second proposal cadence deliberately
-# trades a few seconds of smoke-test latency for a robust fifty-second
-# view-zero deadline.
+# A five-second signed block cadence gives four optimized daemons and the guest
+# workload qualification headroom over Kagami's one-second localnet default.
 DEFAULT_BLOCK_CADENCE_MS = 5_000
 MARKER = ".iroha-taira-devnet"
 MARKER_BODY = "managed by scripts/taira_devnet.py\n"
@@ -3757,10 +3754,10 @@ def wait_for_cluster(
     deadline = time.monotonic() + timeout
     last = "not reachable"
     while time.monotonic() < deadline:
-        # These probes ignore an unavailable/protected status route but make a
-        # published fail-stop or watchdog blocker terminal immediately.  Keep
-        # them outside the retryable readiness block so a serious consensus
-        # diagnosis is not hidden behind a generic convergence timeout.
+        # An unreachable status route is retried; any answer other than the
+        # unauthenticated HTTP 401 contract is terminal immediately.  Keep these
+        # probes outside the retryable readiness block so a contract violation
+        # is not hidden behind a generic convergence timeout.
         if not all(
             parallel_map(roots, lambda root: check_sumeragi_status(root, request))
         ):

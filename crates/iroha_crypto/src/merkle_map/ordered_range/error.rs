@@ -24,10 +24,10 @@ pub enum NoritoKeyRangeError {
     /// The original local allocation pool refused owned tree backing.
     /// This retains its exact release observation and never means invalid state.
     #[error("ordered Norito-key allocation admission failed: {0}")]
-    Admission(mv::allocation::AllocationRefusal),
+    Admission(iroha_allocation::AllocationRefusal),
     /// The original prepaid parent cannot cover the complete fixed level geometry.
     #[error("ordered Norito-key prepaid capacity failed: {0}")]
-    PrepaidCapacity(mv::allocation::InsufficientReservation),
+    PrepaidCapacity(iroha_allocation::InsufficientReservation),
     /// A staged external node store refused a write or lost a required node.
     #[error("ordered Norito-key external node store failed")]
     NodeStore,

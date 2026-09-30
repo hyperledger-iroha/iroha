@@ -128,14 +128,19 @@ fn sora_nexus_v1_carries_the_deployed_taira_shape() {
             .contains_key("registry")
     );
     assert_eq!(
+        value_at(profile.static_config(), "sumeragi")
+            .as_table()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["keys"],
+        "the profile binds only the consensus key policy; block limits are chain parameters"
+    );
+    assert_eq!(
         value_at(profile.static_config(), "sumeragi.keys.allowed_algorithms")
             .as_array()
             .unwrap(),
         &[toml::Value::String("bls_normal".to_owned())]
-    );
-    assert!(
-        profile.static_config()["sumeragi"].get("queues").is_none(),
-        "retired consensus queue geometry must not return to node profiles"
     );
     assert!(
         profile
@@ -566,18 +571,19 @@ fn consensus_digest_is_sensitive_to_every_consensus_input() {
     let policy = base.policy_digest().unwrap();
     assert_ne!(base.consensus_digest(7).unwrap(), consensus, "roster size");
 
-    let mut changed = sora();
-    set(
-        &mut changed.static_config,
-        "nexus.lane_count",
-        toml::Value::Integer(5),
-    );
-    assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "static");
-    assert_eq!(
-        changed.policy_digest().unwrap(),
-        policy,
-        "static is not policy"
-    );
+    for (key, value) in [
+        ("sumeragi.keys.overlap_grace_blocks", 9),
+        ("nexus.lane_count", 5),
+    ] {
+        let mut changed = sora();
+        set(&mut changed.static_config, key, toml::Value::Integer(value));
+        assert_ne!(changed.consensus_digest(4).unwrap(), consensus, "{key}");
+        assert_eq!(
+            changed.policy_digest().unwrap(),
+            policy,
+            "static is not policy: {key}"
+        );
+    }
 
     let mut changed = sora();
     changed.derive.authenticated_non_validator_sources = 8;
@@ -757,7 +763,8 @@ fn chain_discriminant_cannot_be_overridden_by_policy_or_roles() {
 
 #[test]
 fn consensus_keys_cannot_be_reached_by_later_layers() {
-    let cases: [(&str, &str); 5] = [
+    let cases: [(&str, &str); 6] = [
+        ("policy.sumeragi.keys.allowed_algorithms", "policy"),
         ("policy.nexus.lane_count", "policy"),
         ("role.observer.nexus.lane_count", "role.observer"),
         ("policy.network.max_total_connections", "policy"),
@@ -861,7 +868,7 @@ fn node_key_admission_follows_the_allowlist_and_tunables() {
         "torii.kagemusha_v1_commands.redemption_minimum_xor_balance",
         "torii.kagemusha_v1_commands.redemption_private_key_file",
         "soracloud_runtime.inrou.max_cpu_millis",
-        "sumeragi.queues.chunks",
+        "sumeragi.keys.allowed_algorithms",
         "kura.store_dir",
         "private_key_file",
     ] {

@@ -8,6 +8,11 @@ Native checks also require executable `lsof` at `/usr/sbin/lsof` on macOS or
 `/usr/bin/lsof` on Linux. Both full and focused gates reject a missing or
 nonexecutable inspector before compilation; install this prerequisite first.
 
+Both doctor scopes require `GET /readyz` to return HTTP 200 with the exact
+plain-text `Ready` response. A healthy status or mounted MCP route does not
+substitute for admission readiness. Failed readiness reports only a bounded
+machine error code; arbitrary upstream message or data fields are omitted.
+
 The compiled `iroha taira doctor` checks `GET /v1/accounts/faucet/policy` in
 both basic and full scopes without a client configuration or authentication.
 A successful response must contain the exact canonical V1 policy. Missing
@@ -96,7 +101,7 @@ Before signing an immutable release, use an exact focused diagnostic in the same
 warm development lane:
 
     python3 scripts/taira_release.py check \
-      --focus-regression core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay
+      --focus-regression core=sumeragi::node::tests::idle_chain_never_advances_and_real_work_survives_restart
 
 Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. Requested
 `mv`, `mv-ebr`, `mv-map`, `mv-admitted-map` and `concread` tests compile and run
@@ -277,16 +282,13 @@ against their captured SHA256 using bounded reads that preserve the stream offse
 This catches same-size edits even when filesystem timestamps coincide. Existing
 metadata, path, copied-content and archive-content checks remain mandatory.
 
-Before Cargo, the gate compiles the dependency-free consensus reducers and the
-shared lifecycle source assertions directly with the pinned Rust compiler. Both
-must execute every listed test without skips. Lifecycle mutation controls check
-that removing or reordering required retries still fails. The gate also reconciles
+Before Cargo, the gate reconciles
 the shipping binary table with Cargo manifests and the early compilation targets.
 Configuration library and integration tests, CLI, SDK, Torii, crypto, P2P, Core, proof and fixture harnesses,
 including all four shipping entry points, then share one Cargo invocation,
 resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when a native-check checkpoint can be reused.
-MV ownership, pending-Kura recovery, and Core, Torii and daemon startup checks run
+MV ownership, native archive recovery, and Core, Torii and daemon startup checks run
 next; failures are collected across the startup groups before stopping, without
 running CLI or network tests. The priority CLI reset-scope control and Torii
 admission groups follow and report their combined failures. This passed prefix is

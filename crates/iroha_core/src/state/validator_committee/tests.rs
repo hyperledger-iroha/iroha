@@ -25,7 +25,7 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
-    block::consensus_v2::ValidatorPower,
+    block::consensus::ValidatorPower,
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::kagemusha_v1::InstalledBeaconEpochBindingV1,
     nexus::{
@@ -532,6 +532,7 @@ fn committee_retention_extends_exit_and_pending_unbond_liability() {
     // This component fixture exercises the native boundary reducer with the exact original
     // credentials. It does not claim a certified chain or executed transition.
     let current = ValidatorEpochContextV1 {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         version: 1,
         network_id: fixture.authorization.network_id,
         mode: ConsensusMode::Npos,

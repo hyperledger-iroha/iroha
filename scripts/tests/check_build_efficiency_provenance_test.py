@@ -146,25 +146,6 @@ class FakeObjectStore:
         return self.false_ancestry != (ancestor, descendant)
 
 
-def write_source_budget(root: Path, manifest: dict[str, Any]) -> None:
-    """Write only the current source-budget fields consumed by the guard."""
-    contract = manifest["source_budget"]
-    path = root / contract["path"]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": contract["schema_version"],
-                "limits": {
-                    "production": contract["production_limit"],
-                    "test": contract["test_limit"],
-                },
-                "excluded_prefixes": contract["excluded_prefixes"],
-                "exceptions": {},
-            }
-        ),
-        encoding="utf-8",
-    )
 
 
 def prepare_valid_fixture(
@@ -176,7 +157,6 @@ def prepare_valid_fixture(
     lock = manifest["signed_lock_anchor"]["cargo_lock"]
     lock["bytes"] = len(store.lock_bytes)
     lock["sha256"] = hashlib.sha256(store.lock_bytes).hexdigest()
-    write_source_budget(tmp_path, manifest)
     monkeypatch.setattr(MODULE, "verify_object_id", lambda *_args: None)
 
     counts = {
@@ -232,10 +212,10 @@ def test_valid_mocked_object_graph_passes(
         lambda payload: payload["signed_lock_anchor"]["signature"].update(
             {"cryptographic_signer_authentication": True}
         ),
-        lambda payload: payload["source_budget"].update({"production_limit": 5_001}),
-        lambda payload: payload["source_budget"].update({"test_limit": 3_001}),
-        lambda payload: payload["source_budget"].update({"ceiling": 1}),
-        lambda payload: payload["source_budget"]["excluded_prefixes"].reverse(),
+        lambda payload: payload["historical_source_budget"].update({"production_limit": 5_001}),
+        lambda payload: payload["historical_source_budget"].update({"test_limit": 3_001}),
+        lambda payload: payload["historical_source_budget"].update({"ceiling": 1}),
+        lambda payload: payload["historical_source_budget"]["excluded_prefixes"].reverse(),
     ],
 )
 def test_schema_mutations_fail_closed(mutation: Any) -> None:
@@ -439,33 +419,21 @@ def test_cargo_lock_content_mutations_are_rejected(
         MODULE.validate_provenance(tmp_path, manifest, store)
 
 
-@pytest.mark.parametrize("field", ["production", "test"])
-def test_current_source_budget_mutations_are_rejected(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    field: str,
+
+
+
+
+@pytest.mark.parametrize("source_lines", [0, 25_000])
+def test_lineage_verification_does_not_enforce_candidate_source_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_lines: int,
 ) -> None:
+    """Retired source caps never constrain authenticated historical lineage."""
     manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
-    budget_path = tmp_path / manifest["source_budget"]["path"]
-    budget = json.loads(budget_path.read_text(encoding="utf-8"))
-    budget["limits"][field] += 1
-    budget_path.write_text(json.dumps(budget), encoding="utf-8")
-
-    with pytest.raises(MODULE.ProvenanceError, match=f"current source budget {field}"):
-        MODULE.validate_provenance(tmp_path, manifest, store)
-
-
-def test_current_source_budget_rejects_reintroduced_aggregate_policy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
-    budget_path = tmp_path / manifest["source_budget"]["path"]
-    budget = json.loads(budget_path.read_text(encoding="utf-8"))
-    budget["aggregate_rust"] = {"ceiling": 1}
-    budget_path.write_text(json.dumps(budget), encoding="utf-8")
-
-    with pytest.raises(MODULE.ProvenanceError, match="current source budget has invalid keys"):
-        MODULE.validate_provenance(tmp_path, manifest, store)
+    assert not (tmp_path / manifest["historical_source_budget"]["path"]).exists()
+    candidate = tmp_path / "candidate.rs"
+    candidate.write_text("// candidate source\n" * source_lines, encoding="utf-8")
+    result = MODULE.validate_provenance(tmp_path, manifest, store)
+    assert result["roles"] == len(manifest["lineage"])
 
 
 @pytest.mark.parametrize("valid_blob", [True, False])

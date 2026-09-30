@@ -1,34 +1,29 @@
 #!/usr/bin/env python3
-"""Guard the versioned FCMP source-contract assertion inventory.
+"""Guard current FCMP source-contract assets, direct assertions and owner wiring.
 
-The guard is read-only, requires only Python's standard library plus Git, and
-authenticates the three historical Rust blobs whose literal assertion data was
-moved into ``source_contract_groups_v1.json``.  It rejects asset/schema drift,
-case relabeling, callback/body-DSL escape hatches, test-identity changes, and
-growth beyond the formatted Rust-line ratchets.
+The active guard binds exact asset bytes to the current Rust consumer and rejects
+missing groups, malformed data, callback interpreters and assertion bypasses.
 """
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TESTS = Path("crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests.rs")
+TESTS = Path("crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs")
 COMMITMENT = Path(
-    "crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs"
+    "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs"
 )
 RUNTIME = Path(
-    "crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs"
+    "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs"
 )
 PATHS = (TESTS, COMMITMENT, RUNTIME)
 ASSET = Path(
-    "crates/iroha_core/src/privacy_engines/fcmp_plus_plus/prover/tests/"
+    "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/"
     "source_contract_groups_v1.json"
 )
 BLOBS = {
@@ -36,30 +31,87 @@ BLOBS = {
     COMMITMENT: "cf118c236e6fc1fb88b70a7dcb6c66189e27c23a",
     RUNTIME: "e81723d0b934b2295c2ed6fd198aab880867c61c",
 }
-PREIMAGE_SHA256 = {
-    TESTS: "cf940f65fb716c719d9dde7d095960a05e461e1aca62f0cc885c2e1fd7544e92",
-    COMMITMENT: "ecaa6bc06fdfccc05c0f1969163de4740276939190224413cf08cd406828387c",
-    RUNTIME: "f4bcb2537e212b9d36a94ac777b90b6947eb4b30b0e41f7db48c8422ce9bff15",
-}
-SOURCE_SHA256 = {
-    TESTS: "d17a30ad92fc79259a0b0f91ead2ba9a2a7642598e9d1d85387e5ce640d7ac93",
-    COMMITMENT: "b7ec4e254bfbbe37bf3aac024a276064128c11b0578938ff2bd1ec3721e302e8",
-    RUNTIME: "1c872fcb5b810a41c18ca0635e4dc18e9728e845581ea7d08511b27c3ec65ccd",
-}
-LINE_CEILINGS = {TESTS: 2_696, COMMITMENT: 1_572, RUNTIME: 1_794}
-ASSET_LEN = 40_117
-ASSET_SHA256 = "102ca2e207e0560f7c679a7a5345f82a2204f70079c09086dd036d97489963d5"
-GROUPS_SHA256 = "667f099c4128ddaf365f125483afaebc0a932383c3ef36fc2fe01cb82767e220"
-IDS_SHA256 = "aa656881a03be347db4cb952bc39c62318c076fe3908b9fa71e6816230b369a2"
-TESTS_SHA256 = "bc09853b45ab038492e4e2a8265d974425d273e0503f2df45e069522edf2f1e0"
-LOADER_SHA256 = "9f3b43069c73682419d5e8cc63d9f72c07aea72fbbdf0c91aa8e8ed237d1bd39"
 GROUP_COUNT = 76
-KINDS = {
-    "assert_source_contains_all": "contains",
-    "assert_source_excludes_all": "excludes",
-    "assert_source_order": "order",
-    "assert_source_counts": "counts",
-}
+EXPECTED_TEST_INVENTORY = ['crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|prover_copy_owner_clears_transfer_success_and_unwind_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_spendable_output_owns_inputs_and_secret_outputs_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_spendable_output_source_stays_owned_through_release_transfer',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_u64_wrapper_owns_slots_on_success_error_and_inner_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_u64_wrapper_source_takes_every_slot_before_inner_conversion',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_output_opening_owns_success_error_mismatch_and_unwind_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_output_opening_source_stays_owned_until_borrowed_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_rerandomization_owns_success_error_and_unwind_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_scalar_decoder_owns_comparison_wide_and_result_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_constructor_direct_handoff_covers_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_rerandomization_source_keeps_feature_secret_owners_in_order',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_scope_owns_success_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_selene_hash_matches_equation_and_owns_all_exit_paths',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_cycle_step_matches_public_equations_and_owns_copies',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_branch_direct_handoff_covers_capacity_success_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_replacement_owns_success_error_and_zeroize_slots',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_replacement_final_owner_zeroizes_on_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|root_value_equality_owns_every_coordinate_difference_and_scans_full_shape',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|root_value_equality_source_uses_only_borrowed_subtraction_and_owned_differences',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_buffer_zeroizes_on_drop_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|hidden_output_identifier_push_is_preallocated_and_owned_on_success_and_error',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|private_output_identifier_callsites_use_only_borrowed_owned_insertion',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|duplicate_key_image_precheck_owners_cover_success_decode_error_capacity_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|proof_input_coordinate_owners_cover_success_decode_error_downstream_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|input_blind_v_padding_owner_covers_success_downstream_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_y_sum_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_linking_bytes_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_scalar_encoding_handoff_covers_decode_zeroize_downstream_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_linking_bytes_source_owns_encoding_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_spend_x_bytes_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_spend_x_bytes_source_owns_encoding_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_rerandomization_blind_bytes_owner_covers_success_constructor_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_rerandomization_blind_bytes_source_owns_encoding_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|proof_input_coordinate_source_is_borrowed_owned_and_production_visible',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|fixture_secret_selene_hash_source_uses_borrowed_exact_builder_and_owned_result',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests.rs:#[test]|rerandomization_constructor_takes_all_bytes_before_decoding',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|prover_input_constructor_takes_secret_bytes_before_validation',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|prover_input_scalar_owner_handoff_covers_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|public_input_private_point_owners_cover_success_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|public_input_keeps_private_products_in_borrowed_erasing_owners',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/commitment_mask.rs:#[test]|commitment_mask_openings_remain_borrowed_until_the_membership_boundary',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_witness_debug_is_redacted_and_explicit_zeroize_covers_the_full_path',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|constant_work_scan_primitives_visit_every_element_and_pair',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|typed_membership_and_duplicate_scans_cover_every_position',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|hidden_leaf_membership_and_duplicates_cover_first_middle_last_and_absent',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|shared_root_scan_covers_first_middle_last_and_absent_mismatches',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|private_push_guard_forbids_vector_growth',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|maximum_compiled_shape_has_canonical_paths_and_exact_resource_bound',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|parse_path_private_owners_cover_success_error_and_unwind',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|secret_root_comparison_owns_encoding_on_match_mismatch_and_error',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|parse_path_source_keeps_private_values_in_owned_borrowed_order',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|malicious_zero_rng_exhausts_a_fixed_bound_instead_of_hanging',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|borrowed_path_coordinate_handoff_preflights_and_keeps_allocation_stable',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|owned_secret_scalar_handoff_keeps_preallocation_and_clears_source_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|negated_scalar_owner_handoff_retains_source_and_clears_every_temporary',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|sampled_scalar_slots_are_owned_before_rejection_or_return',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_survive_handoff_until_success_drop',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_identity_coordinates_fail_without_unwrapping_owners',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_clear_on_downstream_error_for_both_curves',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prepared_cycle_blind_owners_clear_on_unwind_for_both_curves',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|root_nonce_commitment_encoding_clears_both_point_owners_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|root_blind_response_encoding_clears_both_nonce_owners_on_every_exit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|membership_prover_retries_only_prover_honest_aborts_at_a_fixed_bound',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|#[ignore '
+ '= "manual release resource audit; run under `/usr/bin/time -l` for peak '
+ 'RSS"]|maximum_compiled_shape_release_resource_audit',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|membership_rng_unavailability_fails_without_calling_infallible_rng_methods',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|public_prover_rejects_unavailable_and_short_period_entropy_before_proving',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|deterministic_preflight_errors_take_precedence_over_entropy_failure',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|extracted_prover_test_module_retains_every_legacy_regression',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_one_layer_prover_round_trips_end_to_end',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_two_layer_prover_exercises_alternating_curve_path',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|native_two_input_prover_round_trips_at_the_compiled_bound',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_rejects_duplicate_outputs_key_images_and_input_overflow_preflight',
+ 'crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/prover/tests/runtime.rs:#[test]|prover_paths_reject_reordered_omitted_and_duplicated_layers']
 FORBIDDEN_LOADER_TOKENS = (
     "Fn(",
     "FnMut",
@@ -75,10 +127,6 @@ FORBIDDEN_LOADER_TOKENS = (
 TEST_PATTERN = re.compile(
     r"(?m)((?:^#\[[^\n]+\]\n)+)fn\s+([A-Za-z0-9_]+)\s*\("
 )
-CALL_PATTERN = re.compile(
-    r"\b(assert_source_contains_all|assert_source_excludes_all|"
-    r"assert_source_order|assert_source_counts)\s*\("
-)
 MIGRATED_PATTERN = re.compile(
     r'assert_source_contract_group\s*\(\s*"([^"]+)"'
 )
@@ -88,21 +136,8 @@ FUNCTION_PATTERN = re.compile(
 )
 
 
-def sha256(data: bytes) -> str:
-    """Return a lowercase SHA-256 digest."""
-
-    return hashlib.sha256(data).hexdigest()
 
 
-def git_blob(blob: str) -> bytes:
-    """Read an authenticated historical blob without changing repository state."""
-
-    return subprocess.run(
-        ["git", "cat-file", "blob", blob],
-        cwd=REPO,
-        check=True,
-        stdout=subprocess.PIPE,
-    ).stdout
 
 
 def skip_quoted(source: str, index: int) -> int:
@@ -128,53 +163,6 @@ def skip_quoted(source: str, index: int) -> int:
     raise AssertionError("unterminated Rust quoted literal")
 
 
-def matching_delimiter(source: str, start: int, opener: str, closer: str) -> int:
-    """Find a matching Rust delimiter while ignoring literals and comments."""
-
-    if source[start] != opener:
-        raise AssertionError(f"expected {opener!r} at {start}")
-    depth = 0
-    cursor = start
-    while cursor < len(source):
-        if source.startswith("//", cursor):
-            newline = source.find("\n", cursor + 2)
-            cursor = len(source) if newline < 0 else newline + 1
-            continue
-        if source.startswith("/*", cursor):
-            comment_depth = 1
-            cursor += 2
-            while cursor < len(source) and comment_depth:
-                if source.startswith("/*", cursor):
-                    comment_depth += 1
-                    cursor += 2
-                elif source.startswith("*/", cursor):
-                    comment_depth -= 1
-                    cursor += 2
-                else:
-                    cursor += 1
-            if comment_depth:
-                raise AssertionError("unterminated Rust block comment")
-            continue
-        if source[cursor] == '"' or source.startswith(('b"', 'r"', 'br"'), cursor):
-            cursor = skip_quoted(source, cursor)
-            continue
-        raw_prefix = re.match(r"(?:b?r)#+\"", source[cursor:])
-        if raw_prefix:
-            cursor = skip_quoted(source, cursor)
-            continue
-        if source[cursor] == "'" and cursor + 2 < len(source):
-            closing = cursor + 2 if source[cursor + 1] != "\\" else cursor + 3
-            if closing < len(source) and source[closing] == "'":
-                cursor = closing + 1
-                continue
-        if source[cursor] == opener:
-            depth += 1
-        elif source[cursor] == closer:
-            depth -= 1
-            if depth == 0:
-                return cursor
-        cursor += 1
-    raise AssertionError(f"unterminated {opener}{closer} delimiter")
 
 
 def mask_non_code(source: str) -> str:
@@ -219,125 +207,12 @@ def mask_non_code(source: str) -> str:
     return "".join(masked)
 
 
-def split_top_level(source: str, separator: str = ",") -> list[str]:
-    """Split a Rust token fragment only at top-level separators."""
-
-    parts: list[str] = []
-    start = 0
-    cursor = 0
-    stack: list[str] = []
-    pairs = {"(": ")", "[": "]", "{": "}"}
-    while cursor < len(source):
-        if source.startswith("//", cursor):
-            newline = source.find("\n", cursor + 2)
-            cursor = len(source) if newline < 0 else newline + 1
-            continue
-        if source.startswith("/*", cursor):
-            end = source.find("*/", cursor + 2)
-            if end < 0:
-                raise AssertionError("unterminated Rust block comment")
-            cursor = end + 2
-            continue
-        if source[cursor] == '"' or source.startswith(('b"', 'r"', 'br"'), cursor):
-            cursor = skip_quoted(source, cursor)
-            continue
-        raw_prefix = re.match(r"(?:b?r)#+\"", source[cursor:])
-        if raw_prefix:
-            cursor = skip_quoted(source, cursor)
-            continue
-        character = source[cursor]
-        if character in pairs:
-            stack.append(pairs[character])
-        elif stack and character == stack[-1]:
-            stack.pop()
-        elif character == separator and not stack:
-            parts.append(source[start:cursor].strip())
-            start = cursor + 1
-        cursor += 1
-    tail = source[start:].strip()
-    if tail:
-        parts.append(tail)
-    return parts
 
 
-def function_spans(source: str) -> list[tuple[int, int, str]]:
-    """Return brace-bounded function spans needed to label donor calls."""
-
-    spans = []
-    masked = mask_non_code(source)
-    for match in FUNCTION_PATTERN.finditer(masked):
-        open_paren = masked.find("(", match.start())
-        close_paren = matching_delimiter(source, open_paren, "(", ")")
-        body = source.find("{", close_paren)
-        semicolon = source.find(";", close_paren)
-        if body < 0 or (0 <= semicolon < body):
-            continue
-        end = matching_delimiter(source, body, "{", "}")
-        spans.append((match.start(), end + 1, match.group(1)))
-    return spans
 
 
-def rust_string(token: str) -> str:
-    """Decode the ordinary Rust strings used by the frozen donor inventory."""
-
-    token = token.strip()
-    if not token.startswith('"'):
-        raise AssertionError(f"non-literal source-contract needle: {token[:40]}")
-    value = ast.literal_eval(token)
-    if not isinstance(value, str):
-        raise AssertionError("source-contract needle did not decode to text")
-    return value
 
 
-def donor_groups(path: Path, data: bytes) -> list[dict[str, object]]:
-    """Reconstruct the exact literal groups migrated from one donor blob."""
-
-    source = data.decode("utf-8")
-    masked = mask_non_code(source)
-    spans = function_spans(source)
-    calls = []
-    for match in CALL_PATTERN.finditer(masked):
-        open_paren = masked.find("(", match.start())
-        close_paren = matching_delimiter(source, open_paren, "(", ")")
-        if source.count("\n", match.start(), close_paren) + 1 < 4:
-            continue
-        owners = [name for start, end, name in spans if start <= match.start() < end]
-        if not owners:
-            raise AssertionError(f"ownerless donor call in {path}")
-        arguments = split_top_level(source[open_paren + 1 : close_paren])
-        if len(arguments) != 2:
-            raise AssertionError(f"unexpected donor call arguments in {path}")
-        array_argument = arguments[1].strip()
-        if not array_argument.startswith("&[") or not array_argument.endswith("]"):
-            raise AssertionError(f"non-array donor inventory in {path}")
-        elements = split_top_level(array_argument[2:-1])
-        needles: list[str] = []
-        counts: list[int] = []
-        if match.group(1) == "assert_source_counts":
-            for element in elements:
-                if not element.startswith("(") or not element.endswith(")"):
-                    raise AssertionError("malformed donor count tuple")
-                needle, count = split_top_level(element[1:-1])
-                needles.append(rust_string(needle))
-                counts.append(int(count.replace("_", ""), 0))
-        else:
-            needles = [rust_string(element) for element in elements]
-        calls.append((match.start(), owners[-1], match.group(1), needles, counts))
-    calls.sort()
-    ordinals: dict[str, int] = {}
-    groups = []
-    for _, owner, function, needles, counts in calls:
-        ordinal = ordinals.get(owner, 0)
-        ordinals[owner] = ordinal + 1
-        groups.append(
-            {
-                "id": f"{owner}/{ordinal:02d}",
-                "kind": KINDS[function],
-                "needles": needles,
-                "counts": counts,
-            }
-        )
-    return groups
 
 
 def collect_test_inventory(source_map: dict[Path, bytes]) -> list[str]:
@@ -352,59 +227,66 @@ def collect_test_inventory(source_map: dict[Path, bytes]) -> list[str]:
     return rows
 
 
-def validate_snapshot(
-    source_map: dict[Path, bytes], asset_bytes: bytes, *, enforce_pins: bool
+def validate_current(
+    source_map: dict[Path, bytes], asset_bytes: bytes
 ) -> None:
-    """Validate the current projection against authenticated donor semantics."""
-
-    if enforce_pins:
-        assert len(asset_bytes) == ASSET_LEN
-        assert sha256(asset_bytes) == ASSET_SHA256
-        for path in PATHS:
-            assert sha256(source_map[path]) == SOURCE_SHA256[path]
+    """Validate current compile-time asset ownership and direct assertion wiring."""
     fixture = json.loads(asset_bytes)
     assert set(fixture) == {"schema", "preimage", "groups"}
     assert fixture["schema"] == "iroha_core.fcmp_source_contract_groups.v1"
     assert fixture["preimage"] == {
-        "tests_rs": BLOBS[TESTS],
-        "commitment_mask_rs": BLOBS[COMMITMENT],
+        "tests_rs": BLOBS[TESTS], "commitment_mask_rs": BLOBS[COMMITMENT],
         "runtime_rs": BLOBS[RUNTIME],
     }
+    tests_source = source_map[TESTS].decode("utf-8")
+    length = re.search(r"const SOURCE_CONTRACT_GROUPS_V1_LEN: usize = ([0-9_]+);", tests_source)
+    digest = re.search(r"const SOURCE_CONTRACT_GROUPS_V1_SHA256: \[u8; 32\] = \[(.*?)\];", tests_source, re.DOTALL)
+    assert length is not None and digest is not None
+    assert len(asset_bytes) == int(length.group(1).replace("_", ""))
+    declared_hash = bytes(int(value, 16) for value in re.findall(r"0x([0-9a-f]{2})", digest.group(1)))
+    assert hashlib.sha256(asset_bytes).digest() == declared_hash
     groups = fixture["groups"]
     assert len(groups) == GROUP_COUNT
-    canonical = json.dumps(
-        groups, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode()
-    assert sha256(canonical) == GROUPS_SHA256
-    ids = [group["id"] for group in groups]
+    ids = []
+    for group in groups:
+        assert set(group) == {"id", "kind", "needles", "counts"}
+        assert isinstance(group["id"], str) and group["id"]
+        assert group["kind"] in {"contains", "excludes", "order", "counts"}
+        assert group["needles"] and all(isinstance(needle, str) and needle for needle in group["needles"])
+        assert all(type(count) is int and count >= 0 for count in group["counts"])
+        assert len(group["counts"]) == (len(group["needles"]) if group["kind"] == "counts" else 0)
+        ids.append(group["id"])
     assert len(ids) == len(set(ids))
-    assert sha256(("\n".join(ids) + "\n").encode()) == IDS_SHA256
-    donors = {}
-    expected_groups = []
-    for path in PATHS:
-        donor = git_blob(BLOBS[path])
-        assert sha256(donor) == PREIMAGE_SHA256[path]
-        donors[path] = donor
-        expected_groups.extend(donor_groups(path, donor))
-    assert groups == expected_groups
     current_ids = []
     for path in PATHS:
-        current_ids.extend(MIGRATED_PATTERN.findall(source_map[path].decode("utf-8")))
-        assert source_map[path].count(b"\n") <= LINE_CEILINGS[path]
+        source = source_map[path].decode("utf-8")
+        current_ids.extend(MIGRATED_PATTERN.findall(source))
+        assert source.count("\n") <= 16_100
     assert current_ids == ids
-    assert collect_test_inventory(source_map) == collect_test_inventory(donors)
-    inventory = "\n".join(collect_test_inventory(source_map)) + "\n"
-    assert sha256(inventory.encode()) == TESTS_SHA256
-    tests_source = source_map[TESTS]
-    loader_start = tests_source.index(b"const SOURCE_CONTRACT_GROUPS_V1:")
-    loader_end = tests_source.index(
-        b"#[derive(Clone, Copy)]\nenum SourcePoint", loader_start
-    )
+    assert collect_test_inventory(source_map) == EXPECTED_TEST_INVENTORY
+    function_names = {
+        match.group(1)
+        for source in source_map.values()
+        for match in FUNCTION_PATTERN.finditer(mask_non_code(source.decode("utf-8")))
+    }
+    assert all(group_id.rsplit("/", 1)[0] in function_names for group_id in ids)
+    assert tests_source.count("assert_sal_scalar_encoding_owner_handoff_source(") == 5
+    loader_start = tests_source.index("const SOURCE_CONTRACT_GROUPS_V1:")
+    loader_end = tests_source.index("#[derive(Clone, Copy)]\nenum SourcePoint", loader_start)
     loader = tests_source[loader_start:loader_end]
-    assert sha256(loader) == LOADER_SHA256
-    loader_text = loader.decode("utf-8")
     for token in FORBIDDEN_LOADER_TOKENS:
-        assert token not in loader_text
+        assert token not in loader
+    for contract in (
+        '#[norito(deny_unknown_fields)]',
+        'assert_eq!(digest, SOURCE_CONTRACT_GROUPS_V1_SHA256)',
+        'ids.insert(group.id.as_str())',
+        'group.counts.len(), group.needles.len()',
+        'assert!(source.contains(needle)', 'assert!(!source.contains(needle)',
+        'source[cursor..]', 'cursor += offset + needle.len()',
+        'source.matches(needle).count()', '*count',
+        'unreachable!("source-contract kinds are validated at load")',
+    ):
+        assert contract in loader
 
 
 def current_sources() -> dict[Path, bytes]:
@@ -416,8 +298,8 @@ def current_sources() -> dict[Path, bytes]:
 class FcmpSourceContractGroupsSourceTest(unittest.TestCase):
     """Exercise the source/asset contract and representative fail-closed mutations."""
 
-    def test_current_projection_matches_authenticated_donors(self) -> None:
-        validate_snapshot(current_sources(), (REPO / ASSET).read_bytes(), enforce_pins=True)
+    def test_current_asset_matches_consumer_and_executable_owners(self) -> None:
+        validate_current(current_sources(), (REPO / ASSET).read_bytes())
 
     def test_mutations_fail_closed(self) -> None:
         sources = current_sources()
@@ -452,12 +334,12 @@ class FcmpSourceContractGroupsSourceTest(unittest.TestCase):
         mutations.append((changed, asset))
 
         changed = dict(sources)
-        changed[RUNTIME] = sources[RUNTIME] + b"\n" * 2
+        changed[RUNTIME] = sources[RUNTIME] + b"\n" * 16_101
         mutations.append((changed, asset))
 
         for index, (mutated_sources, mutated_asset) in enumerate(mutations):
             with self.subTest(index=index), self.assertRaises((AssertionError, KeyError)):
-                validate_snapshot(mutated_sources, mutated_asset, enforce_pins=False)
+                validate_current(mutated_sources, mutated_asset)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,11 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     XCTAssertEqual(try bridge.invoke(.reserveOperationID, fields: fields), [id])
     endpoint.substituteResponse = true
     XCTAssertThrowsError(try bridge.invoke(.reserveOperationID, fields: fields))
+    XCTAssertEqual(endpoint.closeCalls, 1)
+    XCTAssertThrowsError(try bridge.invoke(.reserveOperationID, fields: fields))
+    XCTAssertEqual(endpoint.invokeCalls, 2)
+    try bridge.close()
+    XCTAssertEqual(endpoint.closeCalls, 1)
   }
 
   func testMismatchedContractAndMissingBackendStayUnavailable() throws {
@@ -32,6 +37,28 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/🔒", endpoint: endpoint)
     XCTAssertThrowsError(try bridge.invoke(.reserveOperationID, fields: []))
     XCTAssertEqual(endpoint.invokeCalls, 0)
+    XCTAssertEqual(endpoint.closeCalls, 0)
+  }
+
+  func testUncertainDispatchRevokesBeforeFailedTeardownAndPreservesOriginalError() throws {
+    let endpoint = Endpoint()
+    endpoint.failInvoke = true
+    endpoint.failClose = true
+    let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: endpoint)
+    let fields = [KagemushaCoreCoordinatorFrameV1.u32(22), Data(repeating: 7, count: 32), Data([1])]
+    XCTAssertThrowsError(try bridge.invoke(.reserveOperationID, fields: fields)) { error in
+      guard let failure = error as? KagemushaCoreCoordinatorErrorV1,
+        case .invalidFrame(let reason) = failure else {
+        return XCTFail("teardown must preserve the original uncertain dispatch error")
+      }
+      XCTAssertEqual(reason, "scripted dispatch failure")
+    }
+    XCTAssertEqual(endpoint.invokeCalls, 1)
+    XCTAssertEqual(endpoint.closeCalls, 1)
+    XCTAssertThrowsError(try bridge.invoke(.reserveOperationID, fields: fields))
+    try bridge.close()
+    XCTAssertEqual(endpoint.invokeCalls, 1)
+    XCTAssertEqual(endpoint.closeCalls, 1)
   }
 
   func testCloseRevokesLocallyAndCallsNativeOnce() throws {
@@ -64,6 +91,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     var invokeCalls = 0
     var closeCalls = 0
     var failClose = false
+    var failInvoke = false
     var substituteResponse = false
     func contract() throws -> [UInt32] { contractWords }
     func open(storagePath: Data) throws -> UInt64 { openCalls += 1; return returnedHandle }
@@ -75,6 +103,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
       invokeCalls += 1
       XCTAssertEqual(handle, returnedHandle)
       XCTAssertEqual(method, 1)
+      if failInvoke { throw KagemushaCoreCoordinatorErrorV1.invalidFrame("scripted dispatch failure") }
       let fields = try KagemushaCoreCoordinatorFrameV1.decodeRequest(.reserveOperationID, frame: request)
       var response = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.reserveOperationID, requestFrame: request, fields: [fields[1]])
       if substituteResponse { response[20] = 8 }

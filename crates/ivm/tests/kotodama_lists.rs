@@ -2,8 +2,9 @@
 use iroha_crypto::Hash;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
-use ivm::{IVM, KotodamaCompiler, ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
+use ivm::{IVM, ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use std::collections::BTreeMap;
 mod common;
 fn run(source: &str) -> IVM {

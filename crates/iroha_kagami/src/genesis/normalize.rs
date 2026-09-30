@@ -67,8 +67,8 @@ fn render_json<T: Write>(
     write!(writer, "  \"consensus_fingerprint\": ")?;
     write_json_value(writer, &normalized.consensus_fingerprint)?;
     writeln!(writer, ",")?;
-    write!(writer, "  \"sumeragi_v2\": ")?;
-    write_json_value(writer, &normalized.sumeragi_v2)?;
+    write!(writer, "  \"sumeragi_context\": ")?;
+    write_json_value(writer, &normalized.sumeragi_context)?;
     writeln!(writer, ",")?;
     write!(writer, "  \"crypto\": ")?;
     write_json_value(writer, &normalized.crypto)?;

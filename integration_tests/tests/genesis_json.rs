@@ -53,7 +53,7 @@ fn complete_test_genesis_builder_for_topology(
             let seed_byte = 0xA0_u8.wrapping_add(
                 u8::try_from(index).expect("integration-test validator index fits in one byte"),
             );
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
                 0,
                 validator,
@@ -75,9 +75,8 @@ fn complete_test_genesis_builder_for_topology(
         .expect("integration-test topology must form a canonical mint-finality roster");
     builder
         .set_topology(topology)
-        .with_sumeragi_v2_context_parameters(
-            iroha::data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
-            ),
+        .with_sumeragi_context_parameters(
+            iroha::data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         )
         .with_kagemusha_mint_finality_genesis_parameters(parameters)
 }

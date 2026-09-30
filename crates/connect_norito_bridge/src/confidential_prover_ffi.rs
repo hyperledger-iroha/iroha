@@ -3,7 +3,7 @@
 //! This C/JNI boundary marshals typed arguments; it does not introduce a private wire codec.
 //! Only the public result uses canonical Norito JSON. A proof never authorizes ledger mutation.
 
-use iroha_core::zk::{
+use iroha_core_zk::{
     ProofRelation,
     confidential::{
         ConfidentialProof, ConfidentialProver, ConfidentialProverError, ConfidentialTree,

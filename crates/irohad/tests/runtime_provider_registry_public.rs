@@ -1,4 +1,5 @@
 //! Public-surface checks for deployment-owned daemon providers and publication factories.
+use iroha_core::release_identity::CompiledBuildMetadata;
 use irohad::{
     IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1,
     IrohaRuntimeProviderRegistryErrorV1, IrohaRuntimeProviderRegistryV1, MainError,
@@ -19,6 +20,7 @@ struct DeploymentRegistry;
 struct ExternalMusubiPublicationFactory;
 struct ExternalMusubiPublicationRunner;
 type CombinedPublicationLauncher = fn(
+    CompiledBuildMetadata,
     &dyn IrohaRuntimeProviderRegistryV1,
     Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
 ) -> ReportResult<(), MainError>;
@@ -132,14 +134,17 @@ impl iroha_torii::SoraFsProofOutcomeTransactionSigner for ExternalProofOutcomeSi
 #[test]
 fn external_crate_can_implement_registry_and_name_standard_launcher() {
     let registry: Arc<dyn IrohaRuntimeProviderRegistryV1> = Arc::new(DeploymentRegistry);
-    let launcher: fn(&dyn IrohaRuntimeProviderRegistryV1) -> ReportResult<(), MainError> =
-        irohad::run_with_runtime_provider_registry;
+    let launcher: fn(
+        CompiledBuildMetadata,
+        &dyn IrohaRuntimeProviderRegistryV1,
+    ) -> ReportResult<(), MainError> = irohad::run_with_runtime_provider_registry;
     assert_eq!(Arc::strong_count(&registry), 1);
     let _ = launcher;
 }
 #[test]
 fn external_crate_can_implement_factory_and_name_publication_launchers() {
     let standalone_launcher: fn(
+        CompiledBuildMetadata,
         Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
     ) -> ReportResult<(), MainError> = irohad::run_with_musubi_publication;
     let combined_launcher: CombinedPublicationLauncher =
@@ -217,7 +222,7 @@ fn external_crate_can_name_secret_free_broker_catalog_handoff() {
 }
 #[test]
 fn checked_in_binaries_are_explicitly_adapter_disabled() {
-    let source = include_str!("../src/bin/iroha3d.rs");
+    let source = include_str!("../bins/src/bin/iroha3d.rs");
     let compact: String = source
         .chars()
         .filter(|character| !character.is_whitespace())

@@ -83,8 +83,8 @@ the exact 9+3 invocation inventory without treating the fake tools as execution 
 
 ## Blocked Top-Level Fuzz Targets
 
-`fuzz/Cargo.toml` declares five additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
-`da_ingest_schema`, `soranet_handshake`, and `lane_relay_envelope`. The manifest is an explicit standalone cargo-fuzz workspace, but these targets are
+`fuzz/Cargo.toml` declares four additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
+`da_ingest_schema`, and `soranet_handshake`. The manifest is an explicit standalone cargo-fuzz workspace, but these targets are
 not release-wired and must not be reported as executed. There is no tracked `fuzz/Cargo.lock`: the repository ignores
 nested lockfiles, and the root lock does not contain the standalone fuzz package, `libfuzzer-sys`, or `arbitrary`.
 Moving the package into the root workspace would therefore require changing the signed root `Cargo.lock`.

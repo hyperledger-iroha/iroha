@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +19,13 @@ SIGNER_POLICY_REVISION = 8
 SIGNER_POLICY_DIGEST_SHA256 = "9a" * 32
 
 
+@lru_cache(maxsize=16)
 def public_key_from_seed(seed: bytes = DEFAULT_SIGNING_SEED) -> bytes:
-    """Derive a deterministic test-only Ed25519 public key."""
+    """Derive an immutable fixture-only Ed25519 key from the complete seed.
+
+    The bounded memo contains only public keys. Every signature nonce and
+    verification still executes for its own complete message.
+    """
 
     digest = hashlib.sha512(seed).digest()
     scalar = int.from_bytes(digest[:32], "little")

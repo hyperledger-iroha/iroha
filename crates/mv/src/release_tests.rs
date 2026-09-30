@@ -1,7 +1,7 @@
 //! Release observations survive registration races without owning data locks.
 
 use crate::{PublicationPreparationError, cell::Cell, storage::Storage};
-use concread::release::*;
+use iroha_allocation::release::*;
 use std::{
     future::Future,
     pin::Pin,

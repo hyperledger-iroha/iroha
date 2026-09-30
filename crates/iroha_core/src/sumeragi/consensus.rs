@@ -20,12 +20,12 @@ pub use iroha_data_model::block::consensus::{Evidence, ExecKv, ExecWitness, Vali
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::sumeragi::PROTOCOL_VERSION as u32;
 /// Permissioned Sumeragi v1 handshake and signing-domain tag.
-pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
+pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus::PERMISSIONED_TAG;
 /// NPoS Sumeragi v1 handshake and signing-domain tag.
-pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
+pub const NPOS_TAG: &str = iroha_data_model::block::consensus::NPOS_TAG;
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
-/// Compute the genesis-embedded v2 consensus-parameters fingerprint.
+/// Compute the genesis-embedded consensus-parameters fingerprint.
 ///
 /// Mode, cadence, block bound, signed DA/Nexus context, and the
 /// genesis-selected NPoS election inputs are the complete canonical Norito
@@ -35,19 +35,19 @@ use iroha_data_model::prelude::*;
 pub fn compute_consensus_parameters_fingerprint(
     params: &ConsensusGenesisParams,
 ) -> Result<[u8; 32], String> {
-    iroha_data_model::block::consensus_v2::fingerprint::compute(params)
+    iroha_data_model::block::consensus::fingerprint::compute(params)
 }
 /// Build the exact first-release carrier for consensus-genesis parameters.
 ///
 /// Runtime handshakes, genesis metadata generation, and startup validation all
-/// pass this carrier through the canonical v2 fingerprint projection.
+/// pass this carrier through the canonical fingerprint projection.
 ///
 /// # Errors
 /// Returns an error when NPoS mode lacks its signed election parameters.
 pub fn consensus_genesis_params_from_parameters(
-    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    mode: iroha_data_model::block::consensus::ConsensusMode,
     params: &iroha_data_model::parameter::Parameters,
-    v2_context: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    sumeragi_context: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
 ) -> Result<ConsensusGenesisParams, &'static str> {
     let sumeragi = params.sumeragi();
     let block = params.block();
@@ -56,7 +56,7 @@ pub fn consensus_genesis_params_from_parameters(
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter);
     let mode = match mode {
-        iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
+        iroha_data_model::block::consensus::ConsensusMode::Npos => {
             let npos = npos_payload.ok_or("NPoS genesis requires `sumeragi_npos_parameters`")?;
             ConsensusGenesisModeParams::Npos(NposGenesisParams {
                 epoch_length_blocks: npos.epoch_length_blocks(),
@@ -70,7 +70,7 @@ pub fn consensus_genesis_params_from_parameters(
                 slashing_delay_blocks: npos.slashing_delay_blocks(),
             })
         }
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned => {
             if npos_payload.is_some() {
                 return Err("permissioned genesis must omit `sumeragi_npos_parameters`");
             }
@@ -82,7 +82,7 @@ pub fn consensus_genesis_params_from_parameters(
         block_max_transactions: block.max_transactions(),
         mode,
         protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
-        v2_context,
+        sumeragi_context,
     })
 }
 /// Handshake gate structure for p2p checks.
@@ -163,7 +163,7 @@ mod tests {
                 .expect("test block bound must be non-zero"),
             mode: ConsensusGenesisModeParams::Permissioned,
             protocol_version: PROTO_VERSION,
-            v2_context: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
+            sumeragi_context: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
         }
     }
     #[test]
@@ -243,12 +243,12 @@ mod tests {
         );
     }
     #[test]
-    fn canonical_fingerprint_binds_v2_protocol_and_context() {
+    fn canonical_fingerprint_binds_protocol_and_context() {
         let params = permissioned_genesis_params();
         let baseline = compute_consensus_parameters_fingerprint(&params)
             .expect("canonical fixture must fingerprint");
         let mut changed_context = params.clone();
-        changed_context.v2_context.nexus_amx_context_hash[0] ^= 1;
+        changed_context.sumeragi_context.nexus_amx_context_hash[0] ^= 1;
         let changed_context = compute_consensus_parameters_fingerprint(&changed_context)
             .expect("changed signed context must remain valid");
         let changed_protocol = ConsensusGenesisParams {
@@ -259,7 +259,7 @@ mod tests {
         assert!(compute_consensus_parameters_fingerprint(&changed_protocol).is_err());
     }
     #[test]
-    fn canonical_v2_npos_fingerprint_binds_election_seed() {
+    fn canonical_npos_fingerprint_binds_election_seed() {
         let mut p = ConsensusGenesisParams {
             mode: ConsensusGenesisModeParams::Npos(NposGenesisParams {
                 epoch_length_blocks: core::num::NonZeroU64::new(3_600)
@@ -294,7 +294,7 @@ mod tests {
         let chain = test_network_id("iroha:test:hshake");
         let p1 = permissioned_genesis_params();
         let mut p2 = p1.clone();
-        p2.v2_context.nexus_amx_context_hash[0] ^= 1;
+        p2.sumeragi_context.nexus_amx_context_hash[0] ^= 1;
         let f1 = compute_consensus_parameters_fingerprint(&p1)
             .expect("baseline carrier must fingerprint");
         let f2 = compute_consensus_parameters_fingerprint(&p2)

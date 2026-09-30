@@ -1,8 +1,9 @@
 //! Tests that exercise spilled temporaries and nested calls with spills.
 use ivm::{
     IVM, LiteralKindV1, ProgramMetadata, decode_literal_descriptor, encoding, host::DefaultHost,
-    instruction, kotodama::compiler::Compiler as KotodamaCompiler,
+    instruction,
 };
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 #[test]
 fn many_locals_force_spills_and_compute() {

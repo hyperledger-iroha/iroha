@@ -379,7 +379,7 @@ fn resolve_trusted_peers_pop(
             "Sora wizard validator roster is missing authoritative PoPs for: {missing:?}"
         ));
     }
-    if !iroha_data_model::block::consensus_v2::is_valid_committee_size(pops.len()) {
+    if !iroha_data_model::block::consensus::is_valid_committee_size(pops.len()) {
         return Err(eyre!(
             "Sora wizard authoritative validator roster must contain an exact 3f + 1 committee of 4, 7, ... 31 PoPs; got {}",
             pops.len()
@@ -1355,10 +1355,6 @@ mod tests {
         assert!(!rendered.contains("--genesis-manifest-json"));
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the scenario validates the complete generated Nexus template through both canonical admission paths"
-    )]
     fn wizard_nexus_profile_template_passes_canonical_and_cli_profile_admission() {
         let keypair = checked_wizard_bls_keypair();
         let transport_keypair = checked_wizard_transport_keypair();

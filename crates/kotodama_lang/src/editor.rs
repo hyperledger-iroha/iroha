@@ -5,7 +5,6 @@
 //! authority for cross-file symbols; this module never reads the filesystem.
 use crate::{
     ast::ParameterCallMode,
-    builtins::{Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface},
     lexer::{Token, TokenKind},
     linker::{
         ImportBinding, LinkRequest, LinkerOptions, ModuleBuildGraph, ModuleUnit, PackageUnit,
@@ -19,6 +18,7 @@ use crate::{
     source::{FrontendBudget, SourceFile, SourceId, SourceRange, TextRange},
     spanned_ast::{AstFacts, DeclarationKind},
 };
+use kotodama_surface::builtins::{Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Stable source declaration or lexical binding in one snapshot.
@@ -764,7 +764,7 @@ impl EditorSnapshot {
         let tokens =
             crate::lexer::lex(name).map_err(|_| "Rename requires one Kotodama identifier.")?;
         if !matches!(tokens.as_slice(), [Token { kind: TokenKind::Ident(value), .. }, Token { kind: TokenKind::EOF, .. }] if value == name)
-            || crate::semantic::is_reserved_source_declaration(name, false)
+            || kotodama_surface::source_policy::is_reserved_source_declaration(name, false)
         {
             return Err("Rename requires an available Kotodama identifier.".into());
         }
@@ -1077,9 +1077,9 @@ impl EditorSnapshot {
                 }
                 return candidates;
             }
-            for path in crate::semantic::V1_SUM_PATHS
+            for path in kotodama_surface::source_policy::V1_SUM_PATHS
                 .iter()
-                .chain(crate::semantic::V1_ROUNDING_PATHS)
+                .chain(kotodama_surface::source_policy::V1_ROUNDING_PATHS)
             {
                 if let Some(suffix) = path.strip_prefix(&format!("{namespace}::")) {
                     candidates.push(plain_completion(suffix, 20, path));
@@ -1208,7 +1208,7 @@ impl EditorSnapshot {
                 .entry(keyword.to_owned())
                 .or_insert_with(|| plain_completion(keyword, 14, "Kotodama keyword"));
         }
-        for &name in crate::semantic::V1_SOURCE_TYPE_NAMES {
+        for &name in kotodama_surface::source_policy::V1_SOURCE_TYPE_NAMES {
             candidates
                 .entry(name.to_owned())
                 .or_insert_with(|| plain_completion(name, 7, "Kotodama type"));
@@ -1924,7 +1924,7 @@ mod tests {
         let members = labels(&snapshot, cursor(source, ".get") + 1);
         assert_eq!(
             members,
-            crate::semantic::V1_LIST_MEMBER_NAMES
+            kotodama_surface::source_policy::V1_LIST_MEMBER_NAMES
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect()

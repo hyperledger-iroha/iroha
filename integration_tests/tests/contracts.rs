@@ -7,7 +7,6 @@ use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
-    block::consensus_v2::recommended_data_availability_layout,
     isi::smart_contract_code::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
         OfferContractOwnership, SetContractParliamentDelegation,
@@ -28,12 +27,13 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
+use iroha_sumeragi::availability::recommended_data_availability_layout;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use reqwest::StatusCode;
 use std::time::{Duration, Instant};
 use std::{num::NonZeroU64, str::FromStr as _};
 fn minimal_contract_artifact() -> Vec<u8> {
-    ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+    kotodama_lang::compiler::Compiler::new_with_options(kotodama_lang::compiler::CompilerOptions {
         max_cycles: 1_000,
         ..Default::default()
     })
@@ -205,7 +205,7 @@ seiyaku ContractStateProbe {
   }
 }
 "#;
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile contract-state probe program")
 }
@@ -777,7 +777,7 @@ seiyaku DynamicAccessCounter {
   }
 }
 "#;
-    let artifact = ivm::KotodamaCompiler::new()
+    let artifact = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile dynamic-access counter program");
     let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse dynamic-access metadata");
@@ -828,7 +828,7 @@ seiyaku TypedCoreQueryPager {
   }
 }
 "#;
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile typed core-query pager program")
 }
@@ -1753,7 +1753,7 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
         .map_err(|error| eyre!("invalid signed consensus handshake: {error}"))?;
     assert_eq!(handshake.mode, SumeragiConsensusMode::Npos);
     assert_eq!(
-        handshake.sumeragi_v2.da_layout,
+        handshake.sumeragi_context.da_layout,
         recommended_data_availability_layout(),
         "contract lifecycle gate requires the signed mandatory DA layout"
     );
@@ -2465,7 +2465,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         "typed-query pagination gate requires the Sora NPoS profile"
     );
     assert_eq!(
-        handshake.sumeragi_v2.da_layout,
+        handshake.sumeragi_context.da_layout,
         recommended_data_availability_layout(),
         "typed-query pagination gate requires the signed mandatory DA layout"
     );
@@ -3006,7 +3006,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
         "contract V1 restart gate requires the Sora NPoS profile"
     );
     assert_eq!(
-        handshake.sumeragi_v2.da_layout,
+        handshake.sumeragi_context.da_layout,
         recommended_data_availability_layout(),
         "contract V1 restart gate requires the signed mandatory DA layout"
     );

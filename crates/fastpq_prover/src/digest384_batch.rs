@@ -22,7 +22,7 @@ use crate::{DigestExecutionV1, gpu::GpuError};
 /// Maximum final byte payload admitted to one continuation dispatch.
 pub const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
-pub(crate) const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
+pub const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
 /// Eight CPU/device known answers and one CPU/device public probe.
 /// The enclosing prover charges this cold bound even for CPU or warm execution.
 pub const MAX_PREFLIGHT_HASH_CALLS: usize = 18;

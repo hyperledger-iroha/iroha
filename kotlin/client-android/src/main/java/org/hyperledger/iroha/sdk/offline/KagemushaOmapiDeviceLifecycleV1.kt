@@ -25,6 +25,51 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ABI-25 capability frame. StrongBox or an eSE feature flag alone never enables the wallet.
  */
 object KagemushaOmapiDeviceLifecycleV1 {
+    enum class DiscoveryStatus { AVAILABLE, API_UNSUPPORTED, NO_EMBEDDED_READER, UNAVAILABLE, AMBIGUOUS, TIMED_OUT, SERVICE_FAILED }
+    enum class FailureReason { ACCESS_DENIED, APPLET_NOT_FOUND, NO_LOGICAL_CHANNEL, SECURE_ELEMENT_ABSENT, PLATFORM_IO, PLATFORM_FAILURE, CAPABILITY_REJECTED }
+
+    /** Original platform failure remains available to the owner; string rendering exposes no body. */
+    class DiscoveryFailure internal constructor(
+        val readerName: String?, val reason: FailureReason, val cause: Throwable?,
+    ) {
+        override fun toString(): String = "DiscoveryFailure(reader=$readerName, reason=$reason)"
+    }
+
+    /** Discovery is transport evidence only and grants no release or monetary authority. */
+    class DiscoveryResult internal constructor(
+        val bridge: KagemushaDeviceLifecycleBridgeV1,
+        val status: DiscoveryStatus,
+        failures: List<DiscoveryFailure>,
+    ) {
+        val failures: List<DiscoveryFailure> = java.util.Collections.unmodifiableList(failures.toList())
+        init {
+            require((status == DiscoveryStatus.AVAILABLE) ==
+                (bridge.availability == KagemushaDeviceLifecycleBridgeV1.Availability.AVAILABLE))
+        }
+    }
+
+    internal fun classifyFailure(readerName: String?, failure: Throwable): DiscoveryFailure =
+        DiscoveryFailure(readerName, when (failure) {
+            is SecurityException -> FailureReason.ACCESS_DENIED
+            is java.util.NoSuchElementException -> FailureReason.APPLET_NOT_FOUND
+            is UnsupportedOperationException -> FailureReason.NO_LOGICAL_CHANNEL
+            is java.io.IOException -> FailureReason.PLATFORM_IO
+            else -> FailureReason.PLATFORM_FAILURE
+        }, failure)
+
+    private fun unavailable(status: DiscoveryStatus, failures: List<DiscoveryFailure> = emptyList()) =
+        DiscoveryResult(KagemushaDeviceLifecycleBridgeV1.onlineOnly(), status, failures)
+
+    @JvmStatic
+    @JvmOverloads
+    fun openAsync(context: Context, executor: Executor, configuration: Configuration = Configuration(),
+        discoveryTimeoutMillis: Long = DEFAULT_DISCOVERY_TIMEOUT_MILLIS): CompletableFuture<KagemushaDeviceLifecycleBridgeV1> {
+        val discovery = openWithDiagnosticsAsync(context, executor, configuration, discoveryTimeoutMillis)
+        val bridge = discovery.thenApply { it.bridge }
+        bridge.whenComplete { _, _ -> if (bridge.isCancelled) discovery.cancel(false) }
+        return bridge
+    }
+
     /** Exact applet selection and optional reader pin. */
     class Configuration @JvmOverloads constructor(
         readerName: String? = null,
@@ -51,19 +96,19 @@ object KagemushaOmapiDeviceLifecycleV1 {
      */
     @JvmStatic
     @JvmOverloads
-    fun openAsync(
+    fun openWithDiagnosticsAsync(
         context: Context,
         executor: Executor,
         configuration: Configuration = Configuration(),
         discoveryTimeoutMillis: Long = DEFAULT_DISCOVERY_TIMEOUT_MILLIS,
-    ): CompletableFuture<KagemushaDeviceLifecycleBridgeV1> {
+    ): CompletableFuture<DiscoveryResult> {
         require(discoveryTimeoutMillis in 1..MAXIMUM_DISCOVERY_TIMEOUT_MILLIS) {
             "discoveryTimeoutMillis must be in 1..$MAXIMUM_DISCOVERY_TIMEOUT_MILLIS"
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            return CompletableFuture.completedFuture(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
+            return CompletableFuture.completedFuture(unavailable(DiscoveryStatus.API_UNSUPPORTED))
         }
-        val result = CompletableFuture<KagemushaDeviceLifecycleBridgeV1>()
+        val result = CompletableFuture<DiscoveryResult>()
         val service = CompletableFuture<SEService>()
         val shutdownRequested = AtomicBoolean(false)
         val shutdownService: () -> Unit = {
@@ -73,14 +118,14 @@ object KagemushaOmapiDeviceLifecycleV1 {
         }
         val timeout = discoveryTimeoutExecutor.schedule(
             {
-                completeUnavailableUnlessResolved(result, shutdownService)
+                completeDiagnosticTimeoutUnlessResolved(result, shutdownService)
             },
             discoveryTimeoutMillis,
             TimeUnit.MILLISECONDS,
         )
-        result.whenComplete { bridge, _ ->
+        result.whenComplete { discovered, _ ->
             timeout.cancel(false)
-            if (bridge?.availability != KagemushaDeviceLifecycleBridgeV1.Availability.AVAILABLE) {
+            if (discovered?.status != DiscoveryStatus.AVAILABLE) {
                 shutdownService()
             }
         }
@@ -89,7 +134,8 @@ object KagemushaOmapiDeviceLifecycleV1 {
                 service.whenCompleteAsync(
                     { connected, failure ->
                         if (connected == null || failure != null) {
-                            result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
+                            result.complete(unavailable(DiscoveryStatus.SERVICE_FAILED,
+                                listOf(classifyFailure(null, failure ?: IllegalStateException("OMAPI service missing")))))
                         } else {
                             discoverConnectedService(
                                 connected,
@@ -103,12 +149,12 @@ object KagemushaOmapiDeviceLifecycleV1 {
                 )
             }
             service.complete(connecting)
-        } catch (_: Exception) {
-            service.completeExceptionally(IllegalStateException("OMAPI service creation failed"))
-            result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
-        } catch (_: LinkageError) {
-            service.completeExceptionally(IllegalStateException("OMAPI service linkage failed"))
-            result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
+        } catch (error: Exception) {
+            service.completeExceptionally(error)
+            result.complete(unavailable(DiscoveryStatus.SERVICE_FAILED, listOf(classifyFailure(null, error))))
+        } catch (error: LinkageError) {
+            service.completeExceptionally(error)
+            result.complete(unavailable(DiscoveryStatus.SERVICE_FAILED, listOf(classifyFailure(null, error))))
         }
         return result
     }
@@ -116,7 +162,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
     private fun discoverConnectedService(
         service: SEService,
         configuration: Configuration,
-        result: CompletableFuture<KagemushaDeviceLifecycleBridgeV1>,
+        result: CompletableFuture<DiscoveryResult>,
         shutdownService: () -> Unit,
     ) {
         if (result.isDone) {
@@ -124,6 +170,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
             return
         }
         val admitted = mutableListOf<Pair<KagemushaDeviceLifecycleBridgeV1, OmapiChannel>>()
+        val failures = mutableListOf<DiscoveryFailure>()
         try {
             val readers = service.readers
                 .asSequence()
@@ -131,34 +178,40 @@ object KagemushaOmapiDeviceLifecycleV1 {
                 .sortedBy(Reader::getName)
                 .toList()
             for (reader in readers) {
-                val owned = openChannel(reader, configuration.appletAid) ?: continue
+                val owned = openChannel(reader, configuration.appletAid, failures) ?: continue
                 try {
                     val endpoint = KagemushaSecureElementApduEndpointV1(owned)
                     val bridge = KagemushaDeviceLifecycleBridgeV1.withSecureElementEndpoint(endpoint)
                     admitted += bridge to owned
-                } catch (_: RuntimeException) {
+                } catch (error: RuntimeException) {
+                    failures += DiscoveryFailure(reader.name, FailureReason.CAPABILITY_REJECTED, error)
                     owned.close()
-                } catch (_: LinkageError) {
+                } catch (error: LinkageError) {
+                    failures += DiscoveryFailure(reader.name, FailureReason.CAPABILITY_REJECTED, error)
                     owned.close()
                 }
             }
             if (admitted.size == 1) {
                 val (bridge, owned) = admitted.single()
                 owned.attach(service)
-                if (!result.complete(bridge)) owned.close()
+                if (!result.complete(DiscoveryResult(bridge, DiscoveryStatus.AVAILABLE, failures))) owned.close()
             } else {
                 admitted.forEach { (_, owned) -> owned.close() }
                 shutdownService()
-                result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
+                result.complete(unavailable(when {
+                    admitted.size > 1 -> DiscoveryStatus.AMBIGUOUS
+                    readers.isEmpty() -> DiscoveryStatus.NO_EMBEDDED_READER
+                    else -> DiscoveryStatus.UNAVAILABLE
+                }, failures))
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             admitted.forEach { (_, owned) -> owned.close() }
             shutdownService()
-            result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
-        } catch (_: LinkageError) {
+            result.complete(unavailable(DiscoveryStatus.SERVICE_FAILED, failures + classifyFailure(null, error)))
+        } catch (error: LinkageError) {
             admitted.forEach { (_, owned) -> owned.close() }
             shutdownService()
-            result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
+            result.complete(unavailable(DiscoveryStatus.SERVICE_FAILED, failures + classifyFailure(null, error)))
         }
     }
 
@@ -193,20 +246,32 @@ object KagemushaOmapiDeviceLifecycleV1 {
         )
     }
 
+    internal fun completeDiagnosticTimeoutUnlessResolved(result: CompletableFuture<DiscoveryResult>,
+        onTimeout: () -> Unit): Boolean {
+        val completed = result.complete(unavailable(DiscoveryStatus.TIMED_OUT))
+        if (completed) onTimeout()
+        return completed
+    }
+
     @TargetApi(Build.VERSION_CODES.P)
-    private fun openChannel(reader: Reader, aid: ByteArray): OmapiChannel? {
+    private fun openChannel(reader: Reader, aid: ByteArray, failures: MutableList<DiscoveryFailure>): OmapiChannel? {
         var session: Session? = null
         var channel: Channel? = null
         return try {
-            if (!reader.isSecureElementPresent) return null
+            if (!reader.isSecureElementPresent) {
+                failures += DiscoveryFailure(reader.name, FailureReason.SECURE_ELEMENT_ABSENT, null)
+                return null
+            }
             session = reader.openSession()
             channel = session.openLogicalChannel(aid)
             if (channel == null) {
+                failures += DiscoveryFailure(reader.name, FailureReason.NO_LOGICAL_CHANNEL, null)
                 session.close()
                 return null
             }
             OmapiChannel(session, channel)
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            failures += classifyFailure(reader.name, error)
             runCatching { channel?.close() }
             runCatching { session?.close() }
             null

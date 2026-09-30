@@ -4,8 +4,8 @@ use concread::bptree::{
     AllocationDemand, BptreeMap, BptreeMapOwned, BptreeMapReadTxn, ClonePlanning,
     MapAdmissionError, NodeCloning, NodeFunding, OwnedWriteError, PlanningError, Prepaid,
 };
-use concread::shared::{Reserved, Shared};
-use mv::allocation::{
+use iroha_allocation::shared::{Reserved, Shared};
+use iroha_allocation::{
     AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
     ChargedBufferError, ChargedBufferFromChargeError,
 };
@@ -35,7 +35,7 @@ pub(super) type Reader<'a> = BptreeMapReadTxn<'a, Key, Value, Mode>;
 pub enum MembershipAdmissionError {
     /// The original membership or history lock is owned by another operation.
     #[error("transaction membership is busy")]
-    Busy(concread::release::ReleaseWait),
+    Busy(iroha_allocation::release::ReleaseWait),
     /// The original configured pool refused this allocation.
     #[error("transaction membership capacity: {0}")]
     Capacity(AllocationRefusal),
@@ -47,7 +47,7 @@ pub enum MembershipAdmissionError {
     Poisoned,
     /// A different committed membership generation replaced this predecessor.
     #[error("transaction membership predecessor changed")]
-    Changed(concread::release::ReleaseWait),
+    Changed(iroha_allocation::release::ReleaseWait),
     /// The allocator refused an already prepaid membership allocation.
     #[error("transaction membership allocator refused {requested_bytes} bytes")]
     Allocator {
@@ -61,7 +61,7 @@ pub enum MembershipAdmissionError {
 }
 impl MembershipAdmissionError {
     /// Borrow only the original resource release that can permit a retry.
-    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::Busy(wait) | Self::Changed(wait) => Some(wait),
             Self::Capacity(AllocationRefusal::Capacity { release, .. }) => Some(release),
@@ -81,7 +81,7 @@ impl From<ChargedBufferError> for MembershipAdmissionError {
 }
 pub(super) fn physical_error(
     error: OwnedWriteError,
-    wait: concread::release::ReleaseWait,
+    wait: iroha_allocation::release::ReleaseWait,
 ) -> MembershipAdmissionError {
     match error {
         OwnedWriteError::Busy => MembershipAdmissionError::Busy(wait),
@@ -91,7 +91,7 @@ pub(super) fn physical_error(
 }
 pub(super) fn edit_error(
     error: MapAdmissionError<AllocationRefusal>,
-    wait: concread::release::ReleaseWait,
+    wait: iroha_allocation::release::ReleaseWait,
 ) -> MembershipAdmissionError {
     match error {
         MapAdmissionError::Busy => MembershipAdmissionError::Busy(wait),
@@ -163,8 +163,8 @@ pub(crate) struct Pending {
     pub(super) baseline: Option<concread::bptree::BptreeMapRetainedPredecessor<Key, Value, Mode>>,
     leased: bool,
     // Last: clear the original loan and retire payloads before its actual wake.
-    lease_release: Option<concread::release::DeferredRelease>,
-    pub(super) attachment_releases: concread::release::DeferredReleaseBatch,
+    lease_release: Option<iroha_allocation::release::DeferredRelease>,
+    pub(super) attachment_releases: iroha_allocation::release::DeferredReleaseBatch,
 }
 impl Pending {
     fn new(
@@ -172,7 +172,7 @@ impl Pending {
         latest: Option<Tip>,
         replacement: bool,
         next_sequence: u64,
-        attachment_releases: concread::release::DeferredReleaseBatch,
+        attachment_releases: iroha_allocation::release::DeferredReleaseBatch,
     ) -> Self {
         Self {
             predecessor,
@@ -189,7 +189,7 @@ impl Pending {
             attachment_releases,
         }
     }
-    pub(super) fn release_loan(&mut self) -> Option<concread::release::DeferredRelease> {
+    pub(super) fn release_loan(&mut self) -> Option<iroha_allocation::release::DeferredRelease> {
         if self.leased {
             self.predecessor.loaned.store(false, Ordering::Release);
             self.leased = false;

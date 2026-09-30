@@ -35,6 +35,71 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
     XCTAssertEqual(result.canonicalResponseFrame, expected)
   }
 
+  func testExternalResponseAuthenticationBindsOriginalCommandAndQualification() throws {
+    let requestID = fixed(0x11, count: 32)
+    let command = Data([9, 8, 7])
+    let key = Data([4]) + fixed(0x33, count: 64)
+    let capabilities = KagemushaDeviceLifecycleCapabilitiesV1(
+      hardwarePolicyID: fixed(0x55, count: 32), qualificationReportDigest: fixed(0x66, count: 32))
+    let frame = KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+      operation: .prepareExactNextTransition, status: .success, requestID: requestID,
+      payload: Data([1, 2]), authenticator: fixed(0x44, count: 64))
+    var calls = 0
+    let result = try KagemushaDeviceLifecycleBridgeV1.authenticateResponse(frame,
+      operation: .prepareExactNextTransition, requestID: requestID, canonicalCommand: command,
+      capabilities: capabilities, acceptedDevicePublicKey: key,
+      verify: { response, original, operation, nonce, policy, report, acceptedKey in
+        calls += 1
+        XCTAssertEqual(response, frame)
+        XCTAssertEqual(original, command)
+        XCTAssertEqual(operation, .prepareExactNextTransition)
+        XCTAssertEqual(nonce, requestID)
+        XCTAssertEqual(policy, capabilities.hardwarePolicyID)
+        XCTAssertEqual(report, capabilities.qualificationReportDigest)
+        XCTAssertEqual(acceptedKey, key)
+        return true // Native-verifier seam plumbing, never hardware acceptance.
+      })
+    XCTAssertEqual(calls, 1)
+    XCTAssertEqual(result.canonicalResponseFrame, frame)
+  }
+
+  func testExternalResponseCannotBypassNativeAuthenticationOrRetargetNonce() throws {
+    let requestID = fixed(0x11, count: 32)
+    let capabilities = KagemushaDeviceLifecycleCapabilitiesV1(
+      hardwarePolicyID: fixed(0x55, count: 32), qualificationReportDigest: fixed(0x66, count: 32))
+    let frame = KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+      operation: .readActiveHardwareCredential, status: .success, requestID: requestID,
+      payload: Data([1, 2]), authenticator: fixed(0x44, count: 64))
+    XCTAssertThrowsError(try KagemushaDeviceLifecycleBridgeV1.authenticateResponse(frame,
+      operation: .readActiveHardwareCredential, requestID: requestID, canonicalCommand: Data([1]),
+      capabilities: capabilities, acceptedDevicePublicKey: nil, verify: { _, _, _, _, _, _, _ in false }))
+    var invoked = false
+    XCTAssertThrowsError(try KagemushaDeviceLifecycleBridgeV1.authenticateResponse(frame,
+      operation: .readActiveHardwareCredential, requestID: fixed(0x22, count: 32), canonicalCommand: Data([1]),
+      capabilities: capabilities, acceptedDevicePublicKey: nil, verify: { _, _, _, _, _, _, _ in
+        invoked = true; return true
+      }))
+    XCTAssertFalse(invoked)
+  }
+
+  func testExternalResponseRequiresOriginalAcceptedKeyBeforeVerification() throws {
+    let requestID = fixed(0x11, count: 32)
+    let capabilities = KagemushaDeviceLifecycleCapabilitiesV1(
+      hardwarePolicyID: fixed(0x55, count: 32), qualificationReportDigest: fixed(0x66, count: 32))
+    let frame = KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+      operation: .prepareExactNextTransition, status: .success, requestID: requestID,
+      payload: Data([1]), authenticator: fixed(0x44, count: 64))
+    var invoked = false
+    for key in [nil, Data(), fixed(0, count: 65), Data([4]) + fixed(0x33, count: 63)] as [Data?] {
+      XCTAssertThrowsError(try KagemushaDeviceLifecycleBridgeV1.authenticateResponse(frame,
+        operation: .prepareExactNextTransition, requestID: requestID, canonicalCommand: Data([1]),
+        capabilities: capabilities, acceptedDevicePublicKey: key, verify: { _, _, _, _, _, _, _ in
+          invoked = true; return true
+        }))
+    }
+    XCTAssertFalse(invoked)
+  }
+
   func testNativeContractVectorProbeIsBoundedWhenLinked() {
     XCTAssertEqual(KagemushaDeviceLifecycleBridgeV1.maximumNativeContractVectorBytes, 4 * 1024)
     if let vector = KagemushaDeviceLifecycleBridgeV1.nativeContractVector() {

@@ -235,3 +235,36 @@ fn record_keys_are_not_mistaken_for_unknown_fields() {
         .expect_err("a misspelled key must fail");
     assert!(error.contains("record_dir"), "{error}");
 }
+
+#[test]
+fn retired_block_queue_limit_and_storage_tables_are_rejected() {
+    // Block limits are chain parameters; the retired ingress, limit and storage tables have no
+    // node-local replacement and must fail instead of being ignored.
+    for (table, field) in [
+        ("block", "max_transactions"),
+        ("queues", "body_bytes"),
+        ("limits", "max_lanes"),
+        ("storage", "body_store_max_bytes_per_height"),
+    ] {
+        let error = parse_inline(&format!("[sumeragi.{table}]\n{field} = 1\n"))
+            .expect_err("a retired Sumeragi table must fail");
+        assert!(
+            error.contains("unknown parameter") && error.contains(&format!("sumeragi.{table}")),
+            "retired `sumeragi.{table}` must be named as unknown: {error}"
+        );
+    }
+}
+
+#[test]
+fn retired_body_ingress_environment_name_is_not_an_input() {
+    // `SUMERAGI_QUEUES_BODY_BYTES` bound the retired `[sumeragi.queues].body_bytes`; generators
+    // no longer emit it and the reader must leave it unvisited.
+    let env = iroha_config_base::env::MockEnv::new().set("SUMERAGI_QUEUES_BODY_BYTES", "213909504");
+    let _actual: ActualConfig = base_reader()
+        .with_env(env.clone())
+        .read_and_complete::<UserConfig>()
+        .expect("a retired environment name is not a schema input")
+        .parse()
+        .expect("a retired environment name cannot alter the configuration");
+    assert!(env.unvisited().contains("SUMERAGI_QUEUES_BODY_BYTES"));
+}

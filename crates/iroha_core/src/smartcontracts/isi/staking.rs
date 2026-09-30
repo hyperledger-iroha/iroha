@@ -10,6 +10,7 @@ use crate::{
     status,
     telemetry::StateTelemetry,
 };
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer};
 use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     isi::{
@@ -34,7 +35,6 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
-use mv::allocation::{AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer};
 use std::{alloc::Layout, collections::BTreeMap, ops::Range, time::Duration};
 #[path = "staking_effects.rs"]
 mod effects;
@@ -359,7 +359,7 @@ impl PublicLaneStakeIndex {
         let mut nested_account_charges: ChargedBuffer<AllocationCharge> =
             ChargedBuffer::try_from_charge(demand.account_clone_charges, charges_charge).map_err(
                 |(_, error)| match error {
-                    mv::allocation::ChargedBufferFromChargeError::Allocator { layout } => {
+                    iroha_allocation::ChargedBufferFromChargeError::Allocator { layout } => {
                         EvidencePreparationError::Allocator {
                             requested_bytes: layout.size(),
                         }
@@ -375,7 +375,7 @@ impl PublicLaneStakeIndex {
             .expect("complete fixed stake-index demand was reserved");
         let mut share_keys = ChargedBuffer::try_from_charge(demand.share_rows, share_charge)
             .map_err(|(_, error)| match error {
-                mv::allocation::ChargedBufferFromChargeError::Allocator { layout } => {
+                iroha_allocation::ChargedBufferFromChargeError::Allocator { layout } => {
                     EvidencePreparationError::Allocator {
                         requested_bytes: layout.size(),
                     }
@@ -385,7 +385,7 @@ impl PublicLaneStakeIndex {
         let mut groups: ChargedBuffer<IndexedValidatorStake> =
             ChargedBuffer::try_from_charge(demand.validator_groups, group_charge).map_err(
                 |(_, error)| match error {
-                    mv::allocation::ChargedBufferFromChargeError::Allocator { layout } => {
+                    iroha_allocation::ChargedBufferFromChargeError::Allocator { layout } => {
                         EvidencePreparationError::Allocator {
                             requested_bytes: layout.size(),
                         }

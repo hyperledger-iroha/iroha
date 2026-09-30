@@ -168,7 +168,7 @@ impl Drop for Pending<'_> {
 fn register(
     source: &ReleaseNotification,
     control: &Arc<Control>,
-) -> concread::release::ReleaseFuture {
+) -> iroha_allocation::release::ReleaseFuture {
     let mut wait = source.observe().wait_for_release();
     let waker = Waker::from(Arc::clone(control));
     assert!(

@@ -29,6 +29,7 @@ import org.hyperledger.iroha.sdk.alias.PreparedOperationBindingV1
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.consensus.SumeragiLaneStatus
 import org.hyperledger.iroha.sdk.consensus.SumeragiStatus
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
@@ -386,6 +387,18 @@ interface IrohaClient {
         val future = CompletableFuture<SumeragiStatus>()
         future.completeExceptionally(
             IllegalStateException("getSumeragiStatus requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /**
+     * Fetches every lane of the committed global-chain state with the status of the node's
+     * instance of it, fail-closed (`/v1/sumeragi/lanes`).
+     */
+    fun getSumeragiLanes(): CompletableFuture<List<SumeragiLaneStatus>> {
+        val future = CompletableFuture<List<SumeragiLaneStatus>>()
+        future.completeExceptionally(
+            IllegalStateException("getSumeragiLanes requires a concrete IrohaClient implementation")
         )
         return future
     }

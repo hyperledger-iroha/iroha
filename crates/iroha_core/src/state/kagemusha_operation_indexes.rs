@@ -9,10 +9,8 @@ use super::{Storage, WorldData};
 use concread::bptree::{
     AllocationDemand, ClonePlanning, NodeCloning, NodeFunding, PlanningError, Prepaid,
 };
-use mv::{
-    allocation::{AllocationBudget, AllocationCharge, AllocationReservation},
-    storage::{AdmittedStorageError, AdmittedStoragePolicy},
-};
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationReservation};
+use mv::storage::{AdmittedStorageError, AdmittedStoragePolicy};
 use std::alloc::Layout;
 
 /// Closed copying policy for fixed 32-byte operation identifiers only.

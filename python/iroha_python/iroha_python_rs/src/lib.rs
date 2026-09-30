@@ -24,7 +24,7 @@ use core::{
 };
 use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
-use iroha_core::{
+use iroha_core_privacy::{
     privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
         CompiledPrivacyProfileV1, compiled_privacy_profile_catalog_v1, compiled_privacy_profile_v1,
@@ -4779,7 +4779,7 @@ fn confidential_vk_registration_payload_py(
 fn confidential_transfer_v2_verifying_key_registration_payload_v1_py(
     py: Python<'_>,
 ) -> PyResult<Py<PyAny>> {
-    let record = iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+    let record = iroha_core_zk::confidential_v2::confidential_transfer_v2_vk_record(
         "confidential_transfer_v2",
         1,
     )
@@ -4791,7 +4791,7 @@ fn confidential_transfer_v2_verifying_key_registration_payload_v1_py(
     confidential_vk_registration_payload_py(
         py,
         record,
-        iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+        iroha_core_zk::ZK_BACKEND_HALO2_IPA,
         "confidential_transfer_v2",
         "confidential transfer v2",
     )
@@ -4801,7 +4801,7 @@ fn confidential_transfer_v2_verifying_key_registration_payload_v1_py(
 fn confidential_unshield_v3_verifying_key_registration_payload_v1_py(
     py: Python<'_>,
 ) -> PyResult<Py<PyAny>> {
-    let record = iroha_core::zk::confidential_v2::confidential_unshield_v3_vk_record(
+    let record = iroha_core_zk::confidential_v2::confidential_unshield_v3_vk_record(
         "confidential_unshield_v3",
         1,
     )
@@ -4813,7 +4813,7 @@ fn confidential_unshield_v3_verifying_key_registration_payload_v1_py(
     confidential_vk_registration_payload_py(
         py,
         record,
-        iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+        iroha_core_zk::ZK_BACKEND_HALO2_IPA,
         "confidential_unshield_v3",
         "confidential unshield v3",
     )
@@ -4853,7 +4853,7 @@ fn parse_confidential_amount_py(value: &Bound<'_, PyAny>, context: &str) -> PyRe
 fn parse_confidential_merkle_path_py(
     item: &Bound<'_, PyAny>,
     index: usize,
-) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialMerklePathV2> {
+) -> PyResult<iroha_core_zk::confidential_v2::ConfidentialMerklePathV2> {
     let dict = item
         .cast::<PyDict>()
         .map_err(|_| PyTypeError::new_err(format!("input_paths[{index}] must be a mapping")))?;
@@ -4880,7 +4880,7 @@ fn parse_confidential_merkle_path_py(
             })
         })
         .collect::<PyResult<Vec<_>>>()?;
-    Ok(iroha_core::zk::confidential_v2::ConfidentialMerklePathV2 {
+    Ok(iroha_core_zk::confidential_v2::ConfidentialMerklePathV2 {
         siblings: py_fixed_array_list(&siblings, &format!("input_paths[{index}].siblings"))?,
         directions,
         witness_nodes: match witness_nodes {
@@ -4906,7 +4906,7 @@ fn confidential_merkle_path_v2_py_dict(
     py: Python<'_>,
     leaf_index: usize,
     commitment: [u8; 32],
-    path: iroha_core::zk::confidential_v2::ConfidentialMerklePathV2,
+    path: iroha_core_zk::confidential_v2::ConfidentialMerklePathV2,
 ) -> PyResult<Py<PyDict>> {
     let result = PyDict::new(py);
     let directions = PyList::empty(py);
@@ -4931,7 +4931,7 @@ fn compute_confidential_root_v2_py(
     tree_commitments: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyBytes>> {
     let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
-    let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&tree_commitments)
+    let root = iroha_core_zk::confidential_v2::compute_confidential_root_v2(&tree_commitments)
         .map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &root).unbind())
 }
@@ -4953,7 +4953,7 @@ fn derive_confidential_next_zero_path_v2_py(
         py_fixed_array::<32>(previous_leaf_commitment, "previous_leaf_commitment")?;
     let previous_path = parse_confidential_merkle_path_py(previous_path, 0)?;
     let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
-    let path = iroha_core::zk::confidential_v2::derive_confidential_next_zero_path_v2(
+    let path = iroha_core_zk::confidential_v2::derive_confidential_next_zero_path_v2(
         previous_leaf_commitment,
         previous_leaf_index,
         &previous_path,
@@ -4970,7 +4970,7 @@ fn derive_confidential_next_zero_path_v2_py(
 fn default_confidential_diversifier_v2_py(py: Python<'_>) -> Py<PyBytes> {
     PyBytes::new(
         py,
-        &iroha_core::zk::confidential_v2::default_confidential_diversifier_v2(),
+        &iroha_core_zk::confidential_v2::default_confidential_diversifier_v2(),
     )
     .unbind()
 }
@@ -4986,7 +4986,7 @@ fn derive_confidential_diversifier_v2_py(
             "confidential diversifier seed must not be empty",
         ));
     }
-    let diversifier = iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(&seed);
+    let diversifier = iroha_core_zk::confidential_v2::derive_confidential_diversifier_v2(&seed);
     Ok(PyBytes::new(py, &diversifier).unbind())
 }
 #[pyfunction]
@@ -5002,7 +5002,7 @@ fn derive_confidential_owner_tag_v2_py(
     }
     let diversifier = confidential_wallet::secret_word(diversifier)?;
     let owner_tag =
-        iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+        iroha_core_zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
             &spend_key,
             *diversifier,
         )
@@ -5032,7 +5032,7 @@ fn derive_confidential_note_v2_py(
     let amount = Zeroizing::new(parse_confidential_amount_py(amount, "amount")?);
     let rho = confidential_wallet::secret_word(rho)?;
     let owner_tag = confidential_wallet::secret_word(owner_tag)?;
-    let note_commitment = iroha_core::zk::confidential_v2::derive_confidential_note_v2(
+    let note_commitment = iroha_core_zk::confidential_v2::derive_confidential_note_v2(
         asset_definition_id,
         *amount,
         *rho,

@@ -29,7 +29,7 @@ fn candidate(chain: &NativeFinalityFixture, label: &str) -> SignedBlock {
     let mut builder = BlockBuilder::new(chain.next_header());
     builder.push_transaction(transaction);
     let mut block = builder.build(BTreeSet::new());
-    NativeFinalityFixture::install_network_results(&mut block, vec![Ok(Default::default())]);
+    NativeFinalityFixture::install_network_results(&mut block, vec![Ok(Vec::new())]);
     block
 }
 
@@ -52,9 +52,13 @@ fn changed_certificate(
     let mut header = certificate.consensus_header().to_vec();
     let mut qc = certificate.commit_qc().to_vec();
     let mut result = certificate.result_preimage().to_vec();
+    let availability = certificate.availability().to_vec();
     change(&mut header, &mut qc, &mut result);
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
-        header, qc, result,
+        header,
+        qc,
+        result,
+        availability,
     )));
     SumeragiFinalityProof {
         block_wire: block.encode_wire().unwrap(),
@@ -70,11 +74,11 @@ fn native_descendants_authenticate_beyond_the_retired_short_fixture_window() {
     for height in 2..=12 {
         let parent = chain.latest().block_header.hash();
         let proof = chain.certify(candidate(&chain, "ordinary protocol fixture"));
-        let verified = verifier.verify(&proof).unwrap();
-        assert_eq!(verified.height(), height);
+        let accepted = verifier.verify(&proof).unwrap();
+        assert_eq!(accepted.height(), height);
         assert_eq!(proof.committee.len(), 4);
-        assert_eq!(verified.commitment().schedule.current, initial);
-        assert_eq!(verified.header().prev_block_hash(), Some(parent));
+        assert_eq!(accepted.commitment().schedule.current, initial);
+        assert_eq!(accepted.header().prev_block_hash(), Some(parent));
     }
 }
 
@@ -90,19 +94,19 @@ fn same_epoch_descendants_bind_the_exact_source_outputs_and_wire() {
         let input = block.network_input_merkle_commitment();
         let output = block.output_merkle_commitment();
         let proof = chain.certify(block);
-        let verified = verifier.verify(&proof).unwrap();
-        assert_eq!(verified.height(), height);
-        assert_eq!(verified.header().prev_block_hash(), Some(parent));
+        let accepted = verifier.verify(&proof).unwrap();
+        assert_eq!(accepted.height(), height);
+        assert_eq!(accepted.header().prev_block_hash(), Some(parent));
         assert_eq!(
-            verified.block().canonical_proposal_wire_hash().unwrap(),
+            accepted.block().canonical_proposal_wire_hash().unwrap(),
             proposal
         );
-        assert_eq!(verified.execution().executed_block_wire_len, wire_len);
-        assert_eq!(verified.execution().executed_block_wire_hash, wire_hash);
-        assert_eq!(verified.execution().transaction_input_commitment, input);
-        assert_eq!(verified.execution().transaction_output_commitment, output);
-        verified.block().validate_output_merkle_cache().unwrap();
-        let bytes = verified.canonical_executed_wire().unwrap();
+        assert_eq!(accepted.execution().executed_block_wire_len, wire_len);
+        assert_eq!(accepted.execution().executed_block_wire_hash, wire_hash);
+        assert_eq!(accepted.execution().transaction_input_commitment, input);
+        assert_eq!(accepted.execution().transaction_output_commitment, output);
+        accepted.block().validate_output_merkle_cache().unwrap();
+        let bytes = accepted.canonical_executed_wire().unwrap();
         assert_eq!(bytes.len() as u64, wire_len);
         assert_eq!(Hash::new(&bytes), wire_hash);
     }
@@ -125,12 +129,12 @@ fn signed_genesis_has_no_fabricated_commit_certificate_or_epoch_boundary() {
     );
     assert!(genesis.commitment().schedule.boundary.is_none());
     let next = chain.certify(candidate(&chain, "authenticate genesis parent result"));
-    let verified = verifier.verify(&next).unwrap();
+    let accepted = verifier.verify(&next).unwrap();
     assert_eq!(
-        verified.commitment().schedule.current,
+        accepted.commitment().schedule.current,
         genesis.commitment().schedule.current
     );
-    let next_block = verified.block();
+    let next_block = accepted.block();
     let forged = changed_certificate(chain.genesis_proof(), |header, qc, _| {
         let certificate = next_block.commit_certificate().unwrap();
         *header = certificate.consensus_header().to_vec();

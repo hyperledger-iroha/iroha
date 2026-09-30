@@ -335,7 +335,6 @@
     "\"map_new\"",
     "\"matched only V1 core-query builtins\"",
     "\"matched only V1 core-query page builtins\"",
-    "\"matched operation-specific instruction bridge\"",
     "\"matched typed numeric JSON getter\"",
     "\"named argument cache scope must be balanced\"",
     "\"named struct literal is missing lowered field `{declared_name}`\"",
@@ -1891,7 +1890,7 @@
   ],
   "take2_routing_sha256": "2d5f3d141b1f8fd640547ae19dba829cc68b8fd972c90d940831a0c2d742fa14",
   "source": {
-    "bytes": 395558,
-    "sha256": "de5694df8d64984e2927eda2a1ef31ed78b40125a8f4ae4568655731277f86ef"
+    "bytes": 395326,
+    "sha256": "f3bf5a56cb530abc65f5ded0e8d48e57b2dbd0423693db42922df13ad7001d2b"
   }
 }

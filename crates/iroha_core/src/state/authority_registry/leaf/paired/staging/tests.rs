@@ -1,7 +1,7 @@
 //! Growth overlap, refusal and final custody for staged canonical rows.
 
 use super::*;
-use mv::allocation::AllocationRefusal;
+use iroha_allocation::AllocationRefusal;
 use std::{
     alloc::Layout,
     panic::{AssertUnwindSafe, catch_unwind},

@@ -1,13 +1,12 @@
 mod beacon_history;
 mod finality;
-mod scaling_evidence;
 
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_core::kura::{BlockIndex, BlockStore};
 use iroha_data_model::block::{
-    consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block,
+    consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block,
 };
 use std::{
     fs,
@@ -25,8 +24,6 @@ pub struct Args {
 }
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
-    /// Prepare, export or independently replay canonical scaling evidence
-    ScalingEvidence(Box<scaling_evidence::command::Args>),
     /// Project bounded typed public beacon candidates, with explicit coverage limits.
     BeaconHistory {
         /// Exact lane directory containing the canonical block journals.
@@ -80,7 +77,6 @@ enum Command {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self.command {
-            Command::ScalingEvidence(args) => (*args).run(writer),
             Command::BeaconHistory {
                 path_to_block_store,
                 from,
@@ -340,7 +336,7 @@ mod tests {
 
         for args in [
             vec!["beacon-history", "lane0", "--from", "1", "--length", "4"],
-            vec!["finality", "lane0", "--height", "4"],
+            vec!["finality", "lane0", "--chain-id", "chain", "--height", "4"],
         ] {
             assert!(
                 crate::Cli::try_parse_from(["kagami", "advanced", "kura"].into_iter().chain(args))
@@ -349,8 +345,18 @@ mod tests {
         }
         for args in [
             vec!["beacon-history", "lane0", "--length", "4"],
-            vec!["finality", "lane0", "--height", "4", "--from", "2"],
-            vec!["lane0", "finality", "--height", "4"],
+            vec!["finality", "lane0", "--height", "4"],
+            vec![
+                "finality",
+                "lane0",
+                "--chain-id",
+                "chain",
+                "--height",
+                "4",
+                "--from",
+                "2",
+            ],
+            vec!["lane0", "finality", "--chain-id", "chain", "--height", "4"],
         ] {
             assert!(
                 crate::Cli::try_parse_from(["kagami", "advanced", "kura"].into_iter().chain(args))

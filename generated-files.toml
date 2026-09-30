@@ -119,7 +119,7 @@ generator_sources = [
   "ci/run_openapi_generator.sh",
   "crates/iroha_torii/src/openapi.rs",
   "scripts/seal_workspace_source.py",
-  "scripts/sumeragi_v2_release_process_policy.sh",
+  "scripts/sumeragi_release_process_policy.sh",
   "tools/openapi/scripts/check-openapi-signatures.mjs",
   "tools/openapi/scripts/generate-unsigned-openapi.mjs",
   "tools/openapi/scripts/lib/openapi-manifest-v2.mjs",
@@ -188,7 +188,7 @@ kind = "regions"
 outputs = [
   "crates/iroha_data_model/src/smart_contract/entrypoint.rs",
   "crates/ivm_abi/src/access_hints.rs",
-  "crates/kotodama_lang/src/semantic.rs",
+  "crates/kotodama_surface/src/source_policy.rs",
   "specs/kotodama_grammar.md",
   "tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json",
   "javascript/iroha_js/src/numericV1.js",
@@ -623,28 +623,6 @@ inputs = [
   "crates/norito/src/**/*.rs",
 ]
 check = "cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --check"
-
-[[generated]]
-name = "sumeragi-v2-wire-and-native-amx-fixtures"
-kind = "file"
-outputs = [
-  "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
-  "fixtures/sumeragi_v2/wire_v2.tsv",
-]
-generator = "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures"
-generator_sources = [
-  "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
-  "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
-]
-inputs = [
-  "crates/iroha_model_base/Cargo.toml",
-  "crates/iroha_model_base/src/**/*.rs",
-  "crates/iroha_crypto/src/**/*.rs",
-  "crates/iroha_data_model/src/**/*.rs",
-  "crates/iroha_primitives/src/**/*.rs",
-  "crates/norito/src/**/*.rs",
-]
-check = "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check"
 
 [[generated]]
 name = "mochi-canonical-torii-binary-fixtures"

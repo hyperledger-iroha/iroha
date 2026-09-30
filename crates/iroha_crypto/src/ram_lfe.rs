@@ -774,9 +774,9 @@ pub fn decode_bfv_programmed_public_parameters(
 /// Returns [`RamLfeError`] when the secret or public transcript is invalid.
 pub fn bfv_affine_policy_commitment(
     secret: &[u8],
-    public_parameters: Vec<u8>,
+    public_parameters: &[u8],
 ) -> Result<PolicyCommitment, RamLfeError> {
-    let decoded = decode_bfv_public_parameters(&public_parameters)?;
+    let decoded = decode_bfv_public_parameters(public_parameters)?;
     let canonical_public_parameters = norito::encode_canonical(&decoded)
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     build_policy_commitment(
@@ -1030,7 +1030,7 @@ fn evaluate_bfv_affine(
     commitment: &PolicyCommitment,
     request: &ClientRequest,
 ) -> Result<EvalResponse, RamLfeError> {
-    let expected = bfv_affine_policy_commitment(secret, commitment.public_parameters.clone())?;
+    let expected = bfv_affine_policy_commitment(secret, &commitment.public_parameters)?;
     if expected.policy_hash != commitment.policy_hash {
         return Err(RamLfeError::CommitmentMismatch);
     }
@@ -1947,7 +1947,7 @@ mod tests {
         version: u8,
         registers: u16,
         lanes: u16,
-        instructions: Vec<HiddenRamFheInstruction>,
+        instructions: &[HiddenRamFheInstruction],
     ) -> HiddenRamFheProgram {
         program::from_public_test_parts(version, registers, lanes, instructions)
     }
@@ -2069,7 +2069,7 @@ mod tests {
                 .expect("derive BFV public parameters");
         let commitment = bfv_affine_policy_commitment(
             secret,
-            norito::to_bytes(&public_parameters).expect("encode public parameters"),
+            &norito::to_bytes(&public_parameters).expect("encode public parameters"),
         )
         .expect("build BFV policy commitment");
         let ciphertext = encrypt_identifier_from_seed(
@@ -2100,7 +2100,7 @@ mod tests {
                 .expect("derive BFV public parameters");
         let commitment = bfv_affine_policy_commitment(
             secret,
-            norito::to_bytes(&public_parameters).expect("encode public parameters"),
+            &norito::to_bytes(&public_parameters).expect("encode public parameters"),
         )
         .expect("build BFV policy commitment");
         let request = ClientRequest {
@@ -2175,7 +2175,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 1),
                 HiddenRamFheInstruction::LoadInput(1, 2),
                 HiddenRamFheInstruction::Add(2, 0, 1),
@@ -2279,7 +2279,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 2),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2323,7 +2323,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadConst(0, RAM_LFE_BFV_PLAINTEXT_MODULUS),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2362,7 +2362,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 2),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2452,7 +2452,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions,
+            &instructions,
         );
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("chained multiplications must exceed the profile depth budget");
@@ -2494,7 +2494,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2509,7 +2509,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadState(0, BFV_PROGRAM_STATE_WIDTH_U16),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2524,7 +2524,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadConst(BFV_PROGRAM_REGISTER_COUNT_U16, 1),
                 HiddenRamFheInstruction::Output(0),
             ],
@@ -2545,7 +2545,7 @@ mod tests {
                 1,
                 BFV_PROGRAM_REGISTER_COUNT_U16,
                 BFV_PROGRAM_STATE_WIDTH_U16,
-                vec![instruction, HiddenRamFheInstruction::Output(0)],
+                &[instruction, HiddenRamFheInstruction::Output(0)],
             );
             let err = validate_hidden_ram_fhe_program(&program)
                 .expect_err("noncanonical plaintext immediate must be rejected before execution");
@@ -2565,7 +2565,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            instructions,
+            &instructions,
         );
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("programs cannot emit more output slots than the profile admits");
@@ -2577,7 +2577,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![HiddenRamFheInstruction::LoadConst(0, 1); BFV_PROGRAM_MAX_INSTRUCTIONS + 1],
+            &[HiddenRamFheInstruction::LoadConst(0, 1); BFV_PROGRAM_MAX_INSTRUCTIONS + 1],
         );
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("oversized instruction tapes must be rejected before execution");
@@ -2591,7 +2591,7 @@ mod tests {
                     2,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    vec![
+                    &[
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
                     ],
@@ -2603,7 +2603,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16 - 1,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    vec![
+                    &[
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
                     ],
@@ -2615,7 +2615,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16 - 1,
-                    vec![
+                    &[
                         HiddenRamFheInstruction::LoadConst(0, 1),
                         HiddenRamFheInstruction::Output(0),
                     ],
@@ -2627,7 +2627,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    Vec::new(),
+                    &[],
                 ),
                 "instruction tape",
             ),
@@ -2636,7 +2636,7 @@ mod tests {
                     1,
                     BFV_PROGRAM_REGISTER_COUNT_U16,
                     BFV_PROGRAM_STATE_WIDTH_U16,
-                    vec![HiddenRamFheInstruction::LoadConst(0, 1)],
+                    &[HiddenRamFheInstruction::LoadConst(0, 1)],
                 ),
                 "at least one output",
             ),
@@ -2971,7 +2971,7 @@ mod tests {
             1,
             BFV_PROGRAM_REGISTER_COUNT_U16,
             BFV_PROGRAM_STATE_WIDTH_U16,
-            vec![
+            &[
                 HiddenRamFheInstruction::LoadInput(0, 1),
                 HiddenRamFheInstruction::LoadConst(1, 42),
                 HiddenRamFheInstruction::LoadConst(2, 7),
@@ -3143,3 +3143,8 @@ mod tests {
 
 #[cfg(test)]
 mod captured_schema_tests;
+
+// TODO: qualify an RNS encryption profile and complete relation before adopting
+// this structural planner. It cannot authorize encryption or execution.
+#[cfg(test)]
+mod planning_candidate;

@@ -6,7 +6,13 @@ crate. See [Operate Iroha 3 via CLI](https://docs.iroha.tech/get-started/operate
 for the current tutorial.
 
 Within this workspace, `crates/iroha` is the reusable Rust client library and
-`crates/iroha_cli` is the crate that builds the `iroha` command-line binary.
+`crates/iroha_cli` contains the `iroha_cli_lib` implementation package. Its
+`bins` directory contains the `iroha_cli` package that builds the `iroha`
+command-line binary and owns the binary integration tests. Run
+`cargo test -p iroha_cli_lib --lib` for the implementation suite. The library
+always includes its runtime dependencies; its optional flags control bridge
+commands, visual offline codecs and test hooks. The executable owns the `cli`
+and `dev-tools` target-selection flags.
 
 ## Installation
 
@@ -40,7 +46,9 @@ Binding-only IVM proof helpers are removed. Core rejects `IvmProved` until the
 complete native STARK execution relation and State-owned finalized anchor are
 available. Generic proof and verifying-key registry commands remain available.
 
-Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
+Use `iroha taira doctor` for read-only public-testnet diagnostics. Both scopes
+require `/readyz` to return HTTP 200 with the exact plain-text `Ready` response;
+unavailable readiness fails the report with a bounded machine error code. Authorized
 public reset writes belong to the durable `iroha taira public-reset apply`
 coordinator. Retry the same apply command with the same inventory and authorization;
 the durable journal selects recovery inputs for the interrupted phase. Its low-level `write-canary` child accepts exactly one ordered
@@ -166,14 +174,6 @@ that invocation, pair/variant/seed, resource budget, scheduled request count,
 and raw SHA-256 plus byte length of both original output files. Retained native
 file and parent handles remain checked through the actual reply flush.
 
-The scaling launcher uses the original global client descriptor, each original
-`--account-config` path, and peer3's original `--local-observer-config` path.
-It supplies `--fee-payer authority` and every schedule, concurrency and resource
-bound explicitly. Account, observer and resource options take original paths;
-they do not accept descriptor pseudo-paths. A zero exit and terminal receipt
-establish transport custody; joined journal, resource and canonical proof
-replay determine whether a trial passes.
-
 ### Local SoraFS artifacts
 
 Local SoraFS compilation and packaging run without client configuration:
@@ -287,11 +287,6 @@ of truncating records. Endpoint URLs and external error text are omitted; the
 journal retains fixed failure stages and bounded status classifications. No
 private key or authentication header is written.
 
-This command supplies the transaction-observation component of
-[G-SCALE](../../specs/sumeragi_v2_multilane_scaling_gate.md). Trial-adapter wiring,
-production collector capacity, deployment/routing and resource qualification,
-and the five real paired trials remain separate completion requirements.
-
 ### Transaction waits
 
 Use the built-in wait flow instead of shell polling:
@@ -390,14 +385,14 @@ On Unix the key must be in an owner-owned, singly linked regular file with exact
 Descriptor reads use the inherited file directly, preserve the caller's file offset and never
 reopen a path. Requests are signed for the exact `network_id` in `client.toml`.
 
-Fetch the exact reducer-owned consensus status:
+Fetch the Sumeragi core status:
 
 ```bash
 iroha --operator-private-key-file /run/secrets/iroha/operator.key \
   --output-format text ops sumeragi status
 ```
 
-> `--output-format text` prints protocol version, height, view, reducer phase, leader, body state, persistence state, committed height, and restart requirement.
+> `--output-format text` prints height, view, stage, leader, proxy tail, lock view, committed and applied heights, whether the node awaits application, whether it is signing, and the halt reason.
 
 Fetch non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics separately:
 
@@ -406,10 +401,7 @@ iroha --operator-private-key-file /run/secrets/iroha/operator.key \
   --output-format text ops sumeragi diagnostics
 ```
 
-Consensus VRF epoch and penalty snapshots are retired together with the
-`vrf-epoch` and `vrf-penalties` subcommands. Production randomness comes from
-finalized global threshold-beacon pulses. Use the current read-only status and
-equivocation-evidence commands:
+Read the committed equivocation evidence:
 
 ```bash
 iroha --operator-private-key-file /run/secrets/iroha/operator.key \
@@ -831,27 +823,3 @@ file lock. Existing state rejects initialization flags. Scalar JSON checkpoint
 files and the former height/context-id arguments are rejected. `ballot status`
 reads existing custody without changing it; `ballot dropout` authenticates its
 context whenever a state file is selected, including through a lost key's path.
-
-The fixed scaling generator accepts its private development seed only through
-`kagami localnet --scaling-lanes <1|4> --seed-fd <FD>`. The fixed Python owner
-passes an anonymous read-only nonblocking pipe containing exactly 64 lowercase
-hexadecimal bytes followed by EOF. The descriptor is consumed before native
-output generation; the seed never enters process arguments or public receipts.
-Generic localnet development generation has its own independent input policy.
-
-`kagami advanced kura scaling-evidence collect` reads the original stopped Kura
-store and its finalized native context archive. It requires independently pinned
-original signed-genesis and epoch-context files, chain/network/epoch identity and
-finite file/work bounds. It publishes the complete canonical
-`Vec<NativeHeightEvidenceV1>` and actual `Vec<CommittedTransaction>` query vector;
-it does not need a client signing key or a live Torii connection.
-
-Each height retains one complete canonical `SignedBlockWire` and the original
-`NativeContextProjectionV1` values bound by that carrier's mandatory
-`R.native_contexts` proof. The native verifier authenticates the actual
-genesis-to-tip chain, including the H2 anchor for genesis execution, and each
-committed Network input/output inclusion. An absent original context record
-fails collection. The two outputs use retained `.publishing` files and separate
-NOREPLACE publications; failures preserve surviving artifacts without returning
-a successful pair. Facts, export and independent replay still authenticate the
-complete original workload schedule before reporting useful work.

@@ -1,5 +1,6 @@
 //! Runtime trace-mode coverage for compiled Kotodama contracts.
-use ivm::{CoreHost, IVM, KotodamaCompiler, TraceMode};
+use ivm::{CoreHost, IVM, TraceMode};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 #[test]
 fn runtime_trace_mode_collects_pcs_and_register_deltas() {

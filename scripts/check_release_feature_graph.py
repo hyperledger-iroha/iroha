@@ -118,6 +118,8 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,glob)scripts/**/*.py",
     ":(top,literal).cargo/config",
     ":(top,literal).cargo/config.toml",
+    # Release validation loads this profile before executing its selected tests.
+    ":(top,literal).config/nextest.toml",
     ":(top,glob,icase)csharp/**/Directory.Build.props",
     ":(top,glob,icase)csharp/**/Directory.Build.targets",
     ":(top,glob,icase)csharp/**/Directory.Build.rsp",
@@ -128,7 +130,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "84e65e94cbe56b88f6a0d80fe3dedf5a45dc3a72e392e09b422c8da299219219"
+    "6b33e8c40c2ece6151f32854b6b92e7ee926288e13a3fc00bccdb2ae0691a036"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -146,6 +148,9 @@ HOSTILE_CARGO_ENVIRONMENT = frozenset(
 FORBIDDEN_FEATURES = (
     'iroha feature "test-fixtures"',
     'iroha_core feature "iroha-core-tests"',
+    'iroha_core_zk feature "test-utils"',
+    'iroha_core_privacy feature "test-utils"',
+    'iroha_core_timed_ovn feature "test-utils"',
     'iroha_crypto feature "bfv-test-fixtures"',
     'iroha_data_model feature "test-fixtures"',
     'iroha_p2p feature "test-fixtures"',

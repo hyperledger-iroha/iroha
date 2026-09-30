@@ -487,7 +487,6 @@ public final class MusubiInstructionsV1FixtureTests {
             "time_to_live_ms",
             "nonce",
             "fee_payment",
-            "admission_intent",
             "metadata",
             "attachments")) {
       readField(transactionDecoder, field);

@@ -561,6 +561,18 @@ def test_live_swift_cutover_satisfies_strict_source_contract() -> None:
         ),
         (
             MODULE._SWIFT_TORII,
+            "guard let declaredLength = try Self.validatedContentLength(",
+            "guard let declaredLength = try uncheckedContentLength(",
+            "transaction_admission_guard",
+        ),
+        (
+            MODULE._SWIFT_TORII,
+            "declaredLength > 0, declaredLength == data.count",
+            "declaredLength > 0",
+            "transaction_admission_guard",
+        ),
+        (
+            MODULE._SWIFT_TORII,
             "return try PrivacyExact12CapabilityManifestV1.fromAuthenticatedToriiResponseV1(",
             "return try PrivacyNativeBridge.validateExact12CapabilityManifestV1(data)",
             "transaction_admission_guard",

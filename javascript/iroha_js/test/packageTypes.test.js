@@ -173,32 +173,25 @@ test("first-release HTTP client declarations omit compatibility escape hatches",
   }
 });
 
-test("Sumeragi V2 declarations use canonical Rust names without draft aliases", () => {
+test("consensus declarations expose only the current Sumeragi surface", () => {
   const declarations = fs.readFileSync(path.join(PACKAGE_ROOT, "index.d.ts"), "utf8");
-  for (const canonical of [
-    "ToriiSumeragiV2HeightContextId",
-    "ToriiSumeragiV2ConsensusRound",
-    "ToriiSumeragiV2QuorumCertificateRef",
-    "ToriiSumeragiV2TimeoutCertificateRef",
+  for (const current of [
+    "ToriiSumeragiStatus",
+    "ToriiSumeragiLaneStatus",
+    "ToriiSumeragiLaneRecord",
+    "ToriiSumeragiParameters",
   ]) {
     assert.match(
       declarations,
-      new RegExp(`export (?:type|interface) ${canonical}\\b`, "u"),
-      `missing canonical ${canonical} declaration`,
+      new RegExp(`export interface ${current}\\b`, "u"),
+      `missing current ${current} declaration`,
     );
   }
-  for (const retired of [
-    "ToriiSumeragiV2ContextId",
-    "ToriiSumeragiV2Round",
-    "ToriiSumeragiV2QcReference",
-    "ToriiSumeragiV2TimeoutReference",
-  ]) {
-    assert.doesNotMatch(
-      declarations,
-      new RegExp(`export (?:type|interface) ${retired}\\b`, "u"),
-      `retired draft alias ${retired} must be absent`,
-    );
-  }
+  assert.doesNotMatch(
+    declarations,
+    /ToriiSumeragiV2/u,
+    "retired consensus declarations must be absent",
+  );
 });
 
 test("every public export has a safe runtime target and an explicit declaration target", () => {

@@ -99,7 +99,6 @@ def test_retired_routes_exist_only_as_runtime_catalog_and_openapi_negatives() ->
         / "src"
         / "tests"
         / "lib_strict_request_targets.rs",
-        REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs",
         REPO_ROOT
         / "crates"
         / "iroha_torii_shared"
@@ -107,6 +106,22 @@ def test_retired_routes_exist_only_as_runtime_catalog_and_openapi_negatives() ->
         / "route_catalog"
         / "tests.rs",
     }
+
+    openapi_tests = REPO_ROOT / "crates/iroha_torii/src/openapi/tests"
+    fixture = openapi_tests / "openapi_static_contracts_v1.txt"
+    group = "openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.1"
+    retired_fixture_paths = tuple(
+        bytes.fromhex(value).decode("utf-8")
+        for name, value in (
+            line.split("\t", 1) for line in fixture.read_text().splitlines()[1:]
+        )
+        if name == group
+    )
+    assert retired_fixture_paths == RETIRED_PATHS
+    contracts = (openapi_tests / "catalog_and_contracts.rs").read_text()
+    assert f'fn exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent()' in contracts
+    assert f'openapi_contract_strings("{group}",)' in "".join(contracts.split())
+    assert "!paths.contains_key(path)" in contracts
 
     for retired_path in RETIRED_PATHS:
         occurrences = {

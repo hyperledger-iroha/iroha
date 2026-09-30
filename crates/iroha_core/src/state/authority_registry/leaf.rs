@@ -100,10 +100,10 @@ pub(crate) enum LeafError {
     Allocation,
     /// The original pool refused staged backing or a complete lookup-node path.
     #[error("State table allocation admission failed: {0}")]
-    Admission(mv::allocation::AllocationRefusal),
+    Admission(iroha_allocation::AllocationRefusal),
     /// An admitted lookup node's physical allocation or prepaid partition failed.
     #[error("State table lookup allocation failed: {0}")]
-    LookupAllocation(#[source] mv::allocation::PrepaidSharedError),
+    LookupAllocation(#[source] iroha_allocation::PrepaidSharedError),
     /// An ordered raw-key table exceeded its bound or had malformed rows.
     #[error("State table ordered Norito-key construction failed: {0}")]
     OrderedRange(NoritoKeyRangeError),
@@ -800,7 +800,7 @@ impl CanonicalTableLeafSet {
     pub(crate) fn new(
         ids: &[&str],
         limits: LeafLimits,
-        budget: &mv::allocation::AllocationBudget,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Self, LeafError> {
         Ok(Self {
             selection: TableSelection::new(ids, limits)?,

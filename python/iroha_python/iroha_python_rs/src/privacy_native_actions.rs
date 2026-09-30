@@ -6,7 +6,7 @@
 //! material directly into the typed constructors below, and the only returned
 //! wire is a complete signed transaction.
 use core::{fmt, num::NonZeroU32, time::Duration};
-use iroha_core::{
+use iroha_core_privacy::{
     privacy_engines::{
         ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1,
         anonymous_pgc::{
@@ -2084,7 +2084,7 @@ pub fn build_signed_ivm_private_note_action_v1(
         .outputs
         .iter()
         .map(|output| {
-            iroha_core::privacy_engines::ivm_private_note::derive_note_commitment_v1(
+            iroha_core_privacy::privacy_engines::ivm_private_note::derive_note_commitment_v1(
                 output.witness.note(),
             )
             .map_err(|_| PrivacyNativeActionErrorV1::at("ivm-output-commitment"))

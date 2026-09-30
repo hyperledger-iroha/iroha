@@ -1,7 +1,7 @@
 //! This module provides the [`State`] — an in-memory representation of the current blockchain state.
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
 /// Original finite allocation pool passed from startup into State and restore.
-pub use mv::allocation::AllocationBudget;
+pub use iroha_allocation::AllocationBudget;
 
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
@@ -18,7 +18,9 @@ use crate::private_settlement::{
         plan_private_settlement_prepare_locks_v1, plan_private_settlement_receipt_v1,
         validate_private_settlement_persisted_state_v1,
     },
-    protocol::validate_private_settlement_committee_authority_v1,
+    protocol::{
+        native_private_settlement_route_v1, validate_private_settlement_committee_authority_v1,
+    },
     state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
 };
 use eyre::{Result, WrapErr, eyre};
@@ -46,7 +48,7 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus_v2::ConsensusMode,
+    block::consensus::ConsensusMode,
     block::{
         BlockHeader, SignedBlock,
         consensus::{EvidenceRecord, ExecKv, ExecWitness},
@@ -332,6 +334,7 @@ mod exec_witness_capture;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
 mod fastpq_source_inventory;
+pub(crate) mod network_policy_routes;
 mod output_capacity;
 mod output_publication;
 pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
@@ -894,7 +897,7 @@ mod threshold_key_lifecycle_certificate_tests {
                 .collect(),
         )
         .unwrap();
-        let budget = mv::allocation::AllocationBudget::new(1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         let mut schedule = world.consensus_schedule.block();
         *schedule.get_mut() = RetainedConsensusSchedule::admit(&graph, &budget).unwrap();
         schedule.commit();
@@ -1102,9 +1105,11 @@ macro_rules! with_world_overlay_fields {
             parameters,
             peers,
             consensus_schedule,
+            state_accumulator,
             consensus_keys,
             consensus_keys_by_pk,
             sumeragi_lanes,
+            sumeragi_amx,
             domain_committees,
             domain_endorsement_policies,
             domain_endorsements,
@@ -1576,8 +1581,8 @@ macro_rules! build_world_view {
 /// Every concrete tree allocation retains credits from its original finite pool.
 pub struct BlockHashes {
     inner: BlockHashStorage,
-    budget: mv::allocation::AllocationBudget,
-    released: concread::release::ReleaseNotification,
+    budget: iroha_allocation::AllocationBudget,
+    released: iroha_allocation::release::ReleaseNotification,
     committed_height: AtomicUsize,
 }
 
@@ -1618,7 +1623,8 @@ impl State {
     }
 }
 /// The original history owner frees its exact control allocation before refund.
-type ChargedBlockHashMap = concread::shared::Shared<BlockHashMap, mv::allocation::AllocationCharge>;
+type ChargedBlockHashMap =
+    iroha_allocation::shared::Shared<BlockHashMap, iroha_allocation::AllocationCharge>;
 enum BlockHashStorage {
     Owned(ChargedBlockHashMap),
     EmergencyFastMapped(ReadOnlyMmap),
@@ -1696,7 +1702,7 @@ enum BlockHashIterInner<'a> {
             'a,
             usize,
             HashOf<BlockHeader>,
-            mv::allocation::AllocationCharge,
+            iroha_allocation::AllocationCharge,
         >,
     ),
     Slice(std::slice::Iter<'a, HashOf<BlockHeader>>),
@@ -1837,7 +1843,7 @@ impl BlockHashes {
     pub fn new(initial: Vec<HashOf<BlockHeader>>) -> Self {
         Self::try_new(
             initial,
-            mv::allocation::AllocationBudget::new(
+            iroha_allocation::AllocationBudget::new(
                 usize::try_from(
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
                 )
@@ -1855,8 +1861,8 @@ impl BlockHashes {
     fn new_emergency_fast_empty() -> Self {
         Self {
             inner: BlockHashStorage::EmergencyFastEmpty,
-            budget: mv::allocation::AllocationBudget::new(0),
-            released: concread::release::ReleaseNotification::default(),
+            budget: iroha_allocation::AllocationBudget::new(0),
+            released: iroha_allocation::release::ReleaseNotification::default(),
             committed_height: AtomicUsize::new(0),
         }
     }
@@ -1868,8 +1874,8 @@ impl BlockHashes {
         );
         Self {
             inner: BlockHashStorage::EmergencyFastMapped(mapping),
-            budget: mv::allocation::AllocationBudget::new(0),
-            released: concread::release::ReleaseNotification::default(),
+            budget: iroha_allocation::AllocationBudget::new(0),
+            released: iroha_allocation::release::ReleaseNotification::default(),
             committed_height: AtomicUsize::new(committed_height),
         }
     }
@@ -2418,7 +2424,7 @@ pub enum MergeLedgerCommitError {
     /// The original finite Native execution pool cannot fund a host allocation.
     /// This is a local scheduling refusal, never a deterministic body verdict.
     #[error("Native execution resource admission refused: {0}")]
-    NativeResourceAdmission(#[source] mv::allocation::AllocationRefusal),
+    NativeResourceAdmission(#[source] iroha_allocation::AllocationRefusal),
     /// This local attempt lacked execution capacity and produced no canonical result.
     #[error("local execution deferred: {0}")]
     ExecutionDeferred(crate::execution_attempt::ExecutionDeferred),
@@ -2751,7 +2757,7 @@ pub enum MergeLedgerCommitError {
 pub enum EvidencePreparationError {
     /// The original finite pool refused a complete preparation backing layout.
     #[error("consensus penalty preparation capacity: {0}")]
-    Admission(mv::allocation::AllocationRefusal),
+    Admission(iroha_allocation::AllocationRefusal),
     /// The allocator refused a layout already admitted by the original pool.
     #[error("allocator refused {requested_bytes} consensus penalty preparation bytes")]
     Allocator {
@@ -2772,11 +2778,11 @@ pub enum EvidencePreparationError {
     #[error("consensus penalty preparation plan exceeded its fixed capacity")]
     Invariant,
 }
-impl From<mv::allocation::ChargedBufferError> for EvidencePreparationError {
-    fn from(error: mv::allocation::ChargedBufferError) -> Self {
+impl From<iroha_allocation::ChargedBufferError> for EvidencePreparationError {
+    fn from(error: iroha_allocation::ChargedBufferError) -> Self {
         match error {
-            mv::allocation::ChargedBufferError::Admission(refusal) => Self::Admission(refusal),
-            mv::allocation::ChargedBufferError::Allocator { requested_bytes } => {
+            iroha_allocation::ChargedBufferError::Admission(refusal) => Self::Admission(refusal),
+            iroha_allocation::ChargedBufferError::Allocator { requested_bytes } => {
                 Self::Allocator { requested_bytes }
             }
         }
@@ -2784,9 +2790,9 @@ impl From<mv::allocation::ChargedBufferError> for EvidencePreparationError {
 }
 impl EvidencePreparationError {
     /// Original pool release observation, available only for temporary contention.
-    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+    pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
-            Self::Admission(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {
+            Self::Admission(iroha_allocation::AllocationRefusal::Capacity { release, .. }) => {
                 Some(release)
             }
             _ => None,
@@ -3096,7 +3102,7 @@ pub enum LaneLifecycleError {
         /// Original physical lock which prevented acquisition.
         field: &'static str,
         /// Release observation captured before probing that lock.
-        wait: concread::release::ReleaseWait,
+        wait: iroha_allocation::release::ReleaseWait,
     },
 }
 /// Errors surfaced while installing runtime ZK configuration into committed state.
@@ -3735,6 +3741,10 @@ pub struct WorldData {
     /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator after the last published block: the parent World
+    /// state root of the next execution result (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    /// Derived from every canonical World entry; it never commits to itself.
+    pub(crate) state_accumulator: Cell<world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
@@ -4001,6 +4011,8 @@ pub struct WorldData {
         Storage<String, Vec<iroha_data_model::consensus::ConsensusKeyId>>,
     /// The global chain's lanes and autoscale history (`specs/sumeragi_lanes.md` §2, §6).
     pub(crate) sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
+    pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -4196,7 +4208,7 @@ pub struct WorldData {
     /// Universal sparse-index revision bound into finalized query cursors.
     pub(crate) musubi_resolver_index_revision: Cell<MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
-    pub(crate) musubi_replication_shortfall_releases: Cell<u64, mv::allocation::AllocationCharge>,
+    pub(crate) musubi_replication_shortfall_releases: Cell<u64, iroha_allocation::AllocationCharge>,
     /// Greatest globally allocated Soracloud audit sequence, or zero before the first allocation.
     pub(crate) soracloud_sequence_watermark: Cell<u64>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
@@ -4663,6 +4675,8 @@ pub struct WorldBlockFields<'world> {
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule:
         CellField<'world, crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    pub(crate) state_accumulator: CellField<'world, world_projection::WorldStateAccumulator>,
     /// Registered consensus/committee keys.
     pub(crate) consensus_keys: StorageField<'world, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
@@ -4670,6 +4684,8 @@ pub struct WorldBlockFields<'world> {
     /// The global chain's lanes and autoscale history.
     pub(crate) sumeragi_lanes:
         CellField<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state.
+    pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -5177,7 +5193,7 @@ pub struct WorldBlockFields<'world> {
     pub(crate) musubi_resolver_index_revision: CellField<'world, MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases:
-        CellField<'world, u64, mv::allocation::AllocationCharge>,
+        CellField<'world, u64, iroha_allocation::AllocationCharge>,
     /// Greatest globally allocated Soracloud audit sequence.
     pub(crate) soracloud_sequence_watermark: CellField<'world, u64>,
     /// Admitted Soracloud service revisions.
@@ -5643,7 +5659,7 @@ pub struct WorldBlockFields<'world> {
     external_event_buf: Vec<EventBox>,
     // Last: every World sibling releases before original pool refunds can wake.
     #[norito(skip)]
-    operation_index_scope: mv::allocation::OwnedAllocationScope,
+    operation_index_scope: iroha_allocation::OwnedAllocationScope,
 }
 impl WorldBlock<'_> {
     #[cfg(test)]
@@ -5965,6 +5981,7 @@ impl WorldBlock<'_> {
             parameters,
             peers,
             consensus_schedule,
+            state_accumulator,
             viral_reward_budget,
             viral_campaign_budget,
             executor_data_model,
@@ -5986,6 +6003,7 @@ impl WorldBlock<'_> {
             merge_hint_roots,
             merge_global_state_root,
             sumeragi_lanes,
+            sumeragi_amx,
         );
         append_merge_executor_delta(&mut out, "executor", &self.executor);
         self.triggers.append_merge_execution_write_set(&mut out);
@@ -6325,6 +6343,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule:
         CellTransaction<'block, 'world, crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    pub(crate) state_accumulator:
+        CellTransaction<'block, 'world, world_projection::WorldStateAccumulator>,
     /// Registered consensus/committee keys.
     pub(crate) consensus_keys: StorageTransaction<'block, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
@@ -6332,6 +6353,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// The global chain's lanes and autoscale history.
     pub(crate) sumeragi_lanes:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state.
+    pub(crate) sumeragi_amx:
+        CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6830,7 +6854,7 @@ pub struct WorldTransaction<'block, 'world> {
         CellTransaction<'block, 'world, MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases:
-        CellTransaction<'block, 'world, u64, mv::allocation::AllocationCharge>,
+        CellTransaction<'block, 'world, u64, iroha_allocation::AllocationCharge>,
     /// Greatest globally allocated Soracloud audit sequence.
     pub(crate) soracloud_sequence_watermark: CellTransaction<'block, 'world, u64>,
     /// Admitted Soracloud service revisions.
@@ -8604,6 +8628,8 @@ pub struct WorldView<'world> {
     /// §10.1), advanced by the executor after every block.
     pub(crate) consensus_schedule:
         CellView<'world, crate::sumeragi::schedule::RetainedConsensusSchedule>,
+    /// Complete World state accumulator (`specs/sumeragi.md` §4.1, Appendix E, E51).
+    pub(crate) state_accumulator: CellView<'world, world_projection::WorldStateAccumulator>,
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
@@ -8847,6 +8873,8 @@ pub struct WorldView<'world> {
     /// The global chain's lanes and autoscale history.
     pub(crate) sumeragi_lanes:
         CellView<'world, iroha_data_model::sumeragi_lanes::SumeragiLaneState>,
+    /// The global chain's AMX two-phase-commit state.
+    pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -12023,9 +12051,9 @@ pub struct State {
     nexus_storage_budget_last_check_height: AtomicU64,
     /// Process-lived finite owner for committed-evidence preparation allocations.
     /// Funded slices cover fixed prune keys and pending penalty metadata only.
-    evidence_preparation_budget: mv::allocation::AllocationBudget,
+    evidence_preparation_budget: iroha_allocation::AllocationBudget,
     /// Original process-local owner for flat consensus stake-index key backing.
-    stake_index_budget: mv::allocation::AllocationBudget,
+    stake_index_budget: iroha_allocation::AllocationBudget,
     /// Tiered state backend coordinating hot/cold snapshots.
     pub(crate) tiered_backend: Arc<PublicationMutex<TieredStateBackend>>,
     /// Background worker for tiered snapshot processing.
@@ -12418,7 +12446,7 @@ pub struct StateBlockFields<'state> {
     pub(crate) native_execution_tip: block_field::CellField<
         'state,
         Option<NativeExecutionTip>,
-        mv::allocation::AllocationCharge,
+        iroha_allocation::AllocationCharge,
     >,
     state_ref: &'state State,
     /// Original replacement-rewind notices, dropped only after joint writer retirement.
@@ -12430,6 +12458,8 @@ pub struct StateBlockFields<'state> {
     /// Originally funded ordinary source hashes, bound before block-start effects.
     ordinary_carrier_membership_source:
         Option<carrier_source_admission::PrepaidOrdinaryCarrierMembership>,
+    /// Original physical policy routes captured before any carrier prefix effect.
+    network_policy_routes: Option<network_policy_routes::CapturedNetworkPolicyRoutes>,
     /// Topology used to commit latest block
     pub commit_topology: block_field::CellField<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -12626,7 +12656,7 @@ pub struct StateBlockFields<'state> {
     /// Last: deliver view-read notices only after every original field retires.
     read_releases: StateViewReleases<'state>,
     /// Original execution-pool scratch wakes outlive every physical State writer.
-    ivm_refunds: mv::allocation::AllocationRefundBatch,
+    ivm_refunds: iroha_allocation::AllocationRefundBatch,
 }
 
 impl<'state> std::ops::Deref for StateBlock<'state> {
@@ -13716,7 +13746,7 @@ pub struct StateTransaction<'block, 'state> {
     local_storage_refusal: &'block mut Option<StateStorageAdmissionError>,
     /// Borrowed original State pool for final-application stake indexes.
     #[cfg(test)]
-    pub(crate) stake_index_budget: &'state mv::allocation::AllocationBudget,
+    pub(crate) stake_index_budget: &'state iroha_allocation::AllocationBudget,
     /// Actual MV runtime scope; projected fields never replace its undo authority.
     pub(crate) canonical_runtime: CellTransaction<'block, 'state, SnapshotNexusRuntime>,
     // An instruction can read but cannot mutate the original execution anchor.
@@ -14961,15 +14991,15 @@ fn bounded_global_committee_size(
     let configured = world
         .sumeragi_npos_parameters()
         .and_then(|params| usize::try_from(params.max_validators()).ok())
-        .unwrap_or(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
+        .unwrap_or(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
     let capped = available_candidates
         .min(configured)
-        .min(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT);
-    if capped < iroha_data_model::block::consensus_v2::MIN_VALIDATORS_PER_HEIGHT {
+        .min(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT);
+    if capped < iroha_data_model::block::consensus::MIN_VALIDATORS_PER_HEIGHT {
         return None;
     }
     let committee_size = capped - (capped - 1) % 3;
-    iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
+    iroha_data_model::block::consensus::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
 #[cfg_attr(
@@ -14980,7 +15010,7 @@ fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Has
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
     Hash::new_from_chunks(&[
-        b"sumeragi-v2:npos-committee-seat:v1\0",
+        b"sumeragi:npos-committee-seat:v1\0",
         seed.as_slice(),
         epoch_bytes.as_slice(),
         peer_bytes.as_slice(),
@@ -16719,7 +16749,7 @@ mod sumeragi_timing_tests {
     use super::*;
     use std::{sync::Arc, time::Duration};
     #[test]
-    fn v2_block_cadence_reads_the_signed_genesis_value() {
+    fn block_cadence_reads_the_signed_genesis_value() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
@@ -18850,8 +18880,8 @@ impl World {
         domains: D,
         accounts: A,
         asset_definitions: Ad,
-        budget: mv::allocation::AllocationBudget,
-        execution_budget: &mv::allocation::AllocationBudget,
+        budget: iroha_allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Self, mv::storage::AdmittedStorageError>
     where
         D: IntoIterator<Item = Domain>,
@@ -18869,7 +18899,7 @@ impl World {
         ))
     }
     /// Retain the configured original pool for same-process restore and publication.
-    pub(crate) fn operation_index_budget(&self) -> &mv::allocation::AllocationBudget {
+    pub(crate) fn operation_index_budget(&self) -> &iroha_allocation::AllocationBudget {
         self.kagemusha_mint_credit_operations.allocation_budget()
     }
     fn with_assets_on<D, A, Ad, As, N>(
@@ -20168,14 +20198,14 @@ impl World {
     /// Acquire every original World field or return a local storage refusal.
     pub fn try_block(
         &self,
-        execution_budget: &mv::allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<WorldBlock<'_>, mv::storage::AdmittedStorageError> {
         build_world_block!(self, mv::BlockMode::Ordinary, execution_budget)
     }
     /// Acquire the exact replacement overlay under the original finite pool.
     pub fn try_block_and_revert(
         &self,
-        execution_budget: &mv::allocation::AllocationBudget,
+        execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<WorldBlock<'_>, mv::storage::AdmittedStorageError> {
         build_world_block!(self, mv::BlockMode::Replace, execution_budget)
     }
@@ -20184,13 +20214,13 @@ impl World {
     /// to `try_block`; this convenience is unavailable on those paths.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn block(&self) -> WorldBlock<'_> {
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         self.try_block(&budget).expect("fixture World admission")
     }
     /// Acquire a fixture replacement World using a finite test-only control pool.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn block_and_revert(&self) -> WorldBlock<'_> {
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         self.try_block_and_revert(&budget)
             .expect("fixture World replacement admission")
     }
@@ -20860,6 +20890,8 @@ macro_rules! world_ro_accessors {
             storage consensus_keys_by_pk: String => Vec<ConsensusKeyId>;
             /// The global chain's lanes and autoscale history (read-only).
             ref sumeragi_lanes: iroha_data_model::sumeragi_lanes::SumeragiLaneState;
+            /// The global chain's AMX two-phase-commit state (read-only).
+            ref sumeragi_amx: iroha_data_model::sumeragi_amx::SumeragiAmxState;
             /// Pedersen parameter registry (read-only).
             storage pedersen_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>
@@ -24531,6 +24563,7 @@ impl<'block> WorldTransaction<'block, '_> {
             parameters: _,
             peers: _,
             consensus_schedule: _,
+            state_accumulator: _,
             domain_committees: _,
             domain_endorsement_policies: _,
             domain_endorsements: _,
@@ -24636,6 +24669,7 @@ impl<'block> WorldTransaction<'block, '_> {
             consensus_keys: _,
             consensus_keys_by_pk: _,
             sumeragi_lanes: _,
+            sumeragi_amx: _,
             pedersen_params: _,
             poseidon_params: _,
             runtime_upgrades: _,
@@ -24863,6 +24897,7 @@ impl<'block> WorldTransaction<'block, '_> {
         self.consensus_keys.apply();
         self.consensus_keys_by_pk.apply();
         self.sumeragi_lanes.apply();
+        self.sumeragi_amx.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
         self.runtime_upgrades.apply();
@@ -25164,6 +25199,7 @@ impl<'block> WorldTransaction<'block, '_> {
         self.sccp_light_client_stride_index.apply();
         self.peers.apply();
         self.consensus_schedule.apply();
+        self.state_accumulator.apply();
         self.parameters.apply();
     }
     /// Get `Domain` with an ability to modify it.
@@ -25930,7 +25966,7 @@ impl State {
     )]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
-    ) -> Result<PublicationGuard<'_>, concread::release::ReleaseWait> {
+    ) -> Result<PublicationGuard<'_>, iroha_allocation::release::ReleaseWait> {
         self.lane_lifecycle_lock.try_lock_or_wait()
     }
     /// Resolve a physical lane incarnation from one coherent committed view.
@@ -27565,10 +27601,10 @@ impl State {
             nexus: parking_lot::RwLock::new(nexus),
             nexus_runtime_restored_from_snapshot: false,
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
-            evidence_preparation_budget: mv::allocation::AllocationBudget::new(
+            evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
             ),
-            stake_index_budget: mv::allocation::AllocationBudget::new(
+            stake_index_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
             ),
             tiered_backend: Arc::clone(&tiered_backend),
@@ -28746,6 +28782,15 @@ impl State {
     ) -> Result<(Box<StateBlock<'state>>, R), StateBlockStartError<E>> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
+        let mut policy_routes = carrier
+            .map(|source| {
+                network_policy_routes::CapturedNetworkPolicyRoutes::reserve(
+                    source,
+                    &self.ivm_execution_budget(),
+                )
+            })
+            .transpose()
+            .map_err(StateBlockStartError::ExecutionDeferred)?;
         let mut ordinary_source = carrier
             .map(|source| {
                 carrier_source_admission::PrepaidOrdinaryCarrierMembership::reserve(
@@ -28766,6 +28811,10 @@ impl State {
             prepaid.fill_from_preblock(&sb, source);
         }
         sb.ordinary_carrier_membership_source = ordinary_source;
+        if let (Some(source), Some(routes)) = (carrier, policy_routes.as_mut()) {
+            routes.fill_from_preblock(&sb, source);
+        }
+        sb.network_policy_routes = policy_routes;
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
         let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
@@ -29507,6 +29556,15 @@ impl State {
         carrier: Option<&SignedBlock>,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
     ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
+        let mut policy_routes = carrier
+            .map(|source| {
+                network_policy_routes::CapturedNetworkPolicyRoutes::reserve(
+                    source,
+                    &self.ivm_execution_budget(),
+                )
+            })
+            .transpose()
+            .map_err(StateBlockStartError::ExecutionDeferred)?;
         let mut ordinary_source = carrier
             .map(|source| {
                 carrier_source_admission::PrepaidOrdinaryCarrierMembership::reserve(
@@ -29532,6 +29590,10 @@ impl State {
             prepaid.fill_from_preblock(&state_block, source);
         }
         state_block.ordinary_carrier_membership_source = ordinary_source;
+        if let (Some(source), Some(routes)) = (carrier, policy_routes.as_mut()) {
+            routes.fill_from_preblock(&state_block, source);
+        }
+        state_block.network_policy_routes = policy_routes;
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
         stage(&mut state_block).map_err(StateBlockStartError::Stage)?;
@@ -30289,7 +30351,7 @@ impl State {
             cache.insert_ok(entry.key, entry.expires_at_ms, entry.not_before_ms);
         }
     }
-    /// Block cadence frozen into the Sumeragi v2 height profile.
+    /// Block cadence frozen into the Sumeragi height profile.
     #[track_caller]
     #[must_use]
     pub fn sumeragi_block_cadence(&self) -> Duration {
@@ -30458,8 +30520,8 @@ impl State {
             '_,
             LaneManifestRegistryHandle,
         >,
-        hashes: &mut Option<concread::release::DeferredReleaseBatch>,
-        membership: &mut concread::release::DeferredReleaseBatch,
+        hashes: &mut Option<iroha_allocation::release::DeferredReleaseBatch>,
+        membership: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<Option<StateView<'_>>, LaneLifecycleError> {
         const STATE_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
         let caller = core::panic::Location::caller();
@@ -31871,10 +31933,10 @@ impl State {
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             let replacement_evidence_preparation_budget = (evidence_preparation_bytes
                 != self.evidence_preparation_budget.limit_bytes())
-            .then(|| mv::allocation::AllocationBudget::new(evidence_preparation_bytes));
+            .then(|| iroha_allocation::AllocationBudget::new(evidence_preparation_bytes));
             let replacement_stake_index_budget = (stake_index_bytes
                 != self.stake_index_budget.limit_bytes())
-            .then(|| mv::allocation::AllocationBudget::new(stake_index_bytes));
+            .then(|| iroha_allocation::AllocationBudget::new(stake_index_bytes));
             *self.nexus.get_mut() = nexus;
             if let Some(budget) = replacement_evidence_preparation_budget {
                 self.evidence_preparation_budget = budget;
@@ -31940,11 +32002,11 @@ impl State {
         Ok(())
     }
     /// Borrow the original process-local evidence preparation pool.
-    pub(crate) fn evidence_preparation_budget(&self) -> &mv::allocation::AllocationBudget {
+    pub(crate) fn evidence_preparation_budget(&self) -> &iroha_allocation::AllocationBudget {
         &self.evidence_preparation_budget
     }
     /// Borrow the original process-local stake-index backing pool.
-    pub(crate) fn stake_index_budget(&self) -> &mv::allocation::AllocationBudget {
+    pub(crate) fn stake_index_budget(&self) -> &iroha_allocation::AllocationBudget {
         &self.stake_index_budget
     }
     fn ensure_config_catalog_mutation_is_pre_genesis(
@@ -32026,10 +32088,10 @@ impl State {
         let stake_index_bytes = nexus.storage.consensus_stake_index_bytes;
         let replacement_evidence_preparation_budget = (evidence_preparation_bytes
             != self.evidence_preparation_budget.limit_bytes())
-        .then(|| mv::allocation::AllocationBudget::new(evidence_preparation_bytes));
+        .then(|| iroha_allocation::AllocationBudget::new(evidence_preparation_bytes));
         let replacement_stake_index_budget = (stake_index_bytes
             != self.stake_index_budget.limit_bytes())
-        .then(|| mv::allocation::AllocationBudget::new(stake_index_bytes));
+        .then(|| iroha_allocation::AllocationBudget::new(stake_index_bytes));
         let mut releases = LaneLifecycleReleases::new(self);
         validate_lane_authority_geometry(&nexus.lane_catalog, &nexus.dataspace_catalog)?;
         nexus.configured_lane_catalog = configured_lane_catalog;
@@ -37425,6 +37487,11 @@ impl<'state> StateBlock<'state> {
             current_axt_slot,
             this.nexus.axt.replay_retention_slots.get(),
         );
+        // Fixture World edits stay inside the complete World state commitment.
+        let genesis = this._curr_block.is_genesis();
+        this.world
+            .advance_state_accumulator(genesis)
+            .map_err(|_| TransactionsBlockError::WorldCommitPreparation)?;
         let _state_commit_lock = commit_fence.lock();
         let _state_write_lock = write_fence.lock();
         this.world.prepare_publication();
@@ -38728,7 +38795,7 @@ mod tiered_snapshot_diff_tests {
     ) -> Result<Box<State>, deserialize::StateRestoreError> {
         deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-            execution_budget: mv::allocation::AllocationBudget::new(
+            execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),
@@ -39897,17 +39964,15 @@ impl StateTransaction<'_, '_> {
         &self,
         route: iroha_data_model::nexus::PrivateSettlementRouteV1,
     ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
-        let lane = self
-            .nexus
-            .lane_config
-            .entry(route.lane_id)
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Capability)?;
-        if lane.dataspace_id != route.dataspace_id
-            || self.lane_incarnations.get(&route.lane_id) != Some(&route.lane_incarnation)
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Capability);
-        }
-        Ok(())
+        // Match native transaction routing: block h consumes the committed
+        // global anchor h - 1, including activation and closing boundaries.
+        native_private_settlement_route_v1(
+            self.world.sumeragi_lanes(),
+            route,
+            self.block_height().saturating_sub(1),
+        )
+        .map(|_| ())
+        .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)
     }
     /// Bootstrap one explicitly governed confidential settlement pool in this transaction.
     pub(crate) fn bootstrap_private_settlement_pool_v1(
@@ -43317,7 +43382,11 @@ pub(crate) fn run_empty_network_owner_fixture(
             iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
                 .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key())
         },
-        SignedBlock::canonical_resultless_proposal,
+        |source| {
+            source
+                .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
+        },
     );
     assert_eq!(
         source.network_entrypoint_count(),

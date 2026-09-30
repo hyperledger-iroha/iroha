@@ -8,7 +8,7 @@ No live deployment or release readiness is established by this record.
 
 The complete first-release implementation and qualification goal is active.
 Implementation and validation use only the `optimizations` branch in
-`/Users/takemiyamakoto/soramitsudev/iroha`. Results from another checkout do not
+`/Users/takemiyamakoto/dev/iroha`. Results from another checkout do not
 qualify this candidate; all outstanding gates must run against this source.
 The selected design replaces retired layouts and paths; backward-compatible
 decoders, aliases, shims and parallel implementations are prohibited.
@@ -35,12 +35,8 @@ second token named XOR. Taira's public identity and an operator-provisioned Nexu
 identity are not interchangeable. Disposable-network allocations are explicit
 genesis test allocations and are not claims of mainnet monetary value.
 
-The [September 28 reconciliation record](../docs/history/2026-09-28/validator-staking-native-review.md)
-binds the recent scoped evidence and records the remaining source-owner and
-resource-funding gaps. The separate merge is now resolved and staged. The review is now applied on `optimizations`, preserving the staged merge index.
-Core library check14 passed with 294 warnings before the latest seal/storage
-changes. Fresh compilation, deployment allocation repair and runtime/network
-qualification remain open; no integrated release completion is claimed.
+Source-owner and resource-funding gaps, fresh Core compilation and real-network
+transition/monetary qualification remain open.
 
 ## Implemented candidate under validation
 
@@ -152,7 +148,7 @@ node's own certificates (certificates are per node, `specs/sumeragi.md` §12.7):
 | Dynamic election and mint-finality keys | The native E+2 selector/producer, complete retained epoch graph and immediate next-epoch application barrier are integrated. TODO: finish signed control and Pasta integration and qualify complete preparation and certified retention without fresh incumbent keys on actual networks. Registration alone must never add voting authority. | Core/data model, KAGEMUSHA and deployment |
 | Prepared beacon transition | The signed encrypted all-edge DKG model and reducer bind the frozen exact roster and fail closed before finalization if an edge or acceptance is absent. The deterministic Core fixture still constructs secrets centrally; daemon per-seat custody, authenticated exchange, genesis orchestration, current/pending session restart and atomic activation need qualification. Parliament can require an early pulse independently of the next epoch-end election pulse. Do not bypass finalized pulse or certificate checks. | Beacon, Parliament, Sumeragi and daemon |
 | Staking under an enacted DS-transfer validation-fee policy | Exact signed monetary bindings and native effect checks are implemented. The policy counts every actual signed real-XOR staking transfer leg under `PerQualifyingTransferInstruction`, even when the DS fee asset differs; principal cannot satisfy the fee coordinate. Reward reservations and claim dust with no transfer leg incur no transfer fee. The focused Core fee suite passed 110/110 on 2026-09-23. TODO: qualify bounded claims, multisig/proved overlays, and the canonical native execution owner on an unchanged network candidate. Ordinary Nexus/PipelineGas charging already uses signed `FeePaymentIntent`; staking-specific runtime qualification of those payer bounds remains outstanding. | Core/native execution and fees |
-| Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: close the silent-initial-author counterexample and retirement/restart cuts in `sumeragi_liveness_redesign_goals.md`; a second signer or local retry bypass is not a completion. | Core/Sumeragi, Queue, Kura and formal owners |
+| Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: close the silent-initial-author counterexample and retirement/restart cuts; a second signer or local retry bypass is not a completion. | Core/Sumeragi, Queue, Kura and formal owners |
 | Reward allocation | The selected policy is explicit treasury-funded canonical-XOR distributions. TODO: qualify funding, signed recording and bounded payment together. Automatic participation formulas, commission and issuance programs are outside this implementation. | Treasury/governance and Core |
 | Network qualification | TODO: one unchanged candidate proves admission, prepared 4→7→4 rotation, queued Parliament pulse, missing target signer, all-seat restart, replay rejection, rewards, slashing and final withdrawal. Run the maintained fault/DA/formal gates and complete workspace checks. | Integration, release and subsystem owners |
 
@@ -251,71 +247,9 @@ policy remain mandatory.
 
 ## Validation
 
-The [September 27 native quorum checkpoint](../docs/history/2026-09-27/validator-staking-native-quorum.md)
-records 329 ordinary consensus library/simulator passes and both separately run opt-in passes, five
-focused strict mutation kills, and the allocation custody passes from this
-checkout. Global committee geometry and exact certificate cardinality are
-implemented. Core compilation and real-network transition/monetary qualification
-remain open; no historical or simulator result closes those gates.
-
-The custody checkpoint passed 141 focused Core tests with no failures or skips.
-The command selected staking, reward reserves, pinned custody, admission, snapshot,
-configuration restoration and fee guards; the source checkpoint and complete log
-are retained outside the repository under `/tmp/iroha-staking-custody-checkpoint`
-and `/tmp/iroha-staking-core-checkpoint.log`. This result predates the authority,
-monetary-plan and XOR schema changes now in progress.
-
-Validation is in progress. The earlier focused model, executor and codec staking
-selection passed 31 tests (the deliberate fixture generator remained ignored),
-and the complete default-executor library passed 180 tests. On 2026-09-23 the
-typed current-protocol printers recaptured the privacy qualification record,
-the staking monetary and peer-consent records, and the updated evidence nested
-in penalty cancellation. The canonical instruction-record selection now passes
-323 tests with zero failures and one intentional ignored printer. Its 321 rows,
-357 cases, strict identity checks and four-frame roundtrips remain enforced;
-no old decoder or identity fallback was added. The focused Core fee suite passes
-110 tests with no failures on the same monetary source. The current combined
-Core and network candidate still needs its own runtime qualification.
-
-The six-package test-target check passed before the subsequent pinned-stake
-custody and global-pool guard additions. Final Core, daemon, CLI, Torii and network
-validation is still pending. Compilation and source checks do not establish
-live finality or the outstanding outcomes above.
-
-Current integration work also includes explicit reviewed validator allocations for
-`xtask kagami-profiles`; signing must fail on an unfunded manifest rather than
-reintroducing implicit minting. The Rust-authored seven-row validator/staking
-Norito fixture and Kotlin typed decoder pass their focused three-test consumer
-suite, including strict quantity-decimal rejection. The committed seven-row
-fixture also passes a Rust-authored byte-for-byte pin test. The focused
-JavaScript staking codec passes three tests covering exact consent, monetary
-roundtrips, rejected retired JSON shapes and unsafe integers. The full Kotlin core suite
-fails 385 of 1,587 tests without the required same-source ABI-23 native bridge
-and Kotlin fixture-generator executable; that result is not an SDK pass. Swift
-source typechecking and a standalone Rust-fixture and strict quantity-decimal
-runtime smoke pass; its full package test still requires a rebuilt ABI-23 local
-bridge. CLI plan-file signing remains an intermediate workflow; complete SDK
-and operator qualification
-are outstanding. The new Kotlin/Swift source and shared fixture are in both
-maintained SDK source closures; their 25 focused Python closure/OpenAPI-pin
-controls pass. The maintained multilane formal structural/source-binding checker
-passes after rebinding the current Native preparation and State merge owners;
-the focused mutation suite and TLC/Apalache runners remain separate, and the
-checker must be rerun after the production-source cutover.
-
-The updated bridge successor regression passes on the current data-model source:
-one focused test rejects a self-consistent, re-signed authority, epoch authorization,
-or execution-policy substitution before hostile BLS verification. The retired
-layout scan is driving remaining generated schema and SDK fixture replacement.
-The funded Native validator's focused service selector passes 15 tests, including
-original-candidate readiness refusal and retry. Complete pre-execution admission,
-the production runner cutover and an unchanged-candidate Core rerun remain open;
-these focused checks do not qualify committee transitions or staking execution.
-
-The allocation-control checkpoint passed all 481 Concread library tests. The MV
-checkpoint reached 246 passes and one failing new restore-footprint oracle; the
-oracle was corrected to account for retained inline leaf capacity, and its rerun
-remains pending. These controls do not close production N0: native waiter/control
-allocations, complete original World payload admission, restoration and sole-owner
-production cutover remain open. Current Core integration is rebuilding after the
-wire and lifecycle replacements; no unchanged-candidate qualification is claimed.
+Global committee geometry and exact certificate cardinality are implemented.
+Qualification must cover current Core, daemon, CLI, Torii and network consumers,
+authenticated XOR identity, stake/fee/reward conservation, epoch transitions,
+restart, resource admission and adversarial custody. Captured instruction records
+retain strict identity checks and canonical roundtrips; no fallback decoder is
+admitted. Historical or simulator passes do not qualify the current live network.

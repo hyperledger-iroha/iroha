@@ -146,7 +146,7 @@ pub mod isi {
                 &program_policy,
                 state_transaction.network_id(),
                 now_ms,
-                crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
+                crate::zk_guardrails::guardrails_from_config(&state_transaction.zk),
             )?;
             apply_verified_identifier_claim(
                 self.account,

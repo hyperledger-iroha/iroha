@@ -2,9 +2,10 @@ package org.hyperledger.iroha.samples.wallet
 
 import android.content.Context
 import java.io.IOException
-import java.net.http.HttpRequest
+import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import java.util.concurrent.CompletableFuture
-import org.hyperledger.iroha.android.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
 
 /**
  * Minimal [HttpTransportExecutor] that serves canned JSON responses from the app's assets.
@@ -19,22 +20,25 @@ class AssetHttpExecutor(
 
     private val applicationContext = context.applicationContext
 
-    override fun execute(request: HttpRequest): CompletableFuture<HttpTransportExecutor.Response> {
-        val path = request.uri().path
+    override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+        val path = request.uri.path
         val route = routes[path]
-            ?: return CompletableFuture.failedFuture(
-                IOException("no canned response registered for ${request.uri()}")
+            ?: return failed(
+                IOException("no canned response registered for ${request.uri}")
             )
-        if (request.method() != "GET") {
-            return CompletableFuture.failedFuture(
+        if (request.method != "GET") {
+            return failed(
                 IOException("asset executor only supports GET requests")
             )
         }
         return CompletableFuture.supplyAsync {
             val body = applicationContext.assets.open(route.assetName).use { it.readBytes() }
-            HttpTransportExecutor.Response(route.statusCode, body)
+            TransportResponse(route.statusCode, body, "asset fixture", emptyMap(), request.uri, false)
         }
     }
+
+    private fun <T> failed(error: Throwable): CompletableFuture<T> =
+        CompletableFuture<T>().also { it.completeExceptionally(error) }
 
     data class Route(
         val assetName: String,

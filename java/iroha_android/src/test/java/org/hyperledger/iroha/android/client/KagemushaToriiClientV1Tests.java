@@ -18,7 +18,6 @@ import org.hyperledger.iroha.android.client.KagemushaToriiModelsV1.UnverifiedOpe
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.TopUpKagemushaV1Instruction;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -257,7 +256,6 @@ public final class KagemushaToriiClientV1Tests {
             .setInstructionBytes(new byte[] {(byte) seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce(seed + 1L)
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(Collections.emptyMap())
             .build();
     final NoritoJavaCodecAdapter codec =

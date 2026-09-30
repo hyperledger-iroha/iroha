@@ -531,7 +531,7 @@ test("JavaScript identifier validation consumes the normative V1 keyword table",
   }
 
   const semantic = readFileSync(
-    new URL("../../../crates/kotodama_lang/src/semantic.rs", import.meta.url),
+    new URL("../../../crates/kotodama_surface/src/source_policy.rs", import.meta.url),
     "utf8",
   );
   const typeTable = /pub const V1_SOURCE_TYPE_NAMES: &\[&str\] = &\[([\s\S]*?)\];/u.exec(

@@ -8,6 +8,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from pytests.scripts import iso_audit_notary_adapter_test as audit_test
@@ -80,7 +81,6 @@ class IsoOperatorCanaryTest(unittest.TestCase):
     def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
         hidden = "token=canary-ancestor-secret"
         path_type = type(CANARY.Path("."))
-        original_lstat = path_type.lstat
         cases = (
             ("os_error", OSError(5, hidden)),
             ("runtime", RuntimeError(hidden)),
@@ -91,15 +91,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(CANARY.CanaryError) as caught:
                         CANARY._reject_symlinked_existing_ancestors(
                             CANARY.Path("ancestor") / "leaf",
                             display_label="summary_out",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out ancestors", message)
@@ -131,12 +128,9 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(CANARY.CanaryError) as caught:
                         CANARY._read_regular_file(path, display_label="canary")
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect canary", message)
@@ -152,7 +146,6 @@ class IsoOperatorCanaryTest(unittest.TestCase):
     def test_same_existing_path_stat_failures_return_false(self):
         hidden = "token=canary-alias-stat-secret"
         path_type = type(CANARY.Path("."))
-        original_stat = path_type.stat
         helper_cases = (
             ("file", CANARY._same_existing_file),
             ("path", CANARY._same_existing_path),
@@ -170,13 +163,10 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     def failing_stat(_self, *args, error=failure, **kwargs):
                         raise error
 
-                    path_type.stat = failing_stat
-                    try:
+                    with patch.object(path_type, "stat", failing_stat):
                         self.assertFalse(
                             helper(CANARY.Path("left"), CANARY.Path("right"))
                         )
-                    finally:
-                        path_type.stat = original_stat
 
     def test_path_resolve_failures_do_not_echo_detail(self):
         hidden = "token=canary-resolve-secret"
@@ -246,12 +236,9 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                             raise error
                         return original_resolve(self, *args, **kwargs)
 
-                    path_type.resolve = failing_resolve
-                    try:
+                    with patch.object(path_type, "resolve", failing_resolve):
                         with self.assertRaises(CANARY.CanaryError) as caught:
                             action(target)
-                    finally:
-                        path_type.resolve = original_resolve
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -405,9 +392,6 @@ class IsoOperatorCanaryTest(unittest.TestCase):
     def test_text_output_target_inspection_failures_do_not_echo_detail(self):
         hidden = "token=canary-output-inspect-secret"
         path_type = type(CANARY.Path("."))
-        original_exists = path_type.exists
-        original_is_symlink = path_type.is_symlink
-        original_lstat = path_type.lstat
         cases = (
             ("exists_os", "exists", OSError(5, hidden)),
             ("exists_runtime", "exists", RuntimeError(hidden)),
@@ -428,20 +412,17 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, "exists", failing_exists),
+                    patch.object(path_type, "is_symlink", false_is_symlink),
+                    patch.object(path_type, "lstat", failing_lstat),
+                ):
                     with self.assertRaises(CANARY.CanaryError) as caught:
                         CANARY._ensure_text_output_target(
                             CANARY.Path("summary.json"),
                             display_label="summary_out",
                             create_parent=False,
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect summary_out parent", message)
@@ -456,7 +437,6 @@ class IsoOperatorCanaryTest(unittest.TestCase):
     def test_text_output_parent_creation_failures_do_not_echo_detail(self):
         hidden = "token=canary-output-create-secret"
         path_type = type(CANARY.Path("."))
-        original_mkdir = path_type.mkdir
         cases = (
             ("mkdir_os", OSError(5, hidden)),
             ("mkdir_runtime", RuntimeError(hidden)),
@@ -470,15 +450,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     def failing_mkdir(_self, *args, error=failure, **kwargs):
                         raise error
 
-                    path_type.mkdir = failing_mkdir
-                    try:
+                    with patch.object(path_type, "mkdir", failing_mkdir):
                         with self.assertRaises(CANARY.CanaryError) as caught:
                             CANARY._ensure_text_output_target(
                                 CANARY.Path(raw_root) / "out" / "summary.json",
                                 display_label="summary_out",
                             )
-                    finally:
-                        path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn("cannot create summary_out parent", message)

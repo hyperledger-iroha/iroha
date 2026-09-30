@@ -1115,8 +1115,8 @@ pub fn validation_fee_policy_from_json_value(
 /// # Errors
 ///
 /// Returns a [`CodecErrorKind::InvalidArgument`] error when the policy violates its
-/// invariants, or when the lifecycle proposal id is missing, zero or present without a
-/// payout binding.
+/// invariants, when a payout-enabled policy lacks a non-zero lifecycle proposal id, or
+/// when a policy without a payout binding selects a lifecycle proposal.
 pub fn validate_validation_fee_policy_proposal(
     policy: &ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<&[u8; 32]>,
@@ -1185,6 +1185,10 @@ pub fn instruction_from_json(payload: &str) -> CodecResult<InstructionBox> {
     value_to_instruction(value)
 }
 
+/// Admit the exact native `TransferAssetBatch` JSON rendered by [`instruction_to_json_value`].
+///
+/// The settlement `mode` and every entry's `leg_id` are part of the native instruction,
+/// so both are required rather than defaulted or re-derived.
 fn transfer_asset_batch_from_json(value: json::Value) -> CodecResult<InstructionBox> {
     let json::Value::Object(mut fields) = value else {
         return Err(CodecError::new(
@@ -1192,6 +1196,7 @@ fn transfer_asset_batch_from_json(value: json::Value) -> CodecResult<Instruction
             "TransferAssetBatch payload must be an object",
         ));
     };
+    let mode_value = required_value(&mut fields, "mode", "TransferAssetBatch")?;
     let entries_value = required_value(&mut fields, "entries", "TransferAssetBatch")?;
     if !fields.is_empty() {
         return Err(CodecError::new(
@@ -1202,60 +1207,77 @@ fn transfer_asset_batch_from_json(value: json::Value) -> CodecResult<Instruction
             ),
         ));
     }
+    let mode: iroha_data_model::isi::BatchMode =
+        json::from_value(mode_value).map_err(codec_error)?;
     let json::Value::Array(entry_values) = entries_value else {
         return Err(CodecError::new(
             CodecErrorKind::InvalidArgument,
             "TransferAssetBatch.entries must be an array",
         ));
     };
-    let mut entries = Vec::with_capacity(entry_values.len());
-    for (index, entry_value) in entry_values.into_iter().enumerate() {
-        let context = format!("TransferAssetBatch.entries[{index}]");
-        let json::Value::Object(mut entry_fields) = entry_value else {
-            return Err(CodecError::new(
+    let entries = entry_values
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| transfer_asset_batch_entry_from_json(entry, index))
+        .collect::<CodecResult<Vec<_>>>()?;
+    Ok(InstructionBox::from(
+        TransferAssetBatch::new(entries).with_mode(mode),
+    ))
+}
+
+/// Admit one exact `TransferAssetBatch` entry, including its explicit leg identifier.
+fn transfer_asset_batch_entry_from_json(
+    value: json::Value,
+    index: usize,
+) -> CodecResult<iroha_data_model::isi::TransferAssetBatchEntry> {
+    let context = format!("TransferAssetBatch.entries[{index}]");
+    let json::Value::Object(mut entry_fields) = value else {
+        return Err(CodecError::new(
+            CodecErrorKind::InvalidArgument,
+            format!("{context} must be an object"),
+        ));
+    };
+    let leg_id = parse_string_value(
+        required_value(&mut entry_fields, "leg_id", &context)?,
+        &format!("{context}.leg_id"),
+    )?;
+    let from = parse_account_id_value(
+        required_value(&mut entry_fields, "from", &context)?,
+        &format!("{context}.from"),
+    )?;
+    let to = parse_account_id_value(
+        required_value(&mut entry_fields, "to", &context)?,
+        &format!("{context}.to"),
+    )?;
+    let asset_definition_literal = parse_string_value(
+        required_value(&mut entry_fields, "asset_definition", &context)?,
+        &format!("{context}.asset_definition"),
+    )?;
+    let asset_definition = AssetDefinitionId::parse_address_literal(&asset_definition_literal)
+        .map_err(|err| {
+            CodecError::new(
                 CodecErrorKind::InvalidArgument,
-                format!("{context} must be an object"),
-            ));
-        };
-        let from = parse_account_id_value(
-            required_value(&mut entry_fields, "from", &context)?,
-            &format!("{context}.from"),
-        )?;
-        let to = parse_account_id_value(
-            required_value(&mut entry_fields, "to", &context)?,
-            &format!("{context}.to"),
-        )?;
-        let asset_definition_literal = parse_string_value(
-            required_value(&mut entry_fields, "asset_definition", &context)?,
-            &format!("{context}.asset_definition"),
-        )?;
-        let asset_definition = AssetDefinitionId::parse_address_literal(&asset_definition_literal)
-            .map_err(|err| {
-                CodecError::new(
-                    CodecErrorKind::InvalidArgument,
-                    format!("invalid {context}.asset_definition: {err}"),
-                )
-            })?;
-        let amount: Quantity =
-            json::from_value(required_value(&mut entry_fields, "amount", &context)?)
-                .map_err(codec_error)?;
-        if !entry_fields.is_empty() {
-            return Err(CodecError::new(
-                CodecErrorKind::InvalidArgument,
-                format!(
-                    "{context} contains unexpected field(s): {}",
-                    entry_fields.keys().cloned().collect::<Vec<_>>().join(", ")
-                ),
-            ));
-        }
-        entries.push(iroha_data_model::isi::TransferAssetBatchEntry::new(
-            from,
-            to,
-            asset_definition,
-            amount,
+                format!("invalid {context}.asset_definition: {err}"),
+            )
+        })?;
+    let amount: Quantity = json::from_value(required_value(&mut entry_fields, "amount", &context)?)
+        .map_err(codec_error)?;
+    if !entry_fields.is_empty() {
+        return Err(CodecError::new(
+            CodecErrorKind::InvalidArgument,
+            format!(
+                "{context} contains unexpected field(s): {}",
+                entry_fields.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
         ));
     }
-    Ok(InstructionBox::from(TransferAssetBatch::new(entries)))
+    Ok(iroha_data_model::isi::TransferAssetBatchEntry::with_leg_id(
+        leg_id,
+        from,
+        to,
+        asset_definition,
+        amount,
+    ))
 }
 
 fn validate_governance_selector_payload(
@@ -5087,6 +5109,8 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
 
 #[cfg(test)]
 mod atomic_settlement_json_tests;
+#[cfg(test)]
+mod envelope_family_tests;
 #[cfg(test)]
 mod tests;
 

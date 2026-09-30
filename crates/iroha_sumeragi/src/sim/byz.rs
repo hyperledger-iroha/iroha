@@ -22,8 +22,8 @@ use crate::{
     api::{Action, ExecOutcome},
     crypto::{Signer, verify_vote_attestation},
     message::{
-        Block, BlockHeader, BlockResponse, Proposal, Qc, Status, SyncEntry, SyncResponse, TcEntry,
-        TimeoutCert, TimeoutVote, Vote, VoteKind, WireMessage,
+        BlockHeader, PayloadChunk, PayloadManifest, Proposal, ProposalMessage, Qc, Status,
+        SyncEntry, SyncResponse, TcEntry, TimeoutCert, TimeoutVote, Vote, VoteKind, WireMessage,
     },
     preimage,
     testing::{FakeVerifier, fake_attestation},
@@ -46,7 +46,7 @@ pub enum Deliver {
 pub enum Late {
     /// The whole proposal.
     Proposal,
-    /// The body: the proposal goes out at once without its payload.
+    /// The actual rows: the mandatory signed proposal and manifest arrive at once.
     Body,
 }
 
@@ -120,7 +120,7 @@ pub enum Strategy {
     /// own valid echo reporting a low height (a Byzantine member counts as one reply) (F24).
     ForgeEchoes,
     /// As proxy tail, strip the attestations of the flagged `CommitQC`s it forms, and clear
-    /// their flag every other time (§3.7, F37, MA2, MA6).
+    /// their flag and result witness every other time (§3.7, F37, MA2, MA6).
     StripAttestations,
     /// Send its Commit votes of flagged blocks with a forged attestation, or with none, in
     /// turn (§3.7, F37, MA1).
@@ -163,7 +163,7 @@ pub enum NetRule {
         until: Millis,
     },
     /// Strip the payload of proposals to the given machine before heal (forces body fetches).
-    StripProposalsTo(usize),
+    DropRowsTo(usize),
     /// Relay every echo `Status` through the given Byzantine machine: the direct copy is lost
     /// and the prober gets it from the relay (a relayed signed echo counts, F24).
     RelayEchoes(usize),
@@ -210,6 +210,9 @@ pub struct Adversary {
     over_sent: BTreeSet<ShortKey>,
     requests: VecDeque<(usize, PublicKey, WireMessage)>,
     relayed: BTreeSet<(usize, u64, u64)>,
+    /// Each malicious replica injects one unsolicited corrupt copy per exact row identity.
+    /// Receiving another adversary's copy must not recursively amplify the test traffic.
+    forged_rows: BTreeSet<(usize, Hash32, u64, Hash32, u32)>,
     twins: VecDeque<(usize, Millis, Vec<usize>, Rc<WireMessage>)>,
     /// Late leader (body): when the full copy of `(instance, h)` goes out.
     late_bodies: BTreeMap<(usize, u64), Millis>,
@@ -280,10 +283,10 @@ pub fn relabel(msg: &WireMessage, id: Hash32) -> WireMessage {
     match msg {
         WireMessage::Proposal(p) => {
             let mut p = (**p).clone();
-            p.instance = id;
-            p.header.instance = id;
-            p.justify = p.justify.as_ref().map(|t| tc(t, id));
-            p.parent_qc = p.parent_qc.as_ref().map(|q| qc(q, id));
+            p.proposal.instance = id;
+            p.proposal.header.instance = id;
+            p.proposal.justify = p.proposal.justify.as_ref().map(|t| tc(t, id));
+            p.proposal.parent_qc = p.proposal.parent_qc.as_ref().map(|q| qc(q, id));
             WireMessage::Proposal(Box::new(p))
         }
         WireMessage::Vote(v) => WireMessage::Vote(Vote {
@@ -313,13 +316,19 @@ pub fn relabel(msg: &WireMessage, id: Hash32) -> WireMessage {
                 .blocks
                 .iter()
                 .map(|e| SyncEntry {
-                    block: e.block.clone(),
+                    manifest: PayloadManifest {
+                        header: BlockHeader {
+                            instance: id,
+                            ..e.manifest.header.clone()
+                        },
+                        availability: e.manifest.availability.clone(),
+                    },
                     commit_qc: qc(&e.commit_qc, id),
                 })
                 .collect(),
         }),
-        WireMessage::BlockRequest(q) => {
-            WireMessage::BlockRequest(crate::message::BlockRequest { instance: id, ..*q })
+        WireMessage::PayloadRequest(q) => {
+            WireMessage::PayloadRequest(crate::message::PayloadRequest { instance: id, ..*q })
         }
         WireMessage::ApplicationControl(message) => {
             WireMessage::ApplicationControl(crate::message::ApplicationControl {
@@ -330,16 +339,23 @@ pub fn relabel(msg: &WireMessage, id: Hash32) -> WireMessage {
                 bytes: message.bytes,
             })
         }
-        WireMessage::BlockResponse(q) => WireMessage::BlockResponse(BlockResponse {
+        WireMessage::PayloadManifest(value) => WireMessage::PayloadManifest(PayloadManifest {
+            header: BlockHeader {
+                instance: id,
+                ..value.header.clone()
+            },
+            availability: value.availability.clone(),
+        }),
+        WireMessage::PayloadChunk(value) => WireMessage::PayloadChunk(PayloadChunk {
             instance: id,
-            block: q.block.clone(),
+            ..value.clone()
         }),
     }
 }
 
 impl World {
     fn byz_signer(&self, r: usize) -> SimSigner {
-        SimSigner::new(self.net_key(r), None, Rc::clone(&self.log))
+        SimSigner::new(self.net_key(r), None, std::sync::Arc::clone(&self.log))
     }
 
     fn members_except(&self, r: usize, height: u64) -> Vec<usize> {
@@ -368,30 +384,59 @@ impl World {
         }
     }
 
-    /// Sign a proposal of `(h, v)` for `header` with the Byzantine key.
+    /// Sign only the current proposal envelope; relay/table corruption never gains an
+    /// original author's signature by passing through this helper.
+    fn resign_carrier(&self, r: usize, mut carrier: ProposalMessage) -> ProposalMessage {
+        carrier.proposal.sig = self
+            .byz_signer(r)
+            .sign(&carrier.proposal.signing_preimage(&self.hasher));
+        carrier
+    }
+
+    /// Encode and sign a fresh malicious-author body with that machine's actual own key.
     fn byz_proposal(
-        &self,
+        &mut self,
         r: usize,
         header: BlockHeader,
         payload: Vec<u8>,
         view: u64,
         justify: Option<TimeoutCert>,
         parent_qc: Option<Qc>,
-    ) -> Proposal {
-        let instance = self.instances[self.replicas[r].inst].id;
-        let bh = preimage::block_hash(&self.hasher, &header);
-        let ad = preimage::att_digest(&self.hasher, justify.as_ref(), parent_qc.as_ref());
-        let msg = preimage::prop_preimage(&instance, &header.epoch, header.height, view, &bh, &ad);
-        Proposal {
-            instance,
-            height: header.height,
-            view,
+    ) -> ProposalMessage {
+        let config = self.instances[self.replicas[r].inst].config(header.height);
+        let body = crate::testing::author_body(
             header,
-            justify,
-            parent_qc,
-            payload: Some(payload),
-            sig: self.byz_signer(r).sign(&msg),
-        }
+            &payload,
+            &config,
+            &self.replicas[r].budget,
+            &self.hasher,
+            &self.byz_signer(r),
+        );
+        let header = body.header().clone();
+        let frame = body.availability().clone();
+        self.replicas[r]
+            .bodies
+            .insert(body.hash(&self.hasher), body);
+        self.resign_carrier(
+            r,
+            ProposalMessage {
+                availability: frame,
+                proposal: Proposal {
+                    instance: header.instance,
+                    height: header.height,
+                    view,
+                    header,
+                    justify,
+                    parent_qc,
+                    sig: Signature([0; SIGNATURE_LEN]),
+                },
+            },
+        )
+    }
+
+    fn proposal_payload(&self, r: usize, p: &ProposalMessage) -> Option<Vec<u8>> {
+        self.local_body(r, p.proposal.height, &p.proposal.block_hash(&self.hasher))
+            .map(|body| body.payload().as_slice().to_vec())
     }
 
     fn forged_qc(&mut self, r: usize, kind: VoteKind, height: u64, view: u64) -> Qc {
@@ -442,14 +487,36 @@ impl World {
         let me = self.net_key(r);
         let inst = self.replicas[r].inst;
         let mut out = Vec::new();
+        for action in &actions {
+            if let Action::StoreBody { block } = action {
+                self.replicas[r]
+                    .bodies
+                    .insert(block.hash(&self.hasher), block.clone());
+            }
+        }
         for action in actions {
             let (to, msg) = match &action {
+                Action::DisseminatePayload { .. } if strategies.contains(&Strategy::Silent) => {
+                    continue;
+                }
+                Action::DisseminatePayload { peers, body }
+                    if strategies.contains(&Strategy::LateLeader(Late::Body)) =>
+                {
+                    let half = self.late_half_timeout(inst);
+                    let due = *self
+                        .adv
+                        .late_bodies
+                        .entry((inst, body.header().height))
+                        .or_insert(at + half + 100);
+                    self.disseminate_body(r, peers, body, due);
+                    continue;
+                }
                 Action::Send { to, msg } => (vec![to.clone()], msg.clone()),
                 Action::Broadcast { to, msg } => (to.clone(), msg.clone()),
                 Action::ServeBlocks { .. } if strategies.contains(&Strategy::ForgeSync) => {
                     continue;
                 }
-                Action::ServeBody { .. }
+                Action::ServePayload { .. }
                     if strategies.contains(&Strategy::ForgeBodies)
                         || strategies.contains(&Strategy::LateLeader(Late::Body)) =>
                 {
@@ -460,8 +527,8 @@ impl World {
                         || !matches!(
                             action,
                             Action::ServeBlocks { .. }
-                                | Action::ServeBody { .. }
-                                | Action::FetchBody { .. }
+                                | Action::ServePayload { .. }
+                                | Action::FetchPayload { .. }
                         )
                     {
                         out.push(action);
@@ -527,7 +594,9 @@ impl World {
                         q.attestations.clear();
                         self.adv.counter += 1;
                         if self.adv.counter.is_multiple_of(2) {
+                            // Shaped as unflagged, so only the signed flag rejects it (MA6).
                             q.attest = false;
+                            q.attestation_witness = None;
                         }
                         msg = WireMessage::Qc(q);
                     }
@@ -670,9 +739,9 @@ impl World {
                     (Strategy::InvalidProposals, WireMessage::Proposal(p)) => {
                         msg = WireMessage::Proposal(Box::new(self.defective(r, p)));
                     }
-                    (Strategy::StaleParent, WireMessage::Proposal(p)) if p.height > 1 => {
-                        let mut header = p.header.clone();
-                        let parent = self.oracle.refs[inst].get(&(p.height - 2)).map_or(
+                    (Strategy::StaleParent, WireMessage::Proposal(p)) if p.proposal.height > 1 => {
+                        let mut header = p.proposal.header.clone();
+                        let parent = self.oracle.refs[inst].get(&(p.proposal.height - 2)).map_or(
                             (
                                 self.instances[inst].genesis_hash,
                                 self.instances[inst].genesis_result,
@@ -681,70 +750,66 @@ impl World {
                         );
                         header.parent_hash = parent.0;
                         header.parent_result = parent.1;
-                        let payload = p.payload.clone().unwrap_or_default();
-                        msg = WireMessage::Proposal(Box::new(self.byz_proposal(
-                            r,
-                            header,
-                            payload,
-                            p.view,
-                            p.justify.clone(),
-                            p.parent_qc.clone(),
-                        )));
+                        let mut changed = (**p).clone();
+                        changed.proposal.header = header;
+                        msg = WireMessage::Proposal(Box::new(self.resign_carrier(r, changed)));
                     }
                     (Strategy::ForgeCommitQc, WireMessage::Proposal(p))
-                        if p.parent_qc.is_some() =>
+                        if p.proposal.parent_qc.is_some() =>
                     {
-                        let forged = self.forged_qc(r, VoteKind::Commit, p.height - 1, 0);
-                        let payload = p.payload.clone().unwrap_or_default();
-                        msg = WireMessage::Proposal(Box::new(self.byz_proposal(
-                            r,
-                            p.header.clone(),
-                            payload,
-                            p.view,
-                            p.justify.clone(),
-                            Some(forged),
-                        )));
+                        let forged = self.forged_qc(r, VoteKind::Commit, p.proposal.height - 1, 0);
+                        let mut changed = (**p).clone();
+                        changed.proposal.parent_qc = Some(forged);
+                        msg = WireMessage::Proposal(Box::new(self.resign_carrier(r, changed)));
                     }
-                    (Strategy::TcMinHq, WireMessage::Proposal(p)) if p.view > 0 => {
+                    (Strategy::TcMinHq, WireMessage::Proposal(p)) if p.proposal.view > 0 => {
                         if let Some(min) = self
                             .adv
                             .min_tcs
-                            .get(&(inst, p.height, p.view - 1))
+                            .get(&(inst, p.proposal.height, p.proposal.view - 1))
                             .cloned()
                             .filter(|tc| tc.high_pqc.is_none())
-                            && p.justify.as_ref().is_some_and(|j| j.high_pqc.is_some())
+                            && p.proposal
+                                .justify
+                                .as_ref()
+                                .is_some_and(|j| j.high_pqc.is_some())
                         {
                             // Legal: a fresh block justified by a TC whose q entries carry
                             // no lock. Honest safety must not depend on the aggregator.
-                            let topo = self.ground_topology(inst, p.height);
-                            let committee = self.instances[inst].committee(p.height).clone();
-                            let payload: Vec<u8> = Vec::new();
+                            let topo = self.ground_topology(inst, p.proposal.height);
+                            let committee =
+                                self.instances[inst].committee(p.proposal.height).clone();
+                            let payload = encode_tx(u64::MAX - self.adv.counter, false, 0);
                             let header = BlockHeader {
-                                origin_view: p.view,
+                                origin_view: p.proposal.view,
                                 payload_hash: preimage::payload_hash(&self.hasher, &payload),
-                                payload_len: 0,
-                                skipped_leaders: topo.skipped_leader_keys(&committee, p.view),
-                                ..p.header.clone()
+                                availability_digest: crate::types::Hash32::ZERO,
+                                payload_len: payload.len() as u32,
+                                skipped_leaders: topo
+                                    .skipped_leader_keys(&committee, p.proposal.view),
+                                ..p.proposal.header.clone()
                             };
                             let header = BlockHeader {
                                 parent_hash: p
+                                    .proposal
                                     .parent_qc
                                     .as_ref()
                                     .map_or(self.instances[inst].genesis_hash, |q| q.block_hash),
                                 parent_result: p
+                                    .proposal
                                     .parent_qc
                                     .as_ref()
                                     .map_or(self.instances[inst].genesis_result, |q| q.result),
-                                proposer: topo.leader(p.view),
+                                proposer: topo.leader(p.proposal.view),
                                 ..header
                             };
                             msg = WireMessage::Proposal(Box::new(self.byz_proposal(
                                 r,
                                 header,
                                 payload,
-                                p.view,
+                                p.proposal.view,
                                 Some(min),
-                                p.parent_qc.clone(),
+                                p.proposal.parent_qc.clone(),
                             )));
                         }
                     }
@@ -756,10 +821,9 @@ impl World {
                     {
                         keep = false;
                     }
-                    (Strategy::LateLeader(Late::Body), WireMessage::BlockResponse(_)) => {
-                        keep = false;
-                    }
-                    (Strategy::LateLeader(late), WireMessage::Proposal(p)) if p.view == 0 => {
+                    (Strategy::LateLeader(late), WireMessage::Proposal(p))
+                        if p.proposal.view == 0 =>
+                    {
                         let recipients: Vec<usize> = to
                             .iter()
                             .filter_map(|k| self.key_owner.get(k))
@@ -786,20 +850,12 @@ impl World {
                                 }
                             }
                             Late::Body => {
-                                let due = *self
-                                    .adv
+                                self.adv
                                     .late_bodies
-                                    .entry((inst, p.height))
+                                    .entry((inst, p.proposal.height))
                                     .or_insert(at + half + 100);
-                                if at < due && p.payload.is_some() {
-                                    let mut bare = p.clone();
-                                    bare.payload = None;
-                                    let full =
-                                        std::mem::replace(&mut msg, WireMessage::Proposal(bare));
-                                    self.adv
-                                        .twins
-                                        .push_back((r, due, recipients, Rc::new(full)));
-                                }
+                                // The mandatory metadata arrives now; actual rows are delayed
+                                // by the DisseminatePayload action branch above.
                             }
                         }
                     }
@@ -834,24 +890,28 @@ impl World {
     }
 
     /// A signed twin of an own fresh proposal: same round, a different payload.
-    fn twin(&mut self, r: usize, p: &Proposal) -> Option<(WireMessage, WireMessage)> {
-        let fresh = p.justify.as_ref().is_none_or(|tc| tc.high_pqc.is_none());
+    fn twin(&mut self, r: usize, p: &ProposalMessage) -> Option<(WireMessage, WireMessage)> {
+        let fresh = p
+            .proposal
+            .justify
+            .as_ref()
+            .is_none_or(|tc| tc.high_pqc.is_none());
         if !fresh {
             return None;
         }
         self.adv.counter += 1;
-        let mut payload = p.payload.clone().unwrap_or_default();
+        let mut payload = self.proposal_payload(r, p)?;
         payload.extend(encode_tx(u64::MAX - self.adv.counter, false, 8));
-        let mut header = p.header.clone();
+        let mut header = p.proposal.header.clone();
         header.payload_hash = preimage::payload_hash(&self.hasher, &payload);
         header.payload_len = u32::try_from(payload.len()).unwrap_or(u32::MAX);
         let twin = self.byz_proposal(
             r,
             header,
             payload,
-            p.view,
-            p.justify.clone(),
-            p.parent_qc.clone(),
+            p.proposal.view,
+            p.proposal.justify.clone(),
+            p.proposal.parent_qc.clone(),
         );
         Some((
             WireMessage::Proposal(Box::new(p.clone())),
@@ -859,31 +919,20 @@ impl World {
         ))
     }
 
-    /// A signed proposal with a defect in its signed content.
-    fn defective(&mut self, r: usize, p: &Proposal) -> Proposal {
-        let mut header = p.header.clone();
-        let mut payload = p.payload.clone().unwrap_or_default();
+    /// A valid envelope signature over a defective signed header. The unchanged original
+    /// manifest cannot authorize the mutated header; no relay can create this envelope signature.
+    fn defective(&mut self, r: usize, p: &ProposalMessage) -> ProposalMessage {
+        let mut changed = p.clone();
+        let header = &mut changed.proposal.header;
         match self.rng.below(3) {
-            0 => {
-                header.skipped_leaders.push(self.net_key(r));
-            }
-            1 => {
-                header.parent_result = Hash32([0x42; 32]);
-            }
+            0 => header.skipped_leaders.push(self.net_key(r)),
+            1 => header.parent_result = Hash32([0x42; 32]),
             _ => {
-                payload.clear();
-                header.payload_hash = preimage::payload_hash(&self.hasher, &payload);
+                header.payload_hash = preimage::payload_hash(&self.hasher, &[]);
                 header.payload_len = 0;
             }
         }
-        self.byz_proposal(
-            r,
-            header,
-            payload,
-            p.view,
-            p.justify.clone(),
-            p.parent_qc.clone(),
-        )
+        self.resign_carrier(r, changed)
     }
 
     fn observe_timeout(&mut self, r: usize, t: &TimeoutVote) {
@@ -1124,7 +1173,7 @@ impl World {
                 }
                 (Strategy::ShortQcs, WireMessage::Vote(v)) => self.observe_short(r, v),
                 (Strategy::OverAggregate, WireMessage::Vote(v)) => self.observe_over(r, v),
-                (Strategy::ForgeBodies, WireMessage::BlockRequest(_))
+                (Strategy::ForgeBodies, WireMessage::PayloadRequest(_))
                 | (Strategy::ForgeSync, WireMessage::SyncRequest(_)) => {
                     if self.adv.requests.len() < 256 {
                         self.adv
@@ -1132,48 +1181,53 @@ impl World {
                             .push_back((r, from.clone(), (**msg).clone()));
                     }
                 }
-                (Strategy::ForgeBodies, WireMessage::Proposal(p)) => {
-                    // Unsolicited forged bodies under the genuine header.
-                    if let Some(payload) = &p.payload {
-                        let mut forged = payload.clone();
-                        forged.push(0xee);
-                        let block = Block {
-                            header: p.header.clone(),
-                            payload: forged,
-                        };
-                        let msg = WireMessage::BlockResponse(BlockResponse {
-                            instance: self.instances[inst].id,
-                            block,
-                        });
-                        let at = self.now;
-                        self.byz_send_all(r, p.height, msg, at);
+                (Strategy::ForgeBodies, WireMessage::PayloadChunk(chunk)) => {
+                    if !self.adv.forged_rows.insert((
+                        r,
+                        chunk.instance,
+                        chunk.height,
+                        chunk.block_hash,
+                        chunk.index,
+                    )) {
+                        continue;
                     }
+                    let mut forged = chunk.clone();
+                    let mut bytes = forged.bytes.as_slice().to_vec();
+                    bytes[0] ^= 0xee;
+                    forged.bytes = crate::availability::RowBytes::from_untrusted(bytes).unwrap();
+                    self.byz_send_all(r, chunk.height, WireMessage::PayloadChunk(forged), self.now);
                 }
                 (Strategy::TamperRelay, WireMessage::Proposal(p)) => {
-                    if self.adv.relayed.insert((inst, p.height, p.view)) {
-                        let mut stripped = (**p).clone();
-                        stripped.payload = None;
+                    if self
+                        .adv
+                        .relayed
+                        .insert((inst, p.proposal.height, p.proposal.view))
+                    {
                         let mut corrupt = (**p).clone();
-                        if let Some(payload) = corrupt.payload.as_mut() {
-                            payload.push(0x01);
-                        }
-                        let at = self.now;
+                        let mut bytes = corrupt.availability.as_slice().to_vec();
+                        *bytes.last_mut().unwrap() ^= 1;
+                        corrupt.availability =
+                            crate::availability::AvailabilityFrame::from_untrusted(bytes).unwrap();
+                        let mut stripped = (**p).clone();
+                        stripped.availability =
+                            crate::availability::AvailabilityFrame::from_untrusted(Vec::new())
+                                .unwrap();
                         self.byz_send_all(
                             r,
-                            p.height,
+                            p.proposal.height,
                             WireMessage::Proposal(Box::new(corrupt)),
-                            at,
+                            self.now,
                         );
                         self.byz_send_all(
                             r,
-                            p.height,
+                            p.proposal.height,
                             WireMessage::Proposal(Box::new(stripped)),
-                            at,
+                            self.now,
                         );
                         self.adv.twins.push_back((
                             r,
-                            at + 300,
-                            self.members_except(r, p.height),
+                            self.now + 150,
+                            self.members_except(r, p.proposal.height),
                             Rc::clone(msg),
                         ));
                     }
@@ -1191,6 +1245,7 @@ impl World {
                         WireMessage::Tc(t) => t.high_pqc.iter().collect(),
                         WireMessage::Status(s) => s.high_pqc.iter().collect(),
                         WireMessage::Proposal(p) => p
+                            .proposal
                             .justify
                             .as_ref()
                             .and_then(|t| t.high_pqc.as_ref())
@@ -1275,20 +1330,25 @@ impl World {
                     self.byz_send_all(r, h, WireMessage::Timeout(Box::new(timeout)), at);
                 }
             }
-            WireMessage::Proposal(p) if p.height == h && p.view > 0 => {
-                let payload = p.payload.clone().unwrap_or_default();
-                let bh = preimage::block_hash(&self.hasher, &p.header);
+            WireMessage::Proposal(p) if p.proposal.height == h && p.proposal.view > 0 => {
+                let Some(payload) = self.proposal_payload(r, p) else {
+                    return;
+                };
+                let bh = preimage::block_hash(&self.hasher, &p.proposal.header);
                 let result = p
+                    .proposal
                     .justify
                     .as_ref()
                     .and_then(|tc| tc.high_pqc.as_ref())
                     .map(|q| q.result)
-                    .or_else(|| match reference_exec(&p.header.parent_result, &payload) {
-                        ExecOutcome::Valid(res) => Some(res),
-                        _ => None,
-                    });
+                    .or_else(
+                        || match reference_exec(&p.proposal.header.parent_result, &payload) {
+                            ExecOutcome::Valid(res) => Some(res),
+                            _ => None,
+                        },
+                    );
                 if let Some(result) = result {
-                    vote(self, VoteKind::Prepare, p.view, bh, result);
+                    vote(self, VoteKind::Prepare, p.proposal.view, bh, result);
                 }
             }
             WireMessage::Vote(v) if v.height == h && v.view > 0 => {
@@ -1429,6 +1489,7 @@ impl World {
                             parent_hash,
                             parent_result,
                             payload_hash: preimage::payload_hash(&self.hasher, &payload),
+                            availability_digest: crate::types::Hash32::ZERO,
                             payload_len: u32::try_from(payload.len()).unwrap_or(0),
                             proposer: index,
                             skipped_leaders: Vec::new(),
@@ -1503,7 +1564,7 @@ impl World {
                             ..Status::default()
                         };
                         self.byz_send_all(r, height, WireMessage::Status(Box::new(status)), now);
-                        let request = WireMessage::BlockRequest(crate::message::BlockRequest {
+                        let request = WireMessage::PayloadRequest(crate::message::PayloadRequest {
                             instance,
                             height,
                             block_hash: Hash32([self.adv.counter.to_be_bytes()[7]; 32]),
@@ -1516,10 +1577,12 @@ impl World {
                             max_bytes: u32::MAX,
                         });
                         self.byz_send_all(r, height, sync, now);
-                        // Oversize: a proposal with a payload above the frame limit.
-                        let big = u64::from(self.instances[inst].params.max_block_bytes) + 70_000;
-                        if big < 8 * 1024 * 1024 && self.adv.counter.is_multiple_of(10) {
-                            let payload = vec![0u8; usize::try_from(big).unwrap_or(0)];
+                        if self.adv.counter.is_multiple_of(10) {
+                            let mut table =
+                                vec![0; crate::availability::MAX_AVAILABILITY_FRAME_BYTES];
+                            table[..4].copy_from_slice(
+                                &crate::availability::MAX_DA_CHUNK_COUNT.to_be_bytes(),
+                            );
                             let header = BlockHeader {
                                 control_witness: crate::types::ControlWitness::empty(),
                                 epoch,
@@ -1529,13 +1592,30 @@ impl World {
                                 parent_hash: Hash32::ZERO,
                                 parent_result: Hash32::ZERO,
                                 payload_hash: Hash32::ZERO,
-                                payload_len: u32::try_from(payload.len()).unwrap_or(0),
+                                availability_digest: Hash32::ZERO,
+                                payload_len: 1,
                                 proposer: index,
                                 skipped_leaders: Vec::new(),
                                 attest: false,
                             };
-                            let p = self.byz_proposal(r, header, payload, view, None, None);
-                            self.byz_send_all(r, height, WireMessage::Proposal(Box::new(p)), now);
+                            let manifest = PayloadManifest {
+                                header,
+                                availability:
+                                    crate::availability::AvailabilityFrame::from_untrusted(table)
+                                        .unwrap(),
+                            };
+                            let qc = self.forged_qc(r, VoteKind::Commit, height, view);
+                            let msg = WireMessage::SyncResponse(SyncResponse {
+                                instance,
+                                blocks: vec![
+                                    SyncEntry {
+                                        manifest,
+                                        commit_qc: qc
+                                    };
+                                    65
+                                ],
+                            });
+                            self.byz_send_all(r, height, msg, now);
                         }
                         self.adv.counter += 1;
                     }
@@ -1612,7 +1692,7 @@ impl World {
                                 .get(*k)
                                 .is_some_and(|mm| self.machines[*mm].byz)
                         })
-                        .map(|k| SimSigner::new(k.clone(), None, Rc::clone(&self.log)))
+                        .map(|k| SimSigner::new(k.clone(), None, std::sync::Arc::clone(&self.log)))
                         .collect();
                     let bh = Hash32([0x99; 32]);
                     let result = Hash32([0x98; 32]);
@@ -1774,7 +1854,7 @@ impl World {
         };
         for (from, request) in mine {
             match request {
-                WireMessage::BlockRequest(q) => {
+                WireMessage::PayloadRequest(q) => {
                     let genuine =
                         self.replicas[r]
                             .bodies
@@ -1787,10 +1867,34 @@ impl World {
                                     .find(|(_, c)| c.block_hash == q.block_hash)
                                     .map(|(b, _)| b.clone())
                             });
-                    if let Some(mut block) = genuine {
-                        block.payload.push(0xfe);
-                        let msg = WireMessage::BlockResponse(BlockResponse { instance, block });
-                        self.net_send(r, &from, Rc::new(msg), now);
+                    if let Some(block) = genuine {
+                        let shape = self.instances[inst]
+                            .config(block.header().height)
+                            .epoch
+                            .da_layout
+                            .shape(block.payload().as_slice().len() as u64)
+                            .unwrap();
+                        let encoded = iroha_primitives::erasure::rs16::compact::encode_funded(
+                            shape,
+                            block.payload().as_slice(),
+                            &self.replicas[r].budget,
+                        )
+                        .unwrap();
+                        let mut row = encoded.codeword()[shape.chunk_range(0).unwrap()].to_vec();
+                        row[0] ^= 0xfe;
+                        let manifest = WireMessage::PayloadManifest(PayloadManifest {
+                            header: block.header().clone(),
+                            availability: block.availability().clone(),
+                        });
+                        self.net_send(r, &from, Rc::new(manifest), now);
+                        let chunk = WireMessage::PayloadChunk(PayloadChunk {
+                            instance,
+                            height: q.height,
+                            block_hash: q.block_hash,
+                            index: 0,
+                            bytes: crate::availability::RowBytes::from_untrusted(row).unwrap(),
+                        });
+                        self.net_send(r, &from, Rc::new(chunk), now);
                     }
                 }
                 WireMessage::SyncRequest(q) => {
@@ -1807,13 +1911,24 @@ impl World {
                         .take(usize::from(q.max_count).min(16))
                         .map(|(b, c)| {
                             let mut entry = SyncEntry {
-                                block: b.clone(),
+                                manifest: PayloadManifest {
+                                    header: b.header().clone(),
+                                    availability: b.availability().clone(),
+                                },
                                 commit_qc: c.clone(),
                             };
                             match mode {
-                                0 => entry.block.payload.push(0xfd),
+                                0 => {
+                                    let mut bytes = entry.manifest.availability.as_slice().to_vec();
+                                    *bytes.last_mut().unwrap() ^= 0xfd;
+                                    entry.manifest.availability =
+                                        crate::availability::AvailabilityFrame::from_untrusted(
+                                            bytes,
+                                        )
+                                        .unwrap();
+                                }
                                 1 => entry.commit_qc.result = Hash32([0x31; 32]),
-                                _ => entry.block.header.parent_result = Hash32([0x32; 32]),
+                                _ => entry.manifest.header.parent_result = Hash32([0x32; 32]),
                             }
                             entry
                         })
@@ -1853,7 +1968,7 @@ impl World {
                     WireMessage::Status(s) => {
                         s.committed_qc.as_ref().is_some_and(|q| q.height >= h)
                     }
-                    WireMessage::Proposal(p) => p.height > h,
+                    WireMessage::Proposal(p) => p.proposal.height > h,
                     WireMessage::Tc(tc) => tc.height == h && tc.view >= v + 4,
                     _ => false,
                 };
@@ -1901,7 +2016,9 @@ impl World {
             let released = match &*msg {
                 WireMessage::Tc(tc) => tc.height == h && tc.view > v,
                 WireMessage::Qc(q) => q.height == h && q.kind == VoteKind::Commit,
-                WireMessage::Proposal(p) => p.height > h || (p.height == h && p.view > v + 1),
+                WireMessage::Proposal(p) => {
+                    p.proposal.height > h || (p.proposal.height == h && p.proposal.view > v + 1)
+                }
                 _ => false,
             };
             if released || depart >= self.heal_at {
@@ -1917,7 +2034,9 @@ impl World {
                     WireMessage::Timeout(t) if t.height == h && t.view == v + 1 => {
                         return Some((msg, 400));
                     }
-                    WireMessage::Proposal(p) if p.height == h && p.view == v + 1 => {
+                    WireMessage::Proposal(p)
+                        if p.proposal.height == h && p.proposal.view == v + 1 =>
+                    {
                         return Some((msg, 6_000));
                     }
                     WireMessage::Status(s) if from_m == xm && s.high_pqc.is_some() => {
@@ -1946,18 +2065,18 @@ impl World {
                         strip_ppm,
                         corrupt_ppm,
                     },
-                    WireMessage::Proposal(p),
-                ) if p.payload.is_some() => {
+                    WireMessage::PayloadChunk(chunk),
+                ) => {
                     if self.rng.chance(strip_ppm) {
-                        let mut p2 = (**p).clone();
-                        p2.payload = None;
-                        msg = Rc::new(WireMessage::Proposal(Box::new(p2)));
-                    } else if self.rng.chance(corrupt_ppm) {
-                        let mut p2 = (**p).clone();
-                        if let Some(payload) = p2.payload.as_mut() {
-                            payload.push(0xcc);
-                        }
-                        msg = Rc::new(WireMessage::Proposal(Box::new(p2)));
+                        return None;
+                    }
+                    if self.rng.chance(corrupt_ppm) {
+                        let mut changed = chunk.clone();
+                        let mut bytes = changed.bytes.as_slice().to_vec();
+                        bytes[0] ^= 0xcc;
+                        changed.bytes =
+                            crate::availability::RowBytes::from_untrusted(bytes).unwrap();
+                        msg = Rc::new(WireMessage::PayloadChunk(changed));
                     }
                 }
                 (NetRule::DropCommitVotes { from, until }, WireMessage::Vote(v))
@@ -1977,16 +2096,88 @@ impl World {
                     s2.high_pqc = None;
                     msg = Rc::new(WireMessage::Status(Box::new(s2)));
                 }
-                (NetRule::StripProposalsTo(target), WireMessage::Proposal(p))
-                    if to_m == target && p.payload.is_some() =>
-                {
-                    let mut p2 = (**p).clone();
-                    p2.payload = None;
-                    msg = Rc::new(WireMessage::Proposal(Box::new(p2)));
+                (NetRule::DropRowsTo(target), WireMessage::PayloadChunk(_)) if to_m == target => {
+                    return None;
                 }
                 _ => {}
             }
         }
         Some((msg, extra))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{availability::RowBytes, message::PayloadChunk};
+
+    /// Two malicious relays inject actual corrupt rows once each, even when their packets
+    /// feed back through one another; a distinct original row still receives its own fault.
+    #[test]
+    fn forged_rows_do_not_recursively_amplify_between_adversaries() {
+        let mut scenario = Scenario::base("bounded-forged-rows", 0, 7);
+        scenario.byz = vec![
+            (0, vec![Strategy::ForgeBodies]),
+            (1, vec![Strategy::ForgeBodies]),
+        ];
+        let mut world = World::new(scenario);
+        let source = world.net_key(2);
+        let mut chunk = PayloadChunk {
+            instance: world.instances[0].id,
+            height: 1,
+            block_hash: Hash32([7; 32]),
+            index: 0,
+            bytes: RowBytes::from_untrusted(vec![1, 2]).unwrap(),
+        };
+        let enqueued = |world: &World| {
+            world.stats.packets.iter().sum::<u64>()
+                + world
+                    .replicas
+                    .iter()
+                    .map(|replica| replica.nic.len() as u64)
+                    .sum::<u64>()
+        };
+        let initial = enqueued(&world);
+        for relay in [0, 1] {
+            world.byz_observe(
+                relay,
+                &source,
+                &Rc::new(WireMessage::PayloadChunk(chunk.clone())),
+            );
+        }
+        let injected = enqueued(&world);
+        assert_eq!(
+            injected - initial,
+            12,
+            "one six-peer injection by each relay"
+        );
+        chunk.bytes = RowBytes::from_untrusted(vec![1 ^ 0xee, 2]).unwrap();
+        for _ in 0..4 {
+            for relay in [0, 1] {
+                world.byz_observe(
+                    relay,
+                    &source,
+                    &Rc::new(WireMessage::PayloadChunk(chunk.clone())),
+                );
+            }
+        }
+        assert_eq!(
+            enqueued(&world),
+            injected,
+            "feedback injects no additional packets"
+        );
+        chunk.index = 1;
+        for relay in [0, 1] {
+            world.byz_observe(
+                relay,
+                &source,
+                &Rc::new(WireMessage::PayloadChunk(chunk.clone())),
+            );
+        }
+        assert_eq!(
+            enqueued(&world) - injected,
+            12,
+            "a distinct row is still corrupted"
+        );
     }
 }

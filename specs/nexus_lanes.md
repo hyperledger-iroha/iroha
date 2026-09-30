@@ -17,7 +17,7 @@ consensus layer. It produces one deterministic world state while allowing
 logical execution lanes inside physically distinct dataspaces to isolate
 workloads without treating workload names as validator or storage topology.
 
-> **Cross-lane proofs:** This note focuses on geometry and storage. The per-lane settlement commitments, relay pipeline, and merge-ledger proofs required for roadmap **NX-4** are spelled out in [nexus_cross_lane.md](nexus_cross_lane.md).
+> **Lane consensus:** This note focuses on geometry and storage. Lane instances, their certification and the global merge are specified in [sumeragi_lanes.md](sumeragi_lanes.md).
 
 ## Concepts
 
@@ -831,8 +831,9 @@ LaneConfigEntry {
 - `/v1/nexus/lifecycle` exposes the lifecycle/catalog snapshot used to verify
   lane aliases, dataspace bindings, incarnations, activation/close heights, and
   autoscale transitions.
-- `/v1/sumeragi/status` exposes only authoritative `SumeragiV2Status` reducer
-  state; it does not carry lane evidence.
+- `/v1/sumeragi/status` exposes only the authoritative global `SumeragiStatus`
+  instance state; it does not carry lane evidence (`/v1/sumeragi/lanes` lists
+  the node's lane instances).
 - `/v1/sumeragi/diagnostics` exposes non-authoritative operational evidence
   including lane commitments/sessions. Its bounded Native
   participant-application records and bounded restart-stable autonomous

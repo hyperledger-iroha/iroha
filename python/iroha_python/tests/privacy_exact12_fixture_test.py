@@ -250,7 +250,7 @@ def _projection_with_envelope(
     row: PrivacyExact12TypedFixtureRowV1,
     mutate: Callable[[list[bytes]], None],
 ) -> bytes:
-    transaction_fields = _fields(_frame_payload(row.transaction_intent_projection_norito, 0), 10)
+    transaction_fields = _fields(_frame_payload(row.transaction_intent_projection_norito, 0), 9)
     _, _, instruction = _extract_instruction_archive(transaction_fields[3])
     instruction_fields = _fields(_frame_payload(instruction, 8), 1)
     envelope_fields = _fields(instruction_fields[0], 13)
@@ -749,11 +749,11 @@ def test_closed_statement_schema_rejects_an_extra_compact_field() -> None:
     )
 
 
-@pytest.mark.parametrize("field_index", (0, 1, 2, 4, 5, 6, 7, 8, 9))
+@pytest.mark.parametrize("field_index", (0, 1, 2, 4, 5, 6, 7, 8))
 def test_unsigned_transaction_rejects_all_independent_field_mutations(field_index: int) -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    fields = _fields(row.unsigned_transaction_payload_norito, 10)
+    fields = _fields(row.unsigned_transaction_payload_norito, 9)
     replacement = bytearray(fields[field_index])
     replacement[-1] ^= 1
     fields[field_index] = bytes(replacement)
@@ -767,7 +767,7 @@ def test_unsigned_transaction_rejects_all_independent_field_mutations(field_inde
 def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments() -> None:
     bundle = _bundle()
     row = bundle.rows[0]
-    fields = _fields(row.unsigned_transaction_payload_norito, 10)
+    fields = _fields(row.unsigned_transaction_payload_norito, 9)
 
     executable = bytearray(fields[3])
     sequence, sequence_start, _ = _read_field(executable, 4)
@@ -797,7 +797,7 @@ def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments(
     for index, replacement, match in (
         (4, b"\x00", "TTL"),
         (5, b"\x00", "nonce"),
-        (9, b"\x01\x00", "attachments"),
+        (8, b"\x01\x00", "attachments"),
     ):
         changed = list(fields)
         changed[index] = replacement
@@ -807,6 +807,20 @@ def test_transaction_rejects_executable_count_wire_id_ttl_nonce_and_attachments(
             replace(row, unsigned_transaction_payload_norito=_encode_fields(changed)),
             match,
         )
+
+
+@pytest.mark.parametrize("insertion_index", (7, 9))
+def test_transaction_rejects_retired_admission_and_unknown_fields(insertion_index: int) -> None:
+    bundle = _bundle()
+    row = bundle.rows[0]
+    fields = _fields(row.unsigned_transaction_payload_norito, 9)
+    fields.insert(insertion_index, struct.pack("<I", 0))
+    _assert_row_rejected(
+        bundle,
+        0,
+        replace(row, unsigned_transaction_payload_norito=_encode_fields(fields)),
+        "trailing|unknown",
+    )
 
 
 def test_projection_rejects_nonempty_proof_nonzero_digests_and_independent_changes() -> None:

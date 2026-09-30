@@ -106,8 +106,8 @@ pub(crate) fn capture_account_alias_table_once(
 mod tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
     use iroha_crypto::NoritoKeyRangeError;
-    use mv::allocation::{AllocationBudget, AllocationRefusal};
     use std::{
         future::Future,
         pin::pin,

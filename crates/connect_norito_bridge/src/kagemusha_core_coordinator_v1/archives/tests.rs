@@ -172,7 +172,7 @@ fn coordinator_recovery_rejects_missing_selector_context_and_version() {
 
 #[test]
 fn coordinator_archive_fixture_material_is_canonical() {
-    use iroha_core::zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
+    use iroha_core_zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
 
     let candidate = candidate();
     let recovery = recovery();

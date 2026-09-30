@@ -1,6 +1,7 @@
 //! Actual nested by-call execution controls for the private pre-apply owner.
 //! These exercise registered actions, not fabricated callback output claims.
 
+use super::scheduled_time::recorded_component_block;
 use super::*;
 use crate::state::WorldReadOnly;
 use iroha_data_model::{
@@ -169,10 +170,8 @@ fn assert_nested_output(actual: &ExecutionOutputV1, fixture: &NestedCallbackFixt
 
 #[test]
 fn nested_by_call_output_keeps_actual_preorder_steps_and_completions() {
-    let _guard = exec_witness::exec_witness_guard();
     let fixture = nested_callback_fixture(65_536, 4);
-    exec_witness::start_block();
-    let mut block = fixture.state.block(fixture.source.header());
+    let (mut block, _recording) = recorded_component_block(&fixture.state, fixture.source.header());
     block
         .reserve_ordinary_execution_outputs(&fixture.source)
         .unwrap();
@@ -237,6 +236,7 @@ fn nested_by_call_output_keeps_actual_preorder_steps_and_completions() {
             .get(&fixture.child)
             .is_none()
     );
+    drop(_recording);
     drop(block);
     let view = fixture.state.view();
     assert!(
@@ -269,7 +269,6 @@ fn nested_by_call_output_keeps_actual_preorder_steps_and_completions() {
 
 #[test]
 fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut measured = None::<ExecutionOutputV1>;
     for case in 0..3 {
         let bytes = measured
@@ -281,8 +280,8 @@ fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
             _ => bytes.unwrap() - 1,
         };
         let fixture = nested_callback_fixture(limit, 4);
-        exec_witness::start_block();
-        let mut block = fixture.state.block(fixture.source.header());
+        let (mut block, _recording) =
+            recorded_component_block(&fixture.state, fixture.source.header());
         block
             .reserve_ordinary_execution_outputs(&fixture.source)
             .unwrap();
@@ -368,6 +367,7 @@ fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
             retained(&block).row_bytes,
             u64::try_from(norito::canonical_frame_len(actual).unwrap()).unwrap()
         );
+        drop(_recording);
         drop(block);
         assert!(
             fixture
@@ -385,10 +385,8 @@ fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
 
 #[test]
 fn early_nested_depth_failure_cannot_be_swallowed_or_drained_as_success() {
-    let _guard = exec_witness::exec_witness_guard();
     let fixture = nested_callback_fixture(65_536, 1);
-    exec_witness::start_block();
-    let mut block = fixture.state.block(fixture.source.header());
+    let (mut block, _recording) = recorded_component_block(&fixture.state, fixture.source.header());
     block
         .reserve_ordinary_execution_outputs(&fixture.source)
         .unwrap();
@@ -460,11 +458,10 @@ fn early_nested_depth_failure_cannot_be_swallowed_or_drained_as_success() {
 
 #[test]
 fn successful_nested_callbacks_without_journal_transfer_cannot_apply() {
-    let _guard = exec_witness::exec_witness_guard();
     for consensus_effects in [false, true] {
         let fixture = nested_callback_fixture(65_536, 4);
-        exec_witness::start_block();
-        let mut block = fixture.state.block(fixture.source.header());
+        let (mut block, _recording) =
+            recorded_component_block(&fixture.state, fixture.source.header());
         block
             .reserve_ordinary_execution_outputs(&fixture.source)
             .unwrap();
@@ -563,7 +560,6 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
         transaction::error::{TransactionRejectionReason, TriggerExecutionFail},
     };
 
-    let _guard = exec_witness::exec_witness_guard();
     let mut fixture = nested_callback_fixture(65_536, 4);
     let cascade: TriggerId = "output_data_cascade".parse().unwrap();
     let initial_key: Name = "output_data_initial".parse().unwrap();
@@ -614,8 +610,7 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
     ));
     builder.push_transaction(signed);
     fixture.source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
-    exec_witness::start_block();
-    let mut block = fixture.state.block(fixture.source.header());
+    let (mut block, _recording) = recorded_component_block(&fixture.state, fixture.source.header());
     block
         .reserve_ordinary_execution_outputs(&fixture.source)
         .unwrap();

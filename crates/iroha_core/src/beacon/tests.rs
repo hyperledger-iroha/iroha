@@ -721,6 +721,14 @@ pub(crate) fn pending_batched_sortition_attempt(
     Vec<SortitionRequestId>,
     ParliamentAttemptStateV1,
 ) {
+    assert!(
+        pulse_height > 1,
+        "a pulse needs a positive predecessor request height"
+    );
+    let request_height = pulse_height.saturating_sub(10).max(1);
+    // The fixture's frozen policy must describe the exact requested delay,
+    // including pulses before height 11 where a ten-block delay is impossible.
+    let pulse_delay = pulse_height - request_height;
     let proposal_content_id = ProposalContentId::new([0x41; 32]);
     let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
     let mut attempt = ParliamentAttemptStateV1::try_new(
@@ -733,7 +741,7 @@ pub(crate) fn pending_batched_sortition_attempt(
             status: GovernanceAttemptStatusV1::Active,
         },
         1,
-        10,
+        pulse_delay,
         [0x42; 32],
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
             subject_id: [0x43; 32],
@@ -773,7 +781,7 @@ pub(crate) fn pending_batched_sortition_attempt(
             } else {
                 2
             },
-            pulse_height - 10,
+            request_height,
             pulse_height,
             BeaconSessionId::for_network_v1(network_id),
             None,
@@ -786,6 +794,32 @@ pub(crate) fn pending_batched_sortition_attempt(
     }
     request_ids.sort_unstable();
     (governance_attempt_id, request_ids, attempt)
+}
+
+#[test]
+fn pending_sortition_fixture_admits_early_and_later_pulse_heights() {
+    let network_id = beacon_fixture_network_id(0x85);
+    let roster = live_producer_keys()
+        .into_iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    for height in [2, 9, 10, 11, 41] {
+        let (_, requests, attempt) =
+            pending_batched_sortition_attempt(&network_id, &roster, height);
+        assert_eq!(requests.len(), 2);
+        let world = World::new();
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        transaction
+            .put_parliament_attempt(attempt)
+            .expect("canonical fixture admission");
+        assert!(
+            transaction
+                .parliament_required_beacon_pulse_slots
+                .get(&(BeaconSessionId::for_network_v1(&network_id), height))
+                .is_some()
+        );
+    }
 }
 
 #[test]

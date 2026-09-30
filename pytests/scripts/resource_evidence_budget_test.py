@@ -55,10 +55,10 @@ def test_default_policy_and_complete_ten_run_reservation_fit():
     assert result.resource_bytes_per_run == 23 * result.bytes_per_capture
     assert result.resource_bytes == 10 * 23 * result.bytes_per_capture == 1326448640
     assert result.static_bytes == 16 * budget.MIB
-    assert result.dynamic_bytes == 242 * budget.MIB
-    assert result.control_file_count == 153
-    assert result.total_bytes == 1523 * budget.MIB
-    assert result.remaining_bytes == 525 * budget.MIB
+    assert result.dynamic_bytes == 122 * budget.MIB
+    assert result.control_file_count == 33
+    assert result.total_bytes == 1403 * budget.MIB
+    assert result.remaining_bytes == 645 * budget.MIB
     assert result.runs == config["runs"] and result.static_files == config["static_files"]
 
 
@@ -157,9 +157,8 @@ def test_run_order_does_not_replace_identity_and_same_values_are_accepted():
     ("variant", "unsampled", "variant_invalid"), ("geometry", None, "geometry_type_invalid"),
     ("collector_journal", None, "artifact_budget_required"),
     ("transaction_trace", 1, "artifact_budget_required"),
-    ("canonical_proof", None, "artifact_budget_required"),
-    ("run_receipt", None, "artifact_budget_required"), ("raw_run", None, "artifact_budget_required"),
-    ("native_carrier", [], "artifact_budget_required"), ("native_queries", (None,), "artifact_budget_required"),
+    ("run_receipt", None, "artifact_budget_required"), ("run_receipt", [], "artifact_budget_required"),
+    ("collector_journal", (None,), "artifact_budget_required"),
 ])
 def test_each_run_requires_typed_allocations_and_no_unsampled_form(field, value, code):
     fail(code, lambda: replace(inputs()["runs"][0], **{field: value}))
@@ -177,7 +176,7 @@ def test_positive_dynamic_zero_static_and_exact_per_file_limit():
     config = inputs(static_files=(empty,))
     result = budget.admit_experiment(**(config | {"report": budget.FileBudget("report", budget.MAX_FILE_BYTES)}))
     assert result.static_bytes == 0
-    assert result.control_file_count == 153
+    assert result.control_file_count == 33
     assert result.control_budgets[1].max_bytes == budget.MAX_FILE_BYTES
     assert budget.StaticFile("maximum", budget.MAX_FILE_BYTES).size_bytes == budget.MAX_FILE_BYTES
 
@@ -191,8 +190,8 @@ def test_labels_are_bounded_ledger_identities_not_runtime_paths(label):
 def test_duplicate_allocations_never_hide_or_double_count_one_declared_file(where):
     config = inputs()
     runs = list(config["runs"])
-    if where == "same_run": runs[0] = replace(runs[0], run_receipt=runs[0].raw_run)
-    elif where == "cross_run": runs[1] = replace(runs[1], raw_run=runs[0].raw_run)
+    if where == "same_run": runs[0] = replace(runs[0], run_receipt=runs[0].collector_journal)
+    elif where == "cross_run": runs[1] = replace(runs[1], run_receipt=runs[0].run_receipt)
     elif where == "static_dynamic": config["static_files"] = (budget.StaticFile("report", 1),)
     elif where == "root_control": config["other_control"] = (config["report"],)
     else: config["static_files"] = config["static_files"] * 2
@@ -289,7 +288,7 @@ def test_oversized_input_tuples_reject_before_processing_members():
     config = inputs()
     for field in ("static_files", "other_control"):
         fail("bounded_tuple_required", lambda: budget.admit_experiment(**(config | {field: (None,) * 257})))
-    fail("artifact_budget_required", lambda: replace(config["runs"][0], native_bundle=(None,) * 257))
+    fail("artifact_budget_required", lambda: replace(config["runs"][0], run_receipt=(None,) * 257))
 
 
 def test_all_admitted_objects_and_collections_are_immutable():
@@ -300,7 +299,7 @@ def test_all_admitted_objects_and_collections_are_immutable():
         with pytest.raises(FrozenInstanceError): setattr(item, field, 0)
         assert not hasattr(item, "__dict__")
     assert type(result.runs) is type(result.static_files) is type(result.control_budgets) is tuple
-    assert type(result.runs[0].files) is tuple and len(result.runs[0].files) == 15
+    assert type(result.runs[0].files) is tuple and len(result.runs[0].files) == 3
 
 
 @pytest.mark.parametrize("owner", ["policy", "geometry", "static", "file", "run"])
@@ -344,7 +343,7 @@ def test_budget_has_no_io_or_sampling_dependency_and_needs_no_preflight(monkeypa
         patch.setattr(os, "listdir", forbidden)
         patch.setattr(socket, "socket", forbidden)
         patch.setattr(subprocess, "Popen", forbidden)
-        assert budget.admit_experiment(**inputs()).total_bytes == 1523 * budget.MIB
+        assert budget.admit_experiment(**inputs()).total_bytes == 1403 * budget.MIB
         selected = budget.select_run_budget(budget.admit_experiment(**inputs()), 1, 'one_lane')
         assert budget.canonical_run_budget_bytes(selected).startswith(b'{"experiment":')
         assert len(budget.run_budget_sha256(selected)) == 64

@@ -9,11 +9,13 @@ use iroha_data_model::{
             EvidenceOffender, EvidencePenaltyStatus, EvidenceRecord, ExecKv, ExecWitness,
             ExecWitnessMsg, NposGenesisParams,
         },
-        consensus_v2::{SumeragiV2GenesisContextParameters, ValidationError, ValidatorPower},
+        consensus::{SumeragiGenesisContextParameters, ValidationError, ValidatorPower},
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     sumeragi::{
@@ -57,6 +59,28 @@ fn mint_finality_authority(
     }
 }
 
+fn mint_finality_genesis_authorization(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+) -> KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: authority.network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority.authority_id().expect("valid fixture authority"),
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    authorization
+        .validate_against_authority(authority)
+        .expect("valid fixture genesis authorization");
+    authorization
+}
 fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
     assert!(u8::try_from(len).is_ok(), "len must fit in u8");
     (0..len)
@@ -135,8 +159,8 @@ fn rng_hash(rng: &mut DeterministicRng) -> Hash {
 fn rng_block_hash(rng: &mut DeterministicRng) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(rng_hash(rng))
 }
-fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
-    SumeragiV2GenesisContextParameters::recommended()
+fn recommended_genesis_context() -> SumeragiGenesisContextParameters {
+    SumeragiGenesisContextParameters::recommended()
 }
 fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisParams {
     let mode = if rng.next_bool() {
@@ -149,7 +173,7 @@ fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisP
         block_max_transactions: NonZeroU64::new(rng.next_u64()).unwrap_or(NonZeroU64::MIN),
         mode,
         protocol_version: rng.next_u32(),
-        v2_context: recommended_genesis_context(),
+        sumeragi_context: recommended_genesis_context(),
     }
 }
 fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
@@ -403,7 +427,7 @@ fn consensus_genesis_norito_roundtrip() {
         block_max_transactions: NonZeroU64::new(512).unwrap(),
         mode: ConsensusGenesisModeParams::Npos(npos.clone()),
         protocol_version: u32::from(PROTOCOL_VERSION),
-        v2_context: recommended_genesis_context(),
+        sumeragi_context: recommended_genesis_context(),
     };
     let without_npos = ConsensusGenesisParams {
         mode: ConsensusGenesisModeParams::Permissioned,

@@ -5,7 +5,7 @@ use crate::{
     cell::{self, Cell},
     storage::{self, Storage},
 };
-use concread::release::ReleaseFuture;
+use iroha_allocation::release::ReleaseFuture;
 use std::{
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -486,9 +486,9 @@ fn detached_slots_outer_unwind_releases_siblings_before_original_poison_wakes() 
     );
 }
 
-struct Scalar(crate::allocation::AllocationReservation);
+struct Scalar(iroha_allocation::AllocationReservation);
 impl concread::bptree::NodeFunding for Scalar {
-    type Charge = crate::allocation::AllocationCharge;
+    type Charge = iroha_allocation::AllocationCharge;
     fn take_node_charge(&mut self, layout: std::alloc::Layout) -> Self::Charge {
         self.0.try_split(layout).unwrap()
     }
@@ -516,18 +516,18 @@ impl<V: Copy> concread::bptree::ClonePlanning<u64, V> for Scalar {
     }
 }
 impl storage::AdmittedStoragePolicy for Scalar {
-    fn from_admission(reservation: crate::allocation::AllocationReservation) -> Self {
+    fn from_admission(reservation: iroha_allocation::AllocationReservation) -> Self {
         Self(reservation)
     }
-    fn admission(&self) -> &crate::allocation::AllocationReservation {
+    fn admission(&self) -> &iroha_allocation::AllocationReservation {
         &self.0
     }
 }
 
 #[test]
 fn detached_slots_prepaid_preserve_original_scope_and_refusal_custody_without_new_credits() {
-    use crate::allocation::AllocationBudget;
     use concread::bptree::Prepaid;
+    use iroha_allocation::AllocationBudget;
     let budget = AllocationBudget::new(1 << 20);
     let target = Storage::<u64, u64, Prepaid<Scalar>>::try_new_admitted(budget.clone()).unwrap();
     let original = target

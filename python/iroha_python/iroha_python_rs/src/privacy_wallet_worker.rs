@@ -20,7 +20,7 @@ use crate::{
         decode_privacy_wallet_execution_bundle_v1, inspect_privacy_wallet_execution_bundle_v1,
     },
 };
-use iroha_core::privacy_engines::atomic_private_settlement::{
+use iroha_core_privacy::privacy_engines::atomic_private_settlement::{
     AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementWalletErrorV1,
     AtomicPrivateSettlementWalletInspectionV1, complete_atomic_private_settlement_prepared_leg_v1,
     consume_atomic_private_settlement_wallet_bundle_v1,

@@ -1525,10 +1525,17 @@ pub(crate) mod tests {
         let mut query = fixture.query.clone();
         query.transaction_hash = *transaction.hash().as_ref();
         let mut duplicate = signed_proposal(vec![transaction.clone(), transaction.clone()]);
-        let duplicate_before = duplicate.canonical_resultless_proposal();
+        let duplicate_before = duplicate
+            .canonical_resultless_proposal()
+            .expect("valid original proposal");
         let duplicate_outputs = network_outputs(&duplicate, None);
         assert!(install_fixture_outputs(&mut duplicate, duplicate_outputs, 2).is_err());
-        assert_eq!(duplicate.canonical_resultless_proposal(), duplicate_before);
+        assert_eq!(
+            duplicate
+                .canonical_resultless_proposal()
+                .expect("valid original proposal"),
+            duplicate_before
+        );
         assert!(
             !duplicate.has_results(),
             "duplicate execution calls cannot acquire outputs"

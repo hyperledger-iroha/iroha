@@ -1,7 +1,7 @@
 //! Canonical local wallet proving; the Core owner selects and verifies the circuit.
 
 use super::*;
-use iroha_core::zk::confidential::{ConfidentialProof, ConfidentialProver, ConfidentialTree};
+use iroha_core_zk::confidential::{ConfidentialProof, ConfidentialProver, ConfidentialTree};
 use napi::bindgen_prelude::AsyncTask;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -343,7 +343,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             result.relation,
-            iroha_core::zk::ProofRelation::ConfidentialFullUnshield
+            iroha_core_zk::ProofRelation::ConfidentialFullUnshield
         );
         assert_eq!(result.root, root);
         assert_eq!(result.nullifiers.len(), 1);
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn public_envelope_preserves_native_proof_and_output_order() {
-        use iroha_core::zk::ProofRelation;
+        use iroha_core_zk::ProofRelation;
         let actual = envelope(ConfidentialProof {
             relation: ProofRelation::ConfidentialTransfer,
             proof: iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![7, 8]),

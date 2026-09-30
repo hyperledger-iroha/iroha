@@ -1,6 +1,9 @@
 //! Sample configuration builders
+#[path = "genesis_policy.rs"]
+mod genesis_policy;
 use crate::init_instruction_registry;
 use color_eyre::{Report, eyre::eyre};
+pub(crate) use genesis_policy::{discover_generated_policy_hashes, execute_generated_genesis};
 use iroha_config::base::toml::WriteExt;
 use iroha_config::parameters::actual::{
     Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot,
@@ -19,7 +22,7 @@ use iroha_data_model::{
     Registrable as _,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
-    block::consensus_v2::{ConsensusMode as WireConsensusMode, SumeragiV2GenesisContextParameters},
+    block::consensus::{ConsensusMode as WireConsensusMode, SumeragiGenesisContextParameters},
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
     da::commitment::DaProofPolicyBundle,
     domain::Domain,
@@ -404,7 +407,7 @@ fn test_kagemusha_mint_finality_genesis_parameters(
             let seed_byte = 0xA0_u8.wrapping_add(
                 u8::try_from(index).expect("test-network validator index fits in one byte"),
             );
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
                 0,
                 validator,
@@ -547,7 +550,8 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     let mut post_topology_transactions = post_topology_transactions;
     strip_handshake_metadata_transactions(&mut extra_transactions);
     strip_handshake_metadata_transactions(&mut post_topology_transactions);
-    let (mut block, genesis_account, topology_vec, genesis_key_pair, raw_genesis) =
+    let bind_generated_policy = consensus_handshake_meta.is_none();
+    let (block, genesis_account, topology_vec, genesis_key_pair, raw_genesis) =
         build_minimal_genesis_unexecuted_with_post_topology(
             extra_transactions,
             post_topology_transactions,
@@ -564,19 +568,25 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
             confidential_policy_hash,
             mint_finality_override,
         );
-    let (signed_block, staged_hash) = preexecute_genesis_with_runtime_config(
-        &block,
-        &genesis_account,
-        &topology_vec,
+    genesis_policy::execute_generated_genesis(
+        block,
+        raw_genesis,
         &genesis_key_pair,
-        pipeline_config.as_ref(),
-        nexus_config.as_ref(),
-        zk_config.as_ref(),
-        runtime_config.as_ref(),
+        bind_generated_policy,
+        |proposal| {
+            preexecute_genesis_with_runtime_config(
+                proposal,
+                &genesis_account,
+                &topology_vec,
+                &genesis_key_pair,
+                pipeline_config.as_ref(),
+                nexus_config.as_ref(),
+                zk_config.as_ref(),
+                runtime_config.as_ref(),
+            )
+        },
     )
-    .expect("minimal genesis must pre-execute without synthetic results");
-    block.0 = signed_block;
-    (block, staged_hash, raw_genesis)
+    .expect("minimal genesis must pre-execute without synthetic results")
 }
 #[cfg(test)]
 fn build_minimal_genesis_unexecuted(
@@ -713,19 +723,19 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
         |metadata| metadata.mode,
     );
-    let (block_cadence_ms, sumeragi_v2, kagemusha_mint_finality) = consensus_handshake_metadata
-        .map_or_else(
+    let (block_cadence_ms, sumeragi_context, kagemusha_mint_finality) =
+        consensus_handshake_metadata.map_or_else(
             || {
                 (
                     None,
-                    SumeragiV2GenesisContextParameters::recommended(),
+                    SumeragiGenesisContextParameters::recommended(),
                     test_kagemusha_mint_finality_genesis_parameters(&topology),
                 )
             },
             |metadata| {
                 (
                     Some(metadata.block_cadence_ms),
-                    metadata.sumeragi_v2,
+                    metadata.sumeragi_context,
                     metadata.kagemusha_mint_finality,
                 )
             },
@@ -735,7 +745,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .validate()
         .expect("override must be a canonical generation-zero mint-finality authority");
     builder = builder
-        .with_sumeragi_v2_context_parameters(sumeragi_v2)
+        .with_sumeragi_context_parameters(sumeragi_context)
         .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality);
     if let Some(block_cadence_ms) = block_cadence_ms {
         builder = builder.with_block_cadence_ms(block_cadence_ms);
@@ -811,6 +821,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     ));
     builder = builder.append_instruction(Mint::asset_quantity(13u32, rose_asset_id));
     builder = builder.append_instruction(Mint::asset_quantity(44u32, cabbage_asset_id));
+    // Author one global bootstrap phase for the fixture permission grants and
+    // SoraCloud asset definitions/balances. They share the genesis authority and
+    // universal routing; grants add no balance work to the existing mint phase.
+    // Caller-owned batches and the proof-bearing topology stay separate below.
     builder = builder.next_transaction();
     let xor_asset_def: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -943,7 +957,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     // processes are seeded later from the peer streaming identities in `NetworkBuilder`.
     let soracloud_bootstrap_accounts =
         BTreeSet::from([alice_id.clone(), bob_id.clone(), carpenter_id.clone()]);
-    builder = builder.next_transaction();
     builder = builder.append_instruction(Register::asset_definition(AssetDefinition::numeric(
         agent_wallet_asset_definition.clone(),
         "soracloud_agent_wallet".to_owned(),
@@ -1031,7 +1044,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let raw_genesis = builder
         .build_raw()
         .expect("build canonical test-network genesis manifest")
-        .with_consensus_mode(consensus_mode);
+        .with_consensus_mode(consensus_mode)
+        .with_consensus_meta();
     let block = raw_genesis
         .clone()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
@@ -1197,16 +1211,11 @@ pub(crate) fn staged_genesis_policy_hashes(
     )
     .map(|(_, hashes)| hashes)
 }
-/// Stack of the genesis pre-execution thread. Block validation acquires the whole World
-/// overlay in a few very large frames; unoptimized builds need far more than a default 2 MiB
-/// test or runtime thread, as the node's own execution threads do.
-const GENESIS_PREEXECUTION_STACK_BYTES: usize = 64 * 1024 * 1024;
-
 /// Pre-execute with the supplied runtime address profile. Configuration-free test helpers
 /// use the caller's native address scope for both instruction construction and execution.
 ///
-/// Execution runs on a dedicated thread with [`GENESIS_PREEXECUTION_STACK_BYTES`] of stack,
-/// so callers on ordinary test threads do not overflow; a panic there resumes on the caller.
+/// Execution stays on the caller's thread. The scoped profile is restored on return
+/// or unwinding; the native state owner supports an ordinary thread stack.
 pub(crate) fn preexecute_genesis_with_runtime_config(
     block: &GenesisBlock,
     genesis_account: &AccountId,
@@ -1235,31 +1244,17 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
         iroha_data_model::account::address::chain_discriminant,
         |config| *config.common.chain_discriminant.value(),
     );
-    std::thread::scope(|scope| {
-        let execution = std::thread::Builder::new()
-            .name("genesis-preexecution".to_owned())
-            .stack_size(GENESIS_PREEXECUTION_STACK_BYTES)
-            .spawn_scoped(scope, || {
-                let _profile =
-                    iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
-                preexecute_genesis_on_current_thread(
-                    block,
-                    genesis_account,
-                    topology,
-                    genesis_key_pair,
-                    pipeline_config,
-                    nexus_config,
-                    zk_config,
-                    runtime_config,
-                )
-            })
-            .map_err(|error| {
-                Report::new(error).wrap_err("failed to spawn the genesis pre-execution thread")
-            })?;
-        execution
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-    })
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
+    preexecute_genesis_on_current_thread(
+        block,
+        genesis_account,
+        topology,
+        genesis_key_pair,
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        runtime_config,
+    )
 }
 
 fn preexecute_genesis_on_current_thread(
@@ -1447,7 +1442,7 @@ fn resolve_preexec_nexus_config(
     if !has_authoritative_nexus {
         // Direct fixture calls have no resolved runtime config. Keep their
         // account literals unambiguous, but never rewrite an authoritative Nexus
-        // snapshot because the signed v2 commitment must match peer startup.
+        // snapshot because the signed Nexus/AMX context commitment must match peer startup.
         let gas_account = ALICE_ID.to_string();
         nexus.staking.stake_escrow_account_id = gas_account.clone();
         nexus.staking.slash_sink_account_id = gas_account;
@@ -1515,6 +1510,14 @@ fn resign_genesis(
         .expect("replace genesis with its one canonical signature");
     signed
 }
+
+#[cfg(test)]
+#[path = "genesis_stack_tests.rs"]
+mod genesis_stack_tests;
+
+#[cfg(test)]
+#[path = "genesis_fixture_policy.rs"]
+mod genesis_fixture_policy;
 
 #[cfg(test)]
 mod tests {
@@ -1840,6 +1843,208 @@ mod tests {
         }));
     }
     #[test]
+    fn generated_global_bootstrap_keeps_grants_before_exact_soracloud_balances() {
+        init_instruction_registry();
+        let (topology, entries) = genesis_committee();
+        let (_, _, _, _, raw) = build_minimal_genesis_unexecuted_with_post_topology(
+            Vec::new(),
+            Vec::new(),
+            topology,
+            entries,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+            None,
+        );
+        let grant_phases = raw
+            .transactions()
+            .iter()
+            .enumerate()
+            .filter(|(_, transaction)| {
+                transaction
+                    .instructions()
+                    .iter()
+                    .any(|instruction| instruction.as_any().is::<GrantBox>())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(grant_phases.len(), 1, "built-in grants have one owner");
+        let (phase_index, phase) = grant_phases[0];
+        assert!(phase_index > 0, "initial registration stays separate");
+        assert!(phase.topology().is_empty(), "topology has its own owner");
+        let grant_count = phase
+            .instructions()
+            .iter()
+            .take_while(|instruction| instruction.as_any().is::<GrantBox>())
+            .count();
+        assert_eq!(grant_count, 22, "all built-in grants precede balances");
+        let agent_wallet: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap();
+        let shared_lease: AssetDefinitionId = "5PeSrQmLNwwKtruJvDZrbrm9RuMw".parse().unwrap();
+        let mut expected = vec![
+            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+                agent_wallet.clone(),
+                "soracloud_agent_wallet".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))),
+            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+                shared_lease.clone(),
+                "soracloud_hf_lease".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))),
+        ];
+        for account in BTreeSet::from([
+            sanitize_account_id(&ALICE_ID),
+            sanitize_account_id(&BOB_ID),
+            sanitize_account_id(&CARPENTER_ID),
+        ]) {
+            expected.push(
+                Mint::asset_quantity(
+                    500_000_u32,
+                    AssetId::new(agent_wallet.clone(), account.clone()),
+                )
+                .into(),
+            );
+            expected.push(
+                Mint::asset_quantity(500_000_u32, AssetId::new(shared_lease.clone(), account))
+                    .into(),
+            );
+        }
+        assert_eq!(&phase.instructions()[grant_count..], expected);
+        assert!(
+            raw.transactions()[phase_index - 1]
+                .instructions()
+                .iter()
+                .any(|instruction| instruction
+                    .as_any()
+                    .is::<iroha_data_model::isi::TransferBox>())
+        );
+    }
+    #[test]
+    fn generated_global_bootstrap_preserves_caller_batches_at_exact_input_limit() {
+        use iroha_data_model::{Level, isi::Log};
+
+        init_instruction_registry();
+        let extra = (0..3)
+            .map(|index| {
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    format!("before-{index}"),
+                ))]
+            })
+            .collect::<Vec<_>>();
+        let post = (0..2)
+            .map(|index| {
+                vec![
+                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-first"))),
+                    InstructionBox::from(Log::new(Level::INFO, format!("after-{index}-second"))),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let (topology, entries) = genesis_committee();
+        let (block, _, _, _, raw) = build_minimal_genesis_unexecuted_with_post_topology(
+            extra.clone(),
+            post.clone(),
+            topology,
+            entries.clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+            None,
+        );
+        assert_eq!(
+            block.0.external_transactions().count(),
+            iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS as usize,
+            "the authored draft uses exactly the fixed eleven network inputs"
+        );
+        let topology_index = raw
+            .transactions()
+            .iter()
+            .position(|tx| !tx.topology().is_empty())
+            .unwrap();
+        assert_eq!(raw.transactions()[topology_index].topology(), entries);
+        assert!(raw.transactions()[topology_index].instructions().is_empty());
+        for (transaction, original) in raw.transactions()
+            [topology_index - extra.len()..topology_index]
+            .iter()
+            .zip(&extra)
+        {
+            assert_eq!(transaction.instructions(), original);
+            assert!(transaction.topology().is_empty());
+        }
+        for (transaction, original) in raw.transactions()
+            [topology_index + 1..topology_index + 1 + post.len()]
+            .iter()
+            .zip(&post)
+        {
+            assert_eq!(transaction.instructions(), original);
+            assert!(transaction.topology().is_empty());
+        }
+        for original in extra.iter().chain(&post) {
+            assert_eq!(block.0.external_transactions().filter(|transaction| {
+                matches!(transaction.instructions(), Executable::Instructions(batch) if batch.as_ref() == original.as_slice())
+            }).count(), 1, "each caller batch enters the signed block exactly once");
+        }
+    }
+    #[test]
+    fn generated_global_bootstrap_refuses_caller_overflow_without_repacking() {
+        use iroha_data_model::{Level, isi::Log};
+
+        init_instruction_registry();
+        let extra = (0..6)
+            .map(|index| {
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    format!("caller-{index}"),
+                ))]
+            })
+            .collect::<Vec<_>>();
+        let original = extra.clone();
+        let (topology, entries) = genesis_committee();
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_minimal_genesis_unexecuted_with_post_topology(
+                extra.clone(),
+                Vec::new(),
+                topology,
+                entries,
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+                super::chain_id(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+                None,
+            )
+        }))
+        .expect_err("the generator must refuse a twelfth caller-authored input");
+        let message = failure
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| failure.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(message.contains("12 network inputs"), "{message}");
+        assert!(message.contains("FASTPQ bootstrap limit 11"), "{message}");
+        assert_eq!(
+            extra, original,
+            "refusal leaves the authored batches intact"
+        );
+    }
+    #[test]
     fn genesis_allows_wonderland_assets_from_genesis_authority() {
         use iroha_core::block::check_genesis_block;
         use iroha_data_model::{asset::AssetDefinition, isi::Register};
@@ -1867,8 +2072,8 @@ mod tests {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
-            super::build_minimal_genesis_unexecuted(
+        let (mut block, genesis_account, topology_vec, genesis_key_pair, _) =
+            super::genesis_fixture_policy::policy_bound_proposal(
                 Vec::new(),
                 topology,
                 entries,
@@ -1903,8 +2108,8 @@ mod tests {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
-            super::build_minimal_genesis_unexecuted(
+        let (mut block, genesis_account, topology_vec, genesis_key_pair, _) =
+            super::genesis_fixture_policy::policy_bound_proposal(
                 Vec::new(),
                 topology,
                 entries,
@@ -1974,8 +2179,8 @@ mod tests {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
-            super::build_minimal_genesis_unexecuted(
+        let (mut block, genesis_account, topology_vec, genesis_key_pair, _) =
+            super::genesis_fixture_policy::policy_bound_proposal(
                 Vec::new(),
                 topology,
                 entries,
@@ -2010,8 +2215,8 @@ mod tests {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
-            super::build_minimal_genesis_unexecuted(
+        let (mut block, genesis_account, topology_vec, genesis_key_pair, manifest) =
+            super::genesis_fixture_policy::policy_bound_proposal(
                 Vec::new(),
                 topology,
                 entries,
@@ -2074,6 +2279,34 @@ mod tests {
             format!("{error:#}").contains("must be signed with genesis private key"),
             "the strict verifier must reject the stale signature before execution: {error:#}"
         );
+        // A new DA alias changes the actual staged policy. A refreshed signature
+        // alone must still reject the old policy commitment. Only this fixture's
+        // explicit construction stage may bind and sign its new manifest.
+        let signed_mutation = GenesisBlock(super::resign_genesis(&block.0, &genesis_key_pair));
+        let policy_error = super::populate_genesis_results(
+            &signed_mutation,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+            None,
+        )
+        .expect_err("signed DA mutation must not silently rewrite policy authority");
+        assert!(matches!(
+            policy_error
+                .downcast_ref::<Box<iroha_core::block::BlockValidationError>>()
+                .map(Box::as_ref),
+            Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch { .. })
+        ));
+        (block, _) = super::genesis_fixture_policy::bind_proposal(
+            signed_mutation,
+            manifest,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+        )
+        .expect("explicitly bind the mutated fixture's new DA policy");
         super::ensure_genesis_results(
             &mut block,
             &genesis_account,
@@ -2110,8 +2343,8 @@ mod tests {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let (block, genesis_account, topology_vec, genesis_key_pair) =
-            super::build_minimal_genesis_unexecuted(
+        let (block, genesis_account, topology_vec, genesis_key_pair, _) =
+            super::genesis_fixture_policy::policy_bound_proposal(
                 Vec::new(),
                 topology,
                 entries,
@@ -2160,7 +2393,7 @@ mod tests {
             ..Default::default()
         };
         let policies = iroha_core::da::proof_policy_bundle(&nexus.lane_config);
-        let (block, genesis_account, topology_vec, genesis_key_pair, _) =
+        let (block, genesis_account, topology_vec, genesis_key_pair, manifest) =
             super::build_minimal_genesis_unexecuted_with_post_topology(
                 Vec::new(),
                 Vec::new(),
@@ -2177,6 +2410,15 @@ mod tests {
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
                 None,
             );
+        let (block, _) = super::genesis_fixture_policy::bind_proposal(
+            block,
+            manifest,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+        )
+        .expect("construct a policy-bound resultless fixture under its intended configuration");
         let executed = super::populate_genesis_results(
             &block,
             &genesis_account,
@@ -2195,108 +2437,104 @@ mod tests {
     }
     #[test]
     fn populate_genesis_results_uses_supplied_nexus_config_for_custom_staking_genesis() {
-        use iroha_data_model::nexus::{
-            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
-        };
+        use iroha_core::block::{BlockValidationError, InvalidGenesisError};
         use iroha_data_model::{
+            ValidationFail,
             isi::{
-                Register,
+                error::InstructionExecutionError,
                 staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
             },
-            prelude::Quantity,
+            parameter::system::SumeragiNposParameters,
+            transaction::error::TransactionRejectionReason,
         };
-        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+        use iroha_model_base::topology::LaneId;
         use std::num::NonZeroU32;
+
         init_instruction_registry();
+        let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+        );
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let validator_key = KeyPair::random();
-        let validator_id = AccountId::new(validator_key.public_key().clone());
-        let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
-        let stake_asset_id = iroha_data_model::parameter::system::SumeragiNposParameters::default()
-            .xor_asset_definition_id;
-        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
-        let lane_zero = LaneConfig {
-            id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
-            alias: "nexus".to_owned(),
-            ..LaneConfig::default()
+        let npos = SumeragiNposParameters {
+            max_validators: 4,
+            ..Default::default()
         };
-        let lane_one = LaneConfig {
-            id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
-            alias: "ds1".to_owned(),
-            dataspace_id: DataSpaceId::new(7),
-            ..LaneConfig::default()
-        };
-        let catalog = LaneCatalog::new(lane_count, vec![lane_zero, lane_one.clone()])
-            .expect("lane catalog should validate");
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: lane_one.dataspace_id,
-                alias: lane_one.alias.clone(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog should validate");
+        let stake_asset_id = npos.xor_asset_definition_id.clone();
+        let stake_amount = npos.min_self_bond.clone();
+        let escrow_account = AccountId::new(
+            KeyPair::from_seed(
+                b"custom-genesis-staking-escrow".to_vec(),
+                Algorithm::Ed25519,
+            )
+            .public_key()
+            .clone(),
+        );
         let nexus = ActualNexus {
             staking: iroha_config::parameters::actual::NexusStaking {
                 stake_asset_id: stake_asset_id.to_string(),
+                stake_escrow_account_id: escrow_account.to_string(),
+                slash_sink_account_id: escrow_account.to_string(),
+                min_validator_stake: stake_amount.clone(),
+                max_validators: NonZeroU32::new(4).unwrap(),
                 ..Default::default()
             },
-            lane_catalog: catalog.clone(),
-            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog),
-            dataspace_catalog,
             ..Default::default()
         };
-        let escrow_account_id = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
-            .expect("configured staking escrow");
-        let mut post_topology_instructions = vec![
-            Register::domain(Domain::new(nexus_domain.clone())).into(),
-            Register::account(Account::new(validator_id.clone())).into(),
-            Register::asset_definition({
-                let __asset_definition_id = stake_asset_id.clone();
-                AssetDefinition::numeric(
-                    __asset_definition_id.clone(),
-                    "multilane_stake".to_owned(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            })
-            .into(),
-            Mint::asset_quantity(
-                10_u32,
-                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-            )
+        let mut resources = vec![
+            Register::account(Account::new(escrow_account.clone())).into(),
+            Register::asset_definition(AssetDefinition::new(
+                stake_asset_id.clone(),
+                "XOR".to_owned(),
+                NumericSpec::fractional(9),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
             .into(),
         ];
-        post_topology_instructions.extend(genesis_participant_committee_key_instructions(
-            &entries,
-            &[peer_id.clone()],
-        ));
-        post_topology_instructions.extend([
-            RegisterPublicLaneValidator::new(
-                lane_one.id,
-                validator_id.clone(),
-                peer_id.clone(),
-                validator_id.clone(),
-                Quantity::from(10_u32),
-                Metadata::default(),
-                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
-                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                    AssetId::new(stake_asset_id.clone(), escrow_account_id),
-                    Quantity::from(10_u32),
-                ),
-            )
-            .into(),
-            ActivatePublicLaneValidator::new(lane_one.id, validator_id.clone()).into(),
-        ]);
-        let post_topology_transactions = vec![post_topology_instructions];
-        let (block, genesis_account, topology_vec, genesis_key_pair, _) =
+        let mut registrations = Vec::new();
+        for (index, peer) in topology.iter().enumerate() {
+            let validator = AccountId::new(
+                KeyPair::from_seed(
+                    format!("custom-genesis-staking-validator-{index}").into_bytes(),
+                    Algorithm::Ed25519,
+                )
+                .public_key()
+                .clone(),
+            );
+            resources.push(Register::account(Account::new(validator.clone())).into());
+            resources.push(
+                Mint::asset_quantity(
+                    stake_amount.clone(),
+                    AssetId::new(stake_asset_id.clone(), validator.clone()),
+                )
+                .into(),
+            );
+            // Global staking uses the validator-role keys installed by the signed topology.
+            registrations.push(
+                RegisterPublicLaneValidator::new(
+                    LaneId::SINGLE,
+                    validator.clone(),
+                    peer.clone(),
+                    validator.clone(),
+                    stake_amount.clone(),
+                    Metadata::default(),
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator.clone()),
+                        AssetId::new(stake_asset_id.clone(), escrow_account.clone()),
+                        stake_amount.clone(),
+                    ),
+                )
+                .into(),
+            );
+            registrations.push(ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into());
+        }
+        let (block, genesis_account, topology_vec, genesis_key_pair, manifest) =
             super::build_minimal_genesis_unexecuted_with_post_topology(
-                Vec::new(),
-                post_topology_transactions,
+                vec![vec![
+                    SetParameter::new(Parameter::Custom(npos.into_custom_parameter())).into(),
+                ]],
+                vec![resources, registrations],
                 topology,
                 entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
@@ -2306,29 +2544,84 @@ mod tests {
                 Some(nexus.clone()),
                 None,
                 None,
-                None,
+                Some(SumeragiConsensusMode::Npos),
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
                 None,
             );
-        let err = super::populate_genesis_results(
-            &block,
+        let expected_rejection_index = block
+            .0
+            .external_transactions()
+            .position(|transaction| {
+                let Executable::Instructions(instructions) = transaction.instructions() else {
+                    return false;
+                };
+                instructions
+                    .iter()
+                    .any(|instruction| instruction.as_any().is::<RegisterPublicLaneValidator>())
+            })
+            .expect("the signed inputs contain the staking registration source");
+        let (block, _) = super::genesis_fixture_policy::bind_proposal(
+            block,
+            manifest,
             &genesis_account,
             &topology_vec,
             &genesis_key_pair,
-            None,
-            None,
+            Some(&nexus),
         )
-        .expect_err("custom staking genesis should fail without the supplied nexus config");
-        let rendered = format!("{err:?}");
-        assert!(
-            rendered.contains("stake asset definition missing")
-                || rendered.contains("nexus.staking.stake_asset_id")
-                || rendered.contains("Find(AssetDefinition(")
-                || rendered.contains(
-                    "register_public_lane_validator rejected: lane 1 is not active at block height 1"
-                ),
-            "unexpected pre-exec error without nexus config: {err:?}"
+        .expect("construct a policy-bound resultless fixture under its intended configuration");
+        assert_eq!(topology_vec.len(), 4);
+        assert_eq!(
+            super::signed_genesis_consensus_mode(&block).unwrap(),
+            WireConsensusMode::Npos
         );
+        let original_wire = block.0.encode_wire().unwrap();
+        let mut wrong_asset_config = nexus.clone();
+        wrong_asset_config.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        )
+        .to_string();
+        for (config, expected_cause) in [
+            (
+                None,
+                "staking monetary plan does not match its exact current transfer and custody state",
+            ),
+            (
+                Some(&wrong_asset_config),
+                "configured staking or reward asset differs from the committed network XOR identity",
+            ),
+        ] {
+            let report = super::populate_genesis_results(
+                &block,
+                &genesis_account,
+                &topology_vec,
+                &genesis_key_pair,
+                config,
+                None,
+            )
+            .expect_err("signed staking custody requires its supplied Nexus configuration");
+            let error = report
+                .downcast_ref::<Box<BlockValidationError>>()
+                .expect("retain the native validation error");
+            let BlockValidationError::InvalidGenesis(InvalidGenesisError::RejectedOutput(
+                rejection,
+            )) = error.as_ref()
+            else {
+                panic!("expected an actual staking instruction rejection: {report:#}");
+            };
+            assert_eq!(rejection.output_index, expected_rejection_index);
+            assert!(
+                matches!(
+                    rejection.reason.as_ref(),
+                    TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                        InstructionExecutionError::InvariantViolation(cause)
+                    )) if cause.as_ref() == expected_cause
+                ),
+                "unexpected staking rejection: {report:#}"
+            );
+            assert!(!block.0.has_results(), "failed outputs remain unpublished");
+            assert_eq!(block.0.encode_wire().unwrap(), original_wire);
+        }
         let executed = super::populate_genesis_results(
             &block,
             &genesis_account,
@@ -2344,6 +2637,13 @@ mod tests {
                 .all(|result| result.as_ref().is_ok()),
             "pre-executed custom staking genesis should succeed when the builder threads the resolved nexus config"
         );
+        assert!(super::genesis_results_are_canonical(&executed));
+        assert!(super::genesis_signature_is_canonical(
+            &executed,
+            &genesis_key_pair
+        ));
+        assert_eq!(executed.hash(), block.0.hash());
+        assert_eq!(block.0.encode_wire().unwrap(), original_wire);
     }
     #[test]
     fn populate_genesis_results_leases_genesis_account_labels() {
@@ -2368,8 +2668,8 @@ mod tests {
         ]];
         let bls = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let (topology, entries) = genesis_committee_with_key(&bls);
-        let (block, genesis_account, topology, genesis_key_pair) =
-            super::build_minimal_genesis_unexecuted(
+        let (block, genesis_account, topology, genesis_key_pair, _) =
+            super::genesis_fixture_policy::policy_bound_proposal(
                 extra_transactions,
                 topology,
                 entries,

@@ -10,9 +10,9 @@ use std::{
 };
 
 use concread::ebrcell::Untracked;
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use mv::{
     BlockAcquisition, BlockMode, BlockPublication, PublicationPreparationError,
-    allocation::{AllocationBudget, AllocationCharge},
     cell::{Cell, CellAllocationCharges, CellPublicationSuccessor, CellPublicationSuccessorError},
 };
 

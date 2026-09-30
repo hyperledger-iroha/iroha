@@ -59,7 +59,7 @@ schema-closed, payload-free plan containing:
 The schema is closed at every level. `deployment` contains `deployment_id`,
 `environment`, `network`, `chain_id`, and `chain_discriminant`; the final
 three fields must equal the canonical public Taira constants. Validator rows contain `validator_id`,
-`voting`, `da_enabled`, and `rbc_enabled`. Storage-provider rows contain
+`voting` and `da_enabled`. Storage-provider rows contain
 `provider_id` and `operator_id`. Gateway rows contain `gateway_id`, `region`,
 and `administrator_id`. Governance DAG rows contain `instance_id`,
 `kubo_handle`, and `administrator_id`. `runtime_handles` has exactly the

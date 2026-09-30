@@ -1996,20 +1996,6 @@ fn begin_real_xml_provenance(source: &[u8]) {
         }
     });
 }
-fn canonical_real_xml_field_name(message_type: &str, field: &str) -> String {
-    if canonical_message_type(message_type).as_ref() == "pacs.009" {
-        match field {
-            // Preserve the application-header timestamp independently from the
-            // group-header creation time used by the pacs.009 schema.
-            "AppHdr/CreDt" => return field.to_owned(),
-            // Payment status and return messages correlate through GrpHdr/MsgId;
-            // it must not collapse into the distinct BAH BizMsgIdr identity.
-            "Document/FICdtTrf/GrpHdr/MsgId" => return "MsgId".to_owned(),
-            _ => {}
-        }
-    }
-    canonical_field_name(message_type, field)
-}
 fn msg_set_xml(
     field: &str,
     value: &[u8],
@@ -2019,7 +2005,7 @@ fn msg_set_xml(
     MESSAGE_STACK.with(|stack| {
         let mut stack = stack.borrow_mut();
         let message = stack.last_mut().ok_or(MsgError::NoActiveMessage)?;
-        let key = canonical_real_xml_field_name(&message.message_type, field);
+        let key = canonical_field_name(&message.message_type, field);
         if let Some(existing) = message.fields.get(&key) {
             if existing.as_slice() != value {
                 return Err(MsgError::InvalidFormat);
@@ -2676,19 +2662,7 @@ fn stored_field_key(message: &IsoMessage, field: &str) -> String {
     if message.fields.contains_key(field) {
         return field.to_owned();
     }
-    let real_xml_key = canonical_real_xml_field_name(&message.message_type, field);
-    if message.fields.contains_key(&real_xml_key) {
-        return real_xml_key;
-    }
-    let canonical_key = canonical_field_name(&message.message_type, field);
-    if real_xml_key != canonical_key {
-        // The sealed v1 table historically aliases two distinct pacs.009
-        // identities. Keep the corrected runtime key even when it has not yet
-        // been materialised so a missing group MsgId cannot read, overwrite, or
-        // remove the BAH BizMsgIdr (and likewise for the two creation times).
-        return real_xml_key;
-    }
-    canonical_key
+    canonical_field_name(&message.message_type, field)
 }
 /// Retrieve the value of an ISO 20022 field.
 pub fn msg_get(field: &str) -> Option<Vec<u8>> {

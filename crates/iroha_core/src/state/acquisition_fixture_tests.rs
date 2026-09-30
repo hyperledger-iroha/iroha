@@ -7,7 +7,7 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    block::consensus_v2::{ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower},
+    block::consensus::{ConsensusMode, SumeragiGenesisContextParameters, ValidatorPower},
     prelude::*,
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
@@ -16,7 +16,7 @@ use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
 fn genesis(
-    parameters: SumeragiV2GenesisContextParameters,
+    parameters: SumeragiGenesisContextParameters,
     instructions: &[InstructionBox],
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> (SignedBlock, Topology) {
@@ -45,7 +45,7 @@ fn genesis(
     let mut builder =
         GenesisBuilder::new_without_executor(ChainId::from("carrier-preparation"), ".")
             .set_topology(entries)
-            .with_sumeragi_v2_context_parameters(parameters)
+            .with_sumeragi_context_parameters(parameters)
             .with_kagemusha_mint_finality_genesis_parameters(
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
             );
@@ -120,17 +120,24 @@ fn signed_genesis_execution<'state>(
 
 fn fixture_with_topology() -> (Box<State>, SignedBlock, Topology) {
     let nexus = iroha_config::parameters::actual::Nexus::default();
-    let mut parameters = SumeragiV2GenesisContextParameters::recommended();
+    let mut parameters = SumeragiGenesisContextParameters::recommended();
     {
+        // Like kagami's signer, the provisional execution reports the exact staged policies;
+        // native validation still refuses the provisional source itself.
         let (proposal, topology) = genesis(parameters, &[], &nexus);
         let state = state_for(&proposal, &nexus);
-        let (_, staged) = signed_genesis_execution(&state, proposal, &topology);
-        parameters.nexus_amx_context_hash =
-            *crate::sumeragi::staged_genesis_nexus_amx_context_hash(&staged).as_ref();
-        parameters.execution_policy_hash =
-            *crate::sumeragi::staged_genesis_execution_policy_hash(&staged)
-                .unwrap()
-                .as_ref();
+        if let Some((execution, nexus_amx)) = crate::sumeragi::test_chain::staged_genesis_policies(
+            proposal,
+            &topology,
+            &SAMPLE_GENESIS_ACCOUNT_ID,
+            &state,
+            ConsensusMode::Permissioned,
+        )
+        .expect("provisional genesis executes")
+        {
+            parameters.execution_policy_hash = execution.into();
+            parameters.nexus_amx_context_hash = nexus_amx.into();
+        }
     }
     let (proposal, topology) = genesis(parameters, &[], &nexus);
     let state = state_for(&proposal, &nexus);

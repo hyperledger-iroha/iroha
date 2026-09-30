@@ -230,7 +230,9 @@ fn complete_required_metal_masked_deep_producer_roundtrip_and_statement_rejectio
 }
 
 fn complete_siblings() -> [[u32; 8]; 32] {
-    core::array::from_fn(|level| digest((level + 17) as u8))
+    core::array::from_fn(|level| {
+        digest(u8::try_from(level + 17).expect("32 sibling levels offset by 17 fit in u8"))
+    })
 }
 
 // Independent public fixture facts are derived before reading any artifact.
@@ -271,6 +273,7 @@ fn complete_statement() -> PublicStatement {
 }
 
 fn complete_masked_producer(execution: DigestExecutionV1) {
+    use crate::backend::compact_protocol::FixedAir as _;
     use crate::gadgets::compact_smt_air::PhysicalSmtWitness;
     // Required-device failure must precede the diagnostic's private witness too.
     crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
@@ -308,7 +311,6 @@ fn complete_masked_producer(execution: DigestExecutionV1) {
         iroha_crypto::Hash::new(&proof),
     );
     // Retain only public outputs before later resource/golden/verifier assertions.
-    use crate::backend::compact_protocol::FixedAir as _;
     let receipt = diagnostic_artifact::retain(
         &proof,
         air.statement_bytes(),
@@ -418,7 +420,7 @@ fn measured_required_metal_leaf_and_cpu_parent_costs() {
                 binding
                     .hash_leaf(
                         oracle,
-                        index as u32,
+                        u32::try_from(index).unwrap(),
                         &payload[index * width..(index + 1) * width]
                     )
                     .unwrap()
@@ -431,14 +433,20 @@ fn measured_required_metal_leaf_and_cpu_parent_costs() {
         let started = Instant::now();
         for index in 0..4096 {
             left = binding
-                .hash_parent(oracle, 1, (index % (leaves / 2)) as u32, left, right)
+                .hash_parent(
+                    oracle,
+                    1,
+                    u32::try_from(index % (leaves / 2)).unwrap(),
+                    left,
+                    right,
+                )
                 .unwrap();
         }
         std::hint::black_box(left);
         let parent_seconds = started.elapsed().as_secs_f64();
         let estimate = 2.0
-            * (leaf_seconds * leaves as f64 / (batches * count) as f64
-                + parent_seconds * (leaves - 1) as f64 / 4096.0);
+            * (leaf_seconds * exact_count_f64(leaves) / exact_count_f64(batches * count)
+                + parent_seconds * exact_count_f64(leaves - 1) / 4096.0);
         estimated_hash_seconds += estimate;
         eprintln!(
             "oracle={oracle:?}; leaf_samples={}; leaf_seconds={leaf_seconds:.6}; parent_samples=4096; parent_seconds={parent_seconds:.6}; two_tree_hash_seconds_estimate={estimate:.3}",
@@ -448,6 +456,12 @@ fn measured_required_metal_leaf_and_cpu_parent_costs() {
     eprintln!(
         "total_hash_seconds_estimate={estimated_hash_seconds:.3}; excludes transforms, AIR, coefficient work, terminal, verifier and allocation variance; no complete-proof measurement"
     );
+}
+
+/// Exact `f64` value of one bounded diagnostic count; every count here fits `u32`.
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+fn exact_count_f64(count: usize) -> f64 {
+    f64::from(u32::try_from(count).expect("diagnostic count fits u32"))
 }
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -470,6 +484,7 @@ fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
 
     use rayon::prelude::*;
 
+    use super::super::compact_v1::PreparedHashFrame;
     use crate::digest384_batch::execute_last_fields_with_cpu;
 
     let _lane = crate::backend::acquire_gpu_lane();
@@ -487,7 +502,7 @@ fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
     ] {
         let (_, _, _, width) = oracle.shape().unwrap();
         for &count in counts {
-            assert!(count > 0 && count <= 8192 && samples % count == 0);
+            assert!(count > 0 && count <= 8192 && samples.is_multiple_of(count));
             let payloads = (0..count * width / 8)
                 .flat_map(|value| (value as u64 + 7).to_le_bytes())
                 .collect::<Vec<_>>();
@@ -501,19 +516,20 @@ fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
                 let frames = (0..count)
                     .into_par_iter()
                     .map(|index| {
+                        let ordinal = u32::try_from(index).unwrap();
                         if parent {
-                            binding.prepare_parent(oracle, 1, index as u32, left, right)
+                            binding.prepare_parent(oracle, 1, ordinal, left, right)
                         } else {
                             binding.prepare_leaf(
                                 oracle,
-                                index as u32,
+                                ordinal,
                                 &payloads[index * width..(index + 1) * width],
                             )
                         }
                     })
                     .collect::<std::result::Result<Vec<_>, _>>()
                     .unwrap();
-                let bytes = frames.iter().map(|frame| frame.payload_len()).sum();
+                let bytes = frames.iter().map(PreparedHashFrame::payload_len).sum();
                 // The larger diagnostic does not enter or change the production
                 // batch helper. Its exact actual frame bytes must independently
                 // fit the same typed executor limit before dispatch.
@@ -522,7 +538,7 @@ fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
                 } else {
                     frames
                         .par_iter()
-                        .map(|frame| frame.job())
+                        .map(PreparedHashFrame::job)
                         .collect::<Vec<_>>()
                         .into_iter()
                         .collect::<Result<Vec<_>>>()

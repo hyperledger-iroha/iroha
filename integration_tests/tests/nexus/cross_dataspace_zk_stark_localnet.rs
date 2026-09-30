@@ -814,13 +814,13 @@ async fn wait_for_route_probe_rejection(
     }
 }
 fn sample_stark_vk_box(circuit_id: &str, n_log2: u8) -> VerifyingKeyBox {
-    let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
+    let vk_payload = iroha_core_zk::stark::StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.to_owned(),
         n_log2,
-        blowup_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        blowup_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
         fold_arity: 2,
-        queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+        queries: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
     };
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
@@ -839,7 +839,7 @@ async fn register_stark_vk(
         BackendTag::Stark,
         "goldilocks",
         Hash::new(schema).into(),
-        iroha_core::zk::hash_vk(&vk_box),
+        iroha_core_zk::hash_vk(&vk_box),
     );
     record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     record.gas_schedule_id = Some("sched_cross_ds".to_owned());
@@ -870,7 +870,7 @@ fn build_stark_attachment(
     circuit_id: &str,
     schema: &[u8],
 ) -> Result<ProofAttachment> {
-    let proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
+    let proof = iroha_core_zk::prove_stark_fri_open_verify_envelope(
         STARK_BACKEND,
         circuit_id,
         vk_box,
@@ -887,7 +887,7 @@ fn build_stark_attachment(
 fn proof_id_for_attachment(attachment: &ProofAttachment) -> ProofId {
     ProofId {
         backend: attachment.backend.clone(),
-        proof_hash: iroha_core::zk::hash_proof(&attachment.proof),
+        proof_hash: iroha_core_zk::hash_proof(&attachment.proof),
     }
 }
 async fn grant_manage_verifying_keys_permission(client: &Client) -> Result<()> {
@@ -1251,7 +1251,7 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,
@@ -1380,7 +1380,7 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,
@@ -1508,7 +1508,7 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,
@@ -1521,7 +1521,7 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     let mismatch_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_bad");
     let mismatch_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_MISMATCH,
-        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2 + 1,
+        iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2 + 1,
     );
     register_stark_vk(
         &alice,
@@ -1662,7 +1662,7 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
-        iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
     );
     register_stark_vk(
         &alice,

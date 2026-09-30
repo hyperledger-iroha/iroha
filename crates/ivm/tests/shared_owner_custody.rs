@@ -28,7 +28,7 @@ static LOG_ROW_RETENTION_AT_FREE: AtomicUsize = AtomicUsize::new(0);
 static LOG_PAYLOAD_CREDIT_AT_FREE: AtomicUsize = AtomicUsize::new(0);
 static LOG_PAYLOAD_RETENTION_AT_FREE: AtomicUsize = AtomicUsize::new(0);
 static LOG_PAYLOAD_SCRUBBED: AtomicBool = AtomicBool::new(false);
-static LOG_BUDGET: std::sync::OnceLock<mv::allocation::AllocationBudget> =
+static LOG_BUDGET: std::sync::OnceLock<iroha_allocation::AllocationBudget> =
     std::sync::OnceLock::new();
 
 thread_local! {
@@ -67,7 +67,7 @@ static LAST_NODE_POINTER: AtomicUsize = AtomicUsize::new(0);
 static TRACKED_NODE: AtomicUsize = AtomicUsize::new(0);
 static NODE_RESIDENT_AT_FREE: AtomicUsize = AtomicUsize::new(0);
 static NODE_ORIGINAL_CREDIT_AT_FREE: AtomicUsize = AtomicUsize::new(0);
-static NODE_BUDGET: std::sync::OnceLock<mv::allocation::AllocationBudget> =
+static NODE_BUDGET: std::sync::OnceLock<iroha_allocation::AllocationBudget> =
     std::sync::OnceLock::new();
 
 struct ObserveNodes;
@@ -305,7 +305,7 @@ fn concurrent_final_value_owners_deallocate_before_single_payload_drop() {
 #[test]
 fn runtime_template_frees_prepaid_owner_before_refunding_final_borrower() {
     let _serial = SERIAL.lock().unwrap();
-    let budget = mv::allocation::AllocationBudget::new(512 * 1024 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(512 * 1024 * 1024);
     let mut vm = ivm::IVM::try_new_with_memory_budget(50_000, &budget).unwrap();
     let original_bytes = budget.reserved_bytes();
     assert!(original_bytes > 0);
@@ -374,7 +374,7 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
         SeqCst,
     );
     let _observe = ObserveNodes;
-    let refused = mv::allocation::AllocationBudget::new(memory_bytes - 1);
+    let refused = iroha_allocation::AllocationBudget::new(memory_bytes - 1);
     assert!(ivm::IVM::try_new_with_memory_budget(gas, &refused).is_err());
     assert_eq!(refused.reserved_bytes(), 0);
     assert_eq!(
@@ -383,7 +383,7 @@ fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_r
         "root demand refused before node allocation"
     );
 
-    let budget = mv::allocation::AllocationBudget::new(256 * 1024 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
     NODE_BUDGET
         .set(budget.clone())
         .expect("one node observer test");
@@ -473,7 +473,7 @@ fn write_log_backing_reserves_before_allocation_and_frees_before_final_credit_re
     let _observation = ObserveLog;
     const PAYLOAD: usize = 17;
     let row = std::mem::size_of::<ivm::WriteLogEntry>();
-    let budget = mv::allocation::AllocationBudget::new(256 * 1024 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
     LOG_BUDGET
         .set(budget.clone())
         .expect("one log allocator observer");

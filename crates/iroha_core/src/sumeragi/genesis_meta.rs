@@ -6,8 +6,7 @@ use crate::{
     state::{StateBlock, WorldReadOnly, public_lane_validator_record_matches_key},
 };
 use iroha_config::parameters::actual::{
-    NexusConsensusPolicyDigestError, SumeragiV2LaneLifecycleEntry,
-    sumeragi_v2_nexus_amx_context_hash,
+    NexusConsensusPolicyDigestError, SumeragiLaneLifecycleEntry, sumeragi_nexus_amx_context_hash,
 };
 use iroha_crypto::Hash;
 use mv::storage::StorageReadOnly;
@@ -32,14 +31,14 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
     let retained_lane_lineage = staged
         .lane_incarnation_lineage_for_snapshot()
         .iter()
-        .map(|(&lane_id, lineage)| SumeragiV2LaneLifecycleEntry {
+        .map(|(&lane_id, lineage)| SumeragiLaneLifecycleEntry {
             lane_id,
             generation: lineage.generation,
             incarnation: lineage.incarnation,
             activation_height: lineage.activation_height,
         })
         .collect::<Vec<_>>();
-    sumeragi_v2_nexus_amx_context_hash(
+    sumeragi_nexus_amx_context_hash(
         &staged.nexus,
         &staged.pipeline,
         &eligible_validators,

@@ -1,7 +1,9 @@
 //! Regression tests for core issues found by the deterministic simulator (`crate::sim`); each
 //! names the scenario and seed that exposed it.
 
+use super::manifest;
 use super::{G_HASH, G_RESULT, H, I, pick, result_of};
+use crate::preimage;
 use crate::{
     api::{Action, Event, HaltReason},
     crypto::Signer,
@@ -117,7 +119,7 @@ fn sync_refetches_a_gap_left_by_a_dropped_forged_prefix() {
         let qc = h.cqc_for(&block, 0);
         parent = (h.bh(&block), result_of(&block));
         chain.push(SyncEntry {
-            block,
+            manifest: manifest(&block),
             commit_qc: qc,
         });
     }
@@ -191,7 +193,7 @@ fn payload_ready_during_an_outstanding_build_ends_the_idle_wait() {
             Action::Broadcast {
                 msg: WireMessage::Proposal(p),
                 ..
-            } if p.payload.as_deref() == Some(&b"tx"[..])
+            } if p.proposal.header.payload_hash == preimage::payload_hash(&h.v.crypto, b"tx")
         )),
         "the transaction is proposed"
     );

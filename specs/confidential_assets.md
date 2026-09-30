@@ -13,7 +13,7 @@ SPDX-License-Identifier: Apache-2.0
 - Out of scope: off-ledger traffic analysis, quantum adversaries (tracked separately under PQ roadmap), ledger availability attacks.
 
 ## Design Overview
-The Rust wallet entrypoint is `iroha_core::zk::confidential::ConfidentialProver`.
+The Rust wallet entrypoint is `iroha_core_zk::confidential::ConfidentialProver`.
 It binds a typed `NetworkId`, canonical `AssetDefinitionId`, and an owned
 `Zeroizing<[u8; 32]>` spend key. `prove_transfer` and `prove_unshield` select the
 canonical relation/key internally, consume zeroizing note openings, and
@@ -22,8 +22,8 @@ Core; wallet callers cannot supply a circuit identifier or verifier key.
 `ConfidentialTree` accepts a complete commitment
 prefix or one membership path per actual input; no dummy path is exposed.
 The executable source example is
-[`confidential_redemption.rs`](../crates/iroha_core/examples/confidential_redemption.rs),
-run with `cargo run -p iroha_core --example confidential_redemption`.
+[`confidential_redemption.rs`](../crates/iroha_core_zk/examples/confidential_redemption.rs),
+run with `cargo run -p iroha_core_zk --example confidential_redemption`.
 It is local proof construction; active-key, authenticated-root, nullifier and
 transaction authority checks remain owned by ledger admission. Secret opening
 and prover `Debug` output is redacted; returned public proof material is inspectable.
@@ -41,7 +41,7 @@ account/network anonymity. The current data model has no generic `Shield`,
 ledger change without an implemented protocol's independent state checks.
 
 - Local notes bind `(asset_tag, amount, owner_tag, rho)` through the fixed Pasta
-  Poseidon construction in `crates/iroha_core/src/zk/confidential_v2.rs`:
+  Poseidon construction in `crates/iroha_core_zk/src/confidential_v2.rs`:
   - Commitment: `Poseidon(NOTE_DOMAIN, [amount, rho_scalar, owner_tag, asset_tag])`.
   - Owner tag: `Poseidon(OWNER_DOMAIN, [spend_scalar, diversifier])`.
   - Nullifier: `Poseidon(NULLIFIER_DOMAIN, [spend_scalar, rho_scalar, asset_tag, network_tag])`.

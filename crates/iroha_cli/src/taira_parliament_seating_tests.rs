@@ -4,7 +4,7 @@ use super::*;
 use clap::Parser as _;
 use iroha::data_model::{
     asset::{AssetBalancePolicy, AssetDefinition},
-    block::consensus_v2::SumeragiV2GenesisContextParameters,
+    block::consensus::SumeragiGenesisContextParameters,
     domain::Domain,
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
@@ -682,7 +682,7 @@ fn generated_genesis(instructions: Vec<InstructionBox>) -> iroha_genesis::RawGen
                     .public_key()
                     .clone(),
             );
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed; 32],
                 0,
                 peer,
@@ -693,7 +693,7 @@ fn generated_genesis(instructions: Vec<InstructionBox>) -> iroha_genesis::RawGen
     validators.sort_by(|a, b| a.validator.cmp(&b.validator));
     let mut builder =
         iroha_genesis::GenesisBuilder::new_without_executor(TAIRA_CHAIN_ID.into(), ".")
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(
                 KagemushaMintFinalityGenesisParametersV1 {
                     authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {

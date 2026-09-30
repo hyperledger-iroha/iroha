@@ -1,20 +1,25 @@
 //! Original remote witness ownership under actual pool pressure and bounded driver retry.
 
 use super::*;
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_sumeragi::message::ResultWitness;
-use mv::allocation::{AllocationBudget, ChargedBuffer};
 
 fn fixture(
     budget: &AllocationBudget,
 ) -> (DriverHandle, mpsc::Receiver<Input>, PublicKey, WireMessage) {
-    let block = tests::block(2, Hash32([1; 32]), Hash32([2; 32]), Vec::new());
+    let block = tests::block(
+        2,
+        Hash32([1; 32]),
+        Hash32([2; 32]),
+        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+    );
     let mut qc = tests::commit_qc(&block, Hash32([3; 32]));
     qc.attestation_witness = Some(ResultWitness::from_untrusted(vec![7; 200]).unwrap());
     let shared = Arc::new(Shared {
         node_gate: Arc::new(NodeGate::new()),
         allocation_budget: budget.clone(),
         pending_admission: Mutex::new(None),
-        instance: block.header.instance,
+        instance: block.header().instance,
         own: Vec::new(),
         ingress: Arc::new(Mutex::new(Ingress::new(IngressLimits::default()))),
         frame_limit: 1 << 20,
@@ -23,6 +28,7 @@ fn fixture(
         wake_pending: AtomicBool::new(false),
         alive: AtomicBool::new(true),
         stopped: Mutex::new(None),
+        metrics: None,
     });
     let (inputs, rx) = mpsc::channel();
     (
@@ -69,9 +75,14 @@ fn pending_remote_frame_preserves_original_backing_and_never_enters_core_early()
         );
     }
     // Source-independent control traffic continues while the one admission slot is occupied.
-    let block = tests::block(2, Hash32([1; 32]), Hash32([2; 32]), Vec::new());
+    let block = tests::block(
+        2,
+        Hash32([1; 32]),
+        Hash32([2; 32]),
+        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+    );
     let ordinary = WireMessage::Qc(tests::commit_qc(&block, Hash32([3; 32])));
-    assert!(ordinary.attestation_witnesses_admitted_to(&budget));
+    assert!(ordinary.owned_bytes_admitted_to(&budget));
     assert!(handle.deliver_message(peer, ordinary));
     assert_eq!(handle.shared.ingress.lock().len(), 1);
     handle.shared.ingress.lock().pop();
@@ -92,7 +103,7 @@ fn pending_slot_rejects_foreign_owners_and_retained_handle_cannot_revive_stopped
     let budget = AllocationBudget::new(4096);
     let foreign = AllocationBudget::new(4096);
     let (handle, _rx, peer, mut message) = fixture(&budget);
-    message.admit_attestation_witnesses(&foreign).unwrap();
+    message.admit_owned_bytes(&foreign).unwrap();
     assert!(!handle.deliver_message(peer.clone(), message));
     assert_eq!(foreign.reserved_bytes(), 0);
     assert!(handle.shared.pending_admission.lock().is_none());
@@ -129,7 +140,12 @@ fn closed_instance_releases_original_witnesses_even_with_a_retained_handle() {
     assert!(handle.shared.ingress.lock().is_empty());
     assert!(handle.shared.pending_admission.lock().is_none());
     assert_eq!(budget.reserved_bytes(), 0);
-    let block = tests::block(2, Hash32([1; 32]), Hash32([2; 32]), Vec::new());
+    let block = tests::block(
+        2,
+        Hash32([1; 32]),
+        Hash32([2; 32]),
+        iroha_sumeragi::sim::driver::encode_tx(0, false, 0),
+    );
     assert!(!handle.deliver_message(
         peer,
         WireMessage::Qc(tests::commit_qc(&block, Hash32([3; 32])))

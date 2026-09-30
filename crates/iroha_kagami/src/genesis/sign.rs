@@ -75,7 +75,7 @@ pub struct Args {
     /// Use this topology instead of specified in genesis.json.
     /// JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
     ///
-    /// The final unique topology must be an exact Sumeragi v2 `3f + 1`
+    /// The final unique topology must be an exact Sumeragi `3f + 1`
     /// committee in the range 4..=31.
     #[clap(short, long)]
     topology: Option<String>,
@@ -888,7 +888,7 @@ fn build_signed_genesis(
 /// Callers which publish both the manifest and signed block must persist the
 /// returned manifest so prepared-bundle admission can compare every
 /// instruction, including the derived consensus commitment.
-pub fn bind_and_sign_staged_sumeragi_v2_context(
+pub fn bind_and_sign_staged_sumeragi_context(
     genesis: RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
@@ -896,8 +896,8 @@ pub fn bind_and_sign_staged_sumeragi_v2_context(
     confidential_policy_hash: [u8; 32],
     creation_time_ms: Option<u64>,
 ) -> Result<(RawGenesisTransaction, GenesisBlock), color_eyre::eyre::Error> {
-    let mut parameters = genesis.sumeragi_v2_context_parameters();
-    let (nexus_amx_context_hash, execution_policy_hash) = staged_sumeragi_v2_context_hashes(
+    let mut parameters = genesis.sumeragi_context_parameters();
+    let (nexus_amx_context_hash, execution_policy_hash) = staged_sumeragi_context_hashes(
         &genesis,
         genesis_key_pair,
         config,
@@ -908,7 +908,7 @@ pub fn bind_and_sign_staged_sumeragi_v2_context(
     parameters.nexus_amx_context_hash = nexus_amx_context_hash.into();
     parameters.execution_policy_hash = execution_policy_hash.into();
     let bound_manifest = genesis
-        .with_sumeragi_v2_context_parameters(parameters)
+        .with_sumeragi_context_parameters(parameters)
         .with_consensus_meta();
     let proposal = build_signed_genesis(
         bound_manifest.clone(),
@@ -917,7 +917,7 @@ pub fn bind_and_sign_staged_sumeragi_v2_context(
         confidential_policy_hash,
         creation_time_ms,
     )?;
-    let mut executed_block = verify_final_signed_sumeragi_v2_context(
+    let mut executed_block = verify_final_signed_sumeragi_context(
         &bound_manifest,
         config,
         &proposal.0,
@@ -937,14 +937,14 @@ pub fn bind_and_sign_staged_sumeragi_v2_context(
         .wrap_err("replace provisional genesis signature after execution")?;
     Ok((bound_manifest, GenesisBlock(executed_block)))
 }
-fn verify_final_signed_sumeragi_v2_context(
+fn verify_final_signed_sumeragi_context(
     bound_manifest: &RawGenesisTransaction,
     config: Option<&actual::Root>,
     signed: &SignedBlock,
     signed_nexus_amx_context_hash: Hash,
     signed_execution_policy_hash: Hash,
 ) -> Result<SignedBlock, color_eyre::eyre::Error> {
-    let staged = restage_signed_sumeragi_v2_context_hashes(bound_manifest, config, signed)?;
+    let staged = restage_signed_sumeragi_context_hashes(bound_manifest, config, signed)?;
     if staged.nexus_amx_context_hash != signed_nexus_amx_context_hash {
         return Err(eyre!(
             "final-NetworkId genesis restaging changed the signed Nexus/AMX context: signed {signed_nexus_amx_context_hash}, restaged {}",
@@ -961,7 +961,7 @@ fn verify_final_signed_sumeragi_v2_context(
 }
 /// Stage a raw genesis transaction and return its exact Nexus/AMX consensus and execution-policy
 /// commitments without committing state or touching persistent node storage.
-fn staged_sumeragi_v2_context_hashes(
+fn staged_sumeragi_context_hashes(
     genesis: &RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
@@ -974,7 +974,7 @@ fn staged_sumeragi_v2_context_hashes(
             .name("kagami-genesis-staging".to_owned())
             .stack_size(16 * 1024 * 1024)
             .spawn_scoped(scope, move || {
-                staged_sumeragi_v2_context_hashes_on_bounded_stack(
+                staged_sumeragi_context_hashes_on_bounded_stack(
                     genesis,
                     genesis_key_pair,
                     config,
@@ -994,12 +994,12 @@ fn staged_sumeragi_v2_context_hashes(
 /// Prepared-bundle admission uses this path so every runtime config must
 /// reproduce the exact Nexus/AMX and execution-policy commitments signed into
 /// genesis without requiring or reloading the retired genesis private key.
-pub fn staged_signed_sumeragi_v2_context_hashes(
+pub fn staged_signed_sumeragi_context_hashes(
     genesis: &RawGenesisTransaction,
     signed: &SignedBlock,
     config: &actual::Root,
 ) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
-    let staged = restage_signed_sumeragi_v2_context_hashes(genesis, Some(config), signed)?;
+    let staged = restage_signed_sumeragi_context_hashes(genesis, Some(config), signed)?;
     Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash))
 }
 /// Original signed genesis and its exact native lane state produced by actual staging.
@@ -1099,7 +1099,7 @@ pub(crate) fn staged_signed_native_genesis_with_projection<T: Send>(
             .map_err(|_| eyre!("bounded native genesis staging thread panicked"))?
     })
 }
-fn restage_signed_sumeragi_v2_context_hashes(
+fn restage_signed_sumeragi_context_hashes(
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
     signed: &SignedBlock,
@@ -1110,7 +1110,7 @@ fn restage_signed_sumeragi_v2_context_hashes(
             .name("kagami-prepared-genesis-staging".to_owned())
             .stack_size(16 * 1024 * 1024)
             .spawn_scoped(scope, move || {
-                staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
+                staged_sumeragi_context_hashes_from_provisional_on_bounded_stack(
                     genesis,
                     config,
                     provisional,
@@ -1121,7 +1121,7 @@ fn restage_signed_sumeragi_v2_context_hashes(
             .map_err(|_| eyre!("bounded prepared-genesis staging thread panicked"))?
     })
 }
-fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
+fn staged_sumeragi_context_hashes_on_bounded_stack(
     genesis: &RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
@@ -1139,12 +1139,13 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
         confidential_policy_hash,
         creation_time_ms,
     )?;
-    match staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
+    match staged_sumeragi_context_hashes_from_provisional_on_bounded_stack(
         genesis,
         config,
         provisional,
     ) {
         Ok(staged) => Ok((staged.nexus_amx_context_hash, staged.execution_policy_hash)),
+        // Staging preserves the concrete validation error through its report context.
         Err(error) => match error.downcast_ref::<iroha_core::block::BlockValidationError>() {
             Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
                 actual_execution,
@@ -1160,7 +1161,7 @@ fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
         },
     }
 }
-fn staged_sumeragi_v2_context_hashes_from_provisional_on_bounded_stack(
+fn staged_sumeragi_context_hashes_from_provisional_on_bounded_stack(
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
     provisional: GenesisBlock,
@@ -1705,7 +1706,7 @@ impl<T: Write> RunArgs<T> for Args {
                 "genesis signing key does not match the public key pinned by --config"
             ));
         }
-        let (bound_manifest, genesis_block) = bind_and_sign_staged_sumeragi_v2_context(
+        let (bound_manifest, genesis_block) = bind_and_sign_staged_sumeragi_context(
             prepared_genesis,
             &genesis_key_pair,
             peer_config.as_ref(),
@@ -1954,7 +1955,7 @@ fn ensure_valid_genesis_committee(topology: &[PeerId]) -> Result<(), color_eyre:
     }
     if !(4..=MAX_VALIDATORS).contains(&unique.len()) || (unique.len() - 1) % 3 != 0 {
         return Err(eyre!(
-            "genesis topology must contain an exact Sumeragi v2 `3f + 1` validator committee \
+            "genesis topology must contain an exact Sumeragi `3f + 1` validator committee \
              in the supported range 4..={MAX_VALIDATORS} (saw {})",
             unique.len()
         ));
@@ -2003,6 +2004,7 @@ pub(crate) mod tests {
         io::{BufWriter, Write},
         path::PathBuf,
         str::FromStr,
+        time::Duration,
     };
 
     pub(crate) struct NativeGenesisFixture {
@@ -2031,6 +2033,36 @@ pub(crate) mod tests {
             .build_raw()
             .expect("complete signed native genesis fixture")
             .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        // The clock authority performs ordinary charged work after genesis. Its
+        // currency, fee recipient and allocation must therefore be signed inputs,
+        // with the original configured fee policy retained during execution.
+        let fee_asset = AssetDefinitionId::parse_address_literal(&config.nexus.fees.fee_asset_id)
+            .expect("canonical fixture fee currency");
+        let fee_sink = AccountId::parse_encoded(&config.nexus.fees.fee_sink_account_id)
+            .expect("canonical fixture fee recipient");
+        let mut registrations = BootstrapRegistrations::from_manifest(&raw);
+        let mut builder = raw.into_builder().next_transaction();
+        if registrations.asset_defs.insert(fee_asset.clone()) {
+            builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
+                fee_asset.clone(),
+                "XOR",
+                NumericSpec::fractional(9),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )));
+        }
+        if fee_sink != AccountId::new(key.public_key().clone())
+            && registrations.accounts.insert(fee_sink.clone())
+        {
+            builder = builder.append_instruction(Register::account(Account::new(fee_sink)));
+        }
+        let raw = builder
+            .append_instruction(Mint::asset_quantity(
+                10_000_u64,
+                AssetId::new(fee_asset, AccountId::new(key.public_key().clone())),
+            ))
+            .build_raw()
+            .expect("explicit original clock fee allocation");
         use iroha_data_model::sumeragi_lanes::{
             SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy,
         };
@@ -2043,6 +2075,7 @@ pub(crate) mod tests {
             .collect::<Vec<_>>();
         committee.sort_by(|a, b| a.peer.cmp(&b.peer));
         let policy = SumeragiLanePolicy {
+            da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
             max_merge_blocks: 32,
             stall_window: 256,
@@ -2068,7 +2101,7 @@ pub(crate) mod tests {
             &config.nexus.lane_config,
         ));
         let confidential = iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
-        let (manifest, signed) = bind_and_sign_staged_sumeragi_v2_context(
+        let (manifest, signed) = bind_and_sign_staged_sumeragi_context(
             raw,
             &key,
             Some(&config),
@@ -2120,16 +2153,68 @@ pub(crate) mod tests {
                 chain.state().view().world().sumeragi_lanes().lanes.len(),
                 lane_count as usize - 1
             );
-            chain.commit(Vec::new());
+            let key = KeyPair::from_seed(vec![0x7D; 32], Algorithm::Ed25519);
+            let fee_asset =
+                AssetDefinitionId::parse_address_literal(&fixture.config.nexus.fees.fee_asset_id)
+                    .unwrap();
+            let payer_asset =
+                AssetId::new(fee_asset.clone(), AccountId::new(key.public_key().clone()));
+            let before = chain
+                .state()
+                .view()
+                .world()
+                .asset(&payer_asset)
+                .unwrap()
+                .value()
+                .clone()
+                .into_inner();
+            let mut transaction = iroha_data_model::transaction::TransactionBuilder::new(
+                chain.network_id(),
+                AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(
+                    vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                        iroha_data_model::transaction::FeeChargeKind::Nexus,
+                        fee_asset,
+                        1_u64.into(),
+                    )],
+                    None,
+                ),
+            );
+            transaction.set_creation_time(
+                chain.genesis().header().creation_time()
+                    + Duration::from_millis(
+                        fixture
+                            .manifest
+                            .effective_parameters()
+                            .unwrap()
+                            .sumeragi()
+                            .block_cadence_ms
+                            .get()
+                            - 1,
+                    ),
+            );
+            let transaction = transaction
+                .with_instructions([Log::new(
+                    Level::DEBUG,
+                    "original prepared configuration charged work".into(),
+                )])
+                .sign(key.private_key());
+            assert_eq!(chain.commit(vec![transaction]), [true]);
             let committed = chain.committed(2);
+            let outcome = &committed.block().network_output_at(0).unwrap().1.result;
+            assert!(outcome.is_ok(), "original clock transaction: {outcome:?}");
             assert!(
-                committed
-                    .block()
-                    .network_output_at(0)
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .asset(&payer_asset)
                     .unwrap()
-                    .1
-                    .result
-                    .is_ok()
+                    .value()
+                    .clone()
+                    .into_inner()
+                    < before,
+                "the original configured fee policy must actually debit signed funds"
             );
             let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
                 fixture.manifest.chain_id(),
@@ -2361,10 +2446,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         table.insert(file_field, path.to_string_lossy().into_owned().into());
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture materializes the exact complete private config and its real signing identity together"
-    )]
     fn runtime_test_peer_config(
         mut table: toml::Table,
         manifest: &RawGenesisTransaction,
@@ -2766,10 +2847,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         load_peer_config(&path).expect("owner-only signing config must load");
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the parity test keeps final-identity signing and both independent tamper checks in one ordered scenario"
-    )]
     fn signer_and_final_network_id_restaging_have_exact_context_parity() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/peer0.toml"));
@@ -2781,11 +2858,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .build_raw()
             .expect("complete restaging parity fixture")
             .with_consensus_mode(SumeragiConsensusMode::Permissioned);
-        let mut unbound_parameters = raw.sumeragi_v2_context_parameters();
+        let mut unbound_parameters = raw.sumeragi_context_parameters();
         unbound_parameters.nexus_amx_context_hash = Hash::new(b"unbound-nexus-amx").into();
         unbound_parameters.execution_policy_hash = Hash::new(b"unbound-execution-policy").into();
         raw = raw
-            .with_sumeragi_v2_context_parameters(unbound_parameters)
+            .with_sumeragi_context_parameters(unbound_parameters)
             .with_consensus_meta();
         let da_proof_policies = Some(iroha_core::da::proof_policy_bundle(
             &config.nexus.lane_config,
@@ -2802,7 +2879,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )
         .expect("sign the exact unbound provisional genesis");
         let provisional_error =
-            restage_signed_sumeragi_v2_context_hashes(&raw, Some(&config), &provisional.0)
+            restage_signed_sumeragi_context_hashes(&raw, Some(&config), &provisional.0)
                 .err()
                 .expect("the original unbound draft must report its exact policy mismatch");
         assert!(
@@ -2820,7 +2897,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ),
             "the report must retain the validator's concrete draft mismatch: {provisional_error:#}"
         );
-        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_v2_context(
+        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_context(
             raw,
             &genesis_key_pair,
             Some(&config),
@@ -2880,9 +2957,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
         config.genesis.expected_hash = signed.0.hash();
         let (restaged_nexus_amx, restaged_execution_policy) =
-            staged_signed_sumeragi_v2_context_hashes(&bound_manifest, &signed.0, &config)
+            staged_signed_sumeragi_context_hashes(&bound_manifest, &signed.0, &config)
                 .expect("restage signed genesis under its final NetworkId");
-        let signed_parameters = bound_manifest.sumeragi_v2_context_parameters();
+        let signed_parameters = bound_manifest.sumeragi_context_parameters();
         assert_eq!(
             restaged_nexus_amx,
             Hash::prehashed(signed_parameters.nexus_amx_context_hash),
@@ -2900,7 +2977,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .amx_group_budget_ms
             .checked_add(1)
             .expect("test AMX budget increment must not overflow");
-        let nexus_error = verify_final_signed_sumeragi_v2_context(
+        let nexus_error = verify_final_signed_sumeragi_context(
             &bound_manifest,
             Some(&tampered_nexus_config),
             &signed.0,
@@ -2908,18 +2985,25 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             Hash::prehashed(signed_parameters.execution_policy_hash),
         )
         .expect_err("a final-identity Nexus/AMX policy mismatch must fail closed");
-        assert!(
-            matches!(
-                nexus_error.downcast_ref::<iroha_core::block::BlockValidationError>(),
-                Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
-                    expected_nexus,
-                    actual_nexus,
-                    ..
-                }) if *expected_nexus == Hash::prehashed(signed_parameters.nexus_amx_context_hash)
-                    && actual_nexus != expected_nexus
-            ),
-            "unexpected Nexus/AMX tamper error: {nexus_error:#}"
+        let Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+            expected_execution,
+            actual_execution,
+            expected_nexus,
+            actual_nexus,
+        }) = nexus_error.downcast_ref::<iroha_core::block::BlockValidationError>()
+        else {
+            panic!("unexpected Nexus/AMX tamper error: {nexus_error:#}");
+        };
+        assert_eq!(
+            *expected_nexus,
+            Hash::prehashed(signed_parameters.nexus_amx_context_hash)
         );
+        assert_eq!(
+            *expected_execution,
+            Hash::prehashed(signed_parameters.execution_policy_hash)
+        );
+        assert_ne!(actual_nexus, expected_nexus);
+        assert_ne!(actual_execution, expected_execution);
 
         let mut tampered_execution_config = config.clone();
         tampered_execution_config
@@ -2929,7 +3013,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .quarantine_max_txs_per_block
             .checked_add(1)
             .expect("test quarantine limit increment must not overflow");
-        let execution_error = verify_final_signed_sumeragi_v2_context(
+        let execution_error = verify_final_signed_sumeragi_context(
             &bound_manifest,
             Some(&tampered_execution_config),
             &signed.0,
@@ -2937,18 +3021,25 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             Hash::prehashed(signed_parameters.execution_policy_hash),
         )
         .expect_err("a final-identity execution-policy mismatch must fail closed");
-        assert!(
-            matches!(
-                execution_error.downcast_ref::<iroha_core::block::BlockValidationError>(),
-                Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
-                    expected_execution,
-                    actual_execution,
-                    ..
-                }) if *expected_execution == Hash::prehashed(signed_parameters.execution_policy_hash)
-                    && actual_execution != expected_execution
-            ),
-            "unexpected execution-policy tamper error: {execution_error:#}"
+        let Some(iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
+            expected_execution,
+            actual_execution,
+            expected_nexus,
+            actual_nexus,
+        }) = execution_error.downcast_ref::<iroha_core::block::BlockValidationError>()
+        else {
+            panic!("unexpected execution-policy tamper error: {execution_error:#}");
+        };
+        assert_eq!(
+            *expected_execution,
+            Hash::prehashed(signed_parameters.execution_policy_hash)
         );
+        assert_eq!(
+            *expected_nexus,
+            Hash::prehashed(signed_parameters.nexus_amx_context_hash)
+        );
+        assert_ne!(actual_execution, expected_execution);
+        assert_eq!(actual_nexus, expected_nexus);
     }
 
     #[test]
@@ -2962,7 +3053,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .expect("complete generic four-validator genesis")
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned)
                 .with_consensus_meta();
-        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_v2_context(
+        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_context(
             raw,
             &genesis_key_pair,
             None,
@@ -2984,9 +3075,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .validate_output_merkle_cache()
             .expect("complete executed genesis outputs");
         assert_genesis_signatures_verify(&signed.0, &genesis_key_pair);
-        let restaged = restage_signed_sumeragi_v2_context_hashes(&bound_manifest, None, &signed.0)
+        let restaged = restage_signed_sumeragi_context_hashes(&bound_manifest, None, &signed.0)
             .expect("default staging must also accept the final signed network identity");
-        let parameters = bound_manifest.sumeragi_v2_context_parameters();
+        let parameters = bound_manifest.sumeragi_context_parameters();
         assert_eq!(
             restaged.nexus_amx_context_hash,
             Hash::prehashed(parameters.nexus_amx_context_hash)
@@ -3040,7 +3131,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .map(|(peer, pop)| GenesisTopologyEntry::new(peer, pop))
             .collect()
     }
-    fn with_explicit_test_xor_allocations(
+    pub(crate) fn with_explicit_test_xor_allocations(
         manifest: RawGenesisTransaction,
         topology: &[PeerId],
     ) -> RawGenesisTransaction {
@@ -3345,7 +3436,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             let error = ensure_valid_genesis_committee(&topology[..count])
                 .expect_err("non-committee topology must fail");
             assert!(
-                error.to_string().contains("exact Sumeragi v2 `3f + 1`"),
+                error.to_string().contains("exact Sumeragi `3f + 1`"),
                 "unexpected error for {count} peers: {error}"
             );
         }
@@ -3355,10 +3446,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         }
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the regression test audits the complete bound-manifest write/sign contract as one transaction"
-    )]
     fn bound_manifest_output_matches_the_manifest_used_for_signing() {
         let temp = tempfile::tempdir().expect("bound manifest temp dir");
         let bound_manifest_path = temp.path().join("genesis.bound.json");
@@ -3418,8 +3505,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("parse config-bound manifest output");
         let signed_meta = consensus_handshake_meta(&signed);
         assert_eq!(
-            bound_manifest.sumeragi_v2_context_parameters(),
-            signed_meta.sumeragi_v2,
+            bound_manifest.sumeragi_context_parameters(),
+            signed_meta.sumeragi_context,
             "persisted manifest must carry the exact staged Nexus/AMX context signed into the block"
         );
         assert_eq!(
@@ -3429,10 +3516,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
         assert_ne!(
             bound_manifest
-                .sumeragi_v2_context_parameters()
+                .sumeragi_context_parameters()
                 .nexus_amx_context_hash,
             unbound_manifest
-                .sumeragi_v2_context_parameters()
+                .sumeragi_context_parameters()
                 .nexus_amx_context_hash,
             "disabled-Nexus peer config and its AMX policy must replace the generator's unbound context commitment"
         );
@@ -4254,7 +4341,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .with_consensus_meta();
         let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
             .expect("derive checked genesis fixture key");
-        let (manifest, _) = bind_and_sign_staged_sumeragi_v2_context(
+        let (manifest, _) = bind_and_sign_staged_sumeragi_context(
             manifest,
             &key_pair,
             None,
@@ -4290,11 +4377,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         signed_meta
             .validate()
             .expect("signed consensus metadata is complete");
-        let mut bound_parameters = manifest.sumeragi_v2_context_parameters();
-        bound_parameters.nexus_amx_context_hash = signed_meta.sumeragi_v2.nexus_amx_context_hash;
-        bound_parameters.execution_policy_hash = signed_meta.sumeragi_v2.execution_policy_hash;
+        let mut bound_parameters = manifest.sumeragi_context_parameters();
+        bound_parameters.nexus_amx_context_hash =
+            signed_meta.sumeragi_context.nexus_amx_context_hash;
+        bound_parameters.execution_policy_hash = signed_meta.sumeragi_context.execution_policy_hash;
         let expected = manifest
-            .with_sumeragi_v2_context_parameters(bound_parameters)
+            .with_sumeragi_context_parameters(bound_parameters)
             .with_consensus_meta()
             .build_and_sign_with_confidential_policy_hash(
                 &key_pair,
@@ -4327,10 +4415,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the integration regression exercises one generated Nexus localnet through complete peer-config resigning"
-    )]
     fn generated_nexus_localnet_can_be_resigned_with_its_peer_config() {
         let temp = tempfile::tempdir().expect("create localnet output dir");
         let output_dir = fs::canonicalize(temp.path()).expect("canonical localnet output path");
@@ -4368,7 +4452,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut invalid_compliance_config = config.clone();
         invalid_compliance_config.nexus.compliance.enabled = true;
         invalid_compliance_config.nexus.compliance.policy_dir = None;
-        let invalid_compliance_error = bind_and_sign_staged_sumeragi_v2_context(
+        let invalid_compliance_error = bind_and_sign_staged_sumeragi_context(
             RawGenesisTransaction::from_path(output_dir.join("genesis.json"))
                 .expect("reload generated genesis manifest"),
             &genesis_key_pair,
@@ -4483,7 +4567,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let resigned_consensus_meta = consensus_handshake_meta(&block);
         assert_eq!(generated_consensus_meta, resigned_consensus_meta);
         assert_ne!(
-            generated_consensus_meta.sumeragi_v2.nexus_amx_context_hash, [0; 32],
+            generated_consensus_meta
+                .sumeragi_context
+                .nexus_amx_context_hash,
+            [0; 32],
             "staged Nexus/AMX context commitment must not be empty"
         );
         assert_genesis_signatures_verify(&generated_block, &genesis_key_pair);
@@ -5089,7 +5176,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect_err("public stake config must match XOR alias binding");
         assert!(
             err.to_string()
-                .contains("must match the canonical XOR binding"),
+                .contains("NPoS stake asset must equal the committed canonical XOR definition"),
             "unexpected error: {err}"
         );
     }

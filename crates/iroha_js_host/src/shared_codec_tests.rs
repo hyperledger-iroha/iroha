@@ -73,7 +73,7 @@ fn shared_codec_adapter_preserves_instruction_frames_archives_and_errors() {
     }
 }
 
-fn malformed_context_operations(prefix: f64) -> [napi::Error; 13] {
+fn malformed_context_operations(prefix: f64) -> [napi::Error; 10] {
     [
         norito_encode_instruction("{}".to_owned(), prefix)
             .err()
@@ -100,7 +100,6 @@ fn malformed_context_operations(prefix: f64) -> [napi::Error; 13] {
             Uint8Array::from(vec![0_u8]),
             Uint8Array::from(vec![0_u8]),
             Uint8Array::from(vec![0_u8]),
-            JsU64(0),
             Uint8Array::from(vec![0_u8]),
             prefix,
         )
@@ -113,13 +112,6 @@ fn malformed_context_operations(prefix: f64) -> [napi::Error; 13] {
         )
         .err()
         .unwrap(),
-        decode_lane_relay_envelope(Uint8Array::from(vec![0_u8]), prefix)
-            .err()
-            .unwrap(),
-        verify_lane_relay_envelope_json("{}".to_owned(), prefix)
-            .err()
-            .unwrap(),
-        lane_settlement_hash("{}".to_owned(), prefix).err().unwrap(),
         encode_contract_argument_record_json("{}".to_owned(), "{}".to_owned(), prefix)
             .err()
             .unwrap(),
@@ -151,38 +143,7 @@ fn shared_codec_adapter_restores_context_after_malformed_inputs() {
     let _outer = ChainDiscriminantGuard::enter(753);
     for prefix in [369.0, 42.0] {
         let errors = malformed_context_operations(prefix);
-        assert_eq!(errors.len(), 13);
-        assert_eq!(
-            iroha_data_model::account::address::chain_discriminant(),
-            753
-        );
-    }
-}
-
-#[test]
-fn native_lane_context_operations_preserve_the_canonical_settlement() {
-    let _outer = ChainDiscriminantGuard::enter(753);
-    let sample = lane_relay_envelope_sample().unwrap();
-    let envelope: LaneRelayEnvelope = decode_from_bytes(sample.valid.as_ref()).unwrap();
-    let expected_hash = hex::encode_upper(envelope.settlement_hash.as_ref());
-    for prefix in [369.0, 42.0] {
-        let decoded =
-            decode_lane_relay_envelope(Uint8Array::from(sample.valid.to_vec()), prefix).unwrap();
-        assert_eq!(
-            iroha_data_model::account::address::chain_discriminant(),
-            753
-        );
-        verify_lane_relay_envelope_json(decoded.clone(), prefix).unwrap();
-        assert_eq!(
-            iroha_data_model::account::address::chain_discriminant(),
-            753
-        );
-        let value: json::Value = json::from_json(&decoded).unwrap();
-        let settlement = json::to_json(&value["settlement_commitment"]).unwrap();
-        assert_eq!(
-            lane_settlement_hash(settlement, prefix).unwrap(),
-            expected_hash
-        );
+        assert_eq!(errors.len(), 10);
         assert_eq!(
             iroha_data_model::account::address::chain_discriminant(),
             753
@@ -216,7 +177,7 @@ fn contract_argument_record_requires_the_selected_account_prefix() {
         let expected = {
             let _selected = ChainDiscriminantGuard::enter(prefix);
             let payload: Json = json::from_value(value).unwrap();
-            iroha_core::encode_argument_record_from_json(&schema, &payload).unwrap()
+            ivm::encode_argument_record_from_json(&schema, &payload).unwrap()
         };
         let record = encode_contract_argument_record_json(
             schema_json.clone(),

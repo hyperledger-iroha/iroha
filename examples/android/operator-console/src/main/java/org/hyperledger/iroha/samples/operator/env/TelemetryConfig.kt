@@ -9,13 +9,15 @@ import java.time.Clock
 import java.time.Instant
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
-import org.hyperledger.iroha.android.client.ClientObserver
-import org.hyperledger.iroha.android.client.ClientResponse
-import org.hyperledger.iroha.android.telemetry.TelemetryExportStatusSink
-import org.hyperledger.iroha.android.telemetry.TelemetryObserver
-import org.hyperledger.iroha.android.telemetry.TelemetryOptions
-import org.hyperledger.iroha.android.telemetry.TelemetryRecord
-import org.hyperledger.iroha.android.telemetry.TelemetrySink
+import org.hyperledger.iroha.sdk.client.ClientObserver
+import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.telemetry.TelemetryExportStatusSink
+import org.hyperledger.iroha.sdk.telemetry.TelemetryObserver
+import org.hyperledger.iroha.sdk.telemetry.TelemetryOptions
+import org.hyperledger.iroha.sdk.telemetry.TelemetryRecord
+import org.hyperledger.iroha.sdk.telemetry.Redaction
+import org.hyperledger.iroha.sdk.client.JsonEncoder
+import org.hyperledger.iroha.sdk.telemetry.TelemetrySink
 
 data class TelemetryConfig(
     val enabled: Boolean,
@@ -32,8 +34,7 @@ data class TelemetryConfig(
         }
         return try {
             val redaction =
-                TelemetryOptions.Redaction.builder()
-                    .setEnabled(true)
+                Redaction.builder()
                     .setSaltHex(saltHex)
                     .setSaltVersion(saltVersion)
                     .setRotationId(rotationId)
@@ -49,11 +50,11 @@ data class TelemetryConfig(
             return null
         }
         val options = toTelemetryOptions()
-        if (!options.enabled()) {
+        if (!options.enabled) {
             return null
         }
         val baseSink = TelemetryLogSink(logPath, exporter, rotationId, clock)
-        val sink = TelemetryExportStatusSink.wrap(baseSink, exporter)
+        val sink = requireNotNull(TelemetryExportStatusSink.wrap(baseSink, exporter))
         return TelemetryObserver(options, sink)
     }
 
@@ -104,8 +105,8 @@ class TelemetryLogSink(
             "response",
             record,
             mapOf(
-                "status_code" to response.statusCode(),
-                "body_size" to response.body().size
+                "status_code" to response.statusCode,
+                "body_size" to response.body.size
             )
         )
     }
@@ -142,11 +143,11 @@ class TelemetryLogSink(
                 "timestamp" to timestamp(),
                 "exporter" to exporter,
                 "event" to event,
-                "salt_version" to record.saltVersion(),
+                "salt_version" to record.saltVersion,
                 "rotation_id" to rotationId,
-                "authority_hash" to record.authorityHash(),
-                "route" to record.route(),
-                "method" to record.method(),
+                "authority_hash" to record.authorityHash,
+                "route" to record.route,
+                "method" to record.method,
                 "latency_ms" to record.latencyOrNull(),
                 "status_code" to record.statusCodeOrNull(),
                 "error_kind" to record.errorKind().orElse(null)
@@ -157,13 +158,13 @@ class TelemetryLogSink(
 
     private fun write(fields: Map<String, Any?>) {
         val target = destination ?: return
-        val line = encodeJson(fields)
+        val line = JsonEncoder.encode(fields)
         lock.withLock {
             try {
                 target.parent?.let { Files.createDirectories(it) }
-                Files.writeString(
+                Files.write(
                     target,
-                    "$line\n",
+                    "$line\n".toByteArray(Charsets.UTF_8),
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND
                 )
@@ -175,27 +176,7 @@ class TelemetryLogSink(
 
     private fun timestamp(): String = Instant.now(clock).toString()
 
-    private fun encodeJson(fields: Map<String, Any?>): String {
-        val builder = StringBuilder()
-        builder.append('{')
-        fields.entries.forEachIndexed { index, entry ->
-            if (index > 0) builder.append(',')
-            builder.append('"').append(escape(entry.key)).append('"').append(':')
-            builder.append(formatValue(entry.value))
-        }
-        builder.append('}')
-        return builder.toString()
-    }
 
-    private fun formatValue(value: Any?): String =
-        when (value) {
-            null -> "null"
-            is Number, is Boolean -> value.toString()
-            else -> "\"${escape(value.toString())}\""
-        }
-
-    private fun escape(raw: String): String =
-        raw.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
 }
 
 private fun TelemetryRecord.latencyOrNull(): Long? {

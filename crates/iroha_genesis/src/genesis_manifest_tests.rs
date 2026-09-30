@@ -1,3 +1,5 @@
+//! Genesis manifest ownership, preparation, framing, and refusal controls.
+
 use super::*;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
@@ -9,9 +11,9 @@ fn manifest_chain_discriminant_value() -> norito::json::Value {
     norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
         .expect("serialize chain discriminant")
 }
-fn manifest_v2_context_value() -> norito::json::Value {
-    norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
-        .expect("serialize v2 genesis context")
+fn manifest_sumeragi_context_value() -> norito::json::Value {
+    norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
+        .expect("serialize Sumeragi genesis context")
 }
 fn manifest_kagemusha_mint_finality_value() -> norito::json::Value {
     norito::json::value::to_value(&deterministic_test_kagemusha_mint_finality_genesis_parameters())
@@ -39,6 +41,188 @@ fn with_deterministic_test_topology(mut manifest: RawGenesisTransaction) -> RawG
         .topology = deterministic_test_topology_entries();
     manifest
 }
+fn split_fixture() -> RawGenesisTransaction {
+    GenesisBuilder::new_without_executor(ChainId::from("split-genesis-fixture"), ".")
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .with_kagemusha_mint_finality_genesis_parameters(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+        )
+        .next_transaction()
+        .append_instruction(Log::new(Level::INFO, "first original instruction".into()))
+        .append_instruction(Log::new(Level::WARN, "second original instruction".into()))
+        .next_transaction()
+        .append_instruction(Log::new(Level::INFO, "third original instruction".into()))
+        .append_instruction(Log::new(Level::WARN, "fourth original instruction".into()))
+        .next_transaction()
+        .set_topology(deterministic_test_topology_entries())
+        .build_raw()
+        .unwrap()
+}
+#[test]
+fn instruction_only_split_preserves_exact_flat_semantics_and_structured_owners() {
+    let original = split_fixture();
+    let split = original
+        .clone()
+        .partition_instruction_only_transaction(1, &[1, 1])
+        .unwrap();
+    assert_eq!(split.transactions.len(), original.transactions.len() + 1);
+    assert_eq!(
+        norito::json::to_json(&split.transactions[0]).unwrap(),
+        norito::json::to_json(&original.transactions[0]).unwrap()
+    );
+    assert_eq!(
+        norito::json::to_json(split.transactions.last().unwrap()).unwrap(),
+        norito::json::to_json(original.transactions.last().unwrap()).unwrap()
+    );
+    assert_eq!(
+        norito::json::to_json(&split.transactions[3]).unwrap(),
+        norito::json::to_json(&original.transactions[2]).unwrap(),
+        "an unselected instruction batch retains its complete original boundary"
+    );
+    assert_eq!(
+        split.instructions().collect::<Vec<_>>(),
+        original.instructions().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        split.effective_parameters().unwrap(),
+        original.effective_parameters().unwrap()
+    );
+    let mut restored_boundaries = split.clone();
+    restored_boundaries.transactions = original.transactions.clone();
+    assert_eq!(
+        norito::json::to_json(&restored_boundaries).unwrap(),
+        norito::json::to_json(&original).unwrap(),
+        "every nontransaction manifest field is unchanged"
+    );
+    assert_eq!(
+        norito::json::to_json(
+            &split
+                .clone()
+                .partition_instruction_only_transaction(1, &[1])
+                .unwrap()
+        )
+        .unwrap(),
+        norito::json::to_json(&split).unwrap(),
+        "separation is idempotent"
+    );
+    assert!(
+        original
+            .clone()
+            .partition_instruction_only_transaction(original.transactions.len(), &[1])
+            .unwrap_err()
+            .to_string()
+            .contains("out of bounds")
+    );
+    assert!(
+        split.transactions[1..3]
+            .iter()
+            .all(|transaction| transaction.instructions.len() == 1)
+    );
+}
+#[test]
+fn instruction_only_split_refuses_mixed_structured_owners_and_parameter_instructions() {
+    for owner in ["parameters", "topology", "ivm_triggers"] {
+        for lengths in [vec![], vec![0, 2], vec![1], vec![3], vec![usize::MAX, 1]] {
+            assert!(
+                split_fixture()
+                    .partition_instruction_only_transaction(1, &lengths)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("preserve its exact 2 instructions")
+            );
+        }
+        let mut original = split_fixture();
+        match owner {
+            "parameters" => original.transactions[1].parameters = Some(Parameters::default()),
+            "topology" => original.transactions[1].topology = deterministic_test_topology_entries(),
+            "ivm_triggers" => {
+                original.transactions[1]
+                    .ivm_triggers
+                    .push(GenesisIvmTrigger::new(
+                    "split-control".parse().unwrap(),
+                    GenesisIvmAction::new(
+                        "original.to",
+                        Repeats::Exactly(1),
+                        iroha_test_samples::ALICE_ID.clone(),
+                        iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
+                    ),
+                ));
+            }
+            _ => unreachable!(),
+        }
+        let error = original
+            .clone()
+            .partition_instruction_only_transaction(1, &[1, 1])
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("transaction 1 is not instruction-only"),
+            "{owner}: {error}"
+        );
+    }
+    let mut original = split_fixture();
+    original.transactions[1].instructions.push(
+        SetParameter::new(Parameter::Block(BlockParameter::MaxTransactions(
+            NonZeroU64::new(11).unwrap(),
+        )))
+        .into(),
+    );
+    assert!(
+        original
+            .partition_instruction_only_transaction(1, &[1, 1])
+            .unwrap_err()
+            .to_string()
+            .contains("SetParameter")
+    );
+}
+#[test]
+fn normalization_preserves_authored_instruction_boundaries_and_refuses_overbudget_sources() {
+    let manifest = split_fixture();
+    let normalized = manifest
+        .clone()
+        .partition_instruction_only_transaction(1, &[1, 1])
+        .unwrap()
+        .normalize()
+        .unwrap();
+    let logs = normalized
+        .transactions
+        .iter()
+        .filter_map(|batch| {
+            let messages = batch
+                .iter()
+                .filter_map(|instruction| instruction.as_any().downcast_ref::<Log>())
+                .map(|log| format!("{log:?}"))
+                .collect::<Vec<_>>();
+            (!messages.is_empty()).then_some(messages)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(logs.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 2]);
+    assert_eq!(
+        logs.concat(),
+        manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<Log>())
+            .map(|log| format!("{log:?}"))
+            .collect::<Vec<_>>()
+    );
+    let mut overbudget = manifest.clone();
+    while overbudget.transactions.len() <= 11 {
+        overbudget
+            .transactions
+            .push(manifest.transactions[1].clone());
+    }
+    let original = norito::json::to_json(&overbudget).unwrap();
+    assert!(
+        overbudget
+            .clone()
+            .normalize()
+            .unwrap_err()
+            .to_string()
+            .contains("exceeding the FASTPQ bootstrap limit 11")
+    );
+    assert_eq!(norito::json::to_json(&overbudget).unwrap(), original);
+}
 #[test]
 fn genesis_fixture_key_generation_preserves_algorithms() {
     assert_eq!(
@@ -65,7 +249,7 @@ fn kagemusha_authority_must_match_the_signing_topology() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
@@ -102,7 +286,7 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
@@ -172,7 +356,7 @@ fn with_consensus_meta_handles_npos_mode() {
         consensus_mode: SumeragiConsensusMode::Npos,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     })
@@ -235,7 +419,7 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     })
@@ -248,12 +432,12 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         max_txs.get(),
         "effective parameters must reflect block max override"
     );
-    let expected = compute_consensus_parameters_fingerprint_v2(&ConsensusGenesisParams {
+    let expected = compute_consensus_parameters_fingerprint(&ConsensusGenesisParams {
         block_cadence_ms: params.sumeragi().block_cadence_ms(),
         block_max_transactions: params.block().max_transactions(),
         mode: ConsensusGenesisModeParams::Permissioned,
         protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-        v2_context: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
     })
     .expect("canonical permissioned parameters must fingerprint");
     let observed = manifest
@@ -275,7 +459,7 @@ fn build_and_sign_uses_stable_internal_creation_times() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
@@ -320,7 +504,7 @@ fn explicit_creation_time_makes_signed_genesis_reproducible() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
@@ -392,7 +576,7 @@ fn build_and_sign_checked_genesis_transaction_signatures_verify() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
@@ -444,7 +628,7 @@ fn build_and_sign_sets_confidential_digest() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
@@ -474,7 +658,7 @@ fn build_and_sign_sets_explicit_confidential_policy_hash() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
@@ -507,7 +691,7 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
@@ -557,7 +741,7 @@ fn programmatic_raw_genesis_rejects_explicit_set_parameter_instructions() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
@@ -592,7 +776,7 @@ fn transaction_replacement_rejects_explicit_set_parameter_instructions() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
@@ -617,7 +801,7 @@ fn transaction_replacement_rejects_explicit_set_parameter_instructions() {
 fn genesis_builder_rejects_set_parameter_as_generic_instruction() {
     use iroha_data_model::parameter::system::SumeragiParameter;
     let _ = GenesisBuilder::new_without_executor(ChainId::from("iroha:test:paramagg-builder"), ".")
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )
@@ -653,7 +837,7 @@ fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
@@ -810,7 +994,10 @@ fn set_parameter_inside_instructions_is_rejected() {
         "consensus_mode".to_string(),
         norito::json::Value::String("Permissioned".into()),
     );
-    manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -873,7 +1060,10 @@ fn raw_genesis_requires_chain_discriminant() {
         "consensus_mode".to_string(),
         norito::json::Value::String("Permissioned".into()),
     );
-    manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -898,7 +1088,7 @@ fn raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals()
         ChainId::from("iroha:test:testnet-prefix"),
         PathBuf::from("."),
     )
-    .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+    .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
     .with_kagemusha_mint_finality_genesis_parameters(
         deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
@@ -953,7 +1143,10 @@ fn topology_entries_parse_with_pop_hex() {
         norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
             .expect("serialize wire protocol version"),
     );
-    manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -1025,7 +1218,10 @@ fn topology_entries_allow_missing_pop_hex() {
         norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
             .expect("serialize wire protocol version"),
     );
-    manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -1076,7 +1272,10 @@ fn topology_entries_reject_peer_value() {
         norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
             .expect("serialize wire protocol version"),
     );
-    manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
+    manifest_fields.insert(
+        "sumeragi_context".to_string(),
+        manifest_sumeragi_context_value(),
+    );
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
         manifest_kagemusha_mint_finality_value(),
@@ -1102,7 +1301,7 @@ fn clear_topology_removes_all_entries() {
         .set_topology(vec![peer_a])
         .next_transaction()
         .set_topology(vec![peer_b])
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )
@@ -1129,7 +1328,7 @@ fn builder_preserves_consensus_metadata() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: 1,
         consensus_fingerprint: Some(ConsensusFingerprint::new([0xAB; 32])),
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
@@ -1149,7 +1348,7 @@ fn builder_preserves_consensus_metadata() {
         rebuilt.consensus_fingerprint,
         manifest.consensus_fingerprint
     );
-    assert_eq!(rebuilt.sumeragi_v2, manifest.sumeragi_v2);
+    assert_eq!(rebuilt.sumeragi_context, manifest.sumeragi_context);
     assert_eq!(
         rebuilt.kagemusha_mint_finality,
         manifest.kagemusha_mint_finality
@@ -1161,7 +1360,7 @@ fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
         ChainId::from("iroha:test:strict-consensus-manifest"),
         ".",
     )
-    .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+    .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
     .with_kagemusha_mint_finality_genesis_parameters(
         deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
@@ -1226,7 +1425,7 @@ fn normalize_exposes_instruction_batches() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
@@ -1274,9 +1473,9 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
                 slashing_delay_blocks: npos.slashing_delay_blocks(),
             }),
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-            v2_context: tx.sumeragi_v2,
+            sumeragi_context: tx.sumeragi_context,
         };
-        compute_consensus_parameters_fingerprint_v2(&dm_params)
+        compute_consensus_parameters_fingerprint(&dm_params)
             .expect("canonical NPoS fixture must fingerprint")
     }
     fn build_manifest(chain: ChainId, seed_byte: u8) -> RawGenesisTransaction {
@@ -1298,7 +1497,7 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
             consensus_mode: SumeragiConsensusMode::Npos,
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_context: SumeragiGenesisContextParameters::recommended(),
             kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(
             ),
             crypto: ManifestCrypto::default(),
@@ -1343,7 +1542,7 @@ fn permissioned_genesis_rejects_npos_parameters() {
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
-        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
@@ -1369,7 +1568,7 @@ fn crypto_manifest_requires_ed25519() {
         PathBuf::from("."),
     )
     .with_crypto(crypto)
-    .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+    .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
     .with_kagemusha_mint_finality_genesis_parameters(
         deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
@@ -1409,7 +1608,7 @@ fn crypto_manifest_requires_sm_defaults_when_sm2_allowed() {
         PathBuf::from("."),
     )
     .with_crypto(crypto)
-    .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+    .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
     .with_kagemusha_mint_finality_genesis_parameters(
         deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
@@ -1439,7 +1638,7 @@ fn crypto_manifest_accepts_valid_sm_configuration() {
         PathBuf::from("."),
     )
     .with_crypto(crypto)
-    .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+    .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
     .with_kagemusha_mint_finality_genesis_parameters(
         deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
@@ -1462,7 +1661,7 @@ fn crypto_manifest_rejects_sm3_hash_without_sm2() {
         PathBuf::from("."),
     )
     .with_crypto(crypto)
-    .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+    .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
     .with_kagemusha_mint_finality_genesis_parameters(
         deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )

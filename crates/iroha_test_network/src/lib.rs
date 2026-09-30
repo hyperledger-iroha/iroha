@@ -31,7 +31,7 @@ pub use dedicated_read::read_on_dedicated_thread;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
-use iroha::data_model::block::consensus_v2::{
+use iroha::data_model::block::consensus::{
     MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
 };
 use iroha::data_model::sumeragi::SumeragiStatus;
@@ -89,7 +89,6 @@ use iroha_model_base::topology::LaneId;
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
     json::Json,
-    time::TimeSource,
     unique_vec::UniqueVec,
 };
 use iroha_test_samples::{
@@ -128,7 +127,7 @@ use std::{
 // no external dependency needed: versioned encoding is a single leading byte (1)
 use crate::config::ensure_genesis_results_with_runtime_config;
 /// Consensus mode frozen into the test network's signed genesis profile.
-pub use iroha_data_model::block::consensus_v2::ConsensusMode;
+pub use iroha_data_model::block::consensus::ConsensusMode;
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -1166,13 +1165,13 @@ const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT
 const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
 const IROHA_RELEASE_ARTIFACT_ROOT_ENV: &str = "IROHA_RELEASE_ARTIFACT_ROOT";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
-const SUMERAGI_V2_RELEASE_TARGET_SUBDIR: &str = "sumeragi-v2-release";
-const SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
-const SUMERAGI_V2_RELEASE_INVOCATION_PREFIX: &str = "invocation.";
-const SUMERAGI_V2_PREBUILT_MANIFEST: &str = ".sumeragi-v2-prebuilt-binaries.tsv";
-const SUMERAGI_V2_PREBUILT_MANIFEST_SCHEMA_VERSION: &str = "2";
-const MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES: u64 = 32 * 1024;
-const MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const SUMERAGI_RELEASE_TARGET_SUBDIR: &str = "sumeragi-release";
+const SUMERAGI_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
+const SUMERAGI_RELEASE_INVOCATION_PREFIX: &str = "invocation.";
+const SUMERAGI_PREBUILT_MANIFEST: &str = ".sumeragi-prebuilt-binaries.tsv";
+const SUMERAGI_PREBUILT_MANIFEST_SCHEMA_VERSION: &str = "2";
+const MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES: u64 = 32 * 1024;
+const MAX_SUMERAGI_PREBUILT_BINARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_WORKSPACE_CARGO_LOCK_BYTES: u64 = 16 * 1024 * 1024;
 const RELEASE_BINARY_MODE_OCTAL: &str = "0500";
 const RELEASE_BINARY_MODE: u32 = 0o500;
@@ -1426,10 +1425,10 @@ fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
     let before =
         published_regular_file_metadata(path, RELEASE_MANIFEST_MODE, "release prebuilt manifest")?;
-    if before.len() > MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES {
+    if before.len() > MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES {
         return Err(eyre!(
             "release prebuilt manifest exceeds {} byte limit",
-            MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES
+            MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES
         ));
     }
     let mut file = fs::File::open(path).wrap_err_with(|| {
@@ -1448,16 +1447,16 @@ fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
     }
     let capacity = usize::try_from(before.len())
         .unwrap_or(usize::MAX)
-        .min(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES as usize);
+        .min(MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES as usize);
     let mut bytes = Vec::with_capacity(capacity);
     Read::by_ref(&mut file)
-        .take(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES + 1)
+        .take(MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES + 1)
         .read_to_end(&mut bytes)
         .wrap_err("failed to read release prebuilt manifest")?;
-    if bytes.len() as u64 > MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES {
+    if bytes.len() as u64 > MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES {
         return Err(eyre!(
             "release prebuilt manifest exceeds {} byte limit",
-            MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES
+            MAX_SUMERAGI_PREBUILT_MANIFEST_BYTES
         ));
     }
     let after =
@@ -1578,7 +1577,7 @@ fn parse_release_prebuilt_manifest(
         }
         values.push(value);
     }
-    if values[0] != SUMERAGI_V2_PREBUILT_MANIFEST_SCHEMA_VERSION {
+    if values[0] != SUMERAGI_PREBUILT_MANIFEST_SCHEMA_VERSION {
         return Err(eyre!(
             "unsupported release prebuilt manifest schema version {}",
             values[0]
@@ -1659,11 +1658,11 @@ fn parse_release_prebuilt_manifest(
                 kind.manifest_prefix()
             ),
         )?;
-        if size_bytes == 0 || size_bytes > MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES {
+        if size_bytes == 0 || size_bytes > MAX_SUMERAGI_PREBUILT_BINARY_BYTES {
             return Err(eyre!(
                 "release prebuilt manifest `{}` size must be within 1..={}",
                 kind.manifest_prefix(),
-                MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES
+                MAX_SUMERAGI_PREBUILT_BINARY_BYTES
             ));
         }
         if values[base + 3] != RELEASE_BINARY_MODE_OCTAL {
@@ -1733,9 +1732,9 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
     })?;
     let artifact_root = authenticate_release_artifact_root(repo, &artifact_root_raw)?;
     let expected_programs_root = artifact_root
-        .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
+        .join(SUMERAGI_RELEASE_TARGET_SUBDIR)
         .join(&source_manifest_sha256)
-        .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR);
+        .join(SUMERAGI_RELEASE_PROGRAMS_SUBDIR);
     if configured_target.parent() != Some(expected_programs_root.as_path()) {
         return Err(eyre!(
             "{IROHA_TEST_TARGET_DIR_ENV} must be an immediate private invocation bundle under {}; \
@@ -1747,7 +1746,7 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
     let _invocation_suffix = configured_target
         .file_name()
         .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix(SUMERAGI_V2_RELEASE_INVOCATION_PREFIX))
+        .and_then(|name| name.strip_prefix(SUMERAGI_RELEASE_INVOCATION_PREFIX))
         .filter(|suffix| {
             !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
         })
@@ -1755,7 +1754,7 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
             eyre!(
                 "{IROHA_TEST_TARGET_DIR_ENV} private bundle name must be `{}` followed by a \
                  non-empty ASCII alphanumeric token",
-                SUMERAGI_V2_RELEASE_INVOCATION_PREFIX
+                SUMERAGI_RELEASE_INVOCATION_PREFIX
             )
         })?;
     published_directory_metadata(
@@ -1787,7 +1786,7 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
             "{IROHA_TEST_TARGET_DIR_ENV} resolves outside the manifest-addressed release target"
         ));
     }
-    let manifest_path = configured_target.join(SUMERAGI_V2_PREBUILT_MANIFEST);
+    let manifest_path = configured_target.join(SUMERAGI_PREBUILT_MANIFEST);
     let manifest_bytes = read_release_manifest(&manifest_path)?;
     let observed_manifest_sha256 = lowercase_hex(&sha256(&manifest_bytes));
     if observed_manifest_sha256 != prebuilt_manifest_sha256 {
@@ -1886,7 +1885,7 @@ fn validate_release_program_candidate(
             kind.manifest_prefix()
         ));
     }
-    let (digest, size) = sha256_reader_bounded(file, MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES)
+    let (digest, size) = sha256_reader_bounded(file, MAX_SUMERAGI_PREBUILT_BINARY_BYTES)
         .wrap_err_with(|| {
             eyre!(
                 "failed to hash bounded release `{}` binary",
@@ -3369,12 +3368,12 @@ impl ValidatedNetworkGenesis {
         );
         assert_eq!(
             self.staged_hashes.nexus_amx,
-            CryptoHash::prehashed(profile.params.v2_context.nexus_amx_context_hash),
+            CryptoHash::prehashed(profile.params.sumeragi_context.nexus_amx_context_hash),
             "signed test-network Nexus/AMX context must match exact genesis pre-execution"
         );
         assert_eq!(
             self.staged_hashes.execution_policy,
-            CryptoHash::prehashed(profile.params.v2_context.execution_policy_hash),
+            CryptoHash::prehashed(profile.params.sumeragi_context.execution_policy_hash),
             "signed test-network execution policy must match exact genesis pre-execution"
         );
     }
@@ -3953,7 +3952,7 @@ impl Network {
     ) -> Result<()> {
         let mut latest_status: Option<iroha_torii_shared::status::Status> = None;
         let status_timeout = {
-            let configured = client_status_timeout_env();
+            let configured = peer.client_policy().status_timeout;
             if configured == Duration::ZERO {
                 GENESIS_BLOCK_LOG_INTERVAL
             } else {
@@ -4031,7 +4030,7 @@ impl Network {
                 }
                 _ = watchdog.tick() => {
                     elapsed += GENESIS_BLOCK_LOG_INTERVAL;
-                    let sumeragi_v2 = match tokio::time::timeout(
+                    let sumeragi = match tokio::time::timeout(
                         status_timeout,
                         peer.sumeragi_startup_snapshot(),
                     )
@@ -4061,7 +4060,7 @@ impl Network {
                             status_blocks_non_empty = status.blocks_non_empty,
                             status_queue = status.queue_size,
                             status_view_changes = status.view_changes,
-                            sumeragi_v2 = %sumeragi_v2,
+                            sumeragi = %sumeragi,
                             "still waiting for block 1 after genesis submission"
                         );
                     } else {
@@ -4070,7 +4069,7 @@ impl Network {
                             %mnemonic,
                             role,
                             waited = ?elapsed,
-                            sumeragi_v2 = %sumeragi_v2,
+                            sumeragi = %sumeragi,
                             "still waiting for block 1; no status snapshot available"
                         );
                     }
@@ -4368,13 +4367,12 @@ impl Network {
                     "custom genesis consensus_handshake_meta is duplicate or mismatches builder profile; normalizing the canonical consensus parameter"
                 );
             }
-            let mut augmented = normalize_genesis_consensus_handshake(
+            let mut augmented = normalize_genesis_parameters(
                 cached_genesis,
                 &self.genesis_isi,
                 &self.genesis_post_topology_isi,
                 &consensus_handshake_meta,
                 &self.genesis_key_pair,
-                &self.chain_id(),
                 da_proof_policies.as_ref(),
                 confidential_policy_hash,
             );
@@ -4661,7 +4659,7 @@ pub struct PeerStartupState {
     pub sumeragi_snapshot: Option<PeerSumeragiSnapshot>,
     /// Most recent `/v1/sumeragi/status` error captured by the startup watchdog.
     pub sumeragi_error: Option<String>,
-    /// Unix timestamp in milliseconds when the Sumeragi v2 probe completed.
+    /// Unix timestamp in milliseconds when the Sumeragi probe completed.
     pub sumeragi_unix_timestamp_ms: Option<u128>,
     /// Snapshot of the peer's Kura storage layout.
     pub storage: PeerStorageSnapshot,
@@ -6655,99 +6653,9 @@ fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
             _ => false,
         })
 }
-fn normalize_genesis_consensus_handshake(
-    source: &GenesisBlock,
-    genesis_isi: &[Vec<InstructionBox>],
-    genesis_post_topology_isi: &[Vec<InstructionBox>],
-    consensus_handshake_meta: &Parameter,
-    genesis_key_pair: &KeyPair,
-    _fallback_chain_id: &ChainId,
-    da_proof_policies: Option<&DaProofPolicyBundle>,
-    confidential_policy_hash: Option<[u8; 32]>,
-) -> GenesisBlock {
-    let mut param_instructions = genesis_isi
-        .iter()
-        .chain(genesis_post_topology_isi)
-        .flat_map(|batch| batch.iter())
-        .filter(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<SetParameter>()
-                .is_some()
-        })
-        .filter(|instruction| {
-            !instruction
-                .as_any()
-                .downcast_ref::<SetParameter>()
-                .is_some_and(|set_param| {
-                    matches!(
-                        set_param.inner(),
-                        Parameter::Custom(custom)
-                            if custom.id() == &consensus_metadata::handshake_meta_id()
-                    )
-                })
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    param_instructions.push(InstructionBox::from(SetParameter::new(
-        consensus_handshake_meta.clone(),
-    )));
-    let authority = AccountId::new(genesis_key_pair.public_key().clone());
-    let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-    let param_tx = iroha_data_model::transaction::TransactionBuilder::new_genesis_with_time_source(
-        authority,
-        &time_source,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions(param_instructions)
-    .try_sign(genesis_key_pair.private_key())
-    .expect("sign normalized genesis consensus metadata transaction");
-    let source_transactions = source
-        .0
-        .external_transactions()
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut transactions =
-        transactions_without_consensus_handshake_metadata(&source_transactions, genesis_key_pair);
-    transactions.push(param_tx);
-    let external_merkle: iroha_crypto::MerkleTree<
-        iroha_data_model::transaction::TransactionEntrypoint,
-    > = transactions
-        .iter()
-        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-        .collect();
-    let mut header = source.0.header();
-    header.merkle_root = external_merkle.root();
-    let da_proof_policies = da_proof_policies
-        .cloned()
-        .or_else(|| source.0.da_proof_policies().cloned());
-    header.set_da_proof_policies_hash(da_proof_policies.as_ref().map(iroha_crypto::HashOf::new));
-    if let Some(zk_policy_hash) = confidential_policy_hash {
-        let mut confidential_features = header
-            .confidential_features()
-            .unwrap_or(iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST);
-        confidential_features.zk_policy_hash = Some(zk_policy_hash);
-        header.set_confidential_features(Some(confidential_features));
-    }
-    let signer_index = source
-        .0
-        .signatures()
-        .next()
-        .map(|sig| sig.index())
-        .unwrap_or(0);
-    let proposal_signature = iroha_data_model::block::BlockSignature::new(
-        signer_index,
-        iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
-            .expect("sign normalized resultless genesis header"),
-    );
-    let mut proposal =
-        iroha_data_model::block::SignedBlock::presigned(proposal_signature, header, transactions);
-    proposal.set_da_commitments(source.0.da_commitments().cloned());
-    proposal.set_da_proof_policies(da_proof_policies);
-    proposal.set_da_pin_intents(source.0.da_pin_intents().cloned());
-    GenesisBlock(proposal)
-}
-include!("lib/genesis_handshake_normalization.rs");
+#[path = "lib/genesis_parameter_normalization.rs"]
+mod genesis_parameter_normalization;
+use genesis_parameter_normalization::normalize_genesis_parameters;
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
     let mode = match consensus_profile.params.mode {
         ConsensusGenesisModeParams::Permissioned => SumeragiConsensusMode::Permissioned,
@@ -6758,7 +6666,7 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         block_cadence_ms: consensus_profile.params.block_cadence_ms,
         wire_protocol_version: consensus_profile.wire_protocol_version,
         consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
-        sumeragi_v2: consensus_profile.params.v2_context.clone(),
+        sumeragi_context: consensus_profile.params.sumeragi_context.clone(),
         kagemusha_mint_finality: consensus_profile.kagemusha_mint_finality.clone(),
     };
     metadata
@@ -7424,8 +7332,10 @@ impl NetworkBuilder {
     ///
     /// The provided closure receives the network topology (as peer IDs) and the
     /// corresponding Proof-of-Possession entries. It must return a signed genesis
-    /// block. The harness normalizes the system-owned consensus parameter carrier,
-    /// re-signs the affected transactions and block with the configured genesis
+    /// block. The harness consolidates source parameters and builder overrides into
+    /// one carrier before ordinary instructions, retaining a leading executor upgrade.
+    /// It preserves each remaining source payload and ordinary instruction order,
+    /// re-signs affected transactions and the block with the configured genesis
     /// key, and pre-executes under the exact final pipeline, Nexus, and ZK runtime
     /// configuration. It then binds the staged Nexus/AMX context and caches the
     /// identical final bytes supplied to every peer. A custom block whose signed
@@ -8033,10 +7943,19 @@ impl NetworkBuilder {
             }
             genesis_post_topology_isi.push(bootstrap_tx);
             if let Some(stake_amount) = validator_stake {
-                let mut validator_tx = Vec::new();
-                for peer in &peers {
-                    let validator_id = peer.account_id();
-                    validator_tx.push(
+                // Each registration moves one original stake transfer; activation moves none.
+                // Keep each generated entry within both signed bootstrap source-count limits.
+                // Native pre-execution still admits the complete original source and byte bounds.
+                let intrinsic =
+                    iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap().intrinsic;
+                let registrations_per_entry =
+                    usize::try_from(intrinsic.max_transcripts.min(intrinsic.max_deltas))
+                        .expect("bootstrap source count fits usize");
+                for group in peers.chunks(registrations_per_entry) {
+                    let mut validator_tx = Vec::new();
+                    for peer in group {
+                        let validator_id = peer.account_id();
+                        validator_tx.push(
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator_id.clone(),
@@ -8053,15 +7972,16 @@ impl NetworkBuilder {
                     }
                     .into(),
                 );
-                    validator_tx.push(
-                        ActivatePublicLaneValidator {
-                            lane_id: LaneId::SINGLE,
-                            validator: validator_id,
-                        }
-                        .into(),
-                    );
+                        validator_tx.push(
+                            ActivatePublicLaneValidator {
+                                lane_id: LaneId::SINGLE,
+                                validator: validator_id,
+                            }
+                            .into(),
+                        );
+                    }
+                    genesis_post_topology_isi.push(validator_tx);
                 }
-                genesis_post_topology_isi.push(validator_tx);
             }
         }
         if custom_genesis.is_none() {
@@ -8271,16 +8191,16 @@ impl NetworkBuilder {
                 norito::json::from_str::<ConsensusHandshakeMetadata>(parameter.payload().get()).ok()
             })
             .expect(
-                "test-network genesis must carry explicitly provisioned signed Sumeragi v2 context parameters",
+                "test-network genesis must carry explicitly provisioned signed Sumeragi context parameters",
             );
-        let provisional_v2_context = provisional_metadata.sumeragi_v2;
+        let provisional_sumeragi_context = provisional_metadata.sumeragi_context;
         let provisional_kagemusha_mint_finality = disposable_mint_finality_genesis
             .unwrap_or(provisional_metadata.kagemusha_mint_finality);
         let provisional_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                provisional_v2_context.clone(),
+                provisional_sumeragi_context.clone(),
             )
             .expect("test-network genesis parameters must form a canonical carrier");
         let provisional_profile = ConsensusBootstrapProfile {
@@ -8293,17 +8213,16 @@ impl NetworkBuilder {
         };
         let staged_policy_hashes = match custom_genesis_block.as_ref() {
             Some(custom) => {
-                let provisional = normalize_genesis_consensus_handshake(
+                let provisional = normalize_genesis_parameters(
                     custom,
                     &genesis_isi,
                     &genesis_post_topology_isi,
                     &consensus_handshake_parameter(&provisional_profile),
                     &genesis_key_pair,
-                    &consensus_chain_id,
                     da_proof_policies.as_ref(),
                     confidential_policy_hash,
                 );
-                config::staged_genesis_policy_hashes(
+                config::discover_generated_policy_hashes(config::staged_genesis_policy_hashes(
                     &provisional,
                     &AccountId::new(genesis_key_pair.public_key().clone()),
                     &peer_topology,
@@ -8312,20 +8231,21 @@ impl NetworkBuilder {
                     nexus_config.as_ref(),
                     zk_config.as_ref(),
                     resolved_genesis_config.as_ref(),
-                )
-                .expect("normalized custom genesis must pre-execute for v2 context binding")
+                ))
+                .expect("normalized custom genesis must derive its staged Sumeragi context")
             }
             None => preview_staged_policy_hashes
                 .expect("normal genesis preview must provide staged execution-policy hashes"),
         };
-        let mut signed_v2_context = provisional_v2_context;
-        signed_v2_context.nexus_amx_context_hash = staged_policy_hashes.nexus_amx.into();
-        signed_v2_context.execution_policy_hash = staged_policy_hashes.execution_policy.into();
+        let mut signed_sumeragi_context = provisional_sumeragi_context;
+        signed_sumeragi_context.nexus_amx_context_hash = staged_policy_hashes.nexus_amx.into();
+        signed_sumeragi_context.execution_policy_hash =
+            staged_policy_hashes.execution_policy.into();
         let consensus_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                signed_v2_context,
+                signed_sumeragi_context,
             )
             .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
@@ -8372,13 +8292,12 @@ impl NetworkBuilder {
             );
         }
         if let Some(custom) = custom_genesis_block.as_ref() {
-            let mut final_custom = normalize_genesis_consensus_handshake(
+            let mut final_custom = normalize_genesis_parameters(
                 custom,
                 &genesis_isi,
                 &genesis_post_topology_isi,
                 &consensus_handshake_meta,
                 &genesis_key_pair,
-                &consensus_chain_id,
                 da_proof_policies.as_ref(),
                 confidential_policy_hash,
             );
@@ -8441,14 +8360,15 @@ impl NetworkBuilder {
         };
         let exact_genesis_hash = network.genesis().0.hash();
         let network_id = NetworkId::from_genesis_hash(exact_genesis_hash);
-        let client_identity = PeerClientIdentity {
+        let client_config = PeerClientConfig {
             chain: network.chain_id(),
             network_id,
             chain_discriminant,
+            policy: PeerClientPolicy::from_env(),
         };
         for peer in network.all_peers() {
-            peer.client_identity
-                .set(client_identity.clone())
+            peer.client_config
+                .set(client_config.clone())
                 .expect("test-network peer client identity must be initialized exactly once");
         }
         // The test-network generator is the operator provisioning both the
@@ -8486,7 +8406,6 @@ impl NetworkBuilder {
     /// This method exists for convenience in non-async tests.
     pub fn build_blocking(self) -> (Network, Runtime) {
         let rt = runtime::Builder::new_multi_thread()
-            .thread_stack_size(32 * 1024 * 1024)
             .enable_all()
             .build()
             .unwrap();
@@ -8623,13 +8542,32 @@ fn start_checked_storage_fallback_ready(
 ) -> bool {
     has_genesis && elapsed >= START_CHECKED_STORAGE_FALLBACK_GRACE && is_running && has_block_1
 }
-/// Exact generated network and account profile shared by all clients for one peer.
-/// One immutable binding prevents a client from combining identities from different networks.
+/// Network identity and request policy captured when a peer joins its network.
+/// Every client for the peer uses this immutable configuration.
 #[derive(Clone, Debug)]
-struct PeerClientIdentity {
+struct PeerClientConfig {
     chain: ChainId,
     network_id: NetworkId,
     chain_discriminant: u16,
+    policy: PeerClientPolicy,
+}
+
+/// Immutable request and transaction deadlines for one attached peer.
+#[derive(Clone, Debug)]
+struct PeerClientPolicy {
+    status_timeout: Duration,
+    request_timeout: Duration,
+    ttl: Duration,
+}
+impl PeerClientPolicy {
+    fn from_env() -> Self {
+        let status_timeout = client_status_timeout_env();
+        Self {
+            status_timeout,
+            request_timeout: client_request_timeout_env(),
+            ttl: client_ttl_env(status_timeout),
+        }
+    }
 }
 
 /// Controls execution of an `iroha3d` child process.
@@ -8645,7 +8583,8 @@ pub struct NetworkPeer {
     mnemonic: String,
     span: tracing::Span,
     key_pair: KeyPair,
-    client_identity: Arc<OnceLock<PeerClientIdentity>>,
+    client_config: Arc<OnceLock<PeerClientConfig>>,
+    retained_client: Arc<OnceLock<Client>>,
     streaming_key_pair: KeyPair,
     soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
@@ -9001,7 +8940,7 @@ impl NetworkPeer {
         }
         {
             let tasks = &mut tasks;
-            let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+            let client = self.retained_client().client().clone();
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
             let is_running = self.is_running.clone();
@@ -9012,7 +8951,7 @@ impl NetworkPeer {
             let startup_warn_gate = StartupWarnGate::new(STARTUP_STATUS_WARN_GRACE);
             tasks.spawn(
                 async move {
-                    let status_timeout = client_status_timeout_env();
+                    let status_timeout = client.transaction_status_timeout();
                     let status_client = client.clone();
                     let storage_min_height = Arc::new(AtomicU64::new(0));
                     let mut last_progress: Instant;
@@ -9787,7 +9726,7 @@ impl NetworkPeer {
     pub async fn process_id(&self) -> Option<u32> {
         self.run.lock().await.as_ref().and_then(|run| run.pid)
     }
-    /// Create a client to interact with this peer
+    /// Create a distinct client for an explicit account, using the attached peer policy.
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
         Client::from_client(self.async_client_for(account_id, account_private_key))
             .expect("peer blocking client runtime should initialize")
@@ -9802,17 +9741,18 @@ impl NetworkPeer {
             port = %self.port_api,
             "TEST_NETWORK client"
         );
-        let status_timeout = client_status_timeout_env();
-        let request_timeout = client_request_timeout_env();
-        let ttl = client_ttl_env(status_timeout);
         let default_account_domain =
             iroha_model_base::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
         let identity = self
-            .client_identity
+            .client_config
             .get()
             .expect("peer must be attached to a network before creating clients");
+        let policy = self.client_policy();
+        let status_timeout = policy.status_timeout;
+        let request_timeout = policy.request_timeout;
+        let ttl = policy.ttl;
         let config = ConfigReader::new()
             .without_env()
             .with_toml_source(TomlSource::inline(
@@ -9858,12 +9798,27 @@ impl NetworkPeer {
             .build()
             .expect("peer account context should be valid")
     }
-    /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
+    /// Clone Alice's retained client context for this peer.
+    ///
+    /// Network identity, operator authority and deadline policy are fixed at network
+    /// attachment. Clones share connection pools and the owned blocking runtime;
+    /// each call still performs fresh requests and applies the configured deadlines.
     pub fn client(&self) -> Client {
-        self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone())
+        self.retained_client().clone()
+    }
+    fn client_policy(&self) -> &PeerClientPolicy {
+        &self
+            .client_config
+            .get()
+            .expect("peer must be attached to a network before creating clients")
+            .policy
+    }
+    fn retained_client(&self) -> &Client {
+        self.retained_client
+            .get_or_init(|| self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone()))
     }
     pub async fn status(&self) -> Result<Status> {
-        let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let client = self.retained_client().client().clone();
         let result = client.status().get().await.map_err(Report::from);
         match &result {
             Ok(status) => self.record_status_success(status),
@@ -10359,7 +10314,8 @@ impl NetworkPeerBuilder {
             mnemonic,
             span,
             key_pair,
-            client_identity: Arc::new(OnceLock::new()),
+            client_config: Arc::new(OnceLock::new()),
+            retained_client: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair,
@@ -10761,7 +10717,9 @@ mod tests {
     include!("genesis_validation_cache_tests.rs");
     include!("profile_account_defaults_tests.rs");
     include!("peer_client_profile_tests.rs");
+    include!("peer_client_context_tests.rs");
     include!("genesis_profile_tests.rs");
+    include!("sora_profile_tests.rs");
     use iroha_config::parameters::defaults;
     use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
     use iroha_crypto::Algorithm;
@@ -10804,16 +10762,6 @@ mod tests {
     ///
     /// Tests needing both guards must acquire `CONFIG_ENV_GUARD` first.
     static NETWORK_PERMIT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
-    fn run_large_stack_test(name: &str, test: fn()) {
-        let worker = std::thread::Builder::new()
-            .name(name.to_owned())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(test)
-            .expect("spawn large-stack test worker");
-        if let Err(panic) = worker.join() {
-            std::panic::resume_unwind(panic);
-        }
-    }
     fn lock_env_guard(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.blocking_lock()
     }
@@ -11247,7 +11195,8 @@ mod tests {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
-            client_identity: Arc::new(OnceLock::new()),
+            client_config: Arc::new(OnceLock::new()),
+            retained_client: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11305,10 +11254,10 @@ mod tests {
             .expect("generate watchdog streaming key");
         let soranet_transport_key_pair =
             random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
-        let client_identity = Arc::new(OnceLock::new());
+        let client_config = Arc::new(OnceLock::new());
         assert!(
-            client_identity
-                .set(PeerClientIdentity {
+            client_config
+                .set(PeerClientConfig {
                     chain: config::chain_id(),
                     network_id: NetworkId::from_genesis_hash(HashOf::<
                         iroha_data_model::block::BlockHeader,
@@ -11316,6 +11265,7 @@ mod tests {
                         CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]),
                     )),
                     chain_discriminant: defaults::common::chain_discriminant(),
+                    policy: PeerClientPolicy::from_env(),
                 })
                 .is_ok()
         );
@@ -11323,7 +11273,8 @@ mod tests {
             mnemonic: "wait-block-authority-barrier".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate watchdog peer key"),
-            client_identity,
+            client_config,
+            retained_client: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11708,11 +11659,12 @@ mod tests {
             ),
         );
         assert!(
-            peer.client_identity
-                .set(PeerClientIdentity {
+            peer.client_config
+                .set(PeerClientConfig {
                     chain: config::chain_id(),
                     network_id,
                     chain_discriminant: defaults::common::chain_discriminant(),
+                    policy: PeerClientPolicy::from_env(),
                 })
                 .is_ok()
         );
@@ -12423,7 +12375,7 @@ mod tests {
             .map(|index| format!("ordinary startup line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        input.push_str("\nSumeragi v2 effect services failed closed: exact ownership violation\n");
+        input.push_str("\nSumeragi effect services failed closed: exact ownership violation\n");
         for index in 0..100 {
             input.push_str(&format!("ordinary shutdown detail {index}\n"));
         }
@@ -12434,7 +12386,7 @@ mod tests {
         assert!(
             summary
                 .preview
-                .contains("Sumeragi v2 effect services failed closed: exact ownership violation")
+                .contains("Sumeragi effect services failed closed: exact ownership violation")
         );
         assert!(summary.preview.contains("... decisive peer failure ..."));
     }
@@ -12538,26 +12490,14 @@ mod tests {
             "genesis must contain exactly one handshake metadata entry equal to the runtime profile"
         );
     }
-    fn collect_non_handshake_instructions(block: &GenesisBlock) -> Vec<InstructionBox> {
+    fn collect_non_parameter_instructions(block: &GenesisBlock) -> Vec<InstructionBox> {
         block
             .0
             .external_transactions()
             .flat_map(|transaction| match transaction.instructions() {
                 Executable::Instructions(instructions) => instructions
                     .iter()
-                    .filter(|instruction| {
-                        !instruction
-                            .as_any()
-                            .downcast_ref::<SetParameter>()
-                            .is_some_and(|set_param| {
-                                matches!(
-                                    set_param.inner(),
-                                    Parameter::Custom(custom)
-                                        if custom.id()
-                                            == &consensus_metadata::handshake_meta_id()
-                                )
-                            })
-                    })
+                    .filter(|instruction| !instruction.as_any().is::<SetParameter>())
                     .cloned()
                     .collect::<Vec<_>>(),
                 _ => Vec::new(),
@@ -12579,7 +12519,7 @@ mod tests {
         iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
             mode,
             &state,
-            metadata.sumeragi_v2,
+            metadata.sumeragi_context,
         )
         .expect("genesis must reconstruct one canonical consensus carrier")
     }
@@ -12619,12 +12559,12 @@ mod tests {
             .expect("genesis must contain canonical consensus metadata");
         assert_eq!(
             staged.nexus_amx,
-            CryptoHash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash),
+            CryptoHash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash),
             "signed Nexus/AMX commitment must equal the independently staged projection"
         );
         assert_eq!(
             staged.execution_policy,
-            CryptoHash::prehashed(metadata.sumeragi_v2.execution_policy_hash),
+            CryptoHash::prehashed(metadata.sumeragi_context.execution_policy_hash),
             "signed execution-policy commitment must equal the independently staged projection"
         );
     }
@@ -12690,8 +12630,8 @@ mod tests {
             "handshake metadata should advertise NPoS mode"
         );
         assert_eq!(
-            metadata.sumeragi_v2, profile.params.v2_context,
-            "handshake metadata should carry the exact signed v2 context"
+            metadata.sumeragi_context, profile.params.sumeragi_context,
+            "handshake metadata should carry the exact signed Sumeragi context"
         );
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
@@ -12706,16 +12646,6 @@ mod tests {
     }
     #[test]
     fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
-        let worker = std::thread::Builder::new()
-            .name("explicit-npos-ingress-capacity-regression".to_owned())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos_impl)
-            .expect("spawn explicit NPoS ingress-capacity regression");
-        if let Err(panic) = worker.join() {
-            std::panic::resume_unwind(panic);
-        }
-    }
-    fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos_impl() {
         init_instruction_registry();
         let mut npos = SumeragiNposParameters::default();
         npos.max_validators = 4;
@@ -12753,7 +12683,7 @@ mod tests {
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 ConsensusMode::Npos,
                 &parameter_state,
-                metadata.sumeragi_v2,
+                metadata.sumeragi_context,
             )
             .expect("shared runtime derivation must accept the canonical carrier");
         assert_eq!(
@@ -12886,43 +12816,6 @@ mod tests {
                 .and_then(|digest| digest.zk_policy_hash),
             Some(expected),
             "genesis should commit to the confidential policy resolved from config layers"
-        );
-    }
-    #[test]
-    fn resolve_actual_config_applies_sora_profile_non_consensus_settings() {
-        let config_layers = vec![Table::new().write(["sorafs", "storage", "enabled"], true)];
-        assert!(
-            config_requires_sora_profile(&config_layers),
-            "SoraFS-enabled configs should trigger --sora profile detection"
-        );
-        let mut merged = sora_profile_detection_defaults();
-        for layer in &config_layers {
-            merge_tables(&mut merged, layer);
-        }
-        apply_identity_defaults_for_detection(&mut merged);
-        ensure_sora_profile_trusted_peer_pop(&mut merged);
-        let actual = parse_actual_config_for_genesis(merged, &config_layers)
-            .expect("should resolve runtime-equivalent config");
-        assert!(
-            actual.nexus.lane_config.entries().len() > 1,
-            "Sora profile should expand lane catalog beyond single-lane defaults"
-        );
-    }
-    #[test]
-    fn sora_profile_does_not_override_signed_genesis_mode() {
-        init_instruction_registry();
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_peers(4)
-                .with_permissioned_consensus()
-                .with_config_layer(|layer| {
-                    layer.write(["sorafs", "storage", "enabled"], true);
-                }),
-        );
-        assert_eq!(
-            network.consensus_bootstrap_profile().mode_tag,
-            PERMISSIONED_TAG,
-            "local Sora profile selection must not override the signed genesis mode",
         );
     }
     #[test]
@@ -13208,12 +13101,6 @@ mod tests {
     }
     #[test]
     fn observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster() {
-        run_large_stack_test(
-            stringify!(observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster),
-            observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster_impl,
-        );
-    }
-    fn observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster_impl() {
         let bootstrap = ObserverP2pBootstrap::new(5).expect("five observers fit the core profile");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
@@ -13310,12 +13197,6 @@ mod tests {
     }
     #[test]
     fn committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role() {
-        run_large_stack_test(
-            stringify!(committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role),
-            committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role_impl,
-        );
-    }
-    fn committee_validator_bootstrap_keeps_exact_global_roster_and_validator_role_impl() {
         let bootstrap = CommitteeValidatorP2pBootstrap::new(5)
             .expect("five committee validators fit the core profile");
         let network = build_with_isolated_permit(
@@ -13401,12 +13282,7 @@ mod tests {
     }
     #[test]
     fn committee_validator_bootstrap_rejects_an_underbudget_connection_override() {
-        run_large_stack_test(
-            stringify!(committee_validator_bootstrap_rejects_an_underbudget_connection_override),
-            committee_validator_bootstrap_rejects_an_underbudget_connection_override_impl,
-        );
-    }
-    fn committee_validator_bootstrap_rejects_an_underbudget_connection_override_impl() {
+        let preexecution_count = config::genesis_preexecution_count();
         let panic = std::panic::catch_unwind(|| {
             build_with_isolated_permit(
                 NetworkBuilder::new()
@@ -13431,19 +13307,18 @@ mod tests {
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "<missing panic message>".to_owned());
         assert!(
-            panic_message.contains("authenticated/planned maximum validator capacity")
-                && panic_message.contains("planned full-fanout minimum 8"),
-            "planned authenticated-source failure should be localized, got: {panic_message}"
+            panic_message.contains("trusted-peer full fanout requires 8 remote connections")
+                && panic_message.contains("effective network connection capacity 7"),
+            "merged configuration must report the exact required and available capacity: {panic_message}"
+        );
+        assert_eq!(
+            config::genesis_preexecution_count(),
+            preexecution_count,
+            "invalid participant capacity must fail before genesis execution"
         );
     }
     #[test]
     fn mixed_committee_and_observer_bootstrap_reserves_every_non_global_source() {
-        run_large_stack_test(
-            stringify!(mixed_committee_and_observer_bootstrap_reserves_every_non_global_source),
-            mixed_committee_and_observer_bootstrap_reserves_every_non_global_source_impl,
-        );
-    }
-    fn mixed_committee_and_observer_bootstrap_reserves_every_non_global_source_impl() {
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
@@ -13995,16 +13870,6 @@ mod tests {
     }
     #[test]
     fn generated_network_configs_parse_for_legal_roster_scales() {
-        let worker = std::thread::Builder::new()
-            .name("generated-npos-ingress-capacity-regression".to_owned())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(generated_network_configs_parse_for_legal_roster_scales_impl)
-            .expect("spawn generated NPoS ingress-capacity regression");
-        if let Err(panic) = worker.join() {
-            std::panic::resume_unwind(panic);
-        }
-    }
-    fn generated_network_configs_parse_for_legal_roster_scales_impl() {
         init_instruction_registry();
         for validator_count in [4, 7, MAX_VALIDATORS_PER_HEIGHT] {
             let expected_chain = format!("scaled-npos-roster-{validator_count}");
@@ -14038,6 +13903,30 @@ mod tests {
             assert_eq!(network.max_validator_capacity, validator_count);
             validate_planned_validator_capacity(&actual, validator_count)
                 .expect("native participant connection capacity");
+            let genesis = network.genesis();
+            let source_limit =
+                iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap().intrinsic;
+            let registration_counts = genesis
+                .0
+                .external_transactions()
+                .map(|transaction| match transaction.instructions() {
+                    Executable::Instructions(instructions) => instructions
+                        .iter()
+                        .filter(|instruction| {
+                            instruction.as_any().is::<RegisterPublicLaneValidator>()
+                        })
+                        .count(),
+                    _ => panic!("genesis must contain instruction batches"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(registration_counts.iter().sum::<usize>(), validator_count);
+            assert!(
+                registration_counts.iter().all(|count| {
+                    *count <= usize::try_from(source_limit.max_transcripts).unwrap()
+                        && *count <= usize::try_from(source_limit.max_deltas).unwrap()
+                }),
+                "signed batch packing must preserve the per-entry stake transfer bound"
+            );
         }
     }
     #[test]
@@ -15775,13 +15664,23 @@ mod tests {
             remove_env_var(super::PROGRAM_IROHAD_FEATURES_ENV);
         }
     }
-    fn build_with_isolated_permit(builder: NetworkBuilder) -> Network {
+    pub(super) fn build_with_isolated_permit(builder: NetworkBuilder) -> Network {
         let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let dir = tempdir().expect("permit dir");
         let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         builder.build()
+    }
+    pub(super) fn build_blocking_with_isolated_permit(
+        builder: NetworkBuilder,
+    ) -> (Network, Runtime) {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+        builder.build_blocking()
     }
     async fn build_with_isolated_permit_async(builder: NetworkBuilder) -> Network {
         let _guard = lock_env_guard_async(&NETWORK_PERMIT_ENV_GUARD).await;
@@ -16053,27 +15952,19 @@ mod tests {
             !expected.0.has_results(),
             "the custom-genesis helper must defer transaction execution"
         );
-        let produced_instructions = collect_non_handshake_instructions(&produced);
-        let expected_instructions = collect_non_handshake_instructions(&expected);
-        assert!(
-            produced_instructions.starts_with(&expected_instructions),
-            "custom genesis builder should dictate the initial non-handshake instruction sequence"
+        // Canonical parameters are consolidated ahead of ordinary instructions;
+        // the custom builder still owns the exact ordinary instruction sequence.
+        let produced_instructions = collect_non_parameter_instructions(&produced);
+        let expected_instructions = collect_non_parameter_instructions(&expected);
+        assert_eq!(
+            produced_instructions, expected_instructions,
+            "custom genesis builder must preserve every ordinary instruction in order"
         );
         let expected_handshake = consensus_handshake_parameter(&network.consensus_profile);
         assert_exactly_one_consensus_handshake(&produced, &expected_handshake);
     }
     #[test]
     fn observer_aware_custom_genesis_keeps_observers_out_of_voting_roster() {
-        let worker = std::thread::Builder::new()
-            .name("observer-aware-custom-genesis-regression".to_owned())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(observer_aware_custom_genesis_keeps_observers_out_of_voting_roster_impl)
-            .expect("spawn observer-aware custom-genesis regression");
-        if let Err(panic) = worker.join() {
-            std::panic::resume_unwind(panic);
-        }
-    }
-    fn observer_aware_custom_genesis_keeps_observers_out_of_voting_roster_impl() {
         init_instruction_registry();
         let seen_topology: Arc<Mutex<Option<UniqueVec<PeerId>>>> = Arc::new(Mutex::new(None));
         let seen_observers: Arc<Mutex<Option<Vec<PeerId>>>> = Arc::new(Mutex::new(None));
@@ -16154,16 +16045,6 @@ mod tests {
     }
     #[test]
     fn committee_validator_custom_genesis_keeps_exact_global_voting_roster() {
-        let worker = std::thread::Builder::new()
-            .name("committee-validator-custom-genesis-regression".to_owned())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(committee_validator_custom_genesis_keeps_exact_global_voting_roster_impl)
-            .expect("spawn committee-validator custom-genesis regression");
-        if let Err(panic) = worker.join() {
-            std::panic::resume_unwind(panic);
-        }
-    }
-    fn committee_validator_custom_genesis_keeps_exact_global_voting_roster_impl() {
         init_instruction_registry();
         let seen_entries: Arc<Mutex<Option<Vec<GenesisTopologyEntry>>>> =
             Arc::new(Mutex::new(None));
@@ -16273,148 +16154,14 @@ mod tests {
             },
         ));
     }
-    #[test]
-    fn with_genesis_block_respects_npos_consensus_mode() {
-        let worker = std::thread::Builder::new()
-            .name("deferred-custom-genesis-regression".to_owned())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                init_instruction_registry();
-        let mut npos = SumeragiNposParameters::default();
-        npos.epoch_seed = CryptoHash::new(chain_id().into_inner().as_bytes()).into();
-        npos.max_validators = 4;
-        let network = build_with_isolated_permit(
-            NetworkBuilder::new()
-                .with_peers(4)
-                .with_npos_consensus()
-                .without_npos_genesis_bootstrap()
-                .with_genesis_block(|topology, topology_entries| {
-                    let domain_id = DomainId::try_new("deferred_genesis", "universal")
-                        .expect("deferred-genesis domain id");
-                    let asset_definition_id = AssetDefinitionId::derive_from_components(
-                        domain_id.clone(),
-                        "private_credit".parse().expect("asset name"),
-                    );
-                    let scoped_asset_id = AssetId::with_scope(
-                        asset_definition_id.clone(),
-                        ALICE_ID.clone(),
-                        AssetBalanceScope::Dataspace(DataSpaceId::new(1)),
-                    );
-                    unexecuted_genesis_factory_with_post_topology(
-                        Vec::new(),
-                        vec![
-                            vec![
-                                Register::domain(Domain::new(domain_id.clone())).into(),
-                                Register::asset_definition(AssetDefinition::numeric(
-                                    asset_definition_id,
-                                    "deferred private credit".to_owned(),
-                                    AssetBalancePolicy::DataspaceRestricted,
-                                    Some(domain_id),
-                                ))
-                                .into(),
-                            ],
-                            vec![Mint::asset_quantity(1_u32, scoped_asset_id).into()],
-                        ],
-                        topology,
-                        topology_entries,
-                    )
-                })
-                .with_genesis_instruction(InstructionBox::from(SetParameter::new(
-                    Parameter::Custom(npos.into_custom_parameter()),
-                )))
-                .with_config_layer(|layer| {
-                    let mut universal = Table::new();
-                    universal.insert("alias".into(), Value::String("universal".to_owned()));
-                    universal.insert("id".into(), Value::Integer(0));
-                    universal.insert("fault_tolerance".into(), Value::Integer(1));
-                    let mut private = Table::new();
-                    private.insert("alias".into(), Value::String("private-1".to_owned()));
-                    private.insert("id".into(), Value::Integer(1));
-                    private.insert(
-                        "manifest_hash".into(),
-                        Value::String(format!("01{}", "00".repeat(31))),
-                    );
-                    private.insert("fault_tolerance".into(), Value::Integer(1));
-                    let mut lane0 = Table::new();
-                    lane0.insert("index".into(), Value::Integer(0));
-                    lane0.insert("alias".into(), Value::String("global".to_owned()));
-                    lane0.insert("dataspace".into(), Value::String("universal".to_owned()));
-                    lane0.insert("visibility".into(), Value::String("public".to_owned()));
-                    lane0.insert("metadata".into(), Value::Table(Table::new()));
-                    let mut lane1 = Table::new();
-                    lane1.insert("index".into(), Value::Integer(1));
-                    lane1.insert("alias".into(), Value::String("private".to_owned()));
-                    lane1.insert("dataspace".into(), Value::String("private-1".to_owned()));
-                    lane1.insert("visibility".into(), Value::String("restricted".to_owned()));
-                    lane1.insert("metadata".into(), Value::Table(Table::new()));
-                    layer
-                        .write(["nexus", "lane_count"], 2_i64)
-                        .write(
-                            ["nexus", "dataspace_catalog"],
-                            Value::Array(vec![Value::Table(universal), Value::Table(private)]),
-                        )
-                        .write(
-                            ["nexus", "lane_catalog"],
-                            Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]),
-                        )
-                        .write(["nexus", "staking", "max_validators"], 4_i64)
-                        .write(["zk", "stark", "enabled"], true);
-                }),
-        );
-        let profile = network.consensus_bootstrap_profile();
-        assert_eq!(
-            profile.mode_tag, NPOS_TAG,
-            "custom genesis should preserve requested NPoS consensus mode",
-        );
-        let produced = network.genesis();
-        assert!(
-            produced.0.output_results().all(|result| result.as_ref().is_ok()),
-            "deferred dataspace-scoped genesis transactions must pre-execute under the final catalog"
-        );
-        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
-        let peer = network.peers().first().expect("network should have peers");
-        let actual = resolve_actual_config(peer, &config_layers)
-            .expect("deferred-genesis final config should resolve");
-        let expected_policies = iroha_core::da::proof_policy_bundle(&actual.nexus.lane_config);
-        assert_eq!(
-            produced.0.da_proof_policies(),
-            Some(&expected_policies),
-            "custom genesis must bind the builder-resolved multi-lane DA policy"
-        );
-        assert_eq!(
-            produced
-                .0
-                .header()
-                .confidential_features()
-                .and_then(|digest| digest.zk_policy_hash),
-            Some(iroha_core::state::compute_genesis_confidential_policy_hash(
-                &actual.zk
-            )),
-            "custom genesis must bind the builder-resolved confidential policy"
-        );
-        assert_exactly_one_consensus_handshake(&produced, &consensus_handshake_parameter(&profile));
-        let metadata = consensus_handshake_metadata(&produced)
-            .expect("custom genesis should include consensus handshake metadata");
-                assert_eq!(
-                    metadata.mode,
-                    SumeragiConsensusMode::Npos,
-                    "custom genesis handshake metadata should advertise NPoS mode",
-                );
-            })
-            .expect("spawn deferred custom-genesis regression worker");
-        if let Err(payload) = worker.join() {
-            std::panic::resume_unwind(payload);
-        }
-    }
+    include!("genesis_lane_policy_tests.rs");
+
     #[test]
     fn custom_genesis_binds_active_validator_projection_instead_of_normal_preview() {
         init_instruction_registry();
         const SEED: &str = "custom-genesis-active-validator-projection";
         fn fixture_stake_asset_id() -> AssetDefinitionId {
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("nexus", "universal").expect("stake domain"),
-                "xor".parse().expect("stake asset name"),
-            )
+            SumeragiNposParameters::default().xor_asset_definition_id
         }
         fn fixture_escrow_id() -> AccountId {
             AccountId::new(
@@ -16469,7 +16216,7 @@ mod tests {
         let baseline_context_hash = baseline
             .consensus_bootstrap_profile()
             .params
-            .v2_context
+            .sumeragi_context
             .nexus_amx_context_hash;
         drop(baseline);
         let network = build_with_isolated_permit(
@@ -16499,14 +16246,12 @@ mod tests {
                         .next()
                         .expect("custom genesis topology must contain a peer")
                         .clone();
-                    let nexus_domain =
-                        DomainId::try_new("nexus", "universal").expect("nexus domain");
+
                     let stake_asset_id = fixture_stake_asset_id();
                     let escrow = fixture_escrow_id();
                     let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
                     let bootstrap = vec![
                         Register::account(Account::new(escrow.clone())).into(),
-                        Register::domain(Domain::new(nexus_domain)).into(),
                         Register::asset_definition(
                             AssetDefinition::new(
                                 stake_asset_id.clone(),
@@ -16554,12 +16299,15 @@ mod tests {
         let metadata = consensus_handshake_metadata(&genesis)
             .expect("custom genesis must contain canonical consensus metadata");
         assert_eq!(
-            metadata.sumeragi_v2,
-            network.consensus_bootstrap_profile().params.v2_context,
+            metadata.sumeragi_context,
+            network
+                .consensus_bootstrap_profile()
+                .params
+                .sumeragi_context,
             "cached custom genesis must carry the final runtime profile"
         );
         assert_ne!(
-            metadata.sumeragi_v2.nexus_amx_context_hash, baseline_context_hash,
+            metadata.sumeragi_context.nexus_amx_context_hash, baseline_context_hash,
             "custom active-validator state must replace the normal preview projection"
         );
         assert!(

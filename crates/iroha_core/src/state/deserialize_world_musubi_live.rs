@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 #[path = "deserialize_world_musubi_revisions.rs"]
 mod revisions;

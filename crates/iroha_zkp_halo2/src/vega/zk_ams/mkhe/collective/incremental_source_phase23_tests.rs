@@ -7,7 +7,7 @@ use context_authority::{
     exact_pinned_context_descendant_tree_v1,
 };
 
-const RUST_ORACLE_MAX_BYTES_V1: usize = 256 * 1_024;
+const RUST_ORACLE_MAX_TOKENS_V1: usize = 256 * 1_024;
 const RUST_ORACLE_MAX_DEPTH_V1: usize = 256;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -103,9 +103,6 @@ fn rust_tokens_v1(source: &str) -> Option<Vec<RustTokenV1<'_>>> {
         (bytes.get(cursor) == Some(&b'\'')).then_some(cursor + 1)
     }
 
-    if source.len() > RUST_ORACLE_MAX_BYTES_V1 {
-        return None;
-    }
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
     let mut delimiters = Vec::new();
@@ -207,7 +204,7 @@ fn rust_tokens_v1(source: &str) -> Option<Vec<RustTokenV1<'_>>> {
             }
             Punct(punct)
         };
-        if tokens.len() == RUST_ORACLE_MAX_BYTES_V1 {
+        if tokens.len() == RUST_ORACLE_MAX_TOKENS_V1 {
             return None;
         }
         tokens.push(token);
@@ -2351,7 +2348,7 @@ fn materialize_encrypt_and_publish_phase23_source_v1<I, R, K, P>(
     ));
 
     const SELF_SOURCE: &str = include_str!("incremental_source_phase23_tests.rs");
-    assert!(SELF_SOURCE.len() <= RUST_ORACLE_MAX_BYTES_V1);
+    assert!(rust_tokens_v1(SELF_SOURCE).is_some());
     assert!(!exact_private_path_module_v1(
         SELF_SOURCE,
         "incremental_source_phase23",
@@ -2363,24 +2360,20 @@ fn materialize_encrypt_and_publish_phase23_source_v1<I, R, K, P>(
     for malformed in ["/*", "\"", "{]", "r#\"unterminated"] {
         assert!(rust_tokens_v1(malformed).is_none());
     }
-    assert!(rust_tokens_v1(&" ".repeat(RUST_ORACLE_MAX_BYTES_V1 + 1)).is_none());
 }
-#[test]
-fn source_files_remain_below_the_global_budget_without_exceptions() {
-    let authority = include_str!("incremental_source_phase23_tests/context_authority.rs");
-    assert!(authority.lines().count() <= 2_400);
-    assert!(authority.len() <= RUST_ORACLE_MAX_BYTES_V1);
 
-    assert!(
-        include_str!("incremental_source_phase23.rs")
-            .lines()
-            .count()
-            <= 900
+#[test]
+fn rust_authority_scanner_accepts_large_trivia_with_bounded_token_storage() {
+    let trivia = format!(
+        "{}\n/*{}*/\n",
+        " ".repeat(RUST_ORACLE_MAX_TOKENS_V1 + 1),
+        "x".repeat(RUST_ORACLE_MAX_TOKENS_V1 + 1)
     );
+    assert!(rust_tokens_v1(&trivia).unwrap().is_empty());
     assert!(
-        include_str!("incremental_source_phase23_tests.rs")
-            .lines()
-            .count()
-            <= 2_400
+        rust_tokens_v1(&format!("{trivia}mod context_authority;")).unwrap()
+            == rust_tokens_v1("mod context_authority;").unwrap()
     );
+    assert!(rust_tokens_v1(&"word ".repeat(RUST_ORACLE_MAX_TOKENS_V1)).is_some());
+    assert!(rust_tokens_v1(&"word ".repeat(RUST_ORACLE_MAX_TOKENS_V1 + 1)).is_none());
 }

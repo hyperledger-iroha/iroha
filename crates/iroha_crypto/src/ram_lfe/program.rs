@@ -163,24 +163,25 @@ impl HiddenRamFheProgram {
                 "hidden program frame exceeds byte limit",
             ));
         }
-        let view = norito::core::from_bytes_view(bytes).map_err(codec_error)?;
+        let view = norito::core::from_bytes_view(bytes).map_err(|error| codec_error(&error))?;
         if view.schema() != norito::schema::identity::frame_hash::<Self>() {
-            return Err(codec_error(norito::core::Error::SchemaMismatch));
+            return Err(codec_error(&norito::core::Error::SchemaMismatch));
         }
         // This owner's canonical frame is byte-aligned after the 40-byte header.
         // Reject surplus leading padding before the private allocation is made.
         if bytes.len() != norito::core::Header::SIZE + view.as_bytes().len() {
-            return Err(codec_error(norito::core::Error::LengthMismatch));
+            return Err(codec_error(&norito::core::Error::LengthMismatch));
         }
         if view.flags() != norito::core::default_encode_flags() {
-            return Err(codec_error(norito::core::Error::NonCanonicalEncoding));
+            return Err(codec_error(&norito::core::Error::NonCanonicalEncoding));
         }
         // `decode_unchecked` omits only schema checking, performed above. Norito
         // still scopes decode limits/flags and enforces full payload consumption.
         let DecodedOwner(program) = view
             .decode_unchecked::<DecodedOwner>()
-            .map_err(codec_error)?;
-        norito::verify_exact_canonical_frame(&program, bytes).map_err(codec_error)?;
+            .map_err(|error| codec_error(&error))?;
+        norito::verify_exact_canonical_frame(&program, bytes)
+            .map_err(|error| codec_error(&error))?;
         Ok(program)
     }
 
@@ -347,10 +348,13 @@ fn decode_payload(bytes: &[u8]) -> Result<(HiddenRamFheProgram, usize), norito::
         + usize::from(BFV_PROGRAM_REGISTER_COUNT_U16 + BFV_PROGRAM_STATE_WIDTH_U16)
             * std::mem::size_of::<u16>();
     norito::core::reserve_decode_allocation(allocation)?;
-    let mut builder = HiddenRamFheProgram::builder().map_err(program_codec_error)?;
+    let mut builder =
+        HiddenRamFheProgram::builder().map_err(|error| program_codec_error(&error))?;
     builder.tape.bytes[..length].copy_from_slice(private);
     builder.tape.count = length / BYTES_PER_INSTRUCTION;
-    let program = builder.finish().map_err(program_codec_error)?;
+    let program = builder
+        .finish()
+        .map_err(|error| program_codec_error(&error))?;
     norito::core::note_payload_access(bytes, bytes.len());
     Ok((program, bytes.len()))
 }
@@ -406,10 +410,10 @@ fn decode_instruction(slot: &[u8]) -> Result<HiddenRamFheInstruction, norito::co
     Ok(value)
 }
 
-fn codec_error(error: norito::core::Error) -> RamLfeError {
+fn codec_error(error: &norito::core::Error) -> RamLfeError {
     RamLfeError::TranscriptEncoding(error.to_string())
 }
-fn program_codec_error(error: RamLfeError) -> norito::core::Error {
+fn program_codec_error(error: &RamLfeError) -> norito::core::Error {
     norito::core::Error::Message(error.to_string())
 }
 
@@ -430,13 +434,14 @@ impl FromStr for HiddenRamFheProgram {
                 "hidden program requires bounded non-empty lowercase hex",
             ));
         }
-        norito::core::reserve_decode_allocation(literal.len() / 2).map_err(codec_error)?;
+        norito::core::reserve_decode_allocation(literal.len() / 2)
+            .map_err(|error| codec_error(&error))?;
         let mut bytes = Zeroizing::new(Vec::new());
         bytes
             .try_reserve_exact(literal.len() / 2)
             .map_err(|_| invalid_program_error("hidden program byte allocation failed"))?;
         bytes.resize(literal.len() / 2, 0);
-        hex::decode_to_slice(literal, &mut *bytes)
+        hex::decode_to_slice(literal, &mut bytes)
             .map_err(|_| invalid_program_error("hidden program hexadecimal decode failed"))?;
         Self::from_bytes(&bytes)
     }
@@ -481,12 +486,12 @@ pub(super) fn from_public_test_parts(
     version: u8,
     register_count: u16,
     memory_lane_count: u16,
-    instructions: Vec<HiddenRamFheInstruction>,
+    instructions: &[HiddenRamFheInstruction],
 ) -> HiddenRamFheProgram {
     let mut bytes = Zeroizing::new(vec![0; instructions.len() * BYTES_PER_INSTRUCTION]);
     for (slot, instruction) in bytes
         .chunks_exact_mut(BYTES_PER_INSTRUCTION)
-        .zip(&instructions)
+        .zip(instructions)
     {
         let words = Zeroizing::new(instruction_fields(*instruction));
         for (word, target) in words.iter().zip(slot.chunks_exact_mut(8)) {

@@ -2,11 +2,13 @@
 #![allow(clippy::doc_markdown)]
 /// Low-cardinality metrics for the Musubi V1 package ecosystem.
 pub mod musubi;
+/// Per-instance Sumeragi consensus series (`sumeragi_*{lane}`).
+pub mod sumeragi;
 use crate::privacy::PrivacyDrainSnapshot;
 use core::convert::{TryFrom, TryInto};
 use iroha_config::{kura::FsyncMode, parameters::actual::ConfidentialGas as ActualConfidentialGas};
 #[cfg(test)]
-use iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
+use iroha_data_model::block::consensus::PERMISSIONED_TAG;
 use iroha_data_model::{
     da::types::DaRentQuote,
     nexus::MAX_ACTIVE_EXECUTION_LANES,
@@ -35,9 +37,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
     vec::Vec,
 };
-/// Type for reporting amount of dropped messages for sumeragi
-pub type DroppedMessagesCounter = IntCounter;
-/// Type for reporting view change index of current round
+/// Type of the view of the global Sumeragi instance's current round (`view_changes`).
 pub type ViewChangesGauge = GenericGauge<AtomicU64>;
 /// Bounded labels shared by the canonical SoraFS gateway active-request metrics.
 #[derive(Debug, Clone, Copy)]
@@ -1186,44 +1186,11 @@ impl From<StackSettingsSnapshot> for StackStatus {
 pub const GOVERNANCE_MANIFEST_RECENT_CAP: usize = 8;
 const REJECTION_RECENT_WINDOW_MS: u64 = 5 * 60 * 1_000;
 const REJECTION_RECENT_EVENT_CAP: usize = 1_024;
+/// Live node-wide consensus observations. Per-instance progress is exposed
+/// by `/v1/sumeragi/status` and the lane-labelled Sumeragi metrics.
 fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
-    let commit_qc_height = metrics.sumeragi_commit_qc_height.get();
-    let commit_qc_view = metrics.sumeragi_commit_qc_view.get();
-    let highest_qc_height = metrics
-        .sumeragi_highest_qc_height
-        .get()
-        .max(commit_qc_height);
-    let raw_locked_qc_height = metrics.sumeragi_locked_qc_height.get();
-    let raw_locked_qc_view = metrics.sumeragi_locked_qc_view.get();
-    let (locked_qc_height, locked_qc_view) = if commit_qc_height > 0
-        && (raw_locked_qc_height, raw_locked_qc_view) < (commit_qc_height, commit_qc_view)
-    {
-        (commit_qc_height, commit_qc_view)
-    } else {
-        (raw_locked_qc_height, raw_locked_qc_view)
-    };
     SumeragiConsensusStatus {
         mode_tag: metrics.sumeragi_mode_tag(),
-        leader_index: metrics.sumeragi_leader_index.get(),
-        highest_qc_height,
-        locked_qc_height,
-        locked_qc_view,
-        commit_signatures_present: metrics.sumeragi_commit_signatures_present.get(),
-        commit_signatures_counted: metrics.sumeragi_commit_signatures_counted.get(),
-        commit_signatures_set_b: metrics.sumeragi_commit_signatures_set_b.get(),
-        commit_signatures_required: metrics.sumeragi_commit_signatures_required.get(),
-        commit_qc_height,
-        commit_qc_view,
-        commit_qc_epoch: metrics.sumeragi_commit_qc_epoch.get(),
-        commit_qc_signatures_total: metrics.sumeragi_commit_qc_signatures_total.get(),
-        commit_qc_validator_set_len: metrics.sumeragi_commit_qc_validator_set_len.get(),
-        block_created_dropped_by_lock_total: metrics
-            .sumeragi_block_created_dropped_by_lock_total
-            .get(),
-        block_created_hint_mismatch_total: metrics.sumeragi_block_created_hint_mismatch_total.get(),
-        block_created_proposal_mismatch_total: metrics
-            .sumeragi_block_created_proposal_mismatch_total
-            .get(),
         tx_queue_depth: metrics.sumeragi_tx_queue_depth.get(),
         tx_queue_capacity: metrics.sumeragi_tx_queue_capacity.get(),
         tx_queue_retained_bytes: metrics.sumeragi_tx_queue_retained_bytes.get(),
@@ -1233,30 +1200,6 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         tx_queue_saturated_by_bytes: metrics.sumeragi_tx_queue_saturated_by_bytes.get() != 0,
         tx_queue_saturated_by_age: metrics.sumeragi_tx_queue_saturated_by_age.get() != 0,
         tx_queue_oldest_queued_age_ms: metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(),
-        epoch_length_blocks: metrics.sumeragi_epoch_length_blocks.get(),
-        epoch_commit_deadline_offset: metrics.sumeragi_epoch_commit_deadline_offset.get(),
-        epoch_reveal_deadline_offset: metrics.sumeragi_epoch_reveal_deadline_offset.get(),
-        view_change_proof_accepted_total: metrics
-            .sumeragi_view_change_proof_total
-            .with_label_values(&["accepted"])
-            .get(),
-        view_change_proof_stale_total: metrics
-            .sumeragi_view_change_proof_total
-            .with_label_values(&["stale"])
-            .get(),
-        view_change_proof_rejected_total: metrics
-            .sumeragi_view_change_proof_total
-            .with_label_values(&["rejected"])
-            .get(),
-        view_change_suggest_total: metrics.sumeragi_view_change_suggest_total.get(),
-        view_change_install_total: metrics.sumeragi_view_change_install_total.get(),
-        prf_epoch_seed: metrics
-            .sumeragi_prf_epoch_seed_hex
-            .read()
-            .expect("sumeragi PRF seed lock poisoned")
-            .clone(),
-        prf_height: metrics.sumeragi_prf_height.get(),
-        prf_view: metrics.sumeragi_prf_view.get(),
         lane_governance_sealed_total: u32::try_from(
             metrics
                 .nexus_lane_governance_sealed_total
@@ -1459,11 +1402,7 @@ impl Metrics {
             last_rejection_at_ms: value.last_rejection_at_ms(),
             txs_rejected_recent_5m: value.txs_rejected_recent_5m(now_ms),
             uptime: Uptime(Duration::from_millis(value.uptime_since_genesis_ms.get())),
-            view_changes: value
-                .view_changes
-                .get()
-                .try_into()
-                .expect("INTERNAL BUG: Number of view changes exceeds u32::MAX"),
+            view_changes: u32::try_from(value.view_changes.get()).unwrap_or(u32::MAX),
             queue_size: value.queue_size.get(),
             queue_queued: value.queue_queued.get(),
             queue_inflight: value.queue_inflight.get(),
@@ -1488,11 +1427,10 @@ impl Metrics {
             dataspace_catalog: collect_dataspace_catalog(value),
             nexus: None,
             tx_gossip: TxGossipSnapshot {
-                caps: value
+                caps: *value
                     .tx_gossip_caps
                     .read()
-                    .expect("tx gossip caps cache poisoned")
-                    .clone(),
+                    .expect("tx gossip caps cache poisoned"),
                 targets: value
                     .tx_gossip_status
                     .read()
@@ -1519,21 +1457,18 @@ macro_rules! metric_field_type {
     (histogram_vec ($($args:tt)*)) => { HistogramVec };
     (histogram_vec_with_buckets ($($args:tt)*)) => { HistogramVec };
     (view_changes_gauge ($($args:tt)*)) => { ViewChangesGauge };
-    (dropped_messages_counter ($($args:tt)*)) => { DroppedMessagesCounter };
     (raw ($type:ty)) => { $type };
 }
 const EXPONENTIAL_LATENCY_BUCKETS_MS: [f64; 12] = [
     1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1_024.0, 2_048.0,
 ];
-const MISSING_BLOCK_DWELL_BUCKETS_MS: [f64; 10] = [
-    50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 20_000.0, 60_000.0,
+const SUMERAGI_LATENCY_BUCKETS_MS: [f64; 15] = [
+    10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 750.0, 1_000.0, 1_500.0, 2_000.0, 3_000.0, 5_000.0,
+    10_000.0, 30_000.0, 60_000.0,
 ];
 macro_rules! new_catalog_metric {
     ($metrics:ident, $field:ident, view_changes_gauge ()) => {
         $metrics.gauge(stringify!($field))
-    };
-    ($metrics:ident, $field:ident, dropped_messages_counter ()) => {
-        $metrics.int_counter(stringify!($field))
     };
     ($metrics:ident, $field:ident, $kind:ident ()) => {
         $metrics.$kind(stringify!($field))
@@ -1592,20 +1527,6 @@ fields {
     pub last_block_committed_at_ms: gauge();
     /// Millisecond UNIX timestamp when this peer last processed a committed non-empty block.
     pub last_non_empty_block_committed_at_ms: gauge();
-    /// Block commit time trends
-    pub commit_time_ms: histogram_with_buckets(
-        prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid"),
-    );
-    /// Slot duration histogram for NX-18 1-second finality tracking (milliseconds).
-    pub slot_duration_ms: histogram_with_buckets(
-        vec![
-                        250.0, 500.0, 750.0, 1_000.0, 1_250.0, 1_500.0, 2_000.0, 3_000.0,
-                    ],
-    );
-    /// Latest observed slot duration in milliseconds (mirrors NX-18 gauge requirement).
-    pub slot_duration_ms_latest: gauge();
-    /// Rolling data-availability quorum ratio (0–1) derived from slot outcomes.
-    pub da_quorum_ratio: float_gauge();
     /// Number of currently connected peers excluding the reporting peer
     pub connected_peers: gauge();
     /// Cumulative peer churn events observed by the node (`connected` / `disconnected`).
@@ -1640,7 +1561,7 @@ fields {
     pub isi: int_counter_vec(&["type", "success_status"]);
     /// Query handle time Histogram
     pub isi_times: histogram_vec(&["type"]);
-    /// Number of view changes in the current round
+    /// View changes at the current height of the global Sumeragi instance (its current view).
     pub view_changes: view_changes_gauge();
     /// Number of transactions tracked by the queue (queued + in-flight)
     pub queue_size: gauge();
@@ -1917,28 +1838,53 @@ fields {
     pub sumeragi_tx_queue_saturated_by_age: gauge();
     /// Oldest queued transaction age in milliseconds observed by consensus.
     pub sumeragi_tx_queue_oldest_queued_age_ms: gauge();
-    /// Total pending blocks tracked by consensus.
-    pub sumeragi_pending_blocks_total: gauge();
-    /// Pending blocks that currently gate proposals/view changes.
-    pub sumeragi_pending_blocks_blocking: gauge();
-    /// Commit inflight queue depth (inflight + queued commit work).
-    pub sumeragi_commit_inflight_queue_depth: gauge();
-    /// Outstanding missing-block requests observed locally.
-    pub sumeragi_missing_block_requests: gauge();
-    /// Age in milliseconds of the oldest missing-block request.
-    pub sumeragi_missing_block_oldest_ms: gauge();
-    /// Retry window for missing-block fetches in milliseconds.
-    pub sumeragi_missing_block_retry_window_ms: gauge();
-    /// Dwell time from first QC arrival until payload observation (milliseconds).
-    pub sumeragi_missing_block_dwell_ms: histogram_with_buckets(
-        MISSING_BLOCK_DWELL_BUCKETS_MS.to_vec(),
+    /// Sumeragi: height of the current round, per instance (`lane` = `global` or the lane id).
+    pub sumeragi_round_height: gauge_vec(&["lane"]);
+    /// Sumeragi: view of the current round (views advanced at the current height).
+    pub sumeragi_round_view: gauge_vec(&["lane"]);
+    /// Sumeragi: routing stage (0, 1 or 2) of the current round.
+    pub sumeragi_round_stage: gauge_vec(&["lane"]);
+    /// Sumeragi: pacemaker level of the current view.
+    pub sumeragi_pacemaker_level: gauge_vec(&["lane"]);
+    /// Sumeragi: pacemaker start level of the current height.
+    pub sumeragi_pacemaker_start_level: gauge_vec(&["lane"]);
+    /// Sumeragi: current retransmission interval `t_retx` in milliseconds.
+    pub sumeragi_retransmit_interval_ms: gauge_vec(&["lane"]);
+    /// Sumeragi: committed tip height.
+    pub sumeragi_committed_height: gauge_vec(&["lane"]);
+    /// Sumeragi: highest applied height.
+    pub sumeragi_applied_height: gauge_vec(&["lane"]);
+    /// Sumeragi: 1 while committed but waiting for the next height's configuration.
+    pub sumeragi_awaiting_configuration: gauge_vec(&["lane"]);
+    /// Sumeragi: 1 while a configured key signs at the current height.
+    pub sumeragi_signer_present: gauge_vec(&["lane"]);
+    /// Sumeragi: 1 while the node is not a signing member at its height.
+    pub sumeragi_abstaining: gauge_vec(&["lane"]);
+    /// Sumeragi: 1 while some key is unanchored (the node probes and signs nothing with it).
+    pub sumeragi_unanchored: gauge_vec(&["lane"]);
+    /// Sumeragi: 1 for the reason the instance halted, 0 for every other reason.
+    pub sumeragi_halted: gauge_vec(&["lane", "reason"]);
+    /// Sumeragi: blocks the instance committed (rounds and catch-up).
+    pub sumeragi_commits_total: int_counter_vec(&["lane"]);
+    /// Sumeragi: views the instance advanced at its heights.
+    pub sumeragi_view_changes_total: int_counter_vec(&["lane"]);
+    /// Sumeragi: timeout votes the node signed (one per height and view).
+    pub sumeragi_timeout_votes_total: int_counter_vec(&["lane"]);
+    /// Sumeragi: catch-up and block-body fetch requests (labels: kind=sync|body).
+    pub sumeragi_fetch_requests_total: int_counter_vec(&["lane", "kind"]);
+    /// Sumeragi: messages, held effects and serving requests dropped by the driver bounds
+    /// (labels: queue=ingress|held|serve).
+    pub sumeragi_dropped_total: int_counter_vec(&["lane", "queue"]);
+    /// Sumeragi: milliseconds from the first execution of a proposal at a height to its CommitQC.
+    pub sumeragi_commit_latency_ms: histogram_vec_with_buckets(
+        SUMERAGI_LATENCY_BUCKETS_MS.to_vec(),
+                    &["lane"],
     );
-    /// Epoch length in blocks for NPoS scheduling (0 when not applicable).
-    pub sumeragi_epoch_length_blocks: gauge();
-    /// Commit window deadline offset from epoch start, in blocks.
-    pub sumeragi_epoch_commit_deadline_offset: gauge();
-    /// Reveal window deadline offset from epoch start, in blocks.
-    pub sumeragi_epoch_reveal_deadline_offset: gauge();
+    /// Sumeragi: milliseconds from a block's CommitQC to its durable apply.
+    pub sumeragi_apply_latency_ms: histogram_vec_with_buckets(
+        SUMERAGI_LATENCY_BUCKETS_MS.to_vec(),
+                    &["lane"],
+    );
     /// Tiered state: entries retained in the hot tier after the latest snapshot.
     pub state_tiered_hot_entries: gauge();
     /// Tiered state: deterministic key-plus-value hot budget weight after the latest snapshot.
@@ -2173,188 +2119,10 @@ fields {
     pub kaigi_relay_health_reports_by_domain_total: int_counter_vec(&["domain"]);
     /// Kaigi: current relay health state labelled by domain and relay.
     pub kaigi_relay_health_state: int_gauge_vec(&["domain", "relay"]);
-    /// Number of sumeragi dropped messages
-    pub dropped_messages: dropped_messages_counter();
-    /// Number of dropped Sumeragi block messages due to full channel (consensus path)
-    pub sumeragi_dropped_block_messages_total: int_counter();
-    /// Number of dropped Sumeragi control messages due to full channel (control path)
-    pub sumeragi_dropped_control_messages_total: int_counter();
-    /// Sumeragi: votes accepted at proxy tail (cumulative)
-    pub sumeragi_tail_votes_total: int_counter();
-    /// Sumeragi: votes sent grouped by phase (prevote, precommit, available)
-    pub sumeragi_votes_sent_total: int_counter_vec(&["phase"]);
-    /// Sumeragi: votes received grouped by phase (prevote, precommit, available)
-    pub sumeragi_votes_received_total: int_counter_vec(&["phase"]);
-    /// Sumeragi: quorum certificates sent grouped by kind (prevote, precommit, available)
-    pub sumeragi_qc_sent_total: int_counter_vec(&["kind"]);
-    /// Sumeragi: quorum certificates received grouped by kind (prevote, precommit, available)
-    pub sumeragi_qc_received_total: int_counter_vec(&["kind"]);
-    /// Sumeragi: QC validation errors grouped by reason.
-    pub sumeragi_qc_validation_errors_total: int_counter_vec(&["reason"]);
-    /// Sumeragi: validation rejects before voting grouped by reason.
-    pub sumeragi_validation_reject_total: int_counter_vec(&["reason"]);
-    /// Sumeragi: validation gate last reject reason code (0=none, 1=stateless, 2=execution, 3=prev_hash, 4=prev_height, 5=topology).
-    pub sumeragi_validation_reject_last_reason: gauge();
-    /// Sumeragi: block height of the last validation gate reject (0 when unset).
-    pub sumeragi_validation_reject_last_height: gauge();
-    /// Sumeragi: view of the last validation gate reject (0 when unset).
-    pub sumeragi_validation_reject_last_view: gauge();
-    /// Sumeragi: unix timestamp (ms) of the last validation gate reject (0 when unset).
-    pub sumeragi_validation_reject_last_timestamp_ms: gauge();
-    /// Sumeragi: block-sync ShareBlocks dropped because no request was tracked.
-    pub sumeragi_block_sync_share_blocks_unsolicited_total: int_counter();
-    /// Sumeragi: consensus message drops/deferrals grouped by kind, outcome, and reason.
-    pub sumeragi_consensus_message_handling_total: int_counter_vec(&["kind", "outcome", "reason"],);
-    /// Sumeragi: commit-conflict detections (cumulative).
-    pub sumeragi_commit_conflict_detected_total: int_counter();
-    /// Sumeragi: view-change triggers grouped by cause.
-    pub sumeragi_view_change_cause_total: int_counter_vec(&["cause"]);
-    /// Sumeragi: unix timestamp (ms) of the last view-change trigger grouped by cause.
-    pub sumeragi_view_change_cause_last_timestamp_ms: gauge_vec(&["cause"]);
-    /// Sumeragi: QC signer tallies grouped by phase and whether the signer was counted for quorum.
-    pub sumeragi_qc_signer_counts: histogram_vec_with_buckets(
-        prometheus::linear_buckets(0.0, 1.0, 64).expect("valid signer buckets"),
-                    &["phase", "kind"],
-    );
-    /// Sumeragi: invalid-signature drops grouped by message kind and throttle outcome.
-    pub sumeragi_invalid_signature_total: int_counter_vec(&["kind", "outcome"]);
-    /// Sumeragi: widen-before-rotate events (cumulative)
-    pub sumeragi_widen_before_rotate_total: int_counter();
-    /// Sumeragi: view-change suggestions emitted (cumulative)
-    pub sumeragi_view_change_suggest_total: int_counter();
-    /// Sumeragi: view-change installs observed (cumulative)
-    pub sumeragi_view_change_install_total: int_counter();
-    /// Sumeragi: view-change rotations after no proposal observed before cutoff (cumulative).
-    pub sumeragi_proposal_gap_total: int_counter();
-    /// Sumeragi: view-change proof counters grouped by outcome (accepted|stale|rejected)
-    pub sumeragi_view_change_proof_total: gauge_vec(&["outcome"]);
-    /// Sumeragi: Witness-availability QC assembled (cumulative)
-    pub sumeragi_wa_qc_assembled_total: int_counter();
-    /// Sumeragi: certificate size histogram (signatures per committed block)
-    pub sumeragi_cert_size: histogram_with_buckets(
-        prometheus::exponential_buckets(1.0, 1.8, 10).expect("valid"),
-    );
-    /// Sumeragi: signatures present on the block during commit validation (all roles).
-    pub sumeragi_commit_signatures_present: gauge();
-    /// Sumeragi: signatures counted toward the commit quorum (leader + validators in Set A/B).
-    pub sumeragi_commit_signatures_counted: gauge();
-    /// Sumeragi: Set B validator signatures present on the block during commit validation.
-    pub sumeragi_commit_signatures_set_b: gauge();
-    /// Sumeragi: required commit quorum size for the active topology.
-    pub sumeragi_commit_signatures_required: gauge();
-    /// Sumeragi: latest commit certificate height (best-effort).
-    pub sumeragi_commit_qc_height: gauge();
-    /// Sumeragi: latest commit certificate view (best-effort).
-    pub sumeragi_commit_qc_view: gauge();
-    /// Sumeragi: latest commit certificate epoch (best-effort).
-    pub sumeragi_commit_qc_epoch: gauge();
-    /// Sumeragi: signatures attached to the latest commit certificate.
-    pub sumeragi_commit_qc_signatures_total: gauge();
-    /// Sumeragi: validator-set size for the latest commit certificate.
-    pub sumeragi_commit_qc_validator_set_len: gauge();
-    /// Sumeragi: BlockCreated drops due to locked QC gate (sanity check failures).
-    pub sumeragi_block_created_dropped_by_lock_total: int_counter();
-    /// Sumeragi: BlockCreated rejects due to hint mismatch (height/view/parent).
-    pub sumeragi_block_created_hint_mismatch_total: int_counter();
-    /// Sumeragi: BlockCreated rejects due to proposal mismatch (header/payload).
-    pub sumeragi_block_created_proposal_mismatch_total: int_counter();
-    /// Nexus: lane relay envelopes rejected during validation (grouped by error kind).
-    pub lane_relay_invalid_total: int_counter_vec(&["error"]);
-    /// Sumeragi: latest PRF epoch seed (hex) observed for collector selection.
-    pub sumeragi_prf_epoch_seed_hex: raw(Arc<RwLock<Option<String>>>);
     /// Snapshot of Halo2 verifier configuration for status endpoints.
     pub halo2_status: raw(Arc<RwLock<Halo2Status>>);
-    /// Sumeragi: height associated with the current PRF context.
-    pub sumeragi_prf_height: gauge();
-    /// Sumeragi: view associated with the current PRF context.
-    pub sumeragi_prf_view: gauge();
-    /// Sumeragi: deterministic membership view hash (truncated to u64).
-    pub sumeragi_membership_view_hash: gauge();
-    /// Sumeragi: height associated with the membership view hash snapshot.
-    pub sumeragi_membership_height: gauge();
-    /// Sumeragi: view associated with the membership view hash snapshot.
-    pub sumeragi_membership_view: gauge();
-    /// Sumeragi: epoch associated with the membership view hash snapshot.
-    pub sumeragi_membership_epoch: gauge();
     /// Sumeragi: frozen runtime mode tag; empty until the reducer owns a context.
     pub sumeragi_mode_tag: raw(Arc<RwLock<String>>);
-    /// Sumeragi: current leader index (gauge)
-    pub sumeragi_leader_index: gauge();
-    /// Sumeragi: highest QC height (gauge)
-    pub sumeragi_highest_qc_height: gauge();
-    /// Sumeragi: locked QC height (gauge)
-    pub sumeragi_locked_qc_height: gauge();
-    /// Sumeragi: locked QC view (gauge)
-    pub sumeragi_locked_qc_view: gauge();
-    /// Sumeragi: NEW_VIEW receipts per (height, view)
-    pub sumeragi_new_view_receipts_by_hv: gauge_vec(&["height", "view"]);
-    /// Sumeragi: NEW_VIEW messages published (cumulative)
-    pub sumeragi_new_view_publish_total: int_counter();
-    /// Sumeragi: NEW_VIEW messages received and accepted (cumulative)
-    pub sumeragi_new_view_recv_total: int_counter();
-    /// Sumeragi: NEW_VIEW messages dropped because HighestQC is behind the locked QC
-    pub sumeragi_new_view_dropped_by_lock_total: int_counter();
-    /// Sumeragi: missing-block fetch planning outcomes (labels: outcome=requested|backoff|no_targets)
-    pub sumeragi_missing_block_fetch_total: int_counter_vec(&["outcome"]);
-    /// Sumeragi: missing-block fetch target kind (labels: target=signers|topology)
-    pub sumeragi_missing_block_fetch_target_total: int_counter_vec(&["target"]);
-    /// Sumeragi: elapsed milliseconds from first-seen certificate to missing-block fetch request
-    pub sumeragi_missing_block_fetch_dwell_ms: histogram_with_buckets(
-        prometheus::exponential_buckets(10.0, 2.0, 8).expect("inputs are valid"),
-    );
-    /// Sumeragi: number of peers targeted when requesting a missing block payload
-    pub sumeragi_missing_block_fetch_targets: histogram_with_buckets(
-        prometheus::exponential_buckets(1.0, 2.0, 6).expect("inputs are valid"),
-    );
-    /// Block-sync QCs quarantined because local context was missing.
-    pub blocksync_qc_quarantine_total: int_counter();
-    /// Quarantined block-sync QCs that were revalidated successfully.
-    pub blocksync_qc_revalidated_total: int_counter();
-    /// Block-sync QCs dropped permanently after bounded revalidation.
-    pub blocksync_qc_final_drop_total: int_counter_vec(&["reason"]);
-    /// QCs deferred due to missing payload.
-    pub qc_deferred_missing_payload_total: int_counter();
-    /// Deferred QCs resolved after payload arrival.
-    pub qc_deferred_resolved_total: int_counter();
-    /// Deferred QCs expired after bounded retries.
-    pub qc_deferred_expired_total: int_counter();
-    /// Consensus deferrals caused by empty commit topology.
-    pub consensus_empty_commit_topology_defer_total: int_counter();
-    /// Empty-topology recoveries escalated to forced view changes.
-    pub consensus_empty_commit_topology_escalation_total: int_counter();
-    /// Recovery state-machine transitions labeled by state.
-    pub consensus_recovery_state_transitions_total: int_counter_vec(&["state"]);
-    /// Height-scoped missing-block recoveries escalated via deterministic hard cap.
-    pub consensus_missing_block_height_escalation_total: int_counter();
-    /// Sidecar mismatches quarantined in fail-closed mode.
-    pub consensus_sidecar_quarantine_total: int_counter();
-    /// Sidecar mismatches final-dropped after retry/TTL bounds.
-    pub consensus_sidecar_final_drop_total: int_counter();
-    /// Range-pull escalation attempts triggered by dependency recovery.
-    pub blocksync_range_pull_escalation_total: int_counter();
-    /// Successful range-pull recoveries.
-    pub blocksync_range_pull_success_total: int_counter();
-    /// Range-pull recoveries that expired without progress.
-    pub blocksync_range_pull_failure_total: int_counter();
-    /// Stuck-round duration observed while recovery waits for dependencies.
-    pub consensus_recovery_stuck_round_seconds: histogram_with_buckets(
-        prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid"),
-    );
-    /// Sumeragi QC assembly latency histogram (milliseconds) labeled by `kind`
-    pub sumeragi_qc_assembly_latency_ms: histogram_vec_with_buckets(
-        vec![
-                        5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
-                    ],
-                    &["kind"],
-    );
-    /// Sumeragi QC last observed latency gauge (milliseconds) labeled by `kind`
-    pub sumeragi_qc_last_latency_ms: gauge_vec(&["kind"]);
-    /// Sumeragi: kura persistence failures grouped by outcome (retry|abort)
-    pub sumeragi_kura_store_failures_total: int_counter_vec(&["outcome"]);
-    /// Sumeragi: last recorded kura persistence retry attempt (gauge)
-    pub sumeragi_kura_store_last_retry_attempt: gauge();
-    /// Sumeragi: last recorded kura persistence retry backoff in milliseconds (gauge)
-    pub sumeragi_kura_store_last_retry_backoff_ms: gauge();
     /// State commit: state_write_lock wait duration (ms) during block commit.
     pub state_commit_write_lock_wait_ms: histogram_with_buckets(
         vec![
@@ -2368,27 +2136,6 @@ fields {
                         1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
                         10000.0,
                     ],
-    );
-    /// Sumeragi: membership mismatches detected (labeled by peer, height, view)
-    pub sumeragi_membership_mismatch_total: int_counter_vec(&["peer", "height", "view"],);
-    /// Sumeragi: peers currently flagged for membership mismatch (0/1 gauge)
-    pub sumeragi_membership_mismatch_active: gauge_vec(&["peer"]);
-    /// Sumeragi: post attempts to peers (cumulative), labeled by peer id
-    pub sumeragi_post_to_peer_total: int_counter_vec(&["peer"]);
-    /// Sumeragi: background-post enqueued tasks (cumulative), labeled by kind {Post,Broadcast}
-    pub sumeragi_bg_post_enqueued_total: int_counter_vec(&["kind"]);
-    /// Sumeragi: background-post queue full events (cumulative), labeled by kind
-    pub sumeragi_bg_post_overflow_total: int_counter_vec(&["kind"]);
-    /// Sumeragi: background-post drops when the worker queue is unavailable (cumulative), labeled by kind
-    pub sumeragi_bg_post_drop_total: int_counter_vec(&["kind"]);
-    /// Sumeragi: background-post queue depth (approximate, global)
-    pub sumeragi_bg_post_queue_depth: gauge();
-    /// Sumeragi: background-post queue depth by peer (collector), labeled by peer id
-    pub sumeragi_bg_post_queue_depth_by_peer: gauge_vec(&["peer"]);
-    /// Sumeragi: background-post age histogram (milliseconds) labeled by kind {Post,Broadcast}
-    pub sumeragi_bg_post_age_ms: histogram_vec_with_buckets(
-        prometheus::exponential_buckets(1.0, 2.0, 12).expect("inputs are valid"),
-                    &["kind"],
     );
     /// Number of p2p dropped post messages (bounded mode)
     pub p2p_dropped_posts: gauge();
@@ -2412,8 +2159,6 @@ fields {
     pub p2p_post_overflow_total: gauge();
     /// Per-topic breakdown for post channel overflows
     pub p2p_post_overflow_by_topic: gauge_vec(&["priority", "topic"]);
-    /// Consensus ingress drops grouped by topic and reason.
-    pub consensus_ingress_drop_total: int_counter_vec(&["topic", "reason"]);
     /// Number of DNS interval-based refresh cycles performed.
     pub p2p_dns_refresh_total: gauge();
     /// Number of DNS TTL-based refresh cycles performed.
@@ -2462,13 +2207,11 @@ fields {
     pub tx_gossip_dropped_total: int_counter_vec(&["plane", "dataspace", "reason"]);
     /// Latest transaction gossip target count (labels: plane, dataspace).
     pub tx_gossip_targets: gauge_vec(&["plane", "dataspace"]);
-    /// Fallback attempts for restricted gossip (labels: plane, dataspace, surface).
-    pub tx_gossip_fallback_total: int_counter_vec(&["plane", "dataspace", "surface"],);
     /// Configured frame cap for transaction gossip (bytes).
     pub tx_gossip_frame_cap_bytes: gauge();
     /// Configured cap for public gossip targets (0 = broadcast).
     pub tx_gossip_public_target_cap: gauge();
-    /// Configured cap for restricted gossip targets (0 = commit topology).
+    /// Configured cap for restricted gossip targets (0 = all authorized native lane validators).
     pub tx_gossip_restricted_target_cap: gauge();
     /// Public-plane target reshuffle interval in milliseconds.
     pub tx_gossip_public_target_reshuffle_ms: gauge();
@@ -2476,10 +2219,6 @@ fields {
     pub tx_gossip_restricted_target_reshuffle_ms: gauge();
     /// Whether unknown dataspaces are dropped (1) or routed via the restricted plane (0).
     pub tx_gossip_drop_unknown_dataspace: gauge();
-    /// Restricted gossip fallback policy (0 = drop, 1 = public overlay).
-    pub tx_gossip_restricted_fallback: gauge();
-    /// Configured policy for restricted payloads when only the public overlay is available (0 = refuse, 1 = forward).
-    pub tx_gossip_restricted_public_policy: gauge();
     /// Cached status snapshot for the latest gossip target selections.
     pub tx_gossip_status: raw(Arc<RwLock<Vec<TxGossipStatus>>>);
     /// Cached configured caps for status exports.
@@ -2709,12 +2448,6 @@ fields {
     pub block_fee_total_units: gauge();
     /// Scale associated with `block_fee_total_units`
     pub block_fee_total_scale: gauge();
-    /// Merge ledger: total entries appended (cumulative)
-    pub merge_ledger_entries_total: int_counter();
-    /// Merge ledger: latest committed epoch id
-    pub merge_ledger_latest_epoch: gauge();
-    /// Merge ledger: latest global state root hex snapshot
-    pub merge_ledger_latest_root_hex: raw(Arc<RwLock<Option<String>>>);
     /// Torii: filter expression depth by endpoint
     pub torii_filter_depth: histogram_vec_with_buckets(
         vec![1.0, 2.0, 3.0, 5.0, 8.0, 13.0],
@@ -3531,8 +3264,7 @@ prefix (metrics) {
 }
 construct {
     [txs isi isi_times tx_amounts block_height block_height_non_empty last_commit_time_ms
-        last_block_committed_at_ms last_non_empty_block_committed_at_ms commit_time_ms
-        slot_duration_ms slot_duration_ms_latest da_quorum_ratio sm_syscall_total]
+        last_block_committed_at_ms last_non_empty_block_committed_at_ms sm_syscall_total]
     {
         for (kind, mode) in [
             ("hash", "-"),
@@ -3669,12 +3401,8 @@ construct {
         sumeragi_tx_queue_retained_bytes sumeragi_tx_queue_max_retained_bytes
         sumeragi_tx_queue_saturated sumeragi_tx_queue_saturated_by_count
         sumeragi_tx_queue_saturated_by_bytes sumeragi_tx_queue_saturated_by_age
-        sumeragi_tx_queue_oldest_queued_age_ms sumeragi_pending_blocks_total
-        sumeragi_pending_blocks_blocking sumeragi_commit_inflight_queue_depth]
-    [sumeragi_missing_block_requests sumeragi_missing_block_oldest_ms
-        sumeragi_missing_block_retry_window_ms sumeragi_missing_block_dwell_ms
-        sumeragi_epoch_length_blocks sumeragi_epoch_commit_deadline_offset
-        sumeragi_epoch_reveal_deadline_offset state_tiered_hot_entries state_tiered_hot_bytes
+        sumeragi_tx_queue_oldest_queued_age_ms]
+    [state_tiered_hot_entries state_tiered_hot_bytes
         state_tiered_cold_entries state_tiered_cold_bytes state_tiered_cold_reused_entries
         state_tiered_cold_reused_bytes state_tiered_hot_promotions state_tiered_hot_demotions
         state_tiered_hot_budget_overflow_keys state_tiered_hot_budget_overflow_bytes
@@ -3904,20 +3632,18 @@ construct {
         kaigi_relay_manifest_hop_count kaigi_relay_failover_total
         kaigi_relay_failovers_by_domain_total kaigi_relay_failover_hop_count
         kaigi_relay_health_reports_total kaigi_relay_health_reports_by_domain_total
-        kaigi_relay_health_state dropped_messages sumeragi_dropped_block_messages_total
-        sumeragi_dropped_control_messages_total p2p_dropped_posts p2p_dropped_broadcasts
+        kaigi_relay_health_state p2p_dropped_posts p2p_dropped_broadcasts
         p2p_subscriber_queue_full_total p2p_subscriber_queue_full_by_topic_total
         p2p_subscriber_unrouted_total p2p_subscriber_unrouted_by_topic_total p2p_handshake_failures
         p2p_low_post_throttled_total p2p_low_broadcast_throttled_total p2p_post_overflow_total
-        p2p_post_overflow_by_topic consensus_ingress_drop_total p2p_dns_refresh_total
-        p2p_dns_ttl_refresh_total p2p_dns_resolution_fail_total p2p_dns_reconnect_success_total
-        p2p_backoff_scheduled_total p2p_deferred_send_enqueued_total
-        p2p_deferred_send_dropped_total p2p_session_reconnect_total p2p_connect_retry_seconds
-        p2p_accept_throttled_total p2p_accept_bucket_evictions_total p2p_accept_buckets_current
-        p2p_accept_prefix_cache_total p2p_accept_throttle_decisions_total
-        p2p_incoming_cap_reject_total p2p_total_cap_reject_total
-        p2p_preauth_source_cap_reject_total p2p_trust_score
-        p2p_trust_penalties_total p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total]
+        p2p_post_overflow_by_topic p2p_dns_refresh_total p2p_dns_ttl_refresh_total
+        p2p_dns_resolution_fail_total p2p_dns_reconnect_success_total p2p_backoff_scheduled_total
+        p2p_deferred_send_enqueued_total p2p_deferred_send_dropped_total p2p_session_reconnect_total
+        p2p_connect_retry_seconds p2p_accept_throttled_total p2p_accept_bucket_evictions_total
+        p2p_accept_buckets_current p2p_accept_prefix_cache_total p2p_accept_throttle_decisions_total
+        p2p_incoming_cap_reject_total p2p_total_cap_reject_total p2p_preauth_source_cap_reject_total
+        p2p_trust_score p2p_trust_penalties_total p2p_trust_decay_ticks_total
+        p2p_trust_gossip_skipped_total]
     {
         for direction in ["send", "recv"] {
             for reason in ["peer_capability_off", "local_capability_off"] {
@@ -3926,147 +3652,48 @@ construct {
         }
     }
     [p2p_scion_inbound_total p2p_scion_outbound_total
-        tx_gossip_sent_total tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
-        tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
+        tx_gossip_sent_total tx_gossip_dropped_total tx_gossip_targets tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
         tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
-        tx_gossip_drop_unknown_dataspace tx_gossip_restricted_fallback
-        tx_gossip_restricted_public_policy]
+        tx_gossip_drop_unknown_dataspace ]
     {
         let tx_gossip_status = Arc::new(RwLock::new(Vec::new()));
         let tx_gossip_caps = Arc::new(RwLock::new(TxGossipCaps::default()));
     }
-    [sumeragi_new_view_receipts_by_hv sumeragi_post_to_peer_total
-        sumeragi_bg_post_enqueued_total sumeragi_bg_post_overflow_total sumeragi_bg_post_drop_total
-        sumeragi_bg_post_queue_depth sumeragi_bg_post_queue_depth_by_peer sumeragi_bg_post_age_ms
-        sumeragi_new_view_publish_total sumeragi_new_view_recv_total
-        sumeragi_new_view_dropped_by_lock_total sumeragi_commit_conflict_detected_total
-        sumeragi_missing_block_fetch_total sumeragi_missing_block_fetch_target_total
-        sumeragi_missing_block_fetch_dwell_ms sumeragi_missing_block_fetch_targets
-        blocksync_qc_quarantine_total blocksync_qc_revalidated_total blocksync_qc_final_drop_total
-        qc_deferred_missing_payload_total qc_deferred_resolved_total qc_deferred_expired_total
-        consensus_empty_commit_topology_defer_total
-        consensus_empty_commit_topology_escalation_total consensus_recovery_state_transitions_total
-        consensus_missing_block_height_escalation_total consensus_sidecar_quarantine_total
-        consensus_sidecar_final_drop_total blocksync_range_pull_escalation_total
-        blocksync_range_pull_success_total blocksync_range_pull_failure_total
-        consensus_recovery_stuck_round_seconds]
-    [sumeragi_qc_assembly_latency_ms
-        sumeragi_qc_last_latency_ms sumeragi_kura_store_failures_total
-        sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
-        state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms
-        sumeragi_membership_mismatch_total
-        sumeragi_membership_mismatch_active sumeragi_highest_qc_height sumeragi_locked_qc_height
-        sumeragi_locked_qc_view]
+    [state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms ]
     [p2p_queue_depth p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum
         p2p_handshake_ms_count p2p_handshake_error_total p2p_frame_cap_violations_total]
         // Runtime upgrade metrics
     [runtime_upgrade_events_total runtime_upgrade_provenance_rejections_total
         runtime_abi_version]
-        // Sumeragi consensus counters/histogram
-    [sumeragi_tail_votes_total sumeragi_votes_sent_total sumeragi_votes_received_total
-        sumeragi_qc_sent_total sumeragi_qc_received_total sumeragi_qc_validation_errors_total
-        sumeragi_qc_signer_counts sumeragi_invalid_signature_total]
+        // Sumeragi instances: the global instance and every lane instance (`lane` label)
+    [sumeragi_round_height sumeragi_round_view sumeragi_round_stage sumeragi_pacemaker_level
+        sumeragi_pacemaker_start_level sumeragi_retransmit_interval_ms sumeragi_committed_height
+        sumeragi_applied_height sumeragi_awaiting_configuration sumeragi_signer_present
+        sumeragi_abstaining sumeragi_unanchored sumeragi_halted sumeragi_commits_total
+        sumeragi_view_changes_total sumeragi_timeout_votes_total sumeragi_fetch_requests_total
+        sumeragi_dropped_total sumeragi_commit_latency_ms sumeragi_apply_latency_ms]
+    []
     {
-        for label in ["prevote", "precommit", "available"] {
-            let _ = sumeragi_votes_sent_total.with_label_values(&[label]);
-            let _ = sumeragi_votes_received_total.with_label_values(&[label]);
-            let _ = sumeragi_qc_sent_total.with_label_values(&[label]);
-            let _ = sumeragi_qc_received_total.with_label_values(&[label]);
-        }
-        for label in [
-            "bitmap_length_mismatch",
-            "signer_out_of_bounds",
-            "insufficient_signers",
-            "missing_votes",
-            "duplicate_signers",
-            "aggregate_mismatch",
-            "subject_mismatch",
-            "invalid_signature",
-        ] {
-            let _ = sumeragi_qc_validation_errors_total.with_label_values(&[label]);
-        }
-    }
-    [sumeragi_validation_reject_total]
-    {
-        for label in [
-            "stateless",
-            "execution",
-            "prev_hash",
-            "prev_height",
-            "topology",
-        ] {
-            let _ = sumeragi_validation_reject_total.with_label_values(&[label]);
-        }
-    }
-    [sumeragi_validation_reject_last_reason sumeragi_validation_reject_last_height
-        sumeragi_validation_reject_last_view sumeragi_validation_reject_last_timestamp_ms]
-    [sumeragi_block_sync_share_blocks_unsolicited_total
-        sumeragi_consensus_message_handling_total sumeragi_view_change_cause_total
-        sumeragi_view_change_cause_last_timestamp_ms]
-    {
-        for label in [
-            "commit_failure",
-            "quorum_timeout",
-            "stake_quorum_timeout",
-            "censorship_evidence",
-            "missing_payload",
-            "missing_qc",
-            "validation_reject",
-        ] {
-            let _ = sumeragi_view_change_cause_total.with_label_values(&[label]);
-            let _ = sumeragi_view_change_cause_last_timestamp_ms.with_label_values(&[label]);
-        }
-        for phase in ["prevote", "precommit", "available", "commit"] {
-            for kind in ["present", "counted"] {
-                let _ = sumeragi_qc_signer_counts.with_label_values(&[phase, kind]);
-            }
-        }
-        for outcome in ["logged", "throttled"] {
-            let _ = sumeragi_invalid_signature_total.with_label_values(&["vote", outcome]);
-        }
-    }
-    [sumeragi_widen_before_rotate_total sumeragi_view_change_suggest_total
-        sumeragi_view_change_install_total sumeragi_proposal_gap_total
-        sumeragi_view_change_proof_total]
-    {
-        for label in ["accepted", "stale", "rejected"] {
-            let _ = sumeragi_view_change_proof_total.with_label_values(&[label]);
-        }
-    }
-    [sumeragi_wa_qc_assembled_total sumeragi_cert_size sumeragi_commit_signatures_present
-        sumeragi_commit_signatures_counted sumeragi_commit_signatures_set_b
-        sumeragi_commit_signatures_required sumeragi_commit_qc_height sumeragi_commit_qc_view
-        sumeragi_commit_qc_epoch sumeragi_commit_qc_signatures_total
-        sumeragi_commit_qc_validator_set_len
-        sumeragi_block_created_dropped_by_lock_total sumeragi_block_created_hint_mismatch_total
-        sumeragi_block_created_proposal_mismatch_total lane_relay_invalid_total
-        ]
-    {
-        let sumeragi_prf_epoch_seed_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let sumeragi_mode_tag: Arc<RwLock<String>> =
             Arc::new(RwLock::new(String::new()));
         let halo2_status: Arc<RwLock<Halo2Status>> = Arc::new(RwLock::new(Halo2Status::default()));
     }
-    [sumeragi_prf_height sumeragi_prf_view sumeragi_membership_view_hash
-        sumeragi_membership_height sumeragi_membership_view sumeragi_membership_epoch
-        sumeragi_leader_index ivm_cache_hits ivm_cache_misses ivm_cache_evictions
-        ivm_cache_decoded_streams ivm_cache_decoded_ops_total ivm_cache_decode_failures
-        ivm_cache_decode_time_ns_total ivm_cache_memory_resident_bytes
+    [ivm_cache_hits ivm_cache_misses
+        ivm_cache_evictions ivm_cache_decoded_streams ivm_cache_decoded_ops_total
+        ivm_cache_decode_failures ivm_cache_decode_time_ns_total ivm_cache_memory_resident_bytes
         ivm_cache_memory_active_bytes ivm_cache_memory_retained_bytes
         ivm_cache_memory_shared_reclaimable_bytes ivm_cache_memory_shared_borrowed_bytes
         ivm_cache_memory_shared_evicted_live_bytes ivm_cache_memory_unclassified_retained_bytes
         ivm_cache_memory_peak_bytes ivm_cache_memory_unmeasured_owners
         ivm_execution_memory_reserved_bytes ivm_execution_memory_peak_bytes
-        ivm_execution_memory_limit_bytes
-        ivm_register_max_index ivm_register_unique_count
+        ivm_execution_memory_limit_bytes ivm_register_max_index ivm_register_unique_count
         merkle_root_gpu_total merkle_root_cpu_total ivm_memory_commit_ms
         ivm_memory_commit_dirty_chunks ivm_merkle_rebuild_total
         ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices pipeline_dag_edges
         pipeline_conflict_rate_bps pipeline_access_set_source_total pipeline_comp_count
         pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
         pipeline_layer_avg_width pipeline_layer_median_width nexus_config_diff_total
-        nexus_lane_configured_total
-        nexus_lane_governance_sealed nexus_lane_governance_sealed_total
+        nexus_lane_configured_total nexus_lane_governance_sealed nexus_lane_governance_sealed_total
         nexus_lane_lifecycle_applied_total]
     {
         let nexus_lane_governance_sealed_aliases = Arc::new(RwLock::new(Vec::new()));
@@ -4093,14 +3720,9 @@ construct {
         pipeline_overlay_count pipeline_overlay_instructions pipeline_overlay_bytes
         pipeline_quarantine_classified pipeline_quarantine_overflow pipeline_quarantine_executed
         pipeline_stage_ms pipeline_detached_prepared pipeline_detached_merged
-        pipeline_detached_fallback pipeline_detached_fallback_reason merge_ledger_entries_total
-        merge_ledger_latest_epoch]
-    {
-        let merge_ledger_latest_root_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
-
+        pipeline_detached_fallback pipeline_detached_fallback_reason]
         // Torii metrics (app-facing): record filter complexity, match counts,
         // scan latencies, and approximate stream sizes. Labeled by endpoint.
-    }
     [torii_filter_depth torii_filter_match_count torii_scan_ms torii_stream_rows
         torii_lane_admission_latency_seconds torii_route_stage_latency_seconds
         torii_attachment_reject_total torii_attachment_sanitize_ms torii_zk_prover_attachment_bytes
@@ -4307,8 +3929,7 @@ suffix {
 }
 initialize (metrics) {
     [txs block_height block_height_non_empty last_commit_time_ms last_block_committed_at_ms
-        last_non_empty_block_committed_at_ms commit_time_ms slot_duration_ms
-        slot_duration_ms_latest da_quorum_ratio connected_peers p2p_peer_churn_total
+        last_non_empty_block_committed_at_ms connected_peers p2p_peer_churn_total
         uptime_since_genesis_ms domains accounts tx_amounts isi isi_times view_changes queue_size
         queue_queued queue_inflight kura_fsync_enabled kura_fsync_failures_total
         kura_fsync_latency_ms sm_syscall_total sm_syscall_failures_total sm_openssl_preview
@@ -4344,34 +3965,34 @@ initialize (metrics) {
         sumeragi_tx_queue_max_retained_bytes sumeragi_tx_queue_saturated
         sumeragi_tx_queue_saturated_by_count sumeragi_tx_queue_saturated_by_bytes
         sumeragi_tx_queue_saturated_by_age sumeragi_tx_queue_oldest_queued_age_ms
-        sumeragi_pending_blocks_total sumeragi_pending_blocks_blocking
-        sumeragi_commit_inflight_queue_depth sumeragi_missing_block_requests
-        sumeragi_missing_block_oldest_ms sumeragi_missing_block_retry_window_ms
-        sumeragi_missing_block_dwell_ms sumeragi_epoch_length_blocks
-        sumeragi_epoch_commit_deadline_offset sumeragi_epoch_reveal_deadline_offset
-        state_tiered_hot_entries state_tiered_hot_bytes state_tiered_cold_entries
-        state_tiered_cold_bytes state_tiered_cold_reused_entries state_tiered_cold_reused_bytes
-        state_tiered_hot_promotions state_tiered_hot_demotions state_tiered_hot_budget_overflow_keys
-        state_tiered_hot_budget_overflow_bytes state_tiered_last_snapshot_index
-        storage_budget_bytes_used storage_budget_bytes_limit storage_budget_exceeded_total
-        storage_da_cache_total storage_da_churn_bytes_total governance_proposals_status
-        governance_parliament_transitions_total governance_parliament_no_result_total
-        governance_parliament_attempts_by_status governance_parliament_attempts_by_stage
-        governance_citizens_total
+        sumeragi_round_height sumeragi_round_view sumeragi_round_stage sumeragi_pacemaker_level
+        sumeragi_pacemaker_start_level sumeragi_retransmit_interval_ms sumeragi_committed_height
+        sumeragi_applied_height sumeragi_awaiting_configuration sumeragi_signer_present
+        sumeragi_abstaining sumeragi_unanchored sumeragi_halted sumeragi_commits_total
+        sumeragi_view_changes_total sumeragi_timeout_votes_total sumeragi_fetch_requests_total
+        sumeragi_dropped_total sumeragi_commit_latency_ms sumeragi_apply_latency_ms
+        state_tiered_hot_entries state_tiered_hot_bytes
+        state_tiered_cold_entries state_tiered_cold_bytes state_tiered_cold_reused_entries
+        state_tiered_cold_reused_bytes state_tiered_hot_promotions state_tiered_hot_demotions
+        state_tiered_hot_budget_overflow_keys state_tiered_hot_budget_overflow_bytes
+        state_tiered_last_snapshot_index storage_budget_bytes_used storage_budget_bytes_limit
+        storage_budget_exceeded_total storage_da_cache_total storage_da_churn_bytes_total
+        governance_proposals_status governance_parliament_transitions_total
+        governance_parliament_no_result_total governance_parliament_attempts_by_status
+        governance_parliament_attempts_by_stage governance_citizens_total
         governance_protected_namespace_total governance_manifest_admission_total
         governance_manifest_quorum_total governance_manifest_hook_total
         governance_manifest_activations_total governance_bond_events_total
         governance_manifest_recent taikai_ingest_snapshots taikai_ingest_snapshot_order
         da_receipt_metric_lanes recent_rejection_events last_rejection_at_ms
-        taikai_alias_rotation_snapshots taikai_alias_rotation_snapshot_order
-        alias_usage_total iso_reference_status
-        iso_reference_age_seconds iso_reference_records iso_reference_refresh_interval_secs
-        fraud_psp_assessments_total fraud_psp_missing_assessment_total
-        fraud_psp_invalid_metadata_total fraud_psp_attestation_total fraud_psp_latency_ms
-        fraud_psp_score_bps fraud_psp_outcome_mismatch_total streaming_hpke_rekeys_total
-        streaming_gck_rotations_total streaming_quic_datagrams_sent_total
-        streaming_quic_datagrams_dropped_total streaming_fec_parity_current
-        streaming_feedback_timeout_total
+        taikai_alias_rotation_snapshots taikai_alias_rotation_snapshot_order alias_usage_total
+        iso_reference_status iso_reference_age_seconds iso_reference_records
+        iso_reference_refresh_interval_secs fraud_psp_assessments_total
+        fraud_psp_missing_assessment_total fraud_psp_invalid_metadata_total
+        fraud_psp_attestation_total fraud_psp_latency_ms fraud_psp_score_bps
+        fraud_psp_outcome_mismatch_total streaming_hpke_rekeys_total streaming_gck_rotations_total
+        streaming_quic_datagrams_sent_total streaming_quic_datagrams_dropped_total
+        streaming_fec_parity_current streaming_feedback_timeout_total
         streaming_privacy_redaction_fail_total streaming_encode_latency_ms
         streaming_encode_audio_jitter_ms streaming_encode_audio_max_jitter_ms
         streaming_encode_dropped_layers_total streaming_decode_buffer_ms
@@ -4389,71 +4010,27 @@ initialize (metrics) {
         kaigi_relay_manifest_updates_by_domain_total kaigi_relay_manifest_hop_count
         kaigi_relay_failover_total kaigi_relay_failovers_by_domain_total
         kaigi_relay_failover_hop_count kaigi_relay_health_reports_total
-        kaigi_relay_health_reports_by_domain_total kaigi_relay_health_state dropped_messages
-        sumeragi_dropped_block_messages_total sumeragi_dropped_control_messages_total
-        p2p_dropped_posts p2p_dropped_broadcasts p2p_subscriber_queue_full_total
+        kaigi_relay_health_reports_by_domain_total kaigi_relay_health_state p2p_dropped_posts
+        p2p_dropped_broadcasts p2p_subscriber_queue_full_total
         p2p_subscriber_queue_full_by_topic_total p2p_subscriber_unrouted_total
         p2p_subscriber_unrouted_by_topic_total p2p_handshake_failures p2p_low_post_throttled_total
         p2p_low_broadcast_throttled_total p2p_post_overflow_total p2p_post_overflow_by_topic
-        consensus_ingress_drop_total p2p_dns_refresh_total p2p_dns_ttl_refresh_total
-        p2p_dns_resolution_fail_total p2p_dns_reconnect_success_total p2p_backoff_scheduled_total
-        p2p_deferred_send_enqueued_total p2p_deferred_send_dropped_total
-        p2p_session_reconnect_total p2p_connect_retry_seconds p2p_accept_throttled_total
-        p2p_accept_bucket_evictions_total p2p_accept_buckets_current p2p_accept_prefix_cache_total
-        p2p_accept_throttle_decisions_total p2p_incoming_cap_reject_total
-        p2p_total_cap_reject_total p2p_preauth_source_cap_reject_total p2p_trust_score
-        p2p_trust_penalties_total
-        p2p_trust_decay_ticks_total p2p_trust_gossip_skipped_total tx_gossip_sent_total
-        tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
-        tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
-        tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
-        tx_gossip_drop_unknown_dataspace tx_gossip_restricted_fallback
-        tx_gossip_restricted_public_policy tx_gossip_status tx_gossip_caps p2p_scion_inbound_total
-        p2p_scion_outbound_total p2p_queue_depth
+        p2p_dns_refresh_total p2p_dns_ttl_refresh_total p2p_dns_resolution_fail_total
+        p2p_dns_reconnect_success_total p2p_backoff_scheduled_total p2p_deferred_send_enqueued_total
+        p2p_deferred_send_dropped_total p2p_session_reconnect_total p2p_connect_retry_seconds
+        p2p_accept_throttled_total p2p_accept_bucket_evictions_total p2p_accept_buckets_current
+        p2p_accept_prefix_cache_total p2p_accept_throttle_decisions_total
+        p2p_incoming_cap_reject_total p2p_total_cap_reject_total p2p_preauth_source_cap_reject_total
+        p2p_trust_score p2p_trust_penalties_total p2p_trust_decay_ticks_total
+        p2p_trust_gossip_skipped_total tx_gossip_sent_total tx_gossip_dropped_total
+        tx_gossip_targets tx_gossip_frame_cap_bytes tx_gossip_public_target_cap
+        tx_gossip_restricted_target_cap tx_gossip_public_target_reshuffle_ms
+        tx_gossip_restricted_target_reshuffle_ms tx_gossip_drop_unknown_dataspace tx_gossip_status
+        tx_gossip_caps p2p_scion_inbound_total p2p_scion_outbound_total p2p_queue_depth
         p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum p2p_handshake_ms_count
         p2p_handshake_error_total p2p_frame_cap_violations_total runtime_upgrade_events_total
-        runtime_upgrade_provenance_rejections_total runtime_abi_version sumeragi_tail_votes_total
-        sumeragi_votes_sent_total sumeragi_votes_received_total sumeragi_qc_sent_total
-        sumeragi_qc_received_total sumeragi_qc_validation_errors_total
-        sumeragi_validation_reject_total sumeragi_validation_reject_last_reason
-        sumeragi_validation_reject_last_height sumeragi_validation_reject_last_view
-        sumeragi_validation_reject_last_timestamp_ms sumeragi_block_sync_share_blocks_unsolicited_total
-        sumeragi_consensus_message_handling_total sumeragi_view_change_cause_total
-        sumeragi_view_change_cause_last_timestamp_ms sumeragi_qc_signer_counts
-        sumeragi_invalid_signature_total sumeragi_widen_before_rotate_total
-        sumeragi_view_change_suggest_total sumeragi_view_change_install_total
-        sumeragi_proposal_gap_total sumeragi_view_change_proof_total sumeragi_wa_qc_assembled_total
-        sumeragi_cert_size sumeragi_commit_signatures_present sumeragi_commit_signatures_counted
-        sumeragi_commit_signatures_set_b sumeragi_commit_signatures_required
-        sumeragi_commit_qc_height sumeragi_commit_qc_view sumeragi_commit_qc_epoch
-        sumeragi_commit_qc_signatures_total sumeragi_commit_qc_validator_set_len
-        sumeragi_block_created_dropped_by_lock_total
-        sumeragi_block_created_hint_mismatch_total sumeragi_block_created_proposal_mismatch_total
-        lane_relay_invalid_total  sumeragi_prf_epoch_seed_hex
-        halo2_status sumeragi_prf_height sumeragi_prf_view sumeragi_membership_view_hash
-        sumeragi_membership_height sumeragi_membership_view sumeragi_membership_epoch
-        sumeragi_mode_tag sumeragi_leader_index sumeragi_highest_qc_height
-        sumeragi_locked_qc_height sumeragi_locked_qc_view sumeragi_new_view_receipts_by_hv
-        sumeragi_new_view_publish_total sumeragi_new_view_recv_total
-        sumeragi_new_view_dropped_by_lock_total sumeragi_commit_conflict_detected_total
-        sumeragi_missing_block_fetch_total sumeragi_missing_block_fetch_target_total
-        sumeragi_missing_block_fetch_dwell_ms sumeragi_missing_block_fetch_targets
-        blocksync_qc_quarantine_total blocksync_qc_revalidated_total blocksync_qc_final_drop_total
-        qc_deferred_missing_payload_total qc_deferred_resolved_total qc_deferred_expired_total
-        consensus_empty_commit_topology_defer_total
-        consensus_empty_commit_topology_escalation_total consensus_recovery_state_transitions_total
-        consensus_missing_block_height_escalation_total consensus_sidecar_quarantine_total
-        consensus_sidecar_final_drop_total blocksync_range_pull_escalation_total
-        blocksync_range_pull_success_total blocksync_range_pull_failure_total
-        consensus_recovery_stuck_round_seconds sumeragi_qc_assembly_latency_ms
-        sumeragi_qc_last_latency_ms
-        sumeragi_kura_store_failures_total
-        sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
-        state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms
-        sumeragi_membership_mismatch_total
-        sumeragi_membership_mismatch_active sumeragi_post_to_peer_total
-        sumeragi_bg_post_enqueued_total sumeragi_bg_post_overflow_total sumeragi_bg_post_drop_total
-        sumeragi_bg_post_queue_depth sumeragi_bg_post_queue_depth_by_peer sumeragi_bg_post_age_ms
+        runtime_upgrade_provenance_rejections_total runtime_abi_version
+        halo2_status sumeragi_mode_tag state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms
         ivm_cache_hits ivm_cache_misses ivm_cache_evictions ivm_cache_decoded_streams
         ivm_cache_decoded_ops_total ivm_cache_decode_failures ivm_cache_decode_time_ns_total
         ivm_cache_memory_resident_bytes ivm_cache_memory_active_bytes
@@ -4462,11 +4039,11 @@ initialize (metrics) {
         ivm_cache_memory_unclassified_retained_bytes ivm_cache_memory_peak_bytes
         ivm_cache_memory_unmeasured_owners ivm_execution_memory_reserved_bytes
         ivm_execution_memory_peak_bytes ivm_execution_memory_limit_bytes ivm_register_max_index
-        ivm_register_unique_count merkle_root_gpu_total
-        merkle_root_cpu_total ivm_memory_commit_ms ivm_memory_commit_dirty_chunks
-        ivm_merkle_rebuild_total ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices
-        pipeline_dag_edges pipeline_conflict_rate_bps pipeline_access_set_source_total
-        pipeline_comp_count pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
+        ivm_register_unique_count merkle_root_gpu_total merkle_root_cpu_total ivm_memory_commit_ms
+        ivm_memory_commit_dirty_chunks ivm_merkle_rebuild_total
+        ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices pipeline_dag_edges
+        pipeline_conflict_rate_bps pipeline_access_set_source_total pipeline_comp_count
+        pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
         pipeline_layer_avg_width pipeline_layer_median_width nexus_config_diff_total
         nexus_lane_configured_total nexus_lane_governance_sealed nexus_lane_governance_sealed_total
         nexus_lane_governance_sealed_aliases nexus_lane_lifecycle_applied_total
@@ -4488,25 +4065,22 @@ initialize (metrics) {
         axt_policy_snapshot_version axt_policy_snapshot_cache_events_total
         axt_proof_cache_events_total axt_proof_cache_state ivm_exec_ms pipeline_detached_prepared
         pipeline_detached_merged pipeline_detached_fallback pipeline_detached_fallback_reason
-        merge_ledger_entries_total merge_ledger_latest_epoch merge_ledger_latest_root_hex
         pipeline_sig_bls_agg_same pipeline_sig_bls_agg_multi pipeline_sig_bls_deterministic
         pipeline_sig_bls_agg_same_total pipeline_sig_bls_agg_multi_total block_gas_used
         confidential_gas_tx_used confidential_gas_block_used confidential_gas_total
         block_fee_total_units block_fee_total_scale torii_filter_depth torii_filter_match_count
         torii_scan_ms torii_stream_rows torii_lane_admission_latency_seconds
-        torii_route_stage_latency_seconds torii_attachment_reject_total
-        torii_attachment_sanitize_ms torii_zk_prover_attachment_bytes torii_zk_prover_latency_ms
-        torii_zk_prover_gc_total torii_zk_prover_inflight torii_zk_prover_pending
-        torii_zk_prover_last_scan_bytes
+        torii_route_stage_latency_seconds torii_attachment_reject_total torii_attachment_sanitize_ms
+        torii_zk_prover_attachment_bytes torii_zk_prover_latency_ms torii_zk_prover_gc_total
+        torii_zk_prover_inflight torii_zk_prover_pending torii_zk_prover_last_scan_bytes
         torii_zk_prover_last_scan_ms torii_zk_prover_budget_exhausted_total
         torii_query_snapshot_requests torii_query_snapshot_first_batch_ms
         torii_query_snapshot_gas_consumed_units_total query_snapshot_lane_first_batch_ms
         query_snapshot_lane_first_batch_items query_snapshot_lane_remaining_items
-        query_snapshot_lane_cursors_total torii_connect_sessions_total
-        torii_connect_sessions_active torii_pre_auth_reject_total torii_operator_auth_total
-        torii_operator_auth_lockout_total torii_signature_limit_total
-        torii_signature_limit_by_authority_total torii_signature_limit_last_count
-        torii_signature_limit_max torii_nts_unhealthy_reject_total
+        query_snapshot_lane_cursors_total torii_connect_sessions_total torii_connect_sessions_active
+        torii_pre_auth_reject_total torii_operator_auth_total torii_operator_auth_lockout_total
+        torii_signature_limit_total torii_signature_limit_by_authority_total
+        torii_signature_limit_last_count torii_signature_limit_max torii_nts_unhealthy_reject_total
         torii_multisig_direct_sign_reject_total torii_sorafs_admission_total
         torii_sorafs_capacity_telemetry_rejections_total torii_sorafs_capacity_declared_gib
         torii_sorafs_capacity_effective_gib torii_sorafs_capacity_utilised_gib
@@ -4649,12 +4223,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 751;
-const METRIC_CATALOG_V2_REGISTERED: usize = 708;
-const METRIC_CATALOG_V2_BYTES: usize = 102_265;
+const METRIC_CATALOG_V2_ROWS: usize = 662;
+const METRIC_CATALOG_V2_REGISTERED: usize = 629;
+const METRIC_CATALOG_V2_BYTES: usize = 90_041;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "4fd5a8015dafbcec8fb8172f9703a22cbc3632cf4190f688bf4a01726c8362a2";
+    "0674ea0e841f745004f871396111a7076f6307582992487c1089f1f26bd933aa";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

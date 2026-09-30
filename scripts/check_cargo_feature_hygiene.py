@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python <3.11
 FOUNDATIONAL_DEPENDENCIES = frozenset(
     {
         "iroha_core",
+        "iroha_core_zk",
         "iroha_crypto",
         "iroha_data_model",
         "iroha_torii",
@@ -63,22 +64,21 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "application": ("rand", "json", "ecc-batch", "bfv-accel", "pqc"),
         "bfv-accel": (),
         "bls": (
+            "dep:ark-serialize",
             "dep:blst",
             "dep:blstrs",
             "dep:group",
             "dep:pairing",
-            "dep:subtle",
             "dep:w3f-bls",
         ),
         "consensus": ("rand", "bls"),
-        "ecc-batch": ("dep:subtle", "ed25519-dalek/batch"),
+        "ecc-batch": ("ed25519-dalek/batch",),
         "gost": (
             "dep:once_cell",
             "dep:num-bigint",
             "dep:num-traits",
             "dep:streebog",
             "dep:crypto-bigint",
-            "dep:subtle",
         ),
         "json": ("norito/json",),
         "node-crypto": ("application", "consensus", "gost", "sm", "rayon"),
@@ -86,7 +86,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "dep:pqcrypto-traits",
             "dep:pqcrypto-mldsa",
             "dep:soranet_pq",
-            "dep:subtle",
         ),
         "rand": (),
         "rayon": ("dep:rayon",),
@@ -117,49 +116,40 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "iroha_model_base/transparent_api",
         ),
     },
-    "iroha_core": {
-        "default": ("node", "simd"),
-        "runtime": ("json", "bls", "proofs-halo2"),
-        "node": (
-            "runtime",
-            "proofs-stark",
-            "app_api",
-            "gost",
-            "sm",
-            "telemetry",
-            "zk-preverify",
-        ),
+    "iroha_core": {"default": ("node", "simd"),
+ "runtime": ("json", "bls", "proofs-halo2"),
+ "node": ("runtime", "proofs-stark", "app_api", "gost", "sm", "telemetry", "zk-preverify"),
+ "proofs-halo2": ("zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"),
+ "proofs-stark": ("zk-stark",),
+ "proofs-full": ("proofs-halo2", "proofs-stark"),
+ "app_api": (),
+ "bls": ("iroha_crypto/bls", "iroha_data_model/bls"),
+ "circuit-params": ("halo2_proofs/circuit-params", "iroha_core_zk/circuit-params"),
+ "expensive-telemetry": ("telemetry", "iroha_telemetry/metric-instrumentation"),
+ "gost": ("iroha_config/gost", "iroha_crypto/gost", "iroha_data_model/gost"),
+ "json": ("iroha_crypto/json", "iroha_primitives/json"),
+ "sm": ("iroha_config/sm", "iroha_crypto/sm", "iroha_data_model/sm"),
+ "telemetry": (),
+ "simd": ("iroha_primitives/simd-accel", "iroha_core_privacy/simd"),
+ "zk-halo2": ("dep:kaigi_zk", "iroha_core_zk/zk-halo2"),
+ "zk-halo2-ipa": ("zk-ipa-native", "iroha_core_zk/zk-halo2-ipa"),
+ "zk-ipa-native": ("iroha_core_zk/zk-ipa-native",),
+ "zk-preverify": ("iroha_core_zk/zk-preverify",),
+ "zk-stark": ("iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark")},
+    "iroha_core_zk": {
+        "default": ("proofs-halo2", "proofs-stark", "zk-preverify"),
         "proofs-halo2": ("zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"),
         "proofs-stark": ("zk-stark",),
-        "proofs-full": ("proofs-halo2", "proofs-stark"),
-        "app_api": (),
-        "bls": ("iroha_crypto/bls", "iroha_data_model/bls"),
-        "circuit-params": ("halo2_proofs/circuit-params",),
-        "expensive-telemetry": (
-            "telemetry",
-            "iroha_telemetry/metric-instrumentation",
-        ),
-        "gost": (
-            "iroha_config/gost",
-            "iroha_crypto/gost",
-            "iroha_data_model/gost",
-        ),
-        "json": (
-            "iroha_crypto/json",
-            "iroha_primitives/json",
-        ),
-        "sm": (
-            "iroha_config/sm",
-            "iroha_crypto/sm",
-            "iroha_data_model/sm",
-        ),
-        "telemetry": (),
-        "simd": ("iroha_primitives/simd-accel", "sha3/asm"),
         "zk-halo2": ("dep:kaigi_zk",),
         "zk-halo2-ipa": ("zk-ipa-native",),
         "zk-ipa-native": (),
-        "zk-preverify": (),
         "zk-stark": (),
+        "circuit-params": ("halo2_proofs/circuit-params",),
+        "zk-preverify": (),
+        "halo2-dev-tests": (),
+        "test-utils": (),
+        "zk-tests": ("test-utils",),
+        "kagemusha-real-proof-harness": ("zk-halo2-ipa",),
     },
     "iroha_torii": {
         "default": ("node-api",),
@@ -182,7 +172,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "proofs-halo2": ("zk-halo2", "zk-halo2-ipa"),
         "proofs-stark": ("zk-stark",),
         "proofs-full": ("proofs-halo2", "proofs-stark"),
-        "app_api": (),
+        "app_api": ("dep:kotodama_lang",),
         "app_api_https": (),
         "app_api_wss": ("dep:tokio-tungstenite",),
         "circuit-params": ("iroha_core/circuit-params",),
@@ -218,10 +208,8 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "zk-stark": ("iroha_core/zk-stark",),
         "zk-verify-batch": ("dep:iroha_zkp_halo2", "app_api"),
     },
-    "irohad": {
-        "default": ("daemon", "iroha_core/simd"),
-        "daemon": (
-            "telemetry",
+    "irohad_lib": {"default": ("daemon", "iroha_core/simd"),
+ "daemon": ("telemetry",
             "schema-endpoint",
             "gost",
             "sm",
@@ -231,47 +219,31 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "iroha_torii/node-api",
             "iroha_crypto/consensus",
             "iroha_crypto/pqc",
-            "norito/node-codec",
-        ),
-        "telemetry": (
-            "iroha_telemetry",
-            "iroha_telemetry/event-exporter",
-            "iroha_core/telemetry",
-            "iroha_torii/telemetry",
-        ),
-        "expensive-telemetry": ("telemetry", "iroha_core/expensive-telemetry"),
-        "gost": (
-            "iroha_core/gost",
-            "iroha_crypto/gost",
-            "iroha_data_model/gost",
-            "iroha_config/gost",
-            "iroha_torii/gost",
-        ),
-        "sm": (
-            "iroha_core/sm",
-            "iroha_crypto/sm",
-            "iroha_data_model/sm",
-            "iroha_config/sm",
-            "iroha_genesis/sm",
-            "iroha_telemetry/sm",
-            "iroha_torii/sm",
-        ),
-        "dag-recovery-verify": (),
-        "iroha_telemetry": ("dep:iroha_telemetry",),
-        "schema-endpoint": ("iroha_torii/schema",),
-    },
-    "iroha_cli": {
-        "default": ("cli",),
-        "cli": (
-            "bridge",
-            "offline-visual-codecs",
-            "iroha_core/node",
-            "iroha_crypto/consensus",
-            "norito/node-codec",
-        ),
-        "bridge": (),
-        "offline-visual-codecs": ("dep:image",),
-    },
+            "norito/node-codec"),
+ "telemetry": ("iroha_telemetry",
+               "iroha_telemetry/event-exporter",
+               "iroha_core/telemetry",
+               "iroha_torii/telemetry"),
+ "expensive-telemetry": ("telemetry", "iroha_core/expensive-telemetry"),
+ "ivm-cuda": ("ivm/cuda",),
+ "gost": ("iroha_core/gost",
+          "iroha_crypto/gost",
+          "iroha_data_model/gost",
+          "iroha_config/gost",
+          "iroha_torii/gost"),
+ "sm": ("iroha_core/sm",
+        "iroha_crypto/sm",
+        "iroha_data_model/sm",
+        "iroha_config/sm",
+        "iroha_genesis/sm",
+        "iroha_telemetry/sm",
+        "iroha_torii/sm"),
+ "dag-recovery-verify": (),
+ "iroha_telemetry": ("dep:iroha_telemetry",),
+ "schema-endpoint": ("iroha_torii/schema",)},
+    "iroha_cli_lib": {"default": ("bridge", "offline-visual-codecs"),
+ "bridge": (),
+ "offline-visual-codecs": ("dep:image",)},
     "iroha": {
         "default": ("tls-rustls-native-roots", "gost", "sm"),
         "gost": ("iroha_crypto/gost", "iroha_data_model/gost"),
@@ -361,6 +333,49 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "model-primitives": ("dep:iroha_zkp_poseidon",),
         "parallel": ("full", "dep:rayon"),
     },
+
+    "irohad": {"default": ("daemon", "irohad_lib/default"),
+ "daemon": ("irohad_lib/daemon",
+            "telemetry",
+            "schema-endpoint",
+            "gost",
+            "sm",
+            "dag-recovery-verify",
+            "expensive-telemetry"),
+ "external-software-signer-bin": ("daemon",),
+ "dev-tools": ("daemon", "zk-stark", "irohad_lib/dev-tools"),
+ "accel-metal": ("fastpq-gpu", "irohad_lib/accel-metal"),
+ "ivm-cuda": ("irohad_lib/ivm-cuda",),
+ "accel-cuda": ("fastpq-gpu", "irohad_lib/accel-cuda"),
+ "test-network-private-settlement-route-control": ("irohad_lib/test-network-private-settlement-route-control",),
+ "test-network-parliament-signers": ("irohad_lib/test-network-parliament-signers",),
+ "test-network-disposable-broker": ("daemon", "irohad_lib/test-network-disposable-broker"),
+ "fastpq-gpu": ("irohad_lib/fastpq-gpu",),
+ "zk-stark": ("irohad_lib/zk-stark",),
+ "sm": ("irohad_lib/sm",),
+ "gost": ("irohad_lib/gost",),
+ "sm-ffi-openssl": ("sm", "irohad_lib/sm-ffi-openssl"),
+ "beep": ("irohad_lib/beep",),
+ "dag-recovery-verify": ("irohad_lib/dag-recovery-verify",),
+ "telemetry": ("irohad_lib/telemetry",),
+ "expensive-telemetry": ("telemetry", "irohad_lib/expensive-telemetry"),
+ "dev-telemetry": ("telemetry", "irohad_lib/dev-telemetry"),
+ "telegram-alerts": ("telemetry", "irohad_lib/telegram-alerts"),
+ "schema-endpoint": ("irohad_lib/schema-endpoint",),
+ "profiling-endpoint": ("irohad_lib/profiling-endpoint",)},
+    "iroha_cli": {"default": ("cli", "bridge", "offline-visual-codecs"),
+ "cli": (),
+ "bridge": ("iroha_cli_lib/bridge",),
+ "offline-visual-codecs": ("iroha_cli_lib/offline-visual-codecs",),
+ "dev-tools": ("cli",),
+ "ids_projection": ("iroha_cli_lib/ids_projection",),
+ "cli_integration_harness": ("iroha_cli_lib/cli_integration_harness",)},
+    "iroha_core_privacy": {"default": ("zk-stark", "simd"),
+ "zk-stark": (),
+ "simd": ("sha3/asm",),
+ "privacy-release-evidence": ("zk-stark", "iroha_data_model/privacy-exact12-conformance"),
+ "test-utils": ("dep:rand_08",)},
+    "iroha_core_timed_ovn": {"test-utils": ("dep:rand",), "default": ()},
 }
 
 
@@ -377,9 +392,10 @@ CONTEXTUAL_SHIPPING_FEATURES: dict[str, tuple[str, ...]] = {
         "transparent_api",
     ),
     "iroha_core": ("expensive-telemetry",),
+    "iroha_core_zk": (),
     "iroha_torii": (),
-    "irohad": (),
-    "iroha_cli": (),
+    "irohad_lib": ("ivm-cuda",),
+    "iroha_cli_lib": (),
     "iroha": (),
     "iroha_config": (),
     "iroha_genesis": (),
@@ -388,6 +404,11 @@ CONTEXTUAL_SHIPPING_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_primitives": (),
     "iroha_kagami": (),
     "iroha_zkp_halo2": (),
+
+    "irohad": ("ivm-cuda",),
+    "iroha_cli": (),
+    "iroha_core_privacy": (),
+    "iroha_core_timed_ovn": (),
 }
 
 
@@ -417,6 +438,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "streaming-neural-filter",
     ),
     "iroha_crypto": (
+        "bfv-test-fixtures",
         "crypto-parity-tests",
         "dev-tools",
         "sm-ffi-openssl",
@@ -430,24 +452,27 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "test-fixtures",
         "trybuild-tests",
     ),
-    "iroha_core": (
-        "bench",
-        "cuda",
-        "dev-tests",
-        "dev-tools",
-        "fastpq-gpu",
+    "iroha_core": ("bench",
+ "cuda",
+ "dev-tests",
+ "dev-tools",
+ "fastpq-gpu",
+ "halo2-dev-tests",
+ "ids_projection",
+ "iroha-core-tests",
+ "privacy-release-evidence",
+ "profiling",
+ "proofs-full",
+ "quic",
+ "sm-ffi-openssl",
+ "test-network-parliament-signers",
+ "test-network-private-settlement-evidence",
+ "zk-proof-tags",
+ "zk-tests"),
+    "iroha_core_zk": (
         "halo2-dev-tests",
-        "ids_projection",
-        "iroha-core-tests",
         "kagemusha-real-proof-harness",
-        "privacy-release-evidence",
-        "profiling",
-        "proofs-full",
-        "quic",
-        "sm-ffi-openssl",
-        "test-network-parliament-signers",
-        "test-network-private-settlement-evidence",
-        "zk-proof-tags",
+        "test-utils",
         "zk-tests",
     ),
     "iroha_torii": (
@@ -461,23 +486,20 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "zk-proof-tags",
         "zk-tests",
     ),
-    "irohad": (
-        "accel-cuda",
-        "accel-metal",
-        "beep",
-        "dev-telemetry",
-        "dev-tools",
-        "external-software-signer-bin",
-        "fastpq-gpu",
-        "profiling-endpoint",
-        "sm-ffi-openssl",
-        "telegram-alerts",
-        "test-network-disposable-broker",
-        "test-network-private-settlement-route-control",
-        "test-network-parliament-signers",
-        "zk-stark",
-    ),
-    "iroha_cli": ("cli_integration_harness", "dev-tools", "ids_projection"),
+    "irohad_lib": ("accel-cuda",
+ "accel-metal",
+ "beep",
+ "dev-telemetry",
+ "dev-tools",
+ "fastpq-gpu",
+ "profiling-endpoint",
+ "sm-ffi-openssl",
+ "telegram-alerts",
+ "test-network-disposable-broker",
+ "test-network-parliament-signers",
+ "test-network-private-settlement-route-control",
+ "zk-stark"),
+    "iroha_cli_lib": ("cli_integration_harness", "ids_projection"),
     "iroha": (
         "ids_projection",
         "test-fixtures",
@@ -505,6 +527,11 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_primitives": ("bench", "trybuild-tests"),
     "iroha_kagami": ("dev-tools",),
     "iroha_zkp_halo2": ("bench", "schema-structural"),
+
+    "irohad": ("accel-cuda", "accel-metal", "beep", "dev-telemetry", "dev-tools", "external-software-signer-bin", "fastpq-gpu", "profiling-endpoint", "sm-ffi-openssl", "telegram-alerts", "test-network-disposable-broker", "test-network-parliament-signers", "test-network-private-settlement-route-control", "zk-stark"),
+    "iroha_cli": ("cli_integration_harness", "dev-tools", "ids_projection"),
+    "iroha_core_privacy": ("privacy-release-evidence", "test-utils"),
+    "iroha_core_timed_ovn": ("test-utils",),
 }
 
 
@@ -797,6 +824,40 @@ def _check_mandatory_model_json_dependencies(
     return errors
 
 
+# The CLI implementation always owns its complete runtime; only the thin
+# executable's target selection is controlled by its `cli` feature.
+MANDATORY_CLI_RUNTIME_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "iroha_core": ("node",),
+    "iroha_crypto": ("consensus",),
+    "norito": ("node-codec",),
+}
+
+
+def _check_mandatory_cli_runtime_dependencies(
+    document: dict[str, Any], manifest_path: Path
+) -> list[str]:
+    """Reject partial or optionally activated CLI runtime implementations."""
+    dependencies = document.get("dependencies", {})
+    errors: list[str] = []
+    for name, required in MANDATORY_CLI_RUNTIME_DEPENDENCIES.items():
+        specification = dependencies.get(name) if isinstance(dependencies, dict) else None
+        if not isinstance(specification, dict) or specification.get("optional", False) is not False:
+            errors.append(
+                f"{manifest_path}: mandatory CLI runtime dependency `{name}` must be "
+                "a non-optional normal dependency"
+            )
+            continue
+        selected = specification.get("features", [])
+        if (not isinstance(selected, list)
+                or not all(isinstance(feature, str) for feature in selected)
+                or not set(required).issubset(selected)):
+            errors.append(
+                f"{manifest_path}: mandatory CLI runtime dependency `{name}` must "
+                f"select {list(required)!r} unconditionally"
+            )
+    return errors
+
+
 def _check_expected_features(
     document: dict[str, Any], manifest_path: Path
 ) -> list[str]:
@@ -809,6 +870,8 @@ def _check_expected_features(
     errors: list[str] = []
     if package_name == "iroha_data_model":
         errors.extend(_check_mandatory_model_json_dependencies(document, manifest_path))
+    if package_name == "iroha_cli_lib":
+        errors.extend(_check_mandatory_cli_runtime_dependencies(document, manifest_path))
     try:
         actual_features = cargo_visible_features(document)
     except ValueError as error:

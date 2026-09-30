@@ -4,13 +4,17 @@ These guidelines apply to the `integration_tests/` crate.
 
 ## Layout
 - `src/` hosts reusable harness code (metrics parsing, sandbox helpers, SoraFS gateway coverage) plus the `sorafs_gateway_fixtures` binary (`cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures`) that regenerates gateway fixtures.
-- `tests/` is the primary suite of Rust integration tests (genesis, Sumeragi, permissions, Norito streaming, triggers, telemetry, SoraFS, etc.). Cargo now exposes six explicit harness crates:
+- `tests/` is the primary suite of Rust integration tests (genesis, Sumeragi, permissions, Norito streaming, triggers, telemetry, SoraFS, etc.). Cargo exposes explicit harness crates, including:
   - `core_api`
   - `events_and_triggers`
   - `queries_and_proofs`
   - `network_functional`
   - `consensus_and_da`
+  - `sumeragi`
+  - `sumeragi_lanes`
+  - `sumeragi_npos_committee_transition`
   - `nexus_and_streaming`
+  The complete list is the `[[test]]` table in `integration_tests/Cargo.toml`.
 - Scenario files remain under `tests/` and are pulled into those harnesses with `#[path = ...]`; keep a `//!` header on each scenario file.
 - `integration_tests/tests/pipeline_block_rejected.rs` is an additional scaffold kept under `#[ignore]` until a deterministic trigger exists. Run it with `IROHA_RUN_IGNORED=1 cargo test -p integration_tests --test core_api pipeline_block_rejected:: -- --ignored`.
 - `fixtures/` contains pre-baked inputs (e.g., `ivm/*.to`, `sumeragi_*`, `norito_streaming/rans/*.json`). `iroha_test_samples/build.rs` stages canonical `.to` programs in its Cargo `OUT_DIR`; consumers use the sample crate's path helpers and never write generated fixtures into source.
@@ -18,7 +22,7 @@ These guidelines apply to the `integration_tests/` crate.
 ## Features and environment
 - Feature flags:
   - `telemetry` (default) enables metrics assertions.
-  - `fault_injection` opens hooks used by adversarial Sumeragi tests.
+  - `fault_injection` enables trigger-execution fault hooks; consensus faults are simulated only in `crates/iroha_sumeragi` (`specs/sumeragi.md` §13).
   - Norito FEC parity/recovery regression coverage runs unconditionally in `nexus_and_streaming` using local GF(256) helpers.
   - `js_host_parity` mirrors Kotodama host tests inside JS targets.
 - Some tests require optional data:

@@ -15,6 +15,7 @@ default = []
 transparent_api = ["iroha_data_model_derive/transparent_api"]
 
 [dependencies]
+iroha_allocation = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["json"] }
 thiserror = { workspace = true }
 getset = { workspace = true }

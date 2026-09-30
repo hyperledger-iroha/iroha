@@ -1,8 +1,8 @@
 //! Stream fixed-size authenticated snapshot entries into original admitted maps.
 
 use super::*;
-use crate::allocation::AllocationBudget;
 use concread::bptree::{ClonePlanning, Prepaid};
+use iroha_allocation::AllocationBudget;
 
 impl<K, V, P> Storage<K, V, Prepaid<P>>
 where
@@ -118,7 +118,7 @@ mod tests {
         assert_eq!(busy.release_wait(), Some(&release));
         assert_eq!(busy.clone(), busy);
         let capacity =
-            AdmittedStorageError::Allocation(crate::allocation::AllocationRefusal::Capacity {
+            AdmittedStorageError::Allocation(iroha_allocation::AllocationRefusal::Capacity {
                 requested_bytes: 9,
                 reserved_bytes: 8,
                 limit_bytes: 10,

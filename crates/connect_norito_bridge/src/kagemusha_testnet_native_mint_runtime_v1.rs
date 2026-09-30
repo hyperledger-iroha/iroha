@@ -9,7 +9,7 @@
 
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
 
-use iroha_core::zk::{
+use iroha_core_zk::{
     kagemusha_v1_recursion::{
         KagemushaRecursiveVerifierProfileV1, KagemushaTestnetStateObservationScopeV1,
         KagemushaVerifiedFinalityChainV1,

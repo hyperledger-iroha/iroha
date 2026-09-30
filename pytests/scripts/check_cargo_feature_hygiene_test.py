@@ -19,14 +19,20 @@ def test_repository_feature_hygiene() -> None:
     assert FEATURE_HYGIENE.check_repository(ROOT) == []
 
 
+def _manifest_path(package: str) -> Path:
+    split_packages = {
+        "iroha_cli_lib": "iroha_cli", "iroha_cli": "iroha_cli/bins",
+        "irohad_lib": "irohad", "irohad": "irohad/bins",
+    }
+    return ROOT / "crates" / split_packages.get(package, package) / "Cargo.toml"
+
+
 def _guarded_document(package: str) -> dict:
-    manifest = ROOT / "crates" / package / "Cargo.toml"
-    return FEATURE_HYGIENE._load_toml(manifest)
+    return FEATURE_HYGIENE._load_toml(_manifest_path(package))
 
 
 def _guarded_errors(package: str, document: dict) -> list[str]:
-    manifest = ROOT / "crates" / package / "Cargo.toml"
-    return FEATURE_HYGIENE._check_expected_features(document, manifest)
+    return FEATURE_HYGIENE._check_expected_features(document, _manifest_path(package))
 
 
 def test_model_json_dependencies_are_unconditional_and_reject_owner_removal() -> None:
@@ -451,3 +457,35 @@ def test_repository_model_dependency_closure_excludes_storage() -> None:
     assert FEATURE_HYGIENE._check_model_storage_boundary(
         documents, workspace.get("dependencies", {})
     ) == []
+
+
+def test_cli_runtime_features_are_mandatory_normal_dependencies() -> None:
+    document = _guarded_document("iroha_cli_lib")
+    assert _guarded_errors("iroha_cli_lib", document) == []
+    for name, required in FEATURE_HYGIENE.MANDATORY_CLI_RUNTIME_DEPENDENCIES.items():
+        for mutation in ("remove", "optional", "remove-feature"):
+            changed = copy.deepcopy(document)
+            if mutation == "remove":
+                del changed["dependencies"][name]
+            elif mutation == "optional":
+                changed["dependencies"][name]["optional"] = True
+            else:
+                changed["dependencies"][name]["features"].remove(required[0])
+            assert any("mandatory CLI runtime dependency" in error
+                       for error in _guarded_errors("iroha_cli_lib", changed)), (name, mutation)
+
+
+def test_cli_library_rejects_retired_target_gate_aliases() -> None:
+    for feature in ("cli", "dev-tools"):
+        document = copy.deepcopy(_guarded_document("iroha_cli_lib"))
+        document["features"][feature] = []
+        assert any(f"Cargo feature `{feature}` is unclassified" in error
+                   for error in _guarded_errors("iroha_cli_lib", document))
+
+
+def test_cli_executable_keeps_only_real_target_and_option_features() -> None:
+    document = _guarded_document("iroha_cli")
+    assert _guarded_errors("iroha_cli", document) == []
+    assert document["features"]["cli"] == []
+    assert document["features"]["dev-tools"] == ["cli"]
+    assert set(document["features"]["default"]) == {"cli", "bridge", "offline-visual-codecs"}

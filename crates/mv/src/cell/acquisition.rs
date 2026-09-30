@@ -1,10 +1,8 @@
 //! Caller-owned EBR acquisition and exact retirement through enclosing aggregates.
 
 use super::*;
-use concread::{
-    ebrcell::{EbrCellWriterAcquisition, EbrCellWriterAdmissionError, ReservedEbrCell},
-    release::{DeferredRelease, DeferredReleaseBatch},
-};
+use concread::ebrcell::{EbrCellWriterAcquisition, EbrCellWriterAdmissionError, ReservedEbrCell};
+use iroha_allocation::release::{DeferredRelease, DeferredReleaseBatch};
 
 /// Inert original cell slot, initialized only after its aggregate owns every slot.
 /// A caught initialization panic allows only release and destruction, not retry.

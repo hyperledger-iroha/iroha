@@ -11,6 +11,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Canonical(Canonical::Cell(schema::<Parameters>())));
     consensus_schedule: Cell<crate::sumeragi::schedule::RetainedConsensusSchedule> => ("world.consensus_schedule",
         Role::Canonical(Canonical::Cell(schema::<crate::sumeragi::schedule::ConsensusSchedule>())));
+    state_accumulator: Cell<crate::state::world_projection::WorldStateAccumulator> => ("world.state_accumulator",
+        Role::Derived { sources: &["state.world"], check: DerivationCheck::Commitment("state::world_projection::WorldStateAccumulator::capture") });
     peers: Cell<Peers> => ("world.peers",
         Role::Canonical(Canonical::Cell(schema::<Peers>())));
     domains: Storage<DomainId, Domain> => ("world.domains",
@@ -346,7 +348,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Canonical(Canonical::Cell(schema::<MusubiRegistryPolicyV1>())));
     musubi_resolver_index_revision: Cell<MusubiResolverIndexRevisionV1> => ("world.musubi_resolver_index_revision",
         Role::Canonical(Canonical::Cell(schema::<MusubiResolverIndexRevisionV1>())));
-    musubi_replication_shortfall_releases: Cell<u64, mv::allocation::AllocationCharge> => ("world.musubi_replication_shortfall_releases",
+    musubi_replication_shortfall_releases: Cell<u64, iroha_allocation::AllocationCharge> => ("world.musubi_replication_shortfall_releases",
         Role::Derived { sources: &["world.musubi_releases", "world.musubi_archive_availability"], check: DerivationCheck::Rebuild("state::deserialize::musubi_derived::validate_musubi_derived_cuts checks exact current and predecessor shortfall count") });
     soracloud_sequence_watermark: Cell<u64> => ("world.soracloud_sequence_watermark",
         Role::Canonical(Canonical::Cell(schema::<u64>())));
@@ -572,6 +574,8 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, {
         Role::Local("Process delivery buffer; authoritative invocation effects and completions belong to execution output carriers"));
     sumeragi_lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState> => ("world.sumeragi_lanes",
         Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_lanes::SumeragiLaneState>())));
+    sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState> => ("world.sumeragi_amx",
+        Role::Canonical(Canonical::Cell(schema::<iroha_data_model::sumeragi_amx::SumeragiAmxState>())));
     sccp_parameters: Cell<Option<iroha_data_model::sccp::params::SccpParametersV1>> => ("world.sccp_parameters",
         Role::Canonical(Canonical::Cell(schema::<Option<iroha_data_model::sccp::params::SccpParametersV1>>())));
     sccp_reset_nonce: Cell<Option<[u8; 32]>> => ("world.sccp_reset_nonce",

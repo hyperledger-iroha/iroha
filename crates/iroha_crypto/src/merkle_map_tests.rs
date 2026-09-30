@@ -60,7 +60,7 @@ fn all_insertion_orders_and_deletion_histories_have_the_same_root() {
     let expected = reference(&entries);
     let mut count = 0;
     permutations(&mut [0, 1, 2, 3, 4], 0, &mut |order| {
-        let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+        let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
         assert!(map.is_empty());
         for &n in order {
             assert!(map.replace(hash(n), None, Some(hash(n + 10))).unwrap());
@@ -78,7 +78,7 @@ fn all_insertion_orders_and_deletion_histories_have_the_same_root() {
         assert!(map.is_empty());
         assert_eq!(
             map.root(),
-            MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024)).root()
+            MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)).root()
         );
         count += 1;
     });
@@ -87,7 +87,7 @@ fn all_insertion_orders_and_deletion_histories_have_the_same_root() {
 
 #[test]
 fn stale_preimages_noops_and_count_failures_do_not_change_versions() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     map.replace(hash(1), None, Some(hash(2))).unwrap();
     let before = map.clone();
     assert_eq!(
@@ -125,7 +125,7 @@ fn every_split_bit_and_byte_boundary_matches_the_rebuilt_reference() {
     }
 
     let zero = Hash::prehashed([0; 32]);
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let mut expected = BTreeMap::new();
     map.replace(zero, None, Some(hash(999))).unwrap();
     expected.insert(zero, hash(999));
@@ -151,7 +151,7 @@ fn every_split_bit_and_byte_boundary_matches_the_rebuilt_reference() {
 
 #[test]
 fn mixed_mutations_match_a_sorted_map_without_changing_snapshots() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let mut expected = BTreeMap::new();
     let mut rng = 0x1234_5678_9abc_def0_u64;
     for step in 0..700_u64 {
@@ -184,7 +184,7 @@ fn mixed_mutations_match_a_sorted_map_without_changing_snapshots() {
 fn unrelated_subtrees_are_shared_and_key_value_bindings_are_distinct() {
     let left_key = Hash::prehashed([0; 32]);
     let right_key = Hash::prehashed([255; 32]);
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     map.replace(left_key, None, Some(hash(1))).unwrap();
     map.replace(right_key, None, Some(hash(2))).unwrap();
     let before = map.clone();
@@ -207,16 +207,16 @@ fn unrelated_subtrees_are_shared_and_key_value_bindings_are_distinct() {
         _ => panic!("two keys require a branch"),
     }
     assert_ne!(before.root(), map.root());
-    let mut swapped = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut swapped = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     swapped.replace(left_key, None, Some(hash(2))).unwrap();
     swapped.replace(right_key, None, Some(hash(1))).unwrap();
     assert_ne!(before.root(), swapped.root());
-    let mut singleton = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut singleton = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     singleton.replace(left_key, None, Some(hash(1))).unwrap();
     assert_ne!(singleton.root(), before.root());
     assert_ne!(
         singleton.root(),
-        MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024)).root()
+        MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)).root()
     );
 }
 
@@ -224,7 +224,7 @@ fn unrelated_subtrees_are_shared_and_key_value_bindings_are_distinct() {
 fn fixed_blake2b_vectors_bind_empty_leaf_and_root_branch() {
     // Independently calculated with Python hashlib.blake2b(digest_size=32),
     // applying Iroha's low-bit marker after every hash.
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     assert_eq!(
         map.root().to_string(),
         "4ed9ccac2f64fe8467c3b9a56d5ba2b842622208380bfaaa4fe6fc22d53acbf5"
@@ -247,7 +247,7 @@ fn fixed_blake2b_vectors_bind_empty_leaf_and_root_branch() {
 
 #[test]
 fn exact_membership_proof_binds_key_value_count_and_canonical_path() {
-    let budget = mv::allocation::AllocationBudget::new(64 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024);
     let mut map = MerkleMap::new(&budget);
     for n in 0..9 {
         map.replace(hash(n), None, Some(hash(n + 100))).unwrap();

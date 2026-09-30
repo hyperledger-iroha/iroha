@@ -12,14 +12,24 @@
 //! block time with a `Log` transaction of its own clock account when the block's transactions do
 //! not.
 
+#[path = "test_chain/lane_authority.rs"]
+mod lane_authority;
+/// Independent committed-State authority used by certified lane fixtures.
+pub use lane_authority::TestLaneStoreAuthorities;
+#[path = "test_chain/availability.rs"]
+mod availability;
+mod genesis_policy;
+mod local_certificate;
+pub(crate) use genesis_policy::{signed_genesis_fixture_for_state, staged_genesis_policies};
+
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
 use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
 use iroha_data_model::{
     IntoKeyValue, NetworkId, Registrable,
     account::{Account, AccountId},
-    block::consensus_v2::ValidatorPower,
-    block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
+    block::consensus::ValidatorPower,
+    block::{SignedBlock, consensus::SumeragiGenesisContextParameters},
     domain::Domain,
     isi::{InstructionBox, Log},
     parameter::{
@@ -34,14 +44,16 @@ use iroha_model_base::{chain::ChainId, peer::PeerId};
 use iroha_primitives::time::TimeSource;
 use iroha_sumeragi::{
     api::ExecOutcome,
+    availability::AvailableBody,
     crypto::{AttestOutcome, Attestor as _, Signer as _, form_qc},
-    message::{Block, BlockHeader, CommitAttestation, Qc, ResultWitness, Vote, VoteKind},
+    message::{BlockHeader, CommitAttestation, Qc, ResultWitness, Vote, VoteKind},
     preimage::payload_hash,
     types::{Committee, Hash32},
 };
 use mv::storage::StorageReadOnly;
 
 use super::{
+    availability_schedule::AvailabilitySchedule,
     block_store::{KuraBlockStore, Staging},
     certified_chain::{CommittedBlock, committed_block},
     crypto::{BlsCrypto, KeyPairSigner},
@@ -230,6 +242,7 @@ pub struct CertifiedTestChain {
     executor: StateExecutor,
     events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
     blocks: KuraBlockStore,
+    availability: Arc<dyn AvailabilitySchedule>,
     signers: Vec<KeyPairSigner>,
     committee: Committee,
     validators: Vec<(PeerId, Vec<u8>)>,
@@ -511,6 +524,15 @@ impl CertifiedTestChain {
             )
             .expect("fixture committee admits");
         let shared: SharedCrypto = crypto.clone();
+        let instance = global_instance(&genesis, &chain_id.to_string());
+        let availability: Arc<dyn AvailabilitySchedule> = Arc::new(
+            super::runtime_availability::NativeGlobalAvailability::new(
+                Arc::clone(&state),
+                instance,
+                Arc::clone(&crypto),
+            )
+            .map_err(|error| invalid(format!("original availability authority: {error}")))?,
+        );
         let staging = Staging::new();
         let blocks = KuraBlockStore::new(
             Arc::clone(&kura),
@@ -518,6 +540,11 @@ impl CertifiedTestChain {
             GENESIS_HEIGHT,
             staging.clone(),
             state.ivm_execution_budget(),
+            Arc::clone(&availability),
+            Arc::new(super::attestation::NativePastaVerifier::new(
+                instance,
+                *state.network_id_ref(),
+            )),
         );
         let (events, event_receiver) = tokio::sync::broadcast::channel(4096);
         let executor = StateExecutor::spawn(ExecutorContext {
@@ -555,7 +582,6 @@ impl CertifiedTestChain {
                 .collect(),
         )
         .expect("fixture committee");
-        let instance = global_instance(&genesis, &chain_id.to_string());
         let authority = Arc::new(
             crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
                 generation,
@@ -591,6 +617,7 @@ impl CertifiedTestChain {
             executor,
             events: event_receiver,
             blocks,
+            availability,
             signers,
             committee,
             validators,
@@ -634,11 +661,11 @@ impl CertifiedTestChain {
             self.kura
                 .store_block(Arc::clone(original.committed().block()))
                 .map_err(|error| error.to_string())?;
-            let entry = self
-                .blocks
-                .entry(height)
+            let (body, commit_qc) = self
+                .committed_body(height)
+                .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("original replay frame unavailable at {height}"))?;
-            self.executor.replay(&entry.block, &entry.commit_qc)?;
+            self.executor.replay(&body, &commit_qc)?;
             self.tip = (
                 height,
                 original.committed().core_hash(),
@@ -669,6 +696,10 @@ impl CertifiedTestChain {
     /// this fixture does not claim transaction-driven ceremony or live-network qualification.
     /// The returned chain is ready to execute its mandatory attested boundary work at 10.
     pub fn npos_boundary_fixture() -> Self {
+        Self::npos_boundary_fixture_with_currency(true)
+    }
+
+    fn npos_boundary_fixture_with_currency(include_currency: bool) -> Self {
         use crate::beacon::{
             FinalizedGlobalThresholdBeaconKeySessionRecordV1,
             GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconPulseAggregatorV1,
@@ -678,6 +709,11 @@ impl CertifiedTestChain {
             GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconChainAnchorV1,
             GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconPulseContextV1,
         };
+        use iroha_data_model::{
+            asset::{AssetBalancePolicy, AssetDefinition},
+            isi::Register,
+        };
+        use iroha_primitives::numeric::NumericSpec;
         let mut config = TestChainConfig::new(World::new(), 1_000);
         config.consensus_mode = SumeragiConsensusMode::Npos;
         let policy = SumeragiNposParameters {
@@ -688,20 +724,20 @@ impl CertifiedTestChain {
             ..SumeragiNposParameters::default()
         };
         policy.validate().expect("bounded ten-block fixture policy");
-        // Boundary selection authenticates the network currency even when there are no
-        // funded candidates. Register its exact global nine-decimal schema in signed genesis.
-        config.genesis_instructions.push(
-            iroha_data_model::isi::Register::asset_definition(
-                iroha_data_model::asset::AssetDefinition::new(
+        // A boundary reconciles the signed network currency even when it retains
+        // the incumbent committee without an eligible future candidate pool.
+        if include_currency {
+            config.genesis_instructions.push(
+                Register::asset_definition(AssetDefinition::new(
                     policy.xor_asset_definition_id.clone(),
                     "Network XOR",
-                    iroha_primitives::numeric::NumericSpec::fractional(9),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    NumericSpec::fractional(9),
+                    AssetBalancePolicy::Global,
                     None,
-                ),
-            )
-            .into(),
-        );
+                ))
+                .into(),
+            );
+        }
         config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 policy.epoch_length_blocks,
@@ -968,7 +1004,8 @@ impl CertifiedTestChain {
         let transaction_parameters = view.world().parameters().transaction();
         // The leader merges the lane blocks its lane stores have committed; they may raise the
         // block time (the merge time floor).
-        let merges = crate::sumeragi::lanes::merge::propose(&view, &*self.lane_blocks, height);
+        let merges = crate::sumeragi::lanes::merge::propose(&view, &*self.lane_blocks, height)
+            .expect("original lane store is available while building fixture proposal");
         drop(view);
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
         let parent_time = parent.header().creation_time();
@@ -1147,22 +1184,35 @@ impl CertifiedTestChain {
             parent_hash: self.tip.1,
             parent_result: self.tip.2,
             payload_hash: payload_hash(&*self.crypto, &payload_bytes),
+            availability_digest: Hash32::ZERO,
             payload_len: u32::try_from(payload_bytes.len()).expect("payload fits"),
             proposer: 0,
             skipped_leaders: Vec::new(),
             attest: attestation_required(&proposal)
                 || height == scheduled.epoch.authorization.last_height,
         };
-        let block = Block {
-            header,
-            payload: payload_bytes,
-        };
+        let block = self.author_payload(header, payload_bytes);
         let block_hash = block.hash(&*self.crypto);
+        let mut diagnostic_events = self.events.resubscribe();
         let result = match self.executor.execute(&block, &block_hash) {
             Some(ExecOutcome::Valid(result)) => result,
             other => {
+                use iroha_data_model::events::{
+                    EventBox,
+                    pipeline::{BlockStatus, PipelineEventBox},
+                };
+                let mut rejection = None;
+                while let Ok(event) = diagnostic_events.try_recv() {
+                    if let EventBox::Pipeline(PipelineEventBox::Block(event)) = event {
+                        if event.header.height().get() == height {
+                            if let BlockStatus::Rejected(reason) = event.status {
+                                rejection = Some(reason);
+                            }
+                        }
+                    }
+                }
                 return Err(format!(
-                    "fixture block {height} does not execute: {other:?}"
+                    "fixture block {height} does not execute: {other:?}; native rejection: {rejection:?}"
                 ));
             }
         };
@@ -1205,17 +1255,11 @@ impl CertifiedTestChain {
         };
         let witness = if attest {
             if height <= self.tip.0 {
-                Some(
-                    ResultWitness::from_untrusted(
-                        self.committed(height)
-                            .block()
-                            .commit_certificate()
-                            .unwrap()
-                            .result_preimage()
-                            .to_vec(),
-                    )
-                    .unwrap(),
-                )
+                self.committed_body(height)
+                    .expect("restore original certified witness into this State pool")
+                    .expect("original committed body exists")
+                    .1
+                    .attestation_witness
             } else {
                 let statement = iroha_sumeragi::preimage::att_preimage(
                     &self.instance,
@@ -1442,7 +1486,7 @@ impl CertifiedTestChain {
 /// use the production path. Dropping an unpublished owner discards only that speculative work.
 pub struct PendingTestExecution<'chain> {
     chain: &'chain mut CertifiedTestChain,
-    block: Block,
+    block: AvailableBody,
     block_hash: Hash32,
     result: Hash32,
     certificate: Option<(Signers, Qc)>,
@@ -1505,10 +1549,10 @@ impl PendingTestExecution<'_> {
             }
         } else {
             let mut qc = self.chain.commit_qc(
-                self.block.header.height,
+                self.block.header().height,
                 self.block_hash,
                 self.result,
-                self.block.header.attest,
+                self.block.header().attest,
                 signers,
             );
             qc.admit_attestation_witness(&self.chain.state.ivm_execution_budget())
@@ -1559,8 +1603,8 @@ impl PendingTestExecution<'_> {
             .executor
             .commit(&self.block, qc)
             .map_err(|error| error.to_string())?;
-        self.chain.tip = (self.block.header.height, self.block_hash, self.result);
-        let published = self.chain.committed(self.block.header.height);
+        self.chain.tip = (self.block.header().height, self.block_hash, self.result);
+        let published = self.chain.committed(self.block.header().height);
         self.published = Some(published.clone());
         Ok(published)
     }
@@ -1569,7 +1613,7 @@ impl PendingTestExecution<'_> {
 impl Drop for PendingTestExecution<'_> {
     fn drop(&mut self) {
         if self.published.is_none() {
-            self.chain.executor.discard(self.block.header.height, &[]);
+            self.chain.executor.discard(self.block.header().height, &[]);
         }
     }
 }
@@ -1603,6 +1647,16 @@ pub(super) fn prepare_configured_genesis(
     ),
     StartFailure,
 > {
+    // LaneConfig is derived runtime geometry. Rebuild it from the authoritative catalog
+    // before signing, exactly as the pre-genesis State constructor does, so both owners
+    // authenticate the same height-one DA policies even when a caller changes the catalog.
+    let normalized_nexus = nexus_config.map(|nexus| {
+        let mut nexus = nexus.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus
+    });
+    let nexus_config = normalized_nexus.as_ref();
     let da_policies =
         nexus_config.map(|nexus| crate::da::active_proof_policy_bundle_at_height(nexus, 1));
     let confidential = zk.map_or_else(
@@ -1720,11 +1774,11 @@ pub(super) fn prepare_configured_genesis(
         let Some((execution, nexus)) = policies else {
             return Ok((genesis, manifest, Arc::new(state), kura));
         };
-        let mut parameters = manifest.sumeragi_v2_context_parameters();
+        let mut parameters = manifest.sumeragi_context_parameters();
         parameters.execution_policy_hash = execution.into();
         parameters.nexus_amx_context_hash = nexus.into();
         manifest = manifest
-            .with_sumeragi_v2_context_parameters(parameters)
+            .with_sumeragi_context_parameters(parameters)
             .with_consensus_meta();
         genesis = match manifest
             .clone()
@@ -1764,23 +1818,12 @@ pub(crate) fn signed_genesis_fixture(
     if (mode == ConsensusMode::Npos) != npos.is_some() {
         return Err("fixture NPoS policy must exactly match signed mode".into());
     }
-    let parameters = npos
-        .into_iter()
-        .flat_map(|policy| {
-            [
-                Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
-                    policy.epoch_length_blocks,
-                )),
-                Parameter::Custom(policy.into_custom_parameter()),
-            ]
-        })
-        .collect();
     build_genesis(
         chain_id,
         genesis_key,
         validators,
         instructions,
-        parameters,
+        genesis_policy::npos_genesis_parameters(npos),
         mode.into(),
         genesis_time_ms,
     )
@@ -1811,7 +1854,7 @@ fn build_genesis(
     let builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
         .with_block_cadence_ms(NonZeroU64::new(1).expect("non-zero"))
         .set_topology(entries)
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
         );
@@ -1849,6 +1892,78 @@ fn build_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boundary_currency_fixture_retains_native_authority_with_signed_genesis() {
+        use iroha_data_model::{
+            asset::AssetBalancePolicy, isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
+        };
+
+        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        let current = {
+            let view = chain.state().view();
+            let policy = view.world().sumeragi_npos_parameters().unwrap();
+            let currency = view
+                .world()
+                .asset_definitions()
+                .get(&policy.xor_asset_definition_id)
+                .expect("original signed genesis currency");
+            assert_eq!(currency.spec().scale(), Some(9));
+            assert_eq!(currency.balance_scope_policy(), AssetBalancePolicy::Global);
+            view.world()
+                .consensus_schedule()
+                .ready(10)
+                .unwrap()
+                .epoch
+                .clone()
+        };
+        chain.commit(Vec::new());
+        let boundary = chain.committed(10);
+        assert!(boundary.header().unwrap().attest);
+        assert_eq!(boundary.commitment().execution.kagemusha_top_up_count, 0);
+        let next = &boundary
+            .commitment()
+            .schedule
+            .boundary
+            .as_ref()
+            .unwrap()
+            .next;
+        assert_eq!(
+            next.authorization.decision,
+            KagemushaMintFinalityEpochDecisionV1::Retain
+        );
+        assert_eq!(next.authority, current.authority);
+        assert_eq!(next.committee, current.committee);
+        chain.commit(Vec::new());
+        assert_eq!(chain.height(), 11);
+    }
+
+    #[test]
+    fn absent_boundary_currency_rejects_execution_without_draining_original_events() {
+        use iroha_data_model::events::{
+            EventBox,
+            pipeline::{BlockStatus, PipelineEventBox},
+        };
+
+        // Omit the currency in the original signed genesis. Removing an authenticated
+        // live definition would violate AXT incarnation custody before boundary execution.
+        let mut chain = CertifiedTestChain::npos_boundary_fixture_with_currency(false);
+        let original = chain.committed(9);
+        let proposal = chain.proposal(None, Vec::new());
+        let error = match chain.begin_proposal(proposal, Default::default()) {
+            Ok(_) => panic!("absent currency cannot authorize the native boundary"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Some(Invalid)"), "{error}");
+        assert!(error.contains("native rejection: Some("), "{error}");
+        assert_eq!(chain.height(), 9);
+        assert_eq!(chain.committed(9).result(), original.result());
+        assert!(chain.take_events().unwrap().iter().any(|event| matches!(
+            event,
+            EventBox::Pipeline(PipelineEventBox::Block(event))
+                if event.header.height().get() == 10 && matches!(event.status, BlockStatus::Rejected(_))
+        )));
+    }
 
     #[test]
     fn custom_genesis_staking_observes_the_original_topology_before_moving_funds() {
@@ -2020,6 +2135,96 @@ mod tests {
         assert_eq!(foreign.height(), 1);
     }
 
+    #[test]
+    fn configured_genesis_derives_da_geometry_before_signing_and_rejects_wrong_policy() {
+        use iroha_crypto::HashOf;
+        use iroha_data_model::{da::commitment::DaProofPolicyBundle, nexus::LaneCatalog};
+
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        let key = config.genesis_key.clone();
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.fees.base_fee = 0_u32.into();
+        nexus.fees.per_byte_fee = 0_u32.into();
+        nexus.fees.per_instruction_fee = 0_u32.into();
+        nexus.fees.per_gas_unit_fee = 0_u32.into();
+        nexus.lane_catalog = LaneCatalog::new(
+            std::num::NonZeroU32::new(1).unwrap(),
+            vec![iroha_data_model::nexus::LaneConfig {
+                alias: "configured-primary".to_owned(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        // Deliberately retain the prior derived table: the configured catalog is the source.
+        let stale_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, 1);
+        assert!(stale_policies.policies.is_empty());
+        config.nexus = Some(nexus);
+        let prepared = CertifiedTestChain::prepare(config)
+            .expect("custom catalog policies are signed before original genesis execution");
+        let original = prepared.genesis.block();
+        let actual_nexus = prepared.state.nexus_snapshot();
+        let expected = crate::da::active_proof_policy_bundle_at_height(&actual_nexus, 1);
+        assert_eq!(expected.policies.len(), 1);
+        assert_eq!(expected.policies[0].alias, "configured-primary");
+        assert_eq!(original.da_proof_policies(), Some(&expected));
+        assert_eq!(
+            original.header().da_proof_policies_hash(),
+            Some(HashOf::new(&expected))
+        );
+        assert_ne!(expected, stale_policies);
+        let original_wire = prepared.genesis.canonical_wire().to_vec();
+
+        // Independently sign the wrong policy; do not mutate a signed header or bypass
+        // signature validation. The production policy check must reject it without output.
+        let wrong_policy = DaProofPolicyBundle::new(Vec::new());
+        let wrong = prepared
+            .manifest
+            .clone()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &key,
+                Some(wrong_policy.clone()),
+                Some(crate::state::default_genesis_confidential_policy_hash()),
+                1_000,
+            )
+            .unwrap()
+            .0;
+        let topology = super::super::network_topology::Topology::new(
+            prepared
+                .validator_keys
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone())),
+        );
+        {
+            let validation = crate::block::ValidBlock::validate_signed_genesis(
+                wrong,
+                &topology,
+                &AccountId::new(key.public_key().clone()),
+                &TimeSource::new_system(),
+                &prepared.state,
+                ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {});
+            let (rejected, error) = match validation {
+                Ok(_) => panic!("signed policy outside the configured catalog must be rejected"),
+                Err(rejected) => rejected,
+            };
+            assert!(matches!(
+                *error,
+                crate::block::BlockValidationError::ProofPolicyHashMismatch { expected: hash, actual }
+                    if hash == HashOf::new(&expected) && actual == Some(HashOf::new(&wrong_policy))
+            ));
+            assert!(rejected.execution_outputs().is_empty());
+        }
+        assert_eq!(prepared.state.view().height(), 0);
+        assert_eq!(prepared.kura.blocks_count(), 0);
+
+        let chain = CertifiedTestChain::from_prepared(prepared)
+            .expect("the original custom-catalog genesis applies unchanged");
+        assert_eq!(chain.height(), 1);
+        assert_eq!(chain.genesis().encode_wire().unwrap(), original_wire);
+    }
+
     fn prepared_config() -> PreparedTestChainConfig {
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("original-prepared-native-fixture");
@@ -2105,6 +2310,11 @@ mod tests {
         include!("test_chain/native_publication_tests.rs");
     }
 
+    mod world_state_tests {
+        use super::*;
+        include!("test_chain/world_state_tests.rs");
+    }
+
     #[test]
     fn prepared_chain_executes_original_genesis_and_authenticates_its_result_at_h2() {
         let config = prepared_config();
@@ -2123,6 +2333,7 @@ mod tests {
             genesis
                 .block()
                 .canonical_resultless_proposal()
+                .expect("valid fixture proposal projection")
                 .encode_wire()
                 .unwrap(),
             original,

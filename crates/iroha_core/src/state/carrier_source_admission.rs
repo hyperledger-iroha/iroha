@@ -1,7 +1,7 @@
 //! Pre-effect custody for ordinary canonical carrier membership source hashes.
 
 use super::*;
-use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError};
+use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedBufferError};
 
 /// The exact signed source and its fixed, originally funded membership hashes.
 ///

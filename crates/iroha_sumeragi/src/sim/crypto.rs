@@ -13,7 +13,7 @@
 //!   others are compared across restarts.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
@@ -303,7 +303,7 @@ impl SigLog {
 }
 
 /// Shared handle to a [`SigLog`].
-pub type SharedLog = Rc<RefCell<SigLog>>;
+pub type SharedLog = std::sync::Arc<std::sync::Mutex<SigLog>>;
 
 /// A signing key of the simulator (fake scheme) that logs every signature.
 #[derive(Clone, Debug)]
@@ -327,7 +327,8 @@ impl Signer for SimSigner {
 
     fn sign(&self, preimage: &[u8]) -> Signature {
         self.log
-            .borrow_mut()
+            .lock()
+            .expect("signing log")
             .record(&self.key, self.machine, preimage);
         fake_sig(&self.key, preimage)
     }
@@ -363,8 +364,8 @@ impl SimCrypto {
 }
 
 impl Crypto for SimCrypto {
-    fn hash(&self, bytes: &[u8]) -> Hash32 {
-        self.inner.hash(bytes)
+    fn hash_chunks(&self, chunks: &[&[u8]]) -> Hash32 {
+        self.inner.hash_chunks(chunks)
     }
 
     fn verify(&self, pk: &PublicKey, msg: &[u8], sig: &Signature) -> bool {
@@ -413,8 +414,19 @@ mod tests {
     }
 
     #[test]
+    fn hashing_chunks_does_not_charge_pairings() {
+        let crypto = SimCrypto::new();
+        let expected = crypto.hash(b"sumeragi/payloadabc");
+        assert_eq!(
+            crypto.hash_chunks(&[b"sumeragi/payload", b"", b"abc"]),
+            expected
+        );
+        assert_eq!(crypto.pairings(), 0);
+    }
+
+    #[test]
     fn osign_checks_and_retraction() {
-        let log: SharedLog = Rc::default();
+        let log: SharedLog = std::sync::Arc::default();
         let i = Hash32([1; 32]);
         let epoch = &crate::testing::TEST_EPOCH.id;
         let vote = |kind, height, view, bh: &Hash32| {
@@ -422,9 +434,9 @@ mod tests {
         };
         let tmo = |height, view, hq| preimage::tmo_preimage(&i, epoch, height, view, hq);
         let echo = |nonce, height| preimage::echo_preimage(&i, epoch, nonce, height);
-        let x = SimSigner::new(key(1), Some(0), Rc::clone(&log));
+        let x = SimSigner::new(key(1), Some(0), std::sync::Arc::clone(&log));
         let prep = |bh: u8| vote(VoteKind::Prepare, 5, 2, &Hash32([bh; 32]));
-        let leader = SimSigner::new(key(9), None, Rc::clone(&log));
+        let leader = SimSigner::new(key(9), None, std::sync::Arc::clone(&log));
         for bh in 1..=3u8 {
             leader.sign(&preimage::prop_preimage(
                 &i,
@@ -437,54 +449,123 @@ mod tests {
         }
         x.sign(&prep(1));
         x.sign(&prep(1)); // identical re-sign is fine
-        assert!(log.borrow_mut().take_violations().is_empty());
+        assert!(
+            log.lock()
+                .expect("signing log")
+                .take_violations()
+                .is_empty()
+        );
         // Unexposed signatures are retracted on crash: a different one after restart is fine.
-        log.borrow_mut().retract(0, |_, _| false);
-        assert!(!log.borrow().was_signed(&key(1), &prep(1)));
+        log.lock().expect("signing log").retract(0, |_, _| false);
+        assert!(
+            !log.lock()
+                .expect("signing log")
+                .was_signed(&key(1), &prep(1))
+        );
         x.sign(&prep(2));
-        assert!(log.borrow_mut().expose(&key(1), &prep(2)));
-        assert!(!log.borrow_mut().expose(&key(1), &prep(2)));
-        log.borrow_mut().retract(0, |_, _| false);
-        assert!(log.borrow().was_signed(&key(1), &prep(2)));
+        assert!(log.lock().expect("signing log").expose(&key(1), &prep(2)));
+        assert!(!log.lock().expect("signing log").expose(&key(1), &prep(2)));
+        log.lock().expect("signing log").retract(0, |_, _| false);
+        assert!(
+            log.lock()
+                .expect("signing log")
+                .was_signed(&key(1), &prep(2))
+        );
         x.sign(&prep(3));
-        assert_eq!(log.borrow_mut().take_violations().len(), 1, "equivocation");
+        assert_eq!(
+            log.lock().expect("signing log").take_violations().len(),
+            1,
+            "equivocation"
+        );
         // Timeout fence.
         x.sign(&tmo(6, 3, None));
         x.sign(&vote(VoteKind::Commit, 6, 3, &i));
-        assert_eq!(log.borrow_mut().take_violations().len(), 1, "fence");
+        assert_eq!(
+            log.lock().expect("signing log").take_violations().len(),
+            1,
+            "fence"
+        );
         // A timeout for an earlier view: out of order (the Lemma 2 lock clause covers only
         // timeouts at views ≥ the Commit's).
         x.sign(&tmo(6, 2, None));
-        assert_eq!(log.borrow_mut().take_violations().len(), 1, "timeout order");
+        assert_eq!(
+            log.lock().expect("signing log").take_violations().len(),
+            1,
+            "timeout order"
+        );
         // After a Commit at view 1, a later timeout must carry hq ≥ 1.
         x.sign(&vote(VoteKind::Commit, 7, 1, &i));
         x.sign(&tmo(7, 1, Some(1)));
-        assert!(log.borrow_mut().take_violations().is_empty());
+        assert!(
+            log.lock()
+                .expect("signing log")
+                .take_violations()
+                .is_empty()
+        );
         x.sign(&tmo(7, 2, Some(0)));
-        assert_eq!(log.borrow_mut().take_violations().len(), 1, "stale lock");
+        assert_eq!(
+            log.lock().expect("signing log").take_violations().len(),
+            1,
+            "stale lock"
+        );
         // Echoes are never recorded or checked.
         x.sign(&echo(7, 7));
         x.sign(&echo(8, 7));
-        assert!(log.borrow_mut().take_violations().is_empty());
-        assert!(!log.borrow().was_signed(&key(1), &echo(7, 7)));
-        assert_eq!(log.borrow().max_signed_height(&key(1), &i), Some(7));
-        assert_eq!(log.borrow_mut().commits.len(), 2);
+        assert!(
+            log.lock()
+                .expect("signing log")
+                .take_violations()
+                .is_empty()
+        );
+        assert!(
+            !log.lock()
+                .expect("signing log")
+                .was_signed(&key(1), &echo(7, 7))
+        );
+        assert_eq!(
+            log.lock()
+                .expect("signing log")
+                .max_signed_height(&key(1), &i),
+            Some(7)
+        );
+        assert_eq!(log.lock().expect("signing log").commits.len(), 2);
         // Byzantine keys are logged but not checked.
-        let b = SimSigner::new(key(2), None, Rc::clone(&log));
+        let b = SimSigner::new(key(2), None, std::sync::Arc::clone(&log));
         b.sign(&prep(1));
         b.sign(&prep(2));
-        assert!(log.borrow_mut().take_violations().is_empty());
+        assert!(
+            log.lock()
+                .expect("signing log")
+                .take_violations()
+                .is_empty()
+        );
         // A Prepare for a block never proposed in that view (SR3).
         x.sign(&vote(VoteKind::Prepare, 8, 0, &i));
-        assert_eq!(log.borrow_mut().take_violations().len(), 1, "unproposed");
+        assert_eq!(
+            log.lock().expect("signing log").take_violations().len(),
+            1,
+            "unproposed"
+        );
         // Abstention (R2/R6).
-        log.borrow_mut().set_abstain(&key(1), i, 10);
+        log.lock().expect("signing log").set_abstain(&key(1), i, 10);
         x.sign(&tmo(9, 0, None));
-        assert_eq!(log.borrow_mut().take_violations().len(), 1, "abstain");
-        assert!(log.borrow().was_signed(&key(2), &prep(1)));
-        log.borrow_mut().prune_below(6);
-        assert!(!log.borrow().was_signed(&key(2), &prep(1)));
-        assert!(!log.borrow().is_empty());
+        assert_eq!(
+            log.lock().expect("signing log").take_violations().len(),
+            1,
+            "abstain"
+        );
+        assert!(
+            log.lock()
+                .expect("signing log")
+                .was_signed(&key(2), &prep(1))
+        );
+        log.lock().expect("signing log").prune_below(6);
+        assert!(
+            !log.lock()
+                .expect("signing log")
+                .was_signed(&key(2), &prep(1))
+        );
+        assert!(!log.lock().expect("signing log").is_empty());
         assert_eq!(parse_preimage(b"junk"), None);
         assert_eq!(kind_name(KIND_TIMEOUT), "timeout");
     }

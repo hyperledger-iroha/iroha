@@ -16,10 +16,6 @@ use sorafs_manifest::signer::{
 };
 use sorafs_node::FinalizedProviderIngestAuthorizationV1;
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixture builds one exact source request and independently governed custody control"
-)]
 fn current_source_and_control_fixture() -> (
     ProviderIngestCurrentSourceAssignmentV1,
     SignerCustodyBindingV1,

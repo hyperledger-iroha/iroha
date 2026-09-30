@@ -370,7 +370,7 @@ fn decoder_rejects_truncation_extra_bytes_and_wrong_metadata() {
             version,
             registers,
             lanes,
-            program().instructions().collect(),
+            &program().instructions().collect::<Vec<_>>(),
         );
         assert!(HiddenRamFheProgram::from_bytes(&invalid.to_bytes().unwrap()).is_err());
     }

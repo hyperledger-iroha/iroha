@@ -9,10 +9,10 @@ use crate::{
     error::Perm,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
 };
+use iroha_allocation::AllocationBudget;
 use ivm_abi::call::{
     CALL_WORD_BYTES_V1, EmbeddedCallableV1, MAX_CALL_FRAME_BYTES_V1, MAX_CALL_WORDS_V1,
 };
-use mv::allocation::AllocationBudget;
 use std::ops::{Deref, DerefMut};
 
 #[cfg(test)]

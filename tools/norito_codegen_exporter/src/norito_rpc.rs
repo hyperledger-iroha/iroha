@@ -980,10 +980,6 @@ struct WireInstructionPayload {
     payload_base64: String,
 }
 impl RawPayloadFixture {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "fixture construction keeps all descriptor-to-signed-payload invariants in one fail-closed path"
-    )]
     fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
         if self.network_id_hint != self.payload.network_id {
             bail!(
@@ -2007,10 +2003,6 @@ impl PublicationSnapshot {
         Ok(unsealed)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "snapshot capture validates one cohesive path, type, mode, link, and spelling invariant matrix"
-    )]
     fn capture(root: &Path, expected_paths: &[PathBuf]) -> Result<Self> {
         let root_metadata = fs::symlink_metadata(root)
             .with_context(|| format!("failed to inspect publication root {}", root.display()))?;
@@ -2288,10 +2280,6 @@ fn set_canonical_directory_mode(path: &Path) -> Result<()> {
         path.display()
     )
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "publication keeps reservation, namespace identity, exact-tree validation, and the final seal commit in one auditable transaction"
-)]
 fn publish_create_only_publication<F>(
     snapshot: &PublicationSnapshot,
     destination_root: &Path,
@@ -3238,10 +3226,6 @@ struct FixtureEntry {
     time_to_live_ms: u64,
 }
 impl FixtureEntry {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "fixture validation is one cohesive fail-closed manifest invariant matrix"
-    )]
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
         validate_fixture_identity(&self.name, &self.encoded_file)?;
         if self.time_to_live_ms == 0 {
@@ -3866,21 +3850,21 @@ mod tests {
             properties["canonical.prefix.hex"],
             format!("00000000{}", properties["compact.length.hex"])
         );
-        assert_eq!(properties["versioned.bytes"], "624");
+        assert_eq!(properties["versioned.bytes"], "619");
         assert_eq!(
             properties["versioned.sha256"],
-            "564f351b91c59f2fbad3f02fdeb4a477f9ded3af4ec7576c8bdf6a8c7e5513af"
+            "f8a4e12f40d0d5d92d74a032a4b782b6b3361363a1a313161f2336b68006087f"
         );
-        assert_eq!(properties["bare.bytes"], "623");
-        assert_eq!(properties["compact.length.hex"], "df03");
-        assert_eq!(properties["canonical.prefix.hex"], "00000000df03");
+        assert_eq!(properties["bare.bytes"], "618");
+        assert_eq!(properties["compact.length.hex"], "da03");
+        assert_eq!(properties["canonical.prefix.hex"], "00000000da03");
         assert_eq!(
             properties["canonical.hash"],
-            "2515ee634afb06d636c4947ffce5c0ebe70b9d9df52943f95e3e074e65438d91"
+            "76ca8143ab4fc3697dd755576ceb33c82086af30d69d77b030f9817a8e9c2fc3"
         );
         assert_eq!(
             properties["payload.prehash"],
-            "cf3c67158dfa4b370219f4ff24861551de386ce3ce07fa3e142c242ed49e421d"
+            "36b2c7537acc2c100743039539ed28612e5f34e1ecf6df2e2afb4ad55fcebe43"
         );
     }
     #[test]
@@ -4512,10 +4496,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the closed-schema test keeps all top-level and nested rejection cases auditable together"
-    )]
     fn payload_descriptor_requires_exact_top_level_and_payload_fields() {
         let mut fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
         let entry = fixture
@@ -4594,7 +4574,8 @@ mod tests {
                     norito::json!({"intent": label, "value": null}),
                 );
                 let error = parse_payload(&Value::Object(retired))
-                    .expect_err("retired admission field must fail closed");
+                    .err()
+                    .expect("retired admission field must fail closed");
                 assert!(error.to_string().contains(field), "{error}");
             }
         }

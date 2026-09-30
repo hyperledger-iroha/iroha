@@ -337,7 +337,7 @@ Iroha can group signatures by scheme during block validation and verify them in 
 
 - Committed evidence audit:
   - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for the bounded evidence table retained in WSV.
-  - `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with the frozen context and exact signed-artifact summary for committed `SumeragiV2Equivocation` evidence.
+  - `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with the attributed context, offenders and native frame hash of committed `NativeSumeragiEvidence`.
   - Both routes are read-only projections of persisted consensus state. Node-local proofs awaiting block admission are deliberately excluded.
 - Python SDK shortcuts: `iroha_python.ToriiClient.get_pipeline_recovery(height)` fetches the JSON sidecar, and `stream_pipeline_transactions`/`stream_pipeline_blocks`/`stream_pipeline_witnesses`/`stream_pipeline_merges` expose the SSE feeds with Norito-backed filters.
   - Purpose: quick inspection during development and operations.

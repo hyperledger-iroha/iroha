@@ -15,6 +15,7 @@ use crate::{
     },
 };
 use eyre::{Result, WrapErr, eyre};
+use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::{
@@ -30,7 +31,6 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
-use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer};
 use mv::storage::StorageReadOnly;
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -1373,7 +1373,7 @@ mod tests {
                     Quantity,
                 )>()
                 + expected_nested_key_bytes
-                + 8 * std::mem::size_of::<mv::allocation::AllocationCharge>()
+                + 8 * std::mem::size_of::<iroha_allocation::AllocationCharge>()
         );
         drop(snapshot);
         assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
@@ -1407,7 +1407,7 @@ mod tests {
             Quantity,
             Quantity,
         )>() + 3
-            * (validator_key_bytes + std::mem::size_of::<mv::allocation::AllocationCharge>());
+            * (validator_key_bytes + std::mem::size_of::<iroha_allocation::AllocationCharge>());
         let exact_held = budget
             .try_reserve_bytes(budget.limit_bytes() - backing)
             .expect("leave exact combined backing in original pool");
@@ -1897,7 +1897,7 @@ mod tests {
     }
     #[test]
     fn pending_penalty_backing_refusal_preserves_source_and_retries_after_original_release() {
-        use mv::allocation::AllocationRefusal;
+        use iroha_allocation::AllocationRefusal;
 
         let max_rows = super::super::evidence::MAX_COMMITTED_EVIDENCE_RECORDS * 31;
         let max_layout = std::alloc::Layout::array::<PendingPenaltyEvidence>(max_rows)
@@ -1974,7 +1974,7 @@ mod tests {
     }
     #[test]
     fn pending_penalty_peer_key_refusal_preserves_source_and_retries_after_original_release() {
-        use mv::allocation::AllocationRefusal;
+        use iroha_allocation::AllocationRefusal;
 
         let state = native_penalty_state();
         install_one_block_delay_npos(&state);

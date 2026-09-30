@@ -3,8 +3,8 @@
 
 use super::{Core, Peer, PqcVia, Via};
 use crate::{
-    api::Event,
-    message::{Echo, Proposal, Status, VoteKind, WireMessage},
+    api::{Action, Event},
+    message::{Echo, ProposalMessage, Status, VoteKind, WireMessage},
     preimage, safety,
     types::PublicKey,
 };
@@ -13,7 +13,10 @@ impl Core {
     /// §6.1 for every network message.
     pub(super) fn on_message(&mut self, from: &PublicKey, msg: WireMessage) {
         // Rule 1, plus the structural limits in case the driver did not decode with them.
-        if msg.instance() != &self.instance || msg.check_limits().is_err() {
+        if msg.instance() != &self.instance
+            || msg.check_limits().is_err()
+            || !msg.owned_bytes_admitted_to(&self.body_budget)
+        {
             return;
         }
         match msg {
@@ -22,10 +25,22 @@ impl Core {
             WireMessage::Status(status) => self.on_status(from, *status),
             WireMessage::SyncRequest(request) => self.serve_sync(from.clone(), &request),
             WireMessage::SyncResponse(response) => self.on_sync_response(from, response),
-            WireMessage::BlockRequest(request) => {
+            WireMessage::PayloadRequest(request) => {
                 self.on_block_request(from.clone(), request.height, request.block_hash);
             }
-            WireMessage::BlockResponse(response) => self.on_body(response.block, false),
+            WireMessage::PayloadManifest(manifest) => self.on_manifest(manifest),
+            WireMessage::PayloadChunk(chunk) => {
+                if self
+                    .wants
+                    .get(&chunk.block_hash)
+                    .is_some_and(|want| want.height == chunk.height)
+                {
+                    self.out.push(Action::ReceivePayloadChunk {
+                        from: from.clone(),
+                        chunk,
+                    });
+                }
+            }
             round => self.on_round_message(from, round),
         }
     }
@@ -48,7 +63,7 @@ impl Core {
         match msg {
             WireMessage::Qc(qc) => self.sync_hint(&qc, from),
             WireMessage::Proposal(p) => {
-                if let Some(qc) = &p.parent_qc {
+                if let Some(qc) = &p.proposal.parent_qc {
                     self.sync_hint(qc, from);
                 }
             }
@@ -88,7 +103,11 @@ impl Core {
     }
 
     /// §6.2 step 0: a proposal for `h + 1` whose `parent_qc` commits `h`.
-    fn on_next_proposal(&mut self, from: &PublicKey, p: Proposal) {
+    fn on_next_proposal(&mut self, from: &PublicKey, carrier: ProposalMessage) {
+        let ProposalMessage {
+            proposal: p,
+            availability,
+        } = carrier;
         if self.awaiting {
             // Its parent is committed but its configuration is unknown: it cannot be verified.
             // The node gets the proposal again through its proposal request after it enters.
@@ -102,14 +121,14 @@ impl Core {
         }
         self.commit_height(qc, Via::ParentQc);
         if !self.awaiting && self.height == p.height && self.halted.is_none() {
-            self.on_proposal(from, p);
+            self.on_proposal(from, p, availability);
         }
     }
 
     /// Dispatch of round messages at the current height.
     fn on_current(&mut self, from: &PublicKey, msg: WireMessage) {
         match msg {
-            WireMessage::Proposal(p) => self.on_proposal(from, *p),
+            WireMessage::Proposal(p) => self.on_proposal(from, p.proposal, p.availability),
             WireMessage::Vote(vote) => self.on_vote(vote),
             WireMessage::Qc(qc) => self.on_qc(qc, PqcVia::Wire),
             WireMessage::Timeout(t) => self.on_timeout(*t),
@@ -346,7 +365,7 @@ impl Core {
     }
 
     /// §6.11 step 2, the late-entrant re-push: the leader of `(h, view)` holding its proposal
-    /// re-sends it (with payload) at once to a recipient asking for it, at most once per
+    /// re-sends its manifest and rows to a recipient asking for it, at most once per
     /// recipient per view (independently of the interval-gated rebroadcast re-push).
     fn repush_on_request(&mut self, from: &PublicKey, s: &Status) {
         let (Some(me), Some(p)) = (self.my_index(), self.mine.proposal.clone()) else {
@@ -365,13 +384,19 @@ impl Core {
         {
             return;
         }
-        let Some(block) = self.blocks.get(&bh) else {
+        let Some(body) = self.blocks.get(&bh).cloned() else {
             return;
         };
-        let mut full = p;
-        full.payload = Some(block.payload.clone());
+        let full = ProposalMessage {
+            proposal: p,
+            availability: body.availability().clone(),
+        };
         self.request_pushed.insert(from.clone());
         self.send(from.clone(), WireMessage::Proposal(Box::new(full)));
+        self.out.push(Action::DisseminatePayload {
+            peers: vec![from.clone()],
+            body,
+        });
     }
 
     /// `request_proposal` (§6.11, at the end of every `handle` call and of `Core::new`): a node
@@ -488,7 +513,7 @@ impl Core {
         {
             match msg {
                 WireMessage::SyncRequest(request) => self.serve_sync(from, &request),
-                WireMessage::BlockRequest(request) => {
+                WireMessage::PayloadRequest(request) => {
                     self.on_block_request(from, request.height, request.block_hash);
                 }
                 _ => {}

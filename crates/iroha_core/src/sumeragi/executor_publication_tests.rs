@@ -16,7 +16,7 @@ use crate::{
 };
 use iroha_sumeragi::{crypto::NoAttestation, preimage::payload_hash};
 
-fn with_worker(
+pub(super) fn with_worker(
     test: impl FnOnce(
         &CertifiedTestChain,
         &mut Worker<'_>,
@@ -50,7 +50,7 @@ fn with_worker_from(
         .spawn(move || {
             let chain = make_chain();
             assert_eq!(chain.validators().len(), 4);
-            let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap();
+            let (_, certificate, _) = startup::stored_genesis(chain.state()).unwrap().unwrap();
             assert!(certificate.consensus_header().is_empty());
             assert!(
                 certificate.commit_qc().is_empty(),
@@ -86,14 +86,29 @@ fn with_worker_from(
                 applied_watch: Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(1, None)),
                 lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
             };
+            let schedule = Arc::new(
+                crate::sumeragi::runtime_availability::NativeGlobalAvailability::new(
+                    Arc::clone(chain.state()),
+                    chain.instance(),
+                    Arc::clone(&crypto),
+                )
+                .unwrap(),
+            );
+            let verifier = Arc::new(crate::sumeragi::attestation::NativePastaVerifier::new(
+                chain.instance(),
+                chain.network_id(),
+            ));
             let blocks = KuraBlockStore::new(
                 Arc::clone(chain.kura()),
                 crypto,
                 1,
                 context.staging.clone(),
                 context.state.ivm_execution_budget(),
+                schedule,
+                verifier,
             );
             let mut worker = Worker {
+                payload_build: None,
                 context: &context,
                 state: &context.state,
                 applied: context.applied,
@@ -116,16 +131,27 @@ fn with_worker_from(
         .expect("publication worker fixture");
 }
 
-pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> Block {
+pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> AvailableBody {
+    proposal_with_transaction(chain, worker, CertifiedTestChain::tick)
+}
+
+fn proposal_with_transaction(
+    chain: &CertifiedTestChain,
+    worker: &Worker<'_>,
+    transaction: impl FnOnce(
+        &CertifiedTestChain,
+        u64,
+    ) -> iroha_data_model::transaction::SignedTransaction,
+) -> AvailableBody {
     let height = worker.applied.0 + 1;
     let certified_parent = chain.committed(worker.applied.0);
     let scheduled = worker.scheduled(height).unwrap().height_config().unwrap();
     let crypto = worker.context.crypto.as_ref().unwrap();
     let view = chain.state().view();
     let parent = view.latest_block().unwrap();
-    let cadence = Duration::from_millis(worker.scheduled(height).unwrap().params.block_time_ms);
+    let cadence = Duration::from_millis(scheduled.params.block_time);
     let block_time = parent.header().creation_time() + cadence;
-    let tx = chain.tick(u64::try_from(block_time.as_millis()).unwrap() - 1);
+    let tx = transaction(chain, u64::try_from(block_time.as_millis()).unwrap() - 1);
     let (_, time) = iroha_primitives::time::TimeSource::new_mock(block_time);
     let accepted = crate::tx::AcceptedTransaction::accept_with_time_source(
         tx,
@@ -148,8 +174,8 @@ pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> Block
     )
     .unwrap();
     let payload = payload::encode(&proposal).unwrap();
-    Block {
-        header: iroha_sumeragi::message::BlockHeader {
+    chain.author_payload(
+        iroha_sumeragi::message::BlockHeader {
             instance: chain.instance(),
             epoch: scheduled.epoch.id,
             height,
@@ -158,17 +184,26 @@ pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> Block
             parent_result: certified_parent.result(),
             payload_hash: payload_hash(&**crypto, &payload),
             payload_len: u32::try_from(payload.len()).unwrap(),
+            availability_digest: Hash32::ZERO,
             proposer: 0,
             skipped_leaders: Vec::new(),
             control_witness: iroha_sumeragi::types::ControlWitness::empty(),
             attest: height == scheduled.epoch.last_height,
         },
         payload,
-    }
+    )
 }
 
-pub(super) fn executed(chain: &CertifiedTestChain, worker: &mut Worker<'_>) -> (Block, Qc) {
+pub(super) fn executed(chain: &CertifiedTestChain, worker: &mut Worker<'_>) -> (AvailableBody, Qc) {
     let block = proposal(chain, worker);
+    execute_proposal(chain, worker, block)
+}
+
+fn execute_proposal(
+    chain: &CertifiedTestChain,
+    worker: &mut Worker<'_>,
+    block: AvailableBody,
+) -> (AvailableBody, Qc) {
     let crypto = worker.context.crypto.as_ref().unwrap();
     let block_hash = block.hash(&**crypto);
     let Some(ExecOutcome::Valid(result)) = worker.execute(&block, block_hash) else {
@@ -184,7 +219,7 @@ pub(super) fn executed(chain: &CertifiedTestChain, worker: &mut Worker<'_>) -> (
     iroha_sumeragi::crypto::Verifier::new(
         &**worker.context.crypto.as_ref().unwrap(),
         &chain.instance(),
-        &block.header.epoch,
+        &block.header().epoch,
         &committee,
     )
     .verify_qc(&NoAttestation, &qc)
@@ -194,6 +229,166 @@ pub(super) fn executed(chain: &CertifiedTestChain, worker: &mut Worker<'_>) -> (
 
 fn original_overlay(worker: &Worker<'_>) -> usize {
     std::ptr::from_ref(worker.live.as_ref().unwrap().overlay.as_deref().unwrap()) as usize
+}
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn canonical_replay_origin_retains_transition_idempotence_through_publication_retry() {
+    use iroha_data_model::{
+        governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+        },
+        isi::governance::{
+            CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
+            SubmitParliamentLifecycleTransitionV1,
+        },
+        permission::Permission,
+        prelude::InstructionBox,
+    };
+    use iroha_executor_data_model::permission::governance::CanManageParliament;
+    use mv::storage::StorageReadOnly as _;
+    use std::collections::BTreeSet;
+
+    for origin in [
+        CommitTelemetryOrigin::Forward,
+        CommitTelemetryOrigin::HistoricalReplay,
+    ] {
+        let manager =
+            iroha_crypto::KeyPair::from_seed(vec![0xCE; 32], iroha_crypto::Algorithm::Ed25519);
+        let manager_account =
+            iroha_data_model::account::AccountId::new(manager.public_key().clone());
+        let create = CreateParliamentGovernanceAttemptV1 {
+            proposal: ProposalKind::DeployContract(DeployContractProposal {
+                proposal_operator: manager_account.clone(),
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                    .parse()
+                    .unwrap(),
+                code_hash: ContractCodeHash::new([0x31; 32]),
+                abi_hash: ContractAbiHash::new([0x41; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            attempt_sequence: 0,
+        };
+        let seeded_proposal = create.proposal.clone();
+        with_worker_from(
+            move || {
+                // Fix the initial proposal and manager in World before the actual
+                // signed genesis is executed. No post-genesis source is replaced.
+                let mut world = World::new();
+                world.account_permissions.insert(
+                    manager_account.clone(),
+                    BTreeSet::from([Permission::from(CanManageParliament)]),
+                );
+                world.governance_proposals.insert(
+                    seeded_proposal.fingerprint(),
+                    crate::state::GovernanceProposalRecord {
+                        proposer: manager_account,
+                        kind: seeded_proposal,
+                        created_height: 1,
+                        status: crate::state::GovernanceProposalStatus::Proposed,
+                    },
+                );
+                CertifiedTestChain::start(TestChainConfig::new(world, 1_000))
+                    .expect("actual signed genesis with initial governance World")
+            },
+            ConsensusMode::Permissioned,
+            move |chain, worker, blocks, _| {
+                // Signed instructions create the real reducer state and event before
+                // the original execution witness and publication surface are captured.
+                let attempt_id = create.governance_attempt_id();
+                let transition = SubmitParliamentLifecycleTransitionV1 {
+                    governance_attempt_id: attempt_id,
+                    transition: ParliamentLifecycleTransitionV1::CompleteQualification,
+                };
+                let body = proposal_with_transaction(chain, worker, |chain, created_ms| {
+                    chain.sign(
+                        &manager,
+                        [
+                            InstructionBox::from(create),
+                            InstructionBox::from(transition),
+                        ],
+                        created_ms,
+                    )
+                });
+                let (block, qc) = execute_proposal(chain, worker, body);
+                let stage = worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_ref()
+                    .unwrap()
+                    .world
+                    .parliament_attempts
+                    .get(&attempt_id)
+                    .expect("signed Parliament instructions executed")
+                    .attempt()
+                    .stage;
+                assert_ne!(
+                    stage,
+                    iroha_data_model::governance::types::GovernanceStageV1::Qualification,
+                    "the actual reducer completed qualification before witness capture"
+                );
+                worker.prepare_with_origin(&block, &qc, origin).unwrap();
+                let original = original_overlay(worker);
+                let other = match origin {
+                    CommitTelemetryOrigin::Forward => CommitTelemetryOrigin::HistoricalReplay,
+                    CommitTelemetryOrigin::HistoricalReplay => CommitTelemetryOrigin::Forward,
+                };
+                assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
+                assert_eq!(original_overlay(worker), original);
+                blocks.append(&block, &qc).unwrap();
+                let metric = chain
+                    .state()
+                    .telemetry
+                    .governance_parliament_transitions_total
+                    .with_label_values(&["complete_qualification"]);
+                assert_eq!(metric.get(), 0);
+                for _ in 0..2 {
+                    chain.state().with_publication_blocked_for_test(|| {
+                        assert!(matches!(
+                            worker.commit(&block, &qc),
+                            Err(PublicationError::Retryable(_))
+                        ));
+                    });
+                    assert_eq!(
+                        metric.get(),
+                        0,
+                        "refusal cannot publish transition observations"
+                    );
+                    assert_eq!(original_overlay(worker), original);
+                    assert_eq!(
+                        worker.prepare_with_origin(&block, &qc, origin).unwrap(),
+                        Some(qc.result)
+                    );
+                    assert!(worker.prepare_with_origin(&block, &qc, other).is_err());
+                }
+                worker.commit(&block, &qc).unwrap();
+                assert_eq!(
+                    chain
+                        .state()
+                        .view()
+                        .world()
+                        .parliament_attempts()
+                        .get(&attempt_id)
+                        .unwrap()
+                        .attempt()
+                        .stage,
+                    stage,
+                    "both origins publish the same authenticated transition state"
+                );
+                let expected = u64::from(origin == CommitTelemetryOrigin::Forward);
+                assert_eq!(metric.get(), expected);
+                worker.commit(&block, &qc).unwrap();
+                assert_eq!(
+                    metric.get(),
+                    expected,
+                    "the original publication completes once"
+                );
+            },
+        );
+    }
 }
 
 #[test]
@@ -286,7 +481,7 @@ fn reversible_publication_refusal_retains_original_overlay_capture_and_certified
             events.try_recv().is_err(),
             "completed retry cannot duplicate side effects"
         );
-        assert_eq!(blocks.entry(2).unwrap().commit_qc, qc);
+        assert_eq!(blocks.entry(2).unwrap().unwrap().commit_qc, qc);
     });
 }
 
@@ -322,8 +517,9 @@ fn preparation_pins_original_even_against_discard_replacement_and_another_valid_
         let original = worker.context.staging.get(&qc.block_hash).unwrap();
         worker.discard(2, &[]);
         assert_eq!(original_overlay(worker), overlay);
-        let mut competing = block.clone();
-        competing.header.origin_view += 1;
+        let mut competing_header = block.header().clone();
+        competing_header.origin_view += 1;
+        let competing = chain.author_payload(competing_header, block.payload().as_slice().to_vec());
         let hash = competing.hash(&**worker.context.crypto.as_ref().unwrap());
         assert!(matches!(
             worker.execute(&competing, hash),
@@ -340,7 +536,7 @@ fn preparation_pins_original_even_against_discard_replacement_and_another_valid_
         iroha_sumeragi::crypto::Verifier::new(
             &**worker.context.crypto.as_ref().unwrap(),
             &chain.instance(),
-            &block.header.epoch,
+            &block.header().epoch,
             &committee,
         )
         .verify_qc(&NoAttestation, &alternate)
@@ -352,9 +548,27 @@ fn preparation_pins_original_even_against_discard_replacement_and_another_valid_
             &original
         ));
         blocks.append(&block, &qc).unwrap();
+        let original_wire = chain
+            .kura()
+            .get_block(std::num::NonZeroUsize::new(2).unwrap())
+            .unwrap()
+            .encode_wire()
+            .unwrap();
         assert!(
             blocks.append(&block, &alternate).is_err(),
             "durable retry cannot replace the prepared certificate"
+        );
+        blocks.append(&block, &qc).unwrap();
+        assert_eq!(blocks.committed_body(2).unwrap().unwrap().1, qc);
+        assert_eq!(
+            chain
+                .kura()
+                .get_block(std::num::NonZeroUsize::new(2).unwrap())
+                .unwrap()
+                .encode_wire()
+                .unwrap(),
+            original_wire,
+            "refusal and exact retry retain the complete original durable frame"
         );
         worker.commit(&block, &qc).unwrap();
     });
@@ -412,7 +626,10 @@ fn consuming_publication_failure_blocks_every_reexecution_path() {
         ));
         worker.discard(2, &[]);
         worker.reject(2, 0, qc.block_hash);
-        assert_eq!(worker.build(2, 0, 1024), (Vec::new(), false));
+        assert!(matches!(
+            worker.build(2, 0, 1024),
+            Err(PublicationError::RecoveryRequired(_))
+        ));
         assert!(Arc::ptr_eq(
             &worker.context.staging.get(&qc.block_hash).unwrap(),
             &original
@@ -480,7 +697,7 @@ fn original_worker_consuming_failure_halts_driver_status_without_reexecution() {
     with_worker(|chain, worker, blocks, _| {
         let (block, qc) = executed(chain, worker);
         let original = original_overlay(worker);
-        let (_, _, genesis) = startup::stored_genesis(chain.state()).unwrap();
+        let (_, _, genesis) = startup::stored_genesis(chain.state()).unwrap().unwrap();
         let make_crypto = || {
             let crypto = BlsCrypto::new();
             crypto
@@ -494,6 +711,7 @@ fn original_worker_consuming_failure_halts_driver_status_without_reexecution() {
             Box::new(crypto)
         };
         let (mut kernel, _) = Kernel::start(KernelStart {
+            allocation_budget: chain.state().ivm_execution_budget(),
             local: LocalParams::default(),
             init: Init {
                 instance: chain.instance(),
@@ -745,8 +963,8 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
         assert!(matches!(
             refusal,
             Some(NativeLaneStateProofError::Scratch(
-                mv::allocation::ChargedBufferError::Admission(
-                    mv::allocation::AllocationRefusal::Capacity { .. }
+                iroha_allocation::ChargedBufferError::Admission(
+                    iroha_allocation::AllocationRefusal::Capacity { .. }
                 )
             ))
         ));
@@ -831,8 +1049,8 @@ fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custod
             pending.encoding_refusal,
             Some(
                 crate::sumeragi::commitment::ResultPreimageError::Allocation(
-                    mv::allocation::ChargedBufferError::Admission(
-                        mv::allocation::AllocationRefusal::Capacity { .. }
+                    iroha_allocation::ChargedBufferError::Admission(
+                        iroha_allocation::AllocationRefusal::Capacity { .. }
                     )
                 )
             )
@@ -903,7 +1121,7 @@ fn result_encoding_foreign_pool_requires_recovery_and_retains_original_execution
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
         let outcome = worker.run_execution_with_encoder(&block, block_hash, |original, budget| {
-            let foreign = mv::allocation::AllocationBudget::new(budget.limit_bytes());
+            let foreign = iroha_allocation::AllocationBudget::new(budget.limit_bytes());
             encode_result_preimage(original, &foreign)
         });
         assert!(matches!(outcome, ExecOutcome::Failed(_)));
@@ -946,33 +1164,42 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
         let mut encoded = 0;
         let mut header_pointer = None;
         let mut qc_pointer = None;
-        let outcome = worker.prepare_with_encoder(&block, &qc, |part, budget| {
-            let bytes = crate::sumeragi::commitment::encode_certificate_part(
-                part,
-                budget,
-                crate::sumeragi::commitment::MAX_RESULT_PREIMAGE_BYTES,
-            )?;
-            encoded += 1;
-            if encoded == 1 {
-                header_pointer = Some(bytes.as_slice().as_ptr());
-            }
-            if encoded == 2 {
-                qc_pointer = Some(bytes.as_slice().as_ptr());
-            }
-            if encoded == occupy_after_part {
-                occupied = Some(
-                    budget
-                        .try_reserve_bytes(
-                            budget
-                                .limit_bytes()
-                                .checked_sub(budget.reserved_bytes())
-                                .unwrap(),
-                        )
-                        .expect("occupy actual remaining original capacity"),
-                );
-            }
-            Ok(bytes)
-        });
+        let mut availability_pointer = None;
+        let outcome = worker.prepare_with_encoder(
+            &block,
+            &qc,
+            CommitTelemetryOrigin::Forward,
+            |part, budget| {
+                let bytes = crate::sumeragi::commitment::encode_certificate_part(
+                    part,
+                    budget,
+                    crate::sumeragi::commitment::MAX_RESULT_PREIMAGE_BYTES,
+                )?;
+                encoded += 1;
+                if encoded == 1 {
+                    header_pointer = Some(bytes.as_slice().as_ptr());
+                }
+                if encoded == 2 {
+                    qc_pointer = Some(bytes.as_slice().as_ptr());
+                }
+                if encoded == 3 {
+                    availability_pointer = Some(bytes.as_slice().as_ptr());
+                }
+                if encoded == occupy_after_part {
+                    occupied = Some(
+                        budget
+                            .try_reserve_bytes(
+                                budget
+                                    .limit_bytes()
+                                    .checked_sub(budget.reserved_bytes())
+                                    .unwrap(),
+                            )
+                            .expect("occupy actual remaining original capacity"),
+                    );
+                }
+                Ok(bytes)
+            },
+        );
         assert!(matches!(outcome, Err(PublicationError::Retryable(_))));
         assert_eq!(encoded, occupy_after_part);
         for _ in 0..2 {
@@ -992,8 +1219,8 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
                     qc_wire: None,
                     refusal:
                         Some(crate::sumeragi::commitment::ResultPreimageError::Allocation(
-                            mv::allocation::ChargedBufferError::Admission(
-                                mv::allocation::AllocationRefusal::Capacity { .. },
+                            iroha_allocation::ChargedBufferError::Admission(
+                                iroha_allocation::AllocationRefusal::Capacity { .. },
                             ),
                         )),
                     ..
@@ -1001,14 +1228,35 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
                     assert_eq!(original.as_slice().as_ptr(), preimage);
                     assert_eq!(Some(header.as_slice().as_ptr()), header_pointer);
                 }
+                PublicationPhase::EncodingCertificate {
+                    preimage: original,
+                    header_wire: Some(header),
+                    qc_wire: Some(original_qc),
+                    availability_wire: None,
+                    refusal:
+                        Some(crate::sumeragi::commitment::ResultPreimageError::Allocation(
+                            iroha_allocation::ChargedBufferError::Admission(
+                                iroha_allocation::AllocationRefusal::Capacity { .. },
+                            ),
+                        )),
+                    ..
+                } if occupy_after_part == 2 => {
+                    assert_eq!(original.as_slice().as_ptr(), preimage);
+                    assert_eq!(Some(header.as_slice().as_ptr()), header_pointer);
+                    assert_eq!(Some(original_qc.as_slice().as_ptr()), qc_pointer);
+                }
                 PublicationPhase::Certifying {
                     parts: Some(parts),
                     refusal:
                         Some(iroha_data_model::block::CertificateAdmissionError::ControlAdmission(
-                            mv::allocation::AllocationRefusal::Capacity { .. },
+                            iroha_allocation::AllocationRefusal::Capacity { .. },
                         )),
                     ..
-                } if occupy_after_part == 2 => {
+                } if occupy_after_part == 3 => {
+                    assert_eq!(
+                        Some(parts.availability.as_slice().as_ptr()),
+                        availability_pointer
+                    );
                     assert_eq!(parts.result_preimage.as_slice().as_ptr(), preimage);
                     assert_eq!(
                         Some(parts.consensus_header.as_slice().as_ptr()),
@@ -1043,6 +1291,12 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
         if let Some(original_qc) = qc_pointer {
             assert_eq!(certificate.commit_qc().as_ptr(), original_qc);
         }
+        if let Some(original_availability) = availability_pointer {
+            assert_eq!(certificate.availability().as_ptr(), original_availability);
+        }
+        let decoded_frame: iroha_sumeragi::availability::AvailabilityFrame =
+            norito::decode_canonical(certificate.availability()).unwrap();
+        assert_eq!(&decoded_frame, block.availability());
         assert_eq!(original_overlay(worker), overlay);
         blocks.append(&block, &qc).unwrap();
         worker.commit(&block, &qc).unwrap();
@@ -1057,6 +1311,12 @@ fn qc_encoding_refusal_retains_original_header_result_and_execution_until_capaci
 
 #[test]
 fn certificate_control_refusal_retains_every_original_part_through_publication_retry() {
+    assert_certificate_allocation_retry(3);
+}
+
+/// Mandatory availability encoding retains both earlier encodings and the execution owner.
+#[test]
+fn availability_encoding_refusal_retains_original_header_qc_and_execution() {
     assert_certificate_allocation_retry(2);
 }
 
@@ -1065,15 +1325,15 @@ fn native_control_is_attached_once_and_remote_refusal_preserves_the_original_own
     with_worker(|chain, worker, _, _| {
         let block = proposal(chain, worker);
         let source = ApplicationControlContext {
-            instance: block.header.instance,
-            epoch: block.header.epoch,
-            height: block.header.height,
-            parent_hash: block.header.parent_hash,
-            parent_result: block.header.parent_result,
+            instance: block.header().instance,
+            epoch: block.header().epoch,
+            height: block.header().height,
+            parent_hash: block.header().parent_hash,
+            parent_result: block.header().parent_result,
         };
         let build = ControlWitnessContext {
             height: source.height,
-            view: block.header.origin_view,
+            view: block.header().origin_view,
             epoch: source.epoch,
             parent_hash: source.parent_hash,
             parent_result: source.parent_result,
@@ -1131,11 +1391,11 @@ fn native_control_never_displaces_the_original_prepared_publication() {
         let (block, qc) = executed(chain, worker);
         let original = original_overlay(worker);
         let source = ApplicationControlContext {
-            instance: block.header.instance,
-            epoch: block.header.epoch,
-            height: block.header.height,
-            parent_hash: block.header.parent_hash,
-            parent_result: block.header.parent_result,
+            instance: block.header().instance,
+            epoch: block.header().epoch,
+            height: block.header().height,
+            parent_hash: block.header().parent_hash,
+            parent_result: block.header().parent_result,
         };
         assert!(
             worker.drive_control(&source).unwrap().is_none(),
@@ -1156,7 +1416,7 @@ fn native_control_never_displaces_the_original_prepared_publication() {
 #[test]
 fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
     with_worker(|chain, worker, _, _| {
-        let mut block = proposal(chain, worker);
+        let block = proposal(chain, worker);
         let crypto = worker.context.crypto.as_ref().unwrap();
         let hash = block.hash(&**crypto);
         worker.last_built = Some((2, 0, Vec::new()));
@@ -1169,14 +1429,16 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
             height: 2,
             view: 0,
             block_hash: hash,
-            pulse_context: control::pulse_context(&block.header),
+            pulse_context: control::pulse_context(block.header()),
         });
         worker.reject(2, 0, Hash32([201; 32]));
         assert!(
             worker.last_built.is_some(),
             "another proposal cannot consume the original queue selection"
         );
-        block.header.control_witness = ControlWitness::try_from_slice(&[1, 2, 3]).unwrap();
+        let mut controlled = block.header().clone();
+        controlled.control_witness = ControlWitness::try_from_slice(&[1, 2, 3]).unwrap();
+        let block = chain.author_payload(controlled, block.payload().as_slice().to_vec());
         let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
         assert!(matches!(
             worker.execute(&block, hash),
@@ -1195,12 +1457,29 @@ fn quarantine_requires_the_exact_control_free_transaction_rejection_hash() {
 fn native_header_source_is_checked_against_the_pristine_committed_parent() {
     with_worker(|chain, worker, _, _| {
         for changed in 0..3 {
-            let mut block = proposal(chain, worker);
+            let block = proposal(chain, worker);
+            let mut header = block.header().clone();
+            let mut foreign_context = block.source().config().clone();
             match changed {
-                0 => block.header.instance = Hash32([201; 32]),
-                1 => block.header.parent_result = Hash32([202; 32]),
-                _ => block.header.epoch.context = Hash32([203; 32]),
+                0 => header.instance = Hash32([201; 32]),
+                1 => header.parent_result = Hash32([202; 32]),
+                _ => {
+                    header.epoch.context = Hash32([203; 32]);
+                    foreign_context.epoch.id = header.epoch;
+                }
             }
+            let changed_body = chain
+                .author_payload_under_test_context(
+                    header,
+                    block.payload().as_slice().to_vec(),
+                    &foreign_context,
+                )
+                .unwrap_or_else(|(_, error)| panic!("genuinely signed altered context: {error:?}"));
+            assert_ne!(changed_body.header(), block.header());
+            if changed != 1 {
+                assert_ne!(changed_body.source(), block.source());
+            }
+            let block = changed_body;
             let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
             assert!(matches!(
                 worker.execute(&block, hash),
@@ -1211,12 +1490,12 @@ fn native_header_source_is_checked_against_the_pristine_committed_parent() {
             assert_eq!(worker.applied.0, 1);
         }
         let (block, _) = executed(chain, worker);
-        let expected = control::pulse_context(&block.header);
+        let expected = control::pulse_context(block.header());
         assert_eq!(expected.instance, chain.instance().0);
-        assert_eq!(expected.parent_consensus_hash, block.header.parent_hash.0);
-        assert_eq!(expected.parent_result, block.header.parent_result.0);
-        assert_eq!(expected.epoch, block.header.epoch.epoch);
-        assert_eq!(expected.epoch_context_id, block.header.epoch.context.0);
+        assert_eq!(expected.parent_consensus_hash, block.header().parent_hash.0);
+        assert_eq!(expected.parent_result, block.header().parent_result.0);
+        assert_eq!(expected.epoch, block.header().epoch.epoch);
+        assert_eq!(expected.epoch_context_id, block.header().epoch.context.0);
     });
 }
 
@@ -1226,15 +1505,15 @@ fn state_executor_serializes_real_control_requests_and_one_time_attachment() {
         let block = proposal(chain, worker);
         let mut executor = StateExecutor::spawn(worker.context.clone()).unwrap();
         let source = ApplicationControlContext {
-            instance: block.header.instance,
-            epoch: block.header.epoch,
-            height: block.header.height,
-            parent_hash: block.header.parent_hash,
-            parent_result: block.header.parent_result,
+            instance: block.header().instance,
+            epoch: block.header().epoch,
+            height: block.header().height,
+            parent_hash: block.header().parent_hash,
+            parent_result: block.header().parent_result,
         };
         let build = ControlWitnessContext {
             height: source.height,
-            view: block.header.origin_view,
+            view: block.header().origin_view,
             epoch: source.epoch,
             parent_hash: source.parent_hash,
             parent_result: source.parent_result,
@@ -1352,8 +1631,8 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
                 )
                 .unwrap();
             let block = proposal(chain, worker);
-            assert_eq!(block.header.height, 10);
-            assert!(block.header.attest);
+            assert_eq!(block.header().height, 10);
+            assert!(block.header().attest);
             let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
             let outcome =
                 worker.run_execution_with_encoder(&block, block_hash, |original, source| {
@@ -1378,7 +1657,7 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
             let result = live.result;
             let statement = iroha_sumeragi::preimage::att_preimage(
                 &chain.instance(),
-                &block.header.epoch,
+                &block.header().epoch,
                 10,
                 &block_hash,
                 &result,
@@ -1498,7 +1777,7 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
             assert!(worker.prepare(&block, &decoded).is_err());
             assert_eq!(original_overlay(worker), original_overlay_pointer);
             assert!(worker.context.staging.get(&block_hash).is_none());
-            let foreign = mv::allocation::AllocationBudget::new(1024 * 1024);
+            let foreign = iroha_allocation::AllocationBudget::new(1024 * 1024);
             let mut foreign_qc = decoded;
             foreign_qc.admit_attestation_witness(&foreign).unwrap();
             assert!(require_qc_witness_admission(&foreign_qc, &budget).is_err());
@@ -1506,26 +1785,58 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
             assert_eq!(original_overlay(worker), original_overlay_pointer);
             assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
             blocks.append(&block, &qc).unwrap();
+            // Measure the actual immutable table control separately; admission below still
+            // uses only the original State pool and retains its own real backing and control.
+            let measure = iroha_allocation::AllocationBudget::new(original_limit);
+            let mut measured = iroha_allocation::ChargedBuffer::new(
+                block.availability().as_slice().len(),
+                &measure,
+            )
+            .unwrap();
+            measured.append(block.availability().as_slice()).unwrap();
+            let measured =
+                iroha_sumeragi::availability::AvailabilityFrame::from_charged(measured, &measure)
+                    .unwrap_or_else(|(_, error)| panic!("measure table custody: {error}"));
+            let table_total = measure.reserved_bytes();
+            drop(measured);
+            assert_eq!(measure.reserved_bytes(), 0);
+            let stored_source = chain
+                .kura()
+                .get_block(std::num::NonZeroUsize::new(10).unwrap())
+                .unwrap();
             let before_read = budget.reserved_bytes();
-            budget.set_limit_bytes(before_read + witness_len);
-            assert!(matches!(
-                blocks.certified(10),
-                Err(crate::sumeragi::block_store::BlockStoreError::WitnessAdmission(_))
-            ));
-            let read_pointer = blocks.pending_witness_pointer_for_test().unwrap();
-            assert_eq!(budget.reserved_bytes(), before_read + witness_len);
-            assert!(blocks.certified(10).is_err());
+            let read_capacity = before_read + table_total + witness_len;
+            budget.set_limit_bytes(read_capacity);
             assert_eq!(
-                blocks.pending_witness_pointer_for_test(),
-                Some(read_pointer)
+                blocks.certified(10).unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
             );
-            assert_eq!(budget.reserved_bytes(), before_read + witness_len);
-            // Another request cannot discard the original copied buffer during refusal.
-            assert!(blocks.certified(9).is_err());
+            let observation = blocks.pending_certificate_read_for_test().unwrap();
+            assert_eq!(observation.0, Arc::as_ptr(&stored_source));
+            assert!(observation.1.is_some(), "original admitted table retained");
+            let read_pointer = observation
+                .2
+                .expect("original witness backing awaits control");
+            assert_eq!(budget.reserved_bytes(), read_capacity);
             assert_eq!(
-                blocks.pending_witness_pointer_for_test(),
-                Some(read_pointer)
+                blocks.certified(10).unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
             );
+            assert_eq!(
+                blocks.pending_certificate_read_for_test(),
+                Some(observation)
+            );
+            assert_eq!(budget.reserved_bytes(), read_capacity);
+            // Another request cannot discard the original source or either retained buffer.
+            assert_eq!(
+                blocks.certified(9).unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            assert_eq!(
+                blocks.pending_certificate_read_for_test(),
+                Some(observation)
+            );
+            assert_eq!(budget.reserved_bytes(), read_capacity);
             budget.set_limit_bytes(original_limit);
             let (_, recovered) = blocks.certified(10).unwrap().unwrap();
             assert_eq!(
@@ -1545,11 +1856,12 @@ fn native_pasta_refusals_retain_original_execution_until_actual_receipt_publicat
                     .admitted_to(&budget)
             );
             assert_eq!(recovered, qc);
-            assert!(blocks.pending_witness_pointer_for_test().is_none());
+            assert!(blocks.pending_certificate_read_for_test().is_none());
             drop(recovered);
             let stored = blocks
                 .entry(10)
-                .expect("actual stored boundary is readable");
+                .expect("actual stored boundary is readable")
+                .expect("actual stored boundary exists");
             assert_eq!(stored.commit_qc, qc);
             assert!(
                 stored
@@ -1606,7 +1918,7 @@ fn native_pasta_discard_invalidates_the_receipt_before_releasing_its_original_ex
             };
             let statement = iroha_sumeragi::preimage::att_preimage(
                 &chain.instance(),
-                &block.header.epoch,
+                &block.header().epoch,
                 10,
                 &hash,
                 &result,
@@ -1662,8 +1974,19 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
         );
         let overlay = std::ptr::from_ref(original.overlay.as_ref());
         let result = std::ptr::from_ref(original.phase.ready().unwrap().get());
+        let commitment = original.phase.ready().unwrap().get();
+        let authority = commitment.schedule.current.committee.as_ptr();
+        let proofs: Vec<_> = commitment
+            .schedule
+            .current
+            .committee
+            .iter()
+            .map(|member| member.proof_of_possession.as_ptr())
+            .collect();
+        let canonical_result = norito::encode_canonical(commitment).unwrap();
         let witness = iroha_crypto::HashOf::new(&original.witness);
         let budget = worker.state.ivm_execution_budget();
+        assert!(original.phase.ready().unwrap().belongs_to(&budget));
         let held = budget.reserved_bytes();
         for _ in 0..2 {
             assert!(matches!(
@@ -1686,6 +2009,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             );
             assert!(retained.native_contexts.is_none());
             assert_eq!(budget.reserved_bytes(), held);
+            assert!(retained.phase.ready().unwrap().belongs_to(&budget));
             assert!(!worker.results.contains_key(&block_hash));
             assert!(worker.recovery.is_none());
         }
@@ -1699,7 +2023,28 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             std::ptr::from_ref(live.overlay.as_deref().unwrap()),
             overlay
         );
-        assert_eq!(std::ptr::from_ref(live.commitment.get()), result);
+        // RetainedPayload's inline value moves into Live. Its original heap allocations,
+        // complete canonical value and allocation-pool custody must survive that move.
+        assert_eq!(
+            live.commitment.get().schedule.current.committee.as_ptr(),
+            authority
+        );
+        assert_eq!(
+            live.commitment
+                .get()
+                .schedule
+                .current
+                .committee
+                .iter()
+                .map(|member| member.proof_of_possession.as_ptr())
+                .collect::<Vec<_>>(),
+            proofs
+        );
+        assert_eq!(
+            norito::encode_canonical(live.commitment.get()).unwrap(),
+            canonical_result
+        );
+        assert!(live.commitment.belongs_to(&budget));
         assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
         let source = live.native_contexts.as_ref().unwrap();
         let bytes = source.canonical_bytes().to_vec();
@@ -1792,7 +2137,7 @@ fn native_context_archive_failure_preserves_original_bytes_until_durable_acknowl
                 pointer
             );
             assert!(worker.execute(&block, qc.block_hash).is_none());
-            assert_eq!(worker.build(3, 0, 1 << 20), (Vec::new(), false));
+            assert_eq!(worker.build(3, 0, 1 << 20).unwrap(), (None, false));
             assert_eq!(worker.applied.0, 1);
             assert!(events.try_recv().is_err());
         }
@@ -1822,9 +2167,34 @@ fn native_context_archive_failure_preserves_original_bytes_until_durable_acknowl
 #[test]
 fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting() {
     with_worker(|chain, worker, _blocks, events| {
+        let archive_files = || {
+            std::fs::read_dir(chain.kura().store_root().join("native-contexts"))
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), std::fs::read(entry.path()).unwrap())
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let original_archives = archive_files();
+        assert_eq!(
+            original_archives.len(),
+            1,
+            "original genesis context is durable"
+        );
+        let genesis_context = worker
+            .context
+            .native_context_archive
+            .read_exact(1, chain.genesis().hash())
+            .unwrap();
+        assert_eq!(
+            original_archives.values().next().unwrap().as_slice(),
+            genesis_context.as_slice()
+        );
+        drop(genesis_context);
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
-        let foreign_budget = mv::allocation::AllocationBudget::new(1 << 20);
+        let foreign_budget = iroha_allocation::AllocationBudget::new(1 << 20);
         let foreign = NativeContextArchive::open(
             chain.kura(),
             foreign_budget.clone(),
@@ -1837,7 +2207,20 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             worker.prepare_original_result().unwrap();
             let original = worker.finishing.as_ref().unwrap();
             original_overlay = Some(std::ptr::from_ref(original.overlay.as_ref()));
-            original_result = Some(std::ptr::from_ref(original.phase.ready().unwrap().get()));
+            let result = original.phase.ready().unwrap();
+            assert!(result.belongs_to(&worker.state.ivm_execution_budget()));
+            original_result = Some((
+                result.get().schedule.current.committee.as_ptr(),
+                result
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .iter()
+                    .map(|member| member.proof_of_possession.as_ptr())
+                    .collect::<Vec<_>>(),
+                norito::encode_canonical(result.get()).unwrap(),
+            ));
             assert!(matches!(
                 foreign.prepare(
                     &original.overlay,
@@ -1849,12 +2232,7 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             ));
             assert_eq!(foreign_budget.reserved_bytes(), 0);
             assert!(original.native_contexts.is_none());
-            assert!(
-                std::fs::read_dir(chain.kura().store_root().join("native-contexts"))
-                    .unwrap()
-                    .next()
-                    .is_none()
-            );
+            assert_eq!(archive_files(), original_archives);
             worker.finish_execution_with_encoder(encode_result_preimage)
         });
         assert!(matches!(outcome, ExecOutcome::Valid(_)));
@@ -1864,10 +2242,38 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
             original_overlay
         );
         assert_eq!(
-            Some(std::ptr::from_ref(retained.commitment.get())),
+            Some((
+                retained
+                    .commitment
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .as_ptr(),
+                retained
+                    .commitment
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .iter()
+                    .map(|member| member.proof_of_possession.as_ptr())
+                    .collect::<Vec<_>>(),
+                norito::encode_canonical(retained.commitment.get()).unwrap(),
+            )),
             original_result
         );
+        assert!(
+            retained
+                .commitment
+                .belongs_to(&worker.state.ivm_execution_budget())
+        );
         assert!(retained.native_contexts.is_some());
+        assert_eq!(
+            archive_files(),
+            original_archives,
+            "preparation publishes no H2 archive"
+        );
         assert_eq!(foreign_budget.reserved_bytes(), 0);
         assert_eq!(worker.state.view().height(), 1);
         assert!(events.try_recv().is_err());

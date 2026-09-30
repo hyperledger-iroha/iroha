@@ -28,11 +28,11 @@ def sha(raw):
 
 
 def existing_fixture():
-    path = ROOT / "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py"
+    path = ROOT / "scripts/tests/macho_decoder_test.py"
     spec = importlib.util.spec_from_file_location("original_macho_fixture", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module._thin_macho(0x0100000C)
+    return module.thin_macho(0x0100000C)
 
 
 def command(kind, name):
@@ -365,9 +365,9 @@ def test_envelope_pin_and_exact_byte_ownership(case):
 
 def test_exact_command_table_admission_before_shared_decoder(monkeypatch):
     row, files = fixture(); body = files[row["executable"]]
-    observed = []; actual = graph._parse_macho_thin
+    observed = []; actual = graph.parse_macho_thin
     def spy(*args): observed.append(1); return actual(*args)
-    monkeypatch.setattr(graph,"_parse_macho_thin",spy)
+    monkeypatch.setattr(graph,"parse_macho_thin",spy)
     size = struct.unpack_from("<I",body,20)[0]
     monkeypatch.setattr(graph,"MAX_COMMAND_BYTES",size)
     parse(row,files); assert len(observed)==2

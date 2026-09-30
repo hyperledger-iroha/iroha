@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from iroha_torii_client.native_sumeragi import SumeragiStatus, SumeragiFootprint, SumeragiBeaconHorizon, SumeragiHaltReason
+from iroha_torii_client.native_sumeragi import SumeragiLaneStatus, SumeragiLaneRecord, SumeragiLaneMember, SumeragiLaneFrontier, SumeragiParameters
 
 import base64
 import binascii
@@ -9892,35 +9893,6 @@ class SumeragiEvidenceListPage:
         return cls(items=items, total=total)
 
 
-@dataclass(frozen=True)
-class SumeragiPrfStatus:
-    """Pending PRF (pseudo-random function) window state."""
-
-    height: int
-    view: int
-    epoch_seed: Optional[str]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiPrfStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("PRF status must be an object")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("PRF status `height` and `view` must be numeric") from exc
-        seed_value = payload.get("epoch_seed")
-        if seed_value is None:
-            epoch_seed: Optional[str] = None
-        elif isinstance(seed_value, str):
-            epoch_seed = seed_value
-        else:
-            raise TypeError("PRF status `epoch_seed` must be a string when present")
-        return cls(height=height, view=view, epoch_seed=epoch_seed)
-
-
-
-
 _MAX_NATIVE_AMX_GROUP_SOURCES = 4096
 
 
@@ -9950,81 +9922,11 @@ def _strict_uint(payload: Mapping[str, Any], field_name: str, bits: int, context
     return value
 
 
-def _strict_tagged_unit_enum(
-    payload: Mapping[str, Any],
-    field_name: str,
-    *,
-    tag: str,
-    content: str,
-    variants: Sequence[str],
-    context: str,
-) -> str:
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{context} `{field_name}` must be a tagged enum object")
-    if set(value) != {tag, content}:
-        raise ValueError(f"{context} `{field_name}` must contain exactly `{tag}` and `{content}`")
-    variant = value[tag]
-    if not isinstance(variant, str) or variant not in variants:
-        raise ValueError(f"{context} `{field_name}` contains an unsupported variant")
-    if value[content] is not None:
-        raise ValueError(f"{context} `{field_name}.{content}` must be null")
-    return variant
-
-
-def _strict_quantity_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
-    """Decode one canonical bounded non-negative Kotodama quantity."""
-
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, str):
-        raise TypeError(f"{context} `{field_name}` must be a quantity string")
-    if len(value) > 155:
-        raise ValueError(f"{context} `{field_name}` exceeds the quantity text length bound")
-    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
-    if matched is None:
-        raise TypeError(f"{context} `{field_name}` must be a canonical non-negative quantity")
-    fraction = matched.group(2) or ""
-    mantissa = int(matched.group(1) + fraction)
-    if mantissa > (1 << 511) - 1:
-        raise ValueError(f"{context} `{field_name}` exceeds the signed 512-bit domain")
-    return value
-
-
 def _strict_nonempty_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
     value = _required_field(payload, field_name, context)
     if not isinstance(value, str) or value.strip() == "":
         raise TypeError(f"{context} `{field_name}` must be a non-empty string")
     return value
-
-
-def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
-    """Decode one canonical signed Numeric without unbounded decimal input."""
-
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, str):
-        raise TypeError(f"{context} `{field_name}` must be a numeric string")
-    if len(value) > 156:
-        raise ValueError(f"{context} `{field_name}` exceeds the numeric text length bound")
-    return str(NumericV1Codec.decode_decimal_json(value))
-
-
-def _strict_hex_string(
-    payload: Mapping[str, Any],
-    field_name: str,
-    byte_length: int,
-    context: str,
-) -> str:
-    value = _required_field(payload, field_name, context)
-    if (
-        not isinstance(value, str)
-        or len(value) != byte_length * 2
-        or re.fullmatch(r"[0-9A-F]+", value) is None
-    ):
-        raise TypeError(
-            f"{context} `{field_name}` must be exactly {byte_length} bytes of uppercase hex"
-        )
-    return value
-
 
 
 def _crc16_ccitt_false(value: bytes) -> int:
@@ -10057,224 +9959,36 @@ def _strict_nexus_lane_config(value: Any, context: str) -> Dict[str, Any]:
     return _strict_nexus_lane_config_impl(value, context, _strict_exact_fields, _strict_uint, _strict_nonempty_string)
 
 
-def _strict_byte_vector(value: Any, length: int, context: str) -> Tuple[int, ...]:
-    if not isinstance(value, list) or len(value) != length:
-        raise TypeError(f"{context} must contain exactly {length} byte values")
-    result: List[int] = []
-    for index, byte in enumerate(value):
-        if isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255:
-            raise TypeError(f"{context}[{index}] must be an integer byte")
-        result.append(byte)
-    return tuple(result)
-
-
-
-
-
-
-
-
-def _parse_sumeragi_lane_settlement_receipts(
-    receipts_payload: Any, context: str
-) -> List[SumeragiLaneSettlementReceipt]:
-    if not isinstance(receipts_payload, list):
-        raise TypeError(f"{context} receipts must be a list")
-    receipts: List[SumeragiLaneSettlementReceipt] = []
-    for index, receipt in enumerate(receipts_payload):
-        if not isinstance(receipt, Mapping):
-            raise TypeError(f"{context} receipts must be objects")
-        receipt_context = f"{context} receipt at index {index}"
-        _strict_exact_fields(
-            receipt,
-            {
-                "source_id",
-                "local_amount",
-                "xor_due",
-                "xor_after_haircut",
-                "xor_variance",
-                "timestamp_ms",
-            },
-            receipt_context,
-        )
-        source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
-        receipt_local = _strict_quantity_string(receipt, "local_amount", receipt_context)
-        receipt_due = _strict_quantity_string(receipt, "xor_due", receipt_context)
-        receipt_after = _strict_quantity_string(receipt, "xor_after_haircut", receipt_context)
-        receipt_variance = _strict_quantity_string(receipt, "xor_variance", receipt_context)
-        receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
-        receipts.append(
-            SumeragiLaneSettlementReceipt(
-                source_id=source_id,
-                local_amount=receipt_local,
-                xor_due=receipt_due,
-                xor_after_haircut=receipt_after,
-                xor_variance=receipt_variance,
-                timestamp_ms=receipt_timestamp,
-            )
-        )
-    return receipts
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
-_SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
-_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_EVIDENCE_COUNT_JSON_MAX_BYTES = 1 * 1024
 _SUMERAGI_EVIDENCE_LIST_JSON_MAX_BYTES = 1 * 1024 * 1024
-_SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
-    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
-)
-
-
-def _sumeragi_v2_exact_fields(
-    payload: Mapping[str, Any], allowed: Sequence[str], context: str
-) -> None:
-    unknown = sorted(set(payload) - set(allowed))
-    if unknown:
-        raise TypeError(f"{context} contains unsupported fields: {', '.join(unknown)}")
-
-
-def _sumeragi_v2_uint(
-    value: Any,
-    context: str,
-    maximum: int = (1 << 64) - 1,
-    *,
-    positive: bool = False,
-) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{context} must be an unsigned integer")
-    if value < 0 or (positive and value == 0) or value > maximum:
-        raise ValueError(f"{context} is outside its unsigned integer range")
-    return value
-
-
-def _sumeragi_v2_string(value: Any, context: str) -> str:
-    if not isinstance(value, str) or not value.strip() or value != value.strip():
-        raise TypeError(f"{context} must be a non-empty string without surrounding whitespace")
-    return value
-
-
-def _sumeragi_v2_tagged_unit(payload: Any, tag: str, admitted: Sequence[str], context: str) -> str:
-    if not isinstance(payload, Mapping):
-        raise TypeError(f"{context} must be an object")
-    _sumeragi_v2_exact_fields(payload, (tag, "details"), context)
-    if set(payload) != {tag, "details"} or payload.get("details") is not None:
-        raise TypeError(f"{context} must contain `{tag}` and null `details`")
-    variant = _sumeragi_v2_string(payload.get(tag), f"{context}.{tag}")
-    if variant not in admitted:
-        raise ValueError(f"{context}.{tag} has unknown variant {variant!r}")
-    return variant
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @dataclass(frozen=True)
 class SumeragiParamsSnapshot:
     """On-chain Sumeragi parameter snapshot from `/v1/sumeragi/params`."""
 
-    block_time_ms: int
-    commit_time_ms: int
+    block_cadence_ms: int
     max_clock_drift_ms: int
-    collectors_k: int
-    redundant_send_r: int
-    da_enabled: bool
-    next_mode: Optional[str]
-    mode_activation_height: Optional[int]
     chain_height: int
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiParamsSnapshot":
+        """Validate exactly the served fields; any other field fails closed."""
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi params payload must be an object")
-        next_mode_value = payload.get("next_mode")
-        if next_mode_value is not None and not isinstance(next_mode_value, str):
-            raise TypeError("sumeragi params `next_mode` must be a string when present")
-        mode_activation_value = payload.get("mode_activation_height")
-        try:
-            block_time_ms = int(payload.get("block_time_ms", 0))
-            commit_time_ms = int(payload.get("commit_time_ms", 0))
-            max_clock_drift_ms = int(payload.get("max_clock_drift_ms", 0))
-            collectors_k = int(payload.get("collectors_k", 0))
-            redundant_send_r = int(payload.get("redundant_send_r", 0))
-            chain_height = int(payload.get("chain_height", 0))
-            mode_activation_height = (
-                None if mode_activation_value is None else int(mode_activation_value)
-            )
-        except (TypeError, ValueError) as exc:
-            raise TypeError("sumeragi params numeric fields must be integers") from exc
-        da_enabled = payload.get("da_enabled")
-        if not isinstance(da_enabled, bool):
-            raise TypeError("sumeragi params `da_enabled` must be a boolean")
-        return cls(
-            block_time_ms=block_time_ms,
-            commit_time_ms=commit_time_ms,
-            max_clock_drift_ms=max_clock_drift_ms,
-            collectors_k=collectors_k,
-            redundant_send_r=redundant_send_r,
-            da_enabled=da_enabled,
-            next_mode=next_mode_value,
-            mode_activation_height=mode_activation_height,
-            chain_height=chain_height,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiLeaderSnapshot:
-    """Leader index snapshot from `/v1/sumeragi/leader`."""
-
-    leader_index: int
-    prf: SumeragiPrfStatus
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLeaderSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("leader payload must be an object")
-        prf_payload = payload.get("prf")
-        if not isinstance(prf_payload, Mapping):
-            raise TypeError("leader payload missing object `prf` field")
-        try:
-            leader_index = int(payload.get("leader_index", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("leader index must be numeric") from exc
-        return cls(leader_index=leader_index, prf=SumeragiPrfStatus.from_payload(prf_payload))
-
-
+        fields = ("block_cadence_ms", "max_clock_drift_ms", "chain_height")
+        unknown = sorted(set(payload) - set(fields))
+        if unknown:
+            raise TypeError(f"sumeragi params contain unsupported fields: {', '.join(unknown)}")
+        values = {}
+        for name in fields:
+            value = payload.get(name)
+            if type(value) is not int or not 0 <= value < (1 << 64):
+                raise TypeError(f"sumeragi params `{name}` must be an unsigned 64-bit integer")
+            values[name] = value
+        if values["block_cadence_ms"] == 0:
+            raise TypeError("sumeragi params `block_cadence_ms` must be nonzero")
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -11364,9 +11078,107 @@ class ToriiStatusSnapshot:
         return self.metrics.has_activity
 
 
+PIPELINE_STALL_BLOCK_CADENCES = 20
+"""Target block cadences a peer with queued work may go without committing a non-empty block.
+
+`GET /v1/pipeline/preflight` serves one consensus timing value, `sumeragi.block_cadence_ms`
+(the signed-genesis target block time), so `ToriiPipelinePreflight.stall_threshold_ms` is
+``PIPELINE_STALL_BLOCK_CADENCES * block_cadence_ms``. With work queued a healthy chain commits
+about once per cadence. At the Sumeragi defaults (1 s block time, 5 s payload retry, 2-3 s base
+view timer) one crashed leader delays the next commit by roughly 11-14 s plus execution
+(`specs/sumeragi.md` §8.2 P4, §9.3); twenty cadences keep such a single view change from being
+reported as a stall. Callers that know their deployment's local timers pass their own
+threshold to `ToriiStatusPayload.is_queue_stalled`.
+"""
+
+_PIPELINE_PREFLIGHT_ROOT_FIELDS: Tuple[str, ...] = (
+    "schema_version",
+    "chain_height",
+    "sumeragi",
+    "admission",
+    "block",
+    "pipeline",
+    "queue",
+    "fees",
+)
+# Exact served field set of every `PipelinePreflightResponse` object, in Torii's order.
+_PIPELINE_PREFLIGHT_SECTION_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "sumeragi": ("block_cadence_ms",),
+    "admission": (
+        "max_signatures",
+        "max_instructions",
+        "max_tx_bytes",
+        "max_decompressed_bytes",
+        "max_metadata_depth",
+    ),
+    "block": ("max_transactions",),
+    "pipeline": (
+        "signature_batch_max_ed25519",
+        "signature_batch_max_secp256k1",
+        "signature_batch_max_pqc",
+        "signature_batch_max_bls",
+        "overlay_max_instructions",
+        "ivm_max_cycles_upper_bound",
+        "ivm_admission_cycle_limit",
+        "ivm_max_decoded_instructions",
+    ),
+    "queue": ("size", "queued", "inflight"),
+    "fees": (
+        "fee_asset_id",
+        "fee_sink_account_id",
+        "base_fee",
+        "per_byte_fee",
+        "per_instruction_fee",
+        "per_gas_unit_fee",
+        "sponsor_vault_custody_account_id",
+        "settlement_mode",
+        "successful_claim_fee_exempt_authorities",
+    ),
+}
+_PIPELINE_PREFLIGHT_UNSIGNED_SECTIONS = ("sumeragi", "admission", "block", "pipeline", "queue")
+_PIPELINE_PREFLIGHT_POSITIVE_FIELDS = frozenset(
+    {
+        ("sumeragi", "block_cadence_ms"),
+        ("pipeline", "ivm_max_cycles_upper_bound"),
+        ("pipeline", "ivm_admission_cycle_limit"),
+    }
+)
+_PIPELINE_PREFLIGHT_FEE_STRINGS = (
+    "fee_asset_id",
+    "base_fee",
+    "per_byte_fee",
+    "per_instruction_fee",
+    "per_gas_unit_fee",
+    "settlement_mode",
+)
+_PIPELINE_PREFLIGHT_SETTLEMENT_MODES = ("direct", "lane_relay_burn")
+
+
+def _require_pipeline_preflight_fields(
+    record: Mapping[str, Any],
+    expected: Sequence[str],
+    context: str,
+) -> None:
+    """Reject a preflight object that lacks a served field or carries an unserved one."""
+
+    missing = sorted(name for name in expected if name not in record)
+    unexpected = sorted(str(name) for name in record if name not in expected)
+    if missing or unexpected:
+        details: list[str] = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unsupported " + ", ".join(unexpected))
+        raise ValueError(f"{context} fields are not canonical: " + "; ".join(details))
+
+
 @dataclass(frozen=True)
 class ToriiPipelinePreflight:
-    """Typed response from `GET /v1/pipeline/preflight`."""
+    """Typed response from `GET /v1/pipeline/preflight`.
+
+    `from_payload` requires exactly the fields Torii serves in every object. Torii serves no
+    stall threshold: `stall_threshold_ms` is derived from ``sumeragi["block_cadence_ms"]``.
+    """
 
     schema_version: int
     chain_height: int
@@ -11379,22 +11191,31 @@ class ToriiPipelinePreflight:
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     @property
+    def block_cadence_ms(self) -> int:
+        """Signed-genesis target block time served as ``sumeragi.block_cadence_ms``."""
+
+        return int(self.sumeragi["block_cadence_ms"])
+
+    @property
     def stall_threshold_ms(self) -> int:
-        return int(self.sumeragi.get("stall_threshold_ms", 0))
+        """SDK-derived stall threshold: `PIPELINE_STALL_BLOCK_CADENCES` served block cadences."""
+
+        return PIPELINE_STALL_BLOCK_CADENCES * self.block_cadence_ms
 
     def is_status_stalled(self, status: ToriiStatusPayload) -> bool:
+        """Report queued work with no non-empty block committed for over `stall_threshold_ms`."""
+
         return status.is_queue_stalled(self.stall_threshold_ms)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ToriiPipelinePreflight":
+        """Parse the exact preflight body; a missing or unserved field is protocol drift."""
+
         if not isinstance(payload, Mapping):
             raise TypeError("pipeline preflight response must be a JSON object")
-
-        def _mapping(name: str) -> Dict[str, Any]:
-            value = payload.get(name)
-            if not isinstance(value, Mapping):
-                raise TypeError(f"pipeline preflight `{name}` must be a JSON object")
-            return dict(value)
+        _require_pipeline_preflight_fields(
+            payload, _PIPELINE_PREFLIGHT_ROOT_FIELDS, "pipeline preflight"
+        )
 
         def _unsigned(value: Any, context: str, *, positive: bool = False) -> int:
             if isinstance(value, bool) or not isinstance(value, int):
@@ -11405,49 +11226,42 @@ class ToriiPipelinePreflight:
                 raise ValueError(f"{context} must be {qualifier}")
             return value
 
-        pipeline = _mapping("pipeline")
-        pipeline_fields = {
-            "signature_batch_max_ed25519",
-            "signature_batch_max_secp256k1",
-            "signature_batch_max_pqc",
-            "signature_batch_max_bls",
-            "overlay_max_instructions",
-            "ivm_max_cycles_upper_bound",
-            "ivm_admission_cycle_limit",
-            "ivm_max_decoded_instructions",
-        }
-        missing_pipeline_fields = pipeline_fields.difference(pipeline)
-        unexpected_pipeline_fields = set(pipeline).difference(pipeline_fields)
-        if missing_pipeline_fields or unexpected_pipeline_fields:
-            details: list[str] = []
-            if missing_pipeline_fields:
-                details.append("missing " + ", ".join(sorted(missing_pipeline_fields)))
-            if unexpected_pipeline_fields:
-                details.append("unsupported " + ", ".join(sorted(unexpected_pipeline_fields)))
-            raise ValueError(
-                "pipeline preflight `pipeline` fields are not canonical: "
-                + "; ".join(details)
-            )
-        for field_name in pipeline_fields:
-            pipeline[field_name] = _unsigned(
-                pipeline[field_name],
-                f"pipeline preflight pipeline.{field_name}",
-                positive=field_name in {
-                    "ivm_max_cycles_upper_bound",
-                    "ivm_admission_cycle_limit",
-                },
-            )
+        sections: Dict[str, Dict[str, Any]] = {}
+        for name, expected in _PIPELINE_PREFLIGHT_SECTION_FIELDS.items():
+            value = payload.get(name)
+            if not isinstance(value, Mapping):
+                raise TypeError(f"pipeline preflight `{name}` must be a JSON object")
+            section = dict(value)
+            _require_pipeline_preflight_fields(section, expected, f"pipeline preflight `{name}`")
+            sections[name] = section
+        for name in _PIPELINE_PREFLIGHT_UNSIGNED_SECTIONS:
+            section = sections[name]
+            for field_name in _PIPELINE_PREFLIGHT_SECTION_FIELDS[name]:
+                section[field_name] = _unsigned(
+                    section[field_name],
+                    f"pipeline preflight {name}.{field_name}",
+                    positive=(name, field_name) in _PIPELINE_PREFLIGHT_POSITIVE_FIELDS,
+                )
 
-        fees = _mapping("fees")
+        fees = sections["fees"]
+        for field_name in _PIPELINE_PREFLIGHT_FEE_STRINGS:
+            value = fees[field_name]
+            if not isinstance(value, str) or not value:
+                raise TypeError(f"pipeline preflight fees.{field_name} must be a non-empty string")
+        if fees["settlement_mode"] not in _PIPELINE_PREFLIGHT_SETTLEMENT_MODES:
+            raise ValueError(
+                "pipeline preflight fees.settlement_mode must be one of: "
+                + ", ".join(_PIPELINE_PREFLIGHT_SETTLEMENT_MODES)
+            )
         fees["fee_sink_account_id"] = _normalize_exact_any_i105_account_id(
-            fees.get("fee_sink_account_id"),
+            fees["fee_sink_account_id"],
             "pipeline preflight fees.fee_sink_account_id",
         )
         fees["sponsor_vault_custody_account_id"] = _normalize_exact_any_i105_account_id(
-            fees.get("sponsor_vault_custody_account_id"),
+            fees["sponsor_vault_custody_account_id"],
             "pipeline preflight fees.sponsor_vault_custody_account_id",
         )
-        authorities = fees.get("successful_claim_fee_exempt_authorities")
+        authorities = fees["successful_claim_fee_exempt_authorities"]
         if not isinstance(authorities, list):
             raise TypeError(
                 "pipeline preflight fees.successful_claim_fee_exempt_authorities must be an array"
@@ -11471,11 +11285,11 @@ class ToriiPipelinePreflight:
                 payload.get("chain_height"),
                 "pipeline preflight chain_height",
             ),
-            sumeragi=_mapping("sumeragi"),
-            admission=_mapping("admission"),
-            block=_mapping("block"),
-            pipeline=pipeline,
-            queue=_mapping("queue"),
+            sumeragi=sections["sumeragi"],
+            admission=sections["admission"],
+            block=sections["block"],
+            pipeline=sections["pipeline"],
+            queue=sections["queue"],
             fees=fees,
             raw=dict(payload),
         )
@@ -12026,13 +11840,16 @@ __all__ = [
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
-    "SumeragiPrfStatus",
     "SumeragiStatus",
     "SumeragiFootprint",
     "SumeragiBeaconHorizon",
     "SumeragiHaltReason",
+    "SumeragiLaneStatus",
+    "SumeragiLaneRecord",
+    "SumeragiLaneMember",
+    "SumeragiLaneFrontier",
+    "SumeragiParameters",
     "SumeragiParamsSnapshot",
-    "SumeragiLeaderSnapshot",
     "SumeragiEvidenceCount",
     "TriggerRecord",
     "TriggerListPage",
@@ -21141,22 +20958,6 @@ class ToriiClient(
     def get_sumeragi_status_typed(self) -> SumeragiStatus:
         """Read the canonical native observation through the original authenticated client."""
         return super().get_sumeragi_status()
-
-    def get_sumeragi_leader(self) -> Optional[Any]:
-        """Fetch the operator-authenticated leader index snapshot."""
-
-        return self._sumeragi_operator_json(
-            "/v1/sumeragi/leader",
-            context="sumeragi leader",
-        )
-
-    def get_sumeragi_leader_typed(self) -> SumeragiLeaderSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_leader`."""
-
-        payload = self.get_sumeragi_leader()
-        if not isinstance(payload, Mapping):
-            raise TypeError("leader response must be a JSON object")
-        return SumeragiLeaderSnapshot.from_payload(payload)
 
     def get_sumeragi_evidence_count(self) -> SumeragiEvidenceCount:
         """Return the exact committed evidence count."""

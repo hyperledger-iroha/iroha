@@ -191,13 +191,13 @@ fn new_and_init_scaffolds_check_and_build_with_exact_exports() {
             let source = fs::read_to_string(root.join("src/lib.ko")).expect("scaffold source");
             assert!(source.contains("module Library {"));
             assert!(source.contains("TODO: Define the library interface"));
-            let program = ivm::kotodama::parser::parse(&source).expect("canonical module grammar");
+            let program = kotodama_lang::parser::parse(&source).expect("canonical module grammar");
             let expected = exports.into_iter().collect::<BTreeSet<_>>();
             let functions = program
                 .items
                 .iter()
                 .map(|item| match item {
-                    ivm::kotodama::ast::Item::Function(function) => function.name.as_str(),
+                    kotodama_lang::ast::Item::Function(function) => function.name.as_str(),
                     _ => panic!("scaffold must contain only placeholder functions"),
                 })
                 .collect::<Vec<_>>();
@@ -291,10 +291,8 @@ fn init_preserves_existing_type_exports_and_custom_source_directory() {
     let root = temp.path().join("demo");
     fs::create_dir_all(root.join("library")).expect("custom source directory");
     let source = "module Existing { struct Receipt { int value; } struct assert { int value; } }\n";
-    assert!(ivm::kotodama::semantic::is_reserved_source_declaration(
-        "assert", true,
-    ));
-    assert!(!ivm::kotodama::semantic::is_reserved_source_type_declaration("assert"));
+    assert!(kotodama_surface::source_policy::is_reserved_source_declaration("assert", true));
+    assert!(!kotodama_surface::source_policy::is_reserved_source_type_declaration("assert"));
     let library = root.join("library/lib.ko");
     fs::write(&library, source).expect("existing type export");
     for force in [false, true] {
@@ -1127,9 +1125,9 @@ fn top_level_and_nested_command_inventory_is_exact() {
         command_names(&command),
         BTreeSet::from_iter(
             [
-                "add", "alias", "build", "cache", "check", "deploy", "fetch", "info", "init",
-                "metadata", "network", "new", "owner", "package", "publish", "remove", "search",
-                "test", "tree", "unyank", "update", "versions", "view", "wallet", "yank",
+                "add", "alias", "build", "cache", "call", "check", "deploy", "fetch", "info",
+                "init", "metadata", "network", "new", "owner", "package", "publish", "remove",
+                "search", "test", "tree", "unyank", "update", "versions", "view", "wallet", "yank",
             ]
             .map(str::to_owned)
         )

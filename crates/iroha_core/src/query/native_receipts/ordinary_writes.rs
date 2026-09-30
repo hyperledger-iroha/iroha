@@ -11,6 +11,10 @@ pub(super) use casting::CastingOwner;
 use casting::RawCasting;
 
 use crate::state::NativeExecutionProjectionV1;
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
+    PrepaidBufferError, RetainedPayload,
+};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{
@@ -18,10 +22,6 @@ use iroha_data_model::{
         consensus::{ExecKv, ExecWitness},
     },
     sumeragi_lanes::SumeragiLaneState,
-};
-use mv::allocation::{
-    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
-    PrepaidBufferError, RetainedPayload,
 };
 use norito::core::{self as ncore, SerializePayload};
 use std::alloc::Layout;

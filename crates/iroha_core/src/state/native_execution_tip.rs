@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::sumeragi::certified_chain::{CertifiedChain, CommittedBlock};
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use iroha_sumeragi::types::Hash32;
-use mv::allocation::{AllocationBudget, AllocationCharge};
 
 /// Fixed execution identity retained by the original publication generation.
 /// This type deliberately has no decoder or public constructor.
@@ -286,7 +286,7 @@ impl StateBlock<'_> {
 pub(in crate::state) fn original_cell<'a>(
     target: &'a TipCell,
     budget: &AllocationBudget,
-    parent: &mut mv::allocation::AllocationReservation,
+    parent: &mut iroha_allocation::AllocationReservation,
 ) -> Result<
     mv::cell::BlockAcquisitionSlot<'a, Option<NativeExecutionTip>, AllocationCharge>,
     mv::storage::AdmittedStorageError,

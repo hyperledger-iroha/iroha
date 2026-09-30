@@ -24,7 +24,6 @@ fn assert_missing_unregister(reason: &TransactionRejectionReason, missing: &Trig
 
 #[test]
 fn pipeline_successful_root_then_failed_data_child_rolls_back_both_before_quarantine() {
-    let _guard = exec_witness::exec_witness_guard();
     let root: TriggerId = "pipeline_dfs_root".parse().unwrap();
     let child: TriggerId = "pipeline_data_child".parse().unwrap();
     let missing: TriggerId = "pipeline_dfs_absent".parse().unwrap();
@@ -48,8 +47,7 @@ fn pipeline_successful_root_then_failed_data_child_rolls_back_both_before_quaran
             Trigger::new(child.clone(), child_action),
         ],
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute_all(&mut block, &source);
     let rows = &retained(&block).rows;
@@ -140,6 +138,7 @@ fn pipeline_successful_root_then_failed_data_child_rolls_back_both_before_quaran
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
     ));
+    drop(_recording);
     let view = state.view();
     let original = view.world.triggers.pipeline_triggers().get(&root).unwrap();
     assert!(crate::smartcontracts::isi::triggers::trigger_is_enabled(
@@ -150,7 +149,6 @@ fn pipeline_successful_root_then_failed_data_child_rolls_back_both_before_quaran
 
 #[test]
 fn oversized_real_pipeline_rejection_omits_diagnostic_but_quarantines_and_keeps_sibling() {
-    let _guard = exec_witness::exec_witness_guard();
     let bad: TriggerId = "a_large_failure".parse().unwrap();
     let sibling: TriggerId = "b_healthy_sibling".parse().unwrap();
     let missing: TriggerId = "large_failure_absent".parse().unwrap();
@@ -174,8 +172,7 @@ fn oversized_real_pipeline_rejection_omits_diagnostic_but_quarantines_and_keeps_
                 ),
             ],
         );
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute_all(&mut block, &source);
         let rows = &retained(&block).rows;
@@ -275,6 +272,7 @@ fn oversized_real_pipeline_rejection_omits_diagnostic_but_quarantines_and_keeps_
             block.commit().unwrap_err(),
             TransactionsBlockError::ExecutionOutputCapacity
         ));
+        drop(_recording);
         let view = state.view();
         assert!(
             view.world

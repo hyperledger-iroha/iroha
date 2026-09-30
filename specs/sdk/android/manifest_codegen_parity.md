@@ -220,5 +220,5 @@ Future schema changes should follow the change-log workflow
 (`specs/sdk/android/norito_instruction_changes.md`). Generate reviewed candidate
 outputs out of tree first; update recorded hashes and docs only after the two
 independent sealed replays are byte-identical. The developer make targets use
-`scripts/sumeragi_v2_release_cargo_proxy.sh` and therefore require a fresh,
+`scripts/sumeragi_release_cargo_proxy.sh` and therefore require a fresh,
 owner-private external `CARGO_TARGET_DIR`.

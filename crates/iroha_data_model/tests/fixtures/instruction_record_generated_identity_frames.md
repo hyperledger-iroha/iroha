@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 330
-type rows preserve 366 populated values and 1,464 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 329
+type rows preserve 365 populated values and 1,460 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`39a371818b4dbc04d04b4723739fd9e9b64ddf3f469990e0a190b1e7d1fb467d`.
+`59b16c6a823f8cf1c0ca13fdd392be5511baf7ece3cafb7e7583b38c6f59cb2c`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -122,3 +122,9 @@ the instruction: consensus evidence is a local log and telemetry record, so no
 on-chain penalty exists to cancel. The merged first-release inventory retains 330 rows and 366 populated cases;
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
+
+On 2026-09-30, the checksum assertion was reconciled with the checked-in current
+329-row capture. The collection retains 365 populated cases and 1,460 frame
+forms. The current typed registry contains 390 instructions: 21 governance
+entries and 369 non-governance entries. Earlier dated counts and checksums above
+remain evidence for their original candidates.

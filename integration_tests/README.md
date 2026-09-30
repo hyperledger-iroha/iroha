@@ -10,7 +10,14 @@ This crate hosts cross-component tests for Iroha.
   - `queries_and_proofs`
   - `network_functional`
   - `consensus_and_da`
+  - `sumeragi`
+  - `sumeragi_lanes`
+  - `sumeragi_npos_committee_transition`
   - `nexus_and_streaming`
+- Sumeragi on real peers: `cargo test -p integration_tests --test sumeragi` and
+  `--test sumeragi_lanes`; message loss, partitions, crashes and Byzantine
+  behavior are covered by the deterministic simulator
+  (`cargo test -p iroha_sumeragi --features sim`, `specs/sumeragi.md` §13).
 - Target a harness directly with `cargo test -p integration_tests --test <harness>`.
 - The focused `taira_consensus_contracts` target in `iroha_test_network` requires four real validators, three public routable lanes, and the exact signed Ordinary transaction to become state-resolved Applied while all four peers advance beyond genesis. It shares the existing multi-route NPoS/DA genesis fixture, keeps production proof defaults, and fails sandbox skips. Prebuild the native `iroha3d` daemon and `iroha` CLI and select them with `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`; set `IROHA_TEST_SKIP_BUILD=1` and run `cargo test --locked -p iroha_test_network --test taira_consensus_contracts four_peer_multiroute_ordinary_transaction_reaches_applied -- --exact --nocapture`. The maintained Taira release gate supplies these binaries from the same warm native build before the Linux build.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
@@ -67,11 +74,9 @@ This crate hosts cross-component tests for Iroha.
   IVM execution: the complete native execution relation and State-owned anchor
   remain unfinished, and no derive or commitment-binding producer is restored.
 - Feature flags: `telemetry` (default), `fault_injection`, `js_host_parity`, `zk-stark`, and the non-shipping `privacy-release-evidence` gate. Enable with `cargo test -p integration_tests --features "<feature list>"`.
+- The `js_host_parity` local test runs the Rust fetch owner, the actual Node module through the SDK's authenticated native loader, and the actual C ABI through `ctypes`. Build the current JavaScript native artifact first, then select the rebuilt host bridge directory with `IROHA_NATIVE_LIBRARY_PATH=/absolute/bridge/directory cargo test -p integration_tests --features js_host_parity --test nexus_and_streaming orchestrator_parity_across_runtimes`. `IROHA_PARITY_NODE` and `IROHA_PARITY_PYTHON` can select installed runtimes; absent or stale native artifacts fail the test. Comparisons cover payload bytes, scoreboard weights/eligibility, provider reports, receipts and native-call timing, excluding process startup.
 - Norito FEC parity, missing-chunk recovery and corruption tests run in the ordinary `nexus_and_streaming` harness using its local GF(256) helpers; no optional external Reed–Solomon dependency is needed.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.
-- The Sumeragi runner restart scenarios retain an exact four-validator committee with one outage and a seven-validator committee with two outages. Run the focused seven-validator case with `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::authoritative_v2_finalizes_through_two_validator_restarts -- --exact --nocapture --test-threads=1`. The original `sumeragi_v2_runner::authoritative_v2_finalizes_through_validator_restart` remains the four-validator case. Both require account application, cryptographically authenticated finality from the original complete equal-vote committee, committed-block agreement, and restored node identities before and after the outage. Each scenario submits exactly three transactions and waits for the last one to apply everywhere without further submissions.
-- The explicit long restart qualification is `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::authoritative_v2_validator_restart_qualification_32_seeds -- --exact --ignored --nocapture --test-threads=1`. It executes 32 fixed seeds across `(validators, offline) = (4, 1), (7, 1), (7, 2)`: 96 sequential networks with deterministic rotating outage subsets, never more than `f` outages. Unset `IROHA_TEST_NETWORK_BASE_SEED`; the matrix rejects a global override that would collapse distinct seeds. A sandbox skip fails this qualification even without `IROHA_TEST_REQUIRE_NETWORK`. The test prints each case's seed, topology, and completion only after all finality and application assertions pass; adding the matrix to source does not establish that it has passed.
-- The four-peer autoscale A/B/A lifecycle and rotating-validator Native AMX release gates remain in the ordinary, non-ignored Cargo inventory so release automation can detect renames or ignored tests. Plain developer suites take a fast opt-out; set `IROHA_RUN_IGNORED=1` with the exact test filter to execute them locally. Production uses `IROHA_MULTILANE_RELEASE_MODE=1`, requires a real network, and rejects missing completion markers.
 - Plain `cargo test` now uses Cargo's native jobserver and libtest's native thread selection; the workspace no longer serializes every developer build or test globally. Memory-constrained and release-evidence wrappers set scoped `--jobs`, `RUST_TEST_THREADS`, debug, and incremental limits only for their own runs.
 - High-count integration-test suites in workspace crates use explicit grouped harnesses instead of Cargo's automatic one-file-one-binary discovery, reducing duplicate test binary linking in default workspace runs.
 - Test networks run one-at-a-time by default so plain `cargo test` stays stable on WSL and memory-constrained VMs. Increase concurrency with `IROHA_TEST_NETWORK_PARALLELISM=<N>` on high-memory hosts; set `IROHA_TEST_SERIALIZE_NETWORKS=1` to force one-at-a-time startup explicitly.
@@ -88,7 +93,7 @@ stacks and configure a 1 GiB storage ceiling per validator through the ordinary
 Nexus configuration. This bounds the local test allocation independently of the
 capacity of a shared host filesystem. No extra stack environment setting is
 required by the tests.
-It uses four NPoS voting validators with mandatory DA/RBC, submits duplicate
+It uses four NPoS voting validators with mandatory DA, submits duplicate
 reports and competing claims through different peers, revokes an active owner,
 rejects stale completion, and verifies one terminal result plus byte-identical
 finalized task/counter/event projections before and after a validator restart.
@@ -165,17 +170,16 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   lease charges, so this is not production-fee qualification. Existing-file-only
   Fast Kura inspection verifies finality without starting a writer; only the
   actual Strict daemon restart qualifies replay.
-  The scenario requires the sealed release environment (`IROHA_RELEASE_*`) that
-  the retired Sumeragi v2 release-gate runner provided; that runner was removed
-  with the v2 tooling, so the scenario fails closed until it is ported together
-  with the lane storage it inspects. The scenario neither builds child binaries
+  The scenario requires a sealed release environment (`IROHA_RELEASE_*`) whose
+  previous release-gate runner was removed, so it fails closed until it is ported
+  together with the lane storage it inspects. The scenario neither builds child binaries
   nor substitutes a fresh chain/store for retained replay.
 - Pipeline block rejection scaffold lives at `tests/pipeline_block_rejected.rs` inside the `core_api` harness and is `#[ignore]` until a deterministic trigger is available.
 - Canonical Jindo activation, pre-activation rejection, exact replay, and
   restarted-peer catch-up coverage lives in
   `tests/privacy_exact12_jindo_network.rs` inside the `network_functional`
   harness.
-- Canonical native Orchard and PQ-MASP proving, four-peer DA/RBC convergence,
+- Canonical native Orchard and PQ-MASP proving, four-peer DA convergence,
   pre-activation and corrupted-proof rejection, stable-nullifier and exact
   transaction replay, failure atomicity, and a fresh nullifier replay through
   the restarted peer to authenticate recovered PQ state live in
@@ -187,7 +191,7 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   private-IVM proving, exact governed activation, independently corrupted
   proofs, cross-profile proof substitution, wrong statement binding,
   pre-activation rejection, exact and stable-state replay, public-state
-  atomicity, four-peer DA/RBC finality, and restarted-validator recovery live
+  atomicity, four-peer DA finality, and restarted-validator recovery live
   in `tests/privacy_exact12_retained_network.rs`. The same suite proves that
   ZK-ACE remains unavailable on every peer and that its production builder
   fails closed without changing public state. Every available-engine setup
@@ -232,9 +236,7 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
 - The generic game-session retained-input release gate lives in
   `tests/native_game_sessions.rs` inside `core_api`. It starts four real
   validators, retains an application checkpoint and jointly certified pending
-  controls through a fixed-height challenge, holds actual authenticated
-  cross-half votes in a bounded 2+2 consensus partition with all processes and
-  Torii endpoints alive, heals and drains the held votes, rejects conflicting evidence,
+  controls through a fixed-height challenge, rejects conflicting evidence,
   resolves a withheld reveal with three validators online, and requires the
   restarted fourth validator to recover identical session bytes and dispute
   commitments. It then proves the actual V2 technical-win transcript with the native
@@ -251,19 +253,14 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   height/block/artifact binding and publication digest, and requires identical
   full WSV hashes. This is local full-world convergence evidence; the QC does not
   sign that complete WSV hash, and the public route is not a full-WSV verifier.
-  It uses zero stakes and never bypasses native proof admission. The harness
-  selects the separately built consensus-message-control daemon; ordinary
-  production consensus behavior remains unchanged.
+  It uses zero stakes and never bypasses native proof admission.
   The test reserves 32-MiB stacks for its entry and runtime workers, and sets an explicit 1-GiB Nexus storage budget per validator for the finite local workload.
-  The partition uses eight exact views so native BLS identities fit the 64-KiB
-  command limit. Every observation and the final pre-heal check reject a persisted
-  consensus round outside that inventory. Canonical armed/held/healed command and
-  acknowledgement bytes are retained under the network's `game-partition-evidence/`.
+  Finalized ledger-state observations are retained under each peer's
+  `game-finality-evidence/`.
   Run with `IROHA_TEST_REQUIRE_NETWORK=1 cargo iroha-fast -- test -p integration_tests --test core_api native_game_sessions::generic_game_pending_inputs_forfeit_and_restart_four_validators -- --exact --ignored --nocapture`.
   A skipped sandbox is an error in this gate. Successful execution is still
-  required; source presence does not qualify the partition, authenticated
-  state-root convergence, or proof-backed payouts. The controlled partition
-  affects consensus votes; transaction and payload transport remain live.
+  required; source presence does not qualify authenticated state-root
+  convergence or proof-backed payouts.
 
 ### Parliament timed-OVN deadline/retry corridor
 
@@ -271,7 +268,7 @@ The feature-isolated `sora_parliament_lifecycle_smoke` target includes
 `failure_paths::private_ballot_retry::four_validator_private_ballot_deadline_retry_exhaustion_and_restore`.
 It registers actual private-ballot sessions, rejects premature failure and old-TLE
 reuse, derives registration-deadline NoResult, admits one fresh retry, exhausts
-the frozen limit, checks four-peer revision-4 finality and restores a validator.
+the frozen limit, checks four-peer finality and restores a validator.
 It does not replace the sibling proof-valid timed-OVN aggregate-opening test or
 provide deployment/audit qualification. Later-phase private deadline retries and
 partial-write rollback still need separate four-validator coverage.

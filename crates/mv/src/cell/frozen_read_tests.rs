@@ -156,7 +156,8 @@ fn frozen_replacement_cell_reads_the_original_cut_even_after_target_drops() {
 
 #[test]
 fn original_and_frozen_charged_cell_owner_checks_never_accept_equal_foreign_values() {
-    use crate::{BlockAcquisition as _, allocation::AllocationBudget};
+    use crate::BlockAcquisition as _;
+    use iroha_allocation::AllocationBudget;
     let budget = AllocationBudget::new(64 * 1024);
     let target = CellInitialization::try_reserve(&budget)
         .unwrap()
@@ -164,7 +165,7 @@ fn original_and_frozen_charged_cell_owner_checks_never_accept_equal_foreign_valu
     let foreign = CellInitialization::try_reserve(&budget)
         .unwrap()
         .initialize(7_u64, None);
-    let [current, undo] = Cell::<u64, crate::allocation::AllocationCharge>::allocation_layouts();
+    let [current, undo] = Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts();
     let successor_layout = CellPublicationSuccessor::allocation_layout();
     let mut reservation = budget
         .try_reserve_layouts([current, undo, successor_layout])

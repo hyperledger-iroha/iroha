@@ -19,7 +19,7 @@ SPEC.loader.exec_module(gate)
 
 
 class ShippingCodegenEvidenceTests(unittest.TestCase):
-    shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+    shipping = ("taira-launcher", "cli-bin", "sorafs-bin", "kagami")
     binaries = ("iroha3d", "iroha", "iroha3d_taira", "sorafs-node", "kagami")
 
     @staticmethod
@@ -35,10 +35,13 @@ class ShippingCodegenEvidenceTests(unittest.TestCase):
 
     def events(self):
         return [self.library("iroha_core", ["default", "json"]),
+                self.library("iroha_core_zk", ["proofs-halo2", "zk-stark"]),
+                self.library("iroha_core_privacy", ["default"]),
+                self.library("iroha_core_timed_ovn", ["default"]),
                 self.library("iroha_torii", ["default", "app_api"]),
                 *(self.binary(name) for name in self.binaries)]
 
-    def build(self, events, *, message_control=False):
+    def build(self, events, *, settlement_route_control=False):
         child = MagicMock()
         child.stdout = io.StringIO("".join(json.dumps(event) + "\n" for event in events))
         child.wait.return_value = 0
@@ -49,7 +52,7 @@ class ShippingCodegenEvidenceTests(unittest.TestCase):
              patch.object(gate, "isolate_native_artifacts", return_value={}) as isolate, \
              contextlib.redirect_stdout(io.StringIO()):
             result = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/pinned/cargo"},
-                                                    (77,), message_control=message_control)
+                                                    (77,), settlement_route_control=settlement_route_control)
         return result, shipping, cargo, isolate
 
     def test_required_build_verifies_all_shipping_binaries_and_protected_libraries(self):
@@ -65,7 +68,7 @@ class ShippingCodegenEvidenceTests(unittest.TestCase):
         self.assertEqual(cargo.call_args.kwargs["pass_fds"], (77,))
 
     def test_missing_library_evidence_fails_before_artifact_publication(self):
-        for missing in ("iroha_core", "iroha_torii"):
+        for missing in gate.PRODUCTION_LIBRARY_FORBIDDEN_FEATURES:
             events = [event for event in self.events()
                       if event["target"]["name"] != missing]
             with self.subTest(missing=missing), \
@@ -118,9 +121,9 @@ class ShippingCodegenEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.CheckError, "every required executable artifact"):
             self.build(events)
 
-    def test_explicit_message_control_fixture_build_is_not_default_shipping_evidence(self):
+    def test_explicit_settlement_route_control_fixture_build_is_not_default_shipping_evidence(self):
         event = self.binary("iroha3d")
-        _, shipping, cargo, isolate = self.build([event], message_control=True)
+        _, shipping, cargo, isolate = self.build([event], settlement_route_control=True)
         shipping.assert_not_called()
         isolate.assert_called_once()
         self.assertIn("--features", cargo.call_args.args[0])

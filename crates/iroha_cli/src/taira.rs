@@ -66,6 +66,7 @@ const PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1: &str =
 const PREPARED_ENVELOPE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const PREPARED_TRANSACTION_MAX_BYTES: usize = 1024 * 1024;
 const PREPARED_TRANSACTION_CLOCK_SKEW_MS: u64 = 30_000;
+const READINESS_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
 const INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
 const INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const INROU_PUBLIC_DISCOVERY_CONTENT_TYPE: &str = "application/json";
@@ -93,9 +94,16 @@ const FULL_MCP_TOOLS: &[&str] = &[
 #[derive(Clone, Copy)]
 enum RouteCheckMethod {
     Get,
+    GetReadiness,
     PostEmptyObject,
 }
 const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
+    (
+        "readiness",
+        RouteCheckMethod::GetReadiness,
+        "/readyz",
+        &[200],
+    ),
     ("status", RouteCheckMethod::Get, "/status", &[200]),
     ("time_now", RouteCheckMethod::Get, "/v1/time/now", &[200]),
     (
@@ -202,7 +210,7 @@ impl Run for Command {
 /// Read-only Taira public endpoint diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub(super) enum DoctorScope {
-    /// Basic account, asset, transaction and consensus connectivity.
+    /// Basic admission readiness, account, asset, transaction and consensus connectivity.
     #[default]
     Basic,
     /// Include advanced service readiness and strict network-time health.
@@ -220,7 +228,8 @@ impl DoctorScope {
         self == Self::Full
             || matches!(
                 name,
-                "status"
+                "readiness"
+                    | "status"
                     | "time_now"
                     | "sumeragi_status"
                     | "pipeline_transaction_status"
@@ -2629,14 +2638,23 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
             continue;
         }
         let url = join_url(&public_root, path)?;
-        let (method, body) = match method {
-            RouteCheckMethod::Get => (reqwest::Method::GET, None),
-            RouteCheckMethod::PostEmptyObject => (reqwest::Method::POST, Some(&empty_object)),
+        let result = match method {
+            RouteCheckMethod::Get => http_json(&http, reqwest::Method::GET, url.as_str(), None)?,
+            RouteCheckMethod::GetReadiness => http_readiness(&http, url.as_str())?,
+            RouteCheckMethod::PostEmptyObject => http_json(
+                &http,
+                reqwest::Method::POST,
+                url.as_str(),
+                Some(&empty_object),
+            )?,
         };
-        let result = http_json(&http, method, url.as_str(), body)?;
         let status_ok = expected_statuses.contains(&result.status);
         let semantic_error = if status_ok {
             match *name {
+                "readiness" => (result.body.as_ref().and_then(Value::as_str) != Some("Ready"))
+                    .then(|| {
+                        "/readyz did not return the exact plain-text Ready response".to_owned()
+                    }),
                 "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref(), scope).err(),
                 "kagemusha_readiness" => validate_kagemusha_readiness(result.body.as_ref()).err(),
@@ -2645,6 +2663,13 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
         } else {
             None
         };
+        let readiness_failure = (*name == "readiness" && !status_ok).then(|| {
+            format!(
+                "/readyz returned HTTP {}; error_code={}; expected 200",
+                result.status,
+                readiness_error_code(result.body.as_ref())
+            )
+        });
         let ok = status_ok && semantic_error.is_none();
         push_check(
             &mut checks,
@@ -2653,18 +2678,21 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
             ok,
             semantic_error
                 .clone()
+                .or_else(|| readiness_failure.clone())
                 .or_else(|| route_check_detail(expected_statuses)),
         );
         if !status_ok {
-            failures.push(format!(
-                "{name} returned HTTP {}; expected {}",
-                result.status,
-                expected_statuses
-                    .iter()
-                    .map(u16::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" or ")
-            ));
+            failures.push(readiness_failure.unwrap_or_else(|| {
+                format!(
+                    "{name} returned HTTP {}; expected {}",
+                    result.status,
+                    expected_statuses
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                )
+            }));
         } else if let Some(error) = semantic_error {
             failures.push(error);
         }
@@ -6059,6 +6087,57 @@ fn http_json(
         .wrap_err_with(|| format!("request failed for {url}"))?;
     decode_http_json_response(response)
 }
+fn http_readiness(http: &HttpClient, url: &str) -> Result<HttpJson> {
+    // Successful readiness is plain text; failures use the typed JSON envelope.
+    // Bound the response and retain only exact success or a bounded machine code.
+    let response = http
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/plain, application/json")
+        .send()
+        .wrap_err_with(|| format!("readiness request failed for {url}"))?;
+    let status = response.status().as_u16();
+    let plain_text = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim() == "text/plain")
+        });
+    if response
+        .content_length()
+        .is_some_and(|length| length > READINESS_RESPONSE_MAX_BYTES)
+    {
+        return Ok(HttpJson { status, body: None });
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(READINESS_RESPONSE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read bounded Taira readiness response")?;
+    let body = if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > READINESS_RESPONSE_MAX_BYTES {
+        None
+    } else if status == 200 {
+        (plain_text && bytes.as_slice() == b"Ready").then(|| Value::from("Ready"))
+    } else {
+        json::from_slice(&bytes).ok()
+    };
+    Ok(HttpJson { status, body })
+}
+fn readiness_error_code(body: Option<&Value>) -> &str {
+    body.and_then(|body| body.get("code"))
+        .and_then(Value::as_str)
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+        .unwrap_or("unspecified")
+}
 fn http_mcp_json(
     http: &HttpClient,
     url: &str,
@@ -6928,10 +7007,6 @@ fn validate_soracloud_network_policy(value: &Value, context: &str) -> Result<(),
         _ => Err(format!("{context}.mode has unknown variant `{mode}`")),
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the V1 status revision inventory is intentionally validated in one exact pass"
-)]
 fn validate_soracloud_revision(value: &Value, context: &str) -> Result<(), String> {
     const FIELDS: &[&str] = &[
         "sequence",
@@ -7403,10 +7478,6 @@ fn validate_soracloud_control_plane(value: &Value) -> Result<(), String> {
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the public V1 status validator keeps the complete fail-closed contract visible"
-)]
 fn validate_soracloud_status(status: Option<&Value>) -> Result<(), String> {
     const ROOT_FIELDS: &[&str] = &[
         "schema_version",
@@ -9723,7 +9794,33 @@ mod tests {
             }
         }
     }
+    static MOCK_HTTP_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
+    struct MockHttpFixturePermit {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+    thread_local! {
+        static MOCK_HTTP_FIXTURE_OWNER: std::cell::RefCell<std::rc::Weak<MockHttpFixturePermit>> =
+            std::cell::RefCell::new(std::rc::Weak::new());
+    }
+    fn mock_http_fixture_guard() -> std::rc::Rc<MockHttpFixturePermit> {
+        // Independent blocking clients otherwise multiply worker threads and consume the
+        // deliberately short wall-clock deadlines under parallel unit execution. A test owns
+        // all of its loopback servers together; nested servers share the same permit.
+        MOCK_HTTP_FIXTURE_OWNER.with(|owner| {
+            if let Some(permit) = owner.borrow().upgrade() {
+                return permit;
+            }
+            let permit = std::rc::Rc::new(MockHttpFixturePermit {
+                _guard: MOCK_HTTP_FIXTURE_LOCK
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            });
+            *owner.borrow_mut() = std::rc::Rc::downgrade(&permit);
+            permit
+        })
+    }
     struct MockHttpServer {
+        _fixture_permit: std::rc::Rc<MockHttpFixturePermit>,
         base_url: String,
         requests: Arc<Mutex<Vec<MockRequest>>>,
         stop: Arc<AtomicBool>,
@@ -9733,6 +9830,7 @@ mod tests {
     where
         F: Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
     {
+        let fixture_permit = mock_http_fixture_guard();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let addr = listener.local_addr().expect("mock server address");
         listener
@@ -9804,6 +9902,7 @@ mod tests {
             }
         });
         MockHttpServer {
+            _fixture_permit: fixture_permit,
             base_url: format!("http://{addr}"),
             requests,
             stop,
@@ -9863,7 +9962,10 @@ mod tests {
     fn find_header_end(raw: &[u8]) -> Option<usize> {
         raw.windows(4).position(|window| window == b"\r\n\r\n")
     }
-    fn write_mock_response(stream: &mut TcpStream, response: MockResponse) -> std::io::Result<()> {
+    fn write_mock_response(
+        stream: &mut impl std::io::Write,
+        response: MockResponse,
+    ) -> std::io::Result<()> {
         let reason = match response.status {
             200 => "OK",
             202 => "Accepted",
@@ -9876,8 +9978,11 @@ mod tests {
             _ => "OK",
         };
         let body = response.body.as_slice();
+        // Send the frame together: fragmented header writes trigger Nagle/delayed-ACK
+        // latency on loopback and consume the operation deadlines being tested.
+        let mut frame = Vec::new();
         write!(
-            stream,
+            frame,
             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
             response.status,
             reason,
@@ -9885,10 +9990,11 @@ mod tests {
             body.len()
         )?;
         for (name, value) in response.headers {
-            write!(stream, "{name}: {value}\r\n")?;
+            write!(frame, "{name}: {value}\r\n")?;
         }
-        write!(stream, "\r\n")?;
-        stream.write_all(body)
+        write!(frame, "\r\n")?;
+        frame.extend_from_slice(body);
+        stream.write_all(&frame)
     }
     fn finish_mock(server: MockHttpServer) -> Vec<MockRequest> {
         server.stop.store(true, Ordering::Release);
@@ -9897,6 +10003,64 @@ mod tests {
             .expect("request references")
             .into_inner()
             .expect("requests")
+    }
+
+    #[test]
+    fn mock_http_fixture_ownership_is_reentrant_and_released_after_last_owner() {
+        let first = mock_http_fixture_guard();
+        let original = std::rc::Rc::downgrade(&first);
+        let second = mock_http_fixture_guard();
+        assert!(std::rc::Rc::ptr_eq(&first, &second));
+        assert!(
+            thread::spawn(|| MOCK_HTTP_FIXTURE_LOCK.try_lock().is_err())
+                .join()
+                .unwrap()
+        );
+        drop(first);
+        assert!(
+            original.upgrade().is_some(),
+            "the nested fixture still owns exclusion"
+        );
+        drop(second);
+        assert!(
+            original.upgrade().is_none(),
+            "the final fixture releases its ownership"
+        );
+        let next = mock_http_fixture_guard();
+        assert!(!std::rc::Weak::ptr_eq(
+            &original,
+            &std::rc::Rc::downgrade(&next)
+        ));
+    }
+    #[test]
+    fn mock_response_preserves_the_exact_frame_in_one_transport_write() {
+        #[derive(Default)]
+        struct TransportWrites(Vec<Vec<u8>>);
+        impl std::io::Write for TransportWrites {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.push(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut transport = TransportWrites::default();
+        write_mock_response(
+            &mut transport,
+            MockResponse {
+                status: 202,
+                content_type: "application/x-norito",
+                headers: vec![("X-Proof", "exact".to_owned())],
+                body: vec![0, 0xff, b'\r', b'\n'],
+            },
+        )
+        .expect("complete mock HTTP frame");
+        assert_eq!(
+            transport.0,
+            [b"HTTP/1.1 202 Accepted\r\nContent-Type: application/x-norito\r\nContent-Length: 4\r\nConnection: close\r\nX-Proof: exact\r\n\r\n\0\xff\r\n".to_vec()],
+            "the fixture must preserve headers and binary body without delaying fragments"
+        );
     }
 
     #[test]
@@ -10094,6 +10258,7 @@ mod tests {
     }
     fn doctor_mock_response(request: &MockRequest, omit_tool: Option<&str>) -> MockResponse {
         match (request.method.as_str(), path_only(&request.path)) {
+            ("GET", "/readyz") => MockResponse::text(200, "Ready"),
             ("GET", "/v1/accounts/capabilities") => doctor_account_tests::capability_response(),
             ("GET", "/v1/accounts/faucet/policy") => doctor_account_tests::faucet_response(),
             ("GET", "/status") => MockResponse::json(
@@ -10726,10 +10891,6 @@ mod tests {
                 .expect("serialize remaining runtime balance"))
         })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture spells out the complete exact Soracloud V1 response"
-    )]
     fn exact_inrou_status(version: &str, action: &str, revision_count: u64) -> Value {
         let observed_block_hash = Hash::new(b"taira-test-observed-block").to_string();
         let validator_signer = fixture_key_pair(0x96).public_key().to_string();
@@ -10925,10 +11086,6 @@ mod tests {
         })
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one cohesive fail-closed deploy and upgrade contract test"
-    )]
     fn exact_inrou_status_requires_distinct_promoted_upgrade() {
         let deployed_version = inrou_canary_artifact_version(0x11);
         let upgraded_version = inrou_canary_artifact_version(0x22);
@@ -12122,6 +12279,7 @@ mod tests {
     }
     #[test]
     fn inrou_probe_requires_a_current_successful_route_observation() {
+        let _fixture = mock_http_fixture_guard();
         let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         let service_version = inrou_canary_artifact_version(0x24);
         let deployment = inrou_canary_deployment("deploy", &service_version);
@@ -12269,6 +12427,7 @@ mod tests {
     }
     #[test]
     fn candidate_inrou_qualifies_runtime_before_public_discovery_exists() {
+        let _fixture = mock_http_fixture_guard();
         let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
         for scope in [InrouProbeScope::Candidate, InrouProbeScope::Public] {
             let service_version = inrou_canary_artifact_version(0x26);
@@ -12644,6 +12803,142 @@ mod tests {
                 && request.body == "{}"
         }));
     }
+
+    #[test]
+    fn doctor_readiness_requires_exact_plain_text_ready_in_both_scopes() {
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            for (label, content_type, body, accepted) in [
+                (
+                    "ready",
+                    "text/plain; charset=utf-8",
+                    b"Ready".to_vec(),
+                    true,
+                ),
+                ("other text", "text/plain", b"Alive".to_vec(), false),
+                (
+                    "JSON string",
+                    "application/json",
+                    b"\"Ready\"".to_vec(),
+                    false,
+                ),
+                (
+                    "oversized",
+                    "text/plain",
+                    vec![b'x'; usize::try_from(READINESS_RESPONSE_MAX_BYTES + 1).unwrap()],
+                    false,
+                ),
+            ] {
+                let server = spawn_mock_http(16, move |request| {
+                    if path_only(&request.path) == "/readyz" {
+                        MockResponse {
+                            status: 200,
+                            content_type,
+                            headers: Vec::new(),
+                            body: body.clone(),
+                        }
+                    } else {
+                        doctor_mock_response(request, None)
+                    }
+                });
+                let report = run_doctor(&server.base_url, scope).expect("doctor report");
+                let requests = finish_mock(server);
+                assert_eq!(
+                    report_status(&report),
+                    Some(if accepted { "ok" } else { "fail" }),
+                    "{scope:?}: {label}"
+                );
+                let readiness_requests = requests
+                    .iter()
+                    .filter(|request| path_only(&request.path) == "/readyz")
+                    .collect::<Vec<_>>();
+                assert_eq!(readiness_requests.len(), 1, "{scope:?}: {label}");
+                assert_eq!(readiness_requests[0].method, "GET");
+                assert_eq!(
+                    readiness_requests[0].header_values("accept"),
+                    ["text/plain, application/json"]
+                );
+                let checks = report["checks"].as_array().unwrap();
+                let readiness = checks
+                    .iter()
+                    .find(|check| check["name"].as_str() == Some("readiness"))
+                    .expect("mandatory readiness check");
+                assert_eq!(readiness["http_status"].as_u64(), Some(200));
+                assert_eq!(readiness["ok"].as_bool(), Some(accepted));
+                assert!(checks.iter().all(|check| {
+                    check["name"].as_str() == Some("readiness")
+                        || check["ok"].as_bool() == Some(true)
+                }));
+                assert_eq!(
+                    report["failures"].as_array().unwrap().len(),
+                    usize::from(!accepted)
+                );
+                assert!(
+                    doctor_expected_checks(scope)
+                        .iter()
+                        .any(|(name, status, detail)| {
+                            *name == "readiness" && *status == 200 && detail.is_none()
+                        })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn doctor_readiness_unavailable_fails_both_scopes_with_only_bounded_error_codes() {
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            for (code, expected) in [
+                (
+                    Value::from("consensus_admission_unavailable"),
+                    "consensus_admission_unavailable",
+                ),
+                (Value::from("injected\ncode"), "unspecified"),
+                (Value::from("x".repeat(65)), "unspecified"),
+                (Value::Bool(false), "unspecified"),
+            ] {
+                let server = spawn_mock_http(16, move |request| {
+                    if path_only(&request.path) == "/readyz" {
+                        MockResponse::json(
+                            503,
+                            norito::json!({
+                                "code": (code.clone()),
+                                "message": "do-not-forward-server-message",
+                                "details": { "private": "do-not-forward-server-data" }
+                            }),
+                        )
+                    } else {
+                        doctor_mock_response(request, None)
+                    }
+                });
+                let report = run_doctor(&server.base_url, scope).expect("doctor report");
+                finish_mock(server);
+                assert_eq!(
+                    report_status(&report),
+                    Some("fail"),
+                    "{scope:?}: {expected}"
+                );
+                let checks = report["checks"].as_array().unwrap();
+                let readiness = checks
+                    .iter()
+                    .find(|check| check["name"].as_str() == Some("readiness"))
+                    .expect("mandatory readiness check");
+                assert_eq!(readiness["http_status"].as_u64(), Some(503));
+                assert_eq!(readiness["ok"].as_bool(), Some(false));
+                let failure =
+                    format!("/readyz returned HTTP 503; error_code={expected}; expected 200");
+                assert_eq!(readiness["detail"].as_str(), Some(failure.as_str()));
+                assert_eq!(
+                    report["failures"].as_array().unwrap().as_slice(),
+                    &[Value::from(failure)]
+                );
+                assert!(checks.iter().all(|check| {
+                    check["name"].as_str() == Some("readiness")
+                        || check["ok"].as_bool() == Some(true)
+                }));
+                assert!(!json::to_json(&report).unwrap().contains("do-not-forward"));
+            }
+        }
+    }
+
     #[test]
     fn inrou_status_probe_uses_canonical_account_authentication() {
         let server = spawn_mock_http(1, |request| {

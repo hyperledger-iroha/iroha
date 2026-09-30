@@ -9,8 +9,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::{Execute, ivm::host::CoreHost},
     state::State,
-    zk::test_utils::halo2_fixture_envelope,
 };
+use iroha_core_zk::test_utils::halo2_fixture_envelope;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     isi::verifying_keys,

@@ -206,7 +206,7 @@ SHA-256 is `689d7d274831356e0565ab7bfb8acdf64180bb6419a5d59ef7ed8c19ceb37c4b`.
 The full daemon command remains a separate gate:
 
 ```sh
-cargo iroha-fast -- test -p irohad --lib sorafs_provider_ingest_runtime::https_source::tests:: -- --nocapture
+cargo iroha-fast -- test -p irohad_lib --lib sorafs_provider_ingest_runtime::https_source::tests:: -- --nocapture
 ```
 
 After the shared-admission change, a separate immutable exact-source harness passed all 39 tests
@@ -265,7 +265,7 @@ They deliberately use refusing fixture authorities and do not start a daemon or 
 socket. Run this filter to include both the leaf and composition tests:
 
 ```sh
-cargo iroha-fast -- test -p irohad --lib sorafs_provider_ingest_runtime::https_source -- --nocapture
+cargo iroha-fast -- test -p irohad_lib --lib sorafs_provider_ingest_runtime::https_source -- --nocapture
 ```
 
 The retained historical daemon Cargo gate passed, including all six composition tests. This

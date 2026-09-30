@@ -33,8 +33,13 @@ fn public_receipt_requires_exact_selected_run_geometry_and_distinct_bounded_role
     let admitted = writers(123, 456);
     assert_eq!(admitted.journal.max_bytes, 123);
     assert_eq!(admitted.trace.max_bytes, 456);
-    assert_eq!(admitted.journal._label, "pair1.one_lane.journal");
-    assert_eq!(admitted.trace._label, "pair1.one_lane.trace");
+    assert_eq!(admitted.journal.label, "pair1.one_lane.journal");
+    assert_eq!(admitted.trace.label, "pair1.one_lane.trace");
+    assert_eq!(
+        admitted.value(),
+        norito::json!({"journal": {"label": "pair1.one_lane.journal", "max_bytes": 123},
+            "trace": {"label": "pair1.one_lane.trace", "max_bytes": 456}})
+    );
     for (section, key, changed) in [
         ("", "budget_sha256", norito::json!("b".repeat(64))),
         ("", "pair_index", norito::json!(2)),
@@ -211,7 +216,7 @@ fn actual_python_canonical_budget_receipt_decodes_against_independent_rust_sha25
     let allocated = parse(&bound, reply).unwrap();
     assert_eq!(allocated.journal.max_bytes, 4096);
     assert_eq!(allocated.trace.max_bytes, 8192);
-    assert_eq!(allocated.journal._label, "pair1.one_lane.journal");
-    assert_eq!(allocated.trace._label, "pair1.one_lane.trace");
+    assert_eq!(allocated.journal.label, "pair1.one_lane.journal");
+    assert_eq!(allocated.trace.label, "pair1.one_lane.trace");
     assert!(parse(&expected(), reply).is_err());
 }

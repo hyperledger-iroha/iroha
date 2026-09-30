@@ -108,6 +108,10 @@ def test_owner_is_registered_for_the_exact_two_outputs() -> None:
         "scripts/write_musubi_fixtures.py",
     }
     assert set(owner["inputs"]) == {
+        "crates/iroha_model_base/src/topology.rs",
+        "crates/iroha_model_base/Cargo.toml",
+        "crates/iroha_model_base/src/chain.rs",
+        "crates/iroha_primitives/src/chain_id.rs",
         "crates/iroha_data_model/src/id.rs",
         "crates/iroha_data_model/src/isi/mod.rs",
         "crates/iroha_data_model/src/isi/musubi.rs",

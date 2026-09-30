@@ -316,8 +316,8 @@ publication authority.
   trust-policy injection, daemon-owned immutable-query scheduling, externally
   authenticated journal submission/finality reconciliation, supervision, and
   payload-free status are wired. The configured compact archive is
-  Kura-authenticated at startup and captured after Kura finality plus the WSV
-  checkpoint and before State publication. The standard daemon has no
+  Kura-authenticated at startup and captures the exact published committed State
+  before the executor acknowledges apply or advances to another height. The standard daemon has no
   validator-key or queue-backed journal fallback. It also drains retained
   native PoR terminals into durable reputation admission under the configured
   bounded cadence even when optional replay archival is disabled. External
@@ -497,8 +497,9 @@ publication authority.
     the authenticated Kura tip, preserves the activation floor when first
     enabled on a nonempty chain, and constructs the query from that archive.
     The same archive is threaded through Sumeragi and durably captures each
-    fresh height after Kura finality and the WSV checkpoint but before
-    `StateBlock::commit`; a capture failure requires committed recovery.
+    exact published committed State before apply acknowledgement or height
+    advancement; a failed capture retains the committed decision for retry
+    without repeating State publication or notifications.
   - Implemented: Daemon startup applies the runtime's complete exact-request
     bootstrap-view validator—anchor identity and chain/height, authority-policy
     activation time, canonical continuation, non-zero bounded request limit,

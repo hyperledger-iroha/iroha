@@ -33,10 +33,8 @@ use iroha_core::validator_committee_evidence::{
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
-    consensus::{
-        GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1,
-        v2::is_valid_committee_size,
-    },
+    block::consensus::is_valid_committee_size,
+    consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1},
     isi::{
         InstructionBox,
         consensus_keys::{

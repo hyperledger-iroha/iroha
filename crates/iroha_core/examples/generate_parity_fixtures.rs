@@ -145,20 +145,24 @@ fn run_block_and_events(
             .unpack(|_| {})
             .into()
     };
-    // Execute and commit
-    let (mut sb, sb_recorder) =
-        iroha_core::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
-            .expect("original writer-first component execution");
-    let vb = ValidBlock::validate_unchecked(block, &mut sb, sb_recorder).unpack(|_| {});
-    let errors: Vec<_> = vb.as_ref().failed_outputs().collect();
-    assert!(
-        errors.is_empty(),
-        "parity fixture transactions failed: {errors:?}"
-    );
-    let cb = vb.commit_unchecked().unpack(|_| {});
-    // Apply block effects without re-executing transactions.
-    let events = sb.apply_without_execution(&cb, Vec::<iroha_model_base::peer::PeerId>::new());
-    sb.commit().expect("commit parity fixture state");
+    // Execute and commit. The boxed overlay borrows `state` until the box itself is
+    // dropped, so it stays inside this block and `state` can be returned afterwards.
+    let events = {
+        let (mut sb, sb_recorder) =
+            iroha_core::block::ValidBlock::start_component_execution(&block.clone().into(), &state)
+                .expect("original writer-first component execution");
+        let vb = ValidBlock::validate_unchecked(block, &mut sb, sb_recorder).unpack(|_| {});
+        let errors: Vec<_> = vb.as_ref().failed_outputs().collect();
+        assert!(
+            errors.is_empty(),
+            "parity fixture transactions failed: {errors:?}"
+        );
+        let cb = vb.commit_unchecked().unpack(|_| {});
+        // Apply block effects without re-executing transactions.
+        let events = sb.apply_without_execution(&cb, Vec::<iroha_model_base::peer::PeerId>::new());
+        sb.commit().expect("commit parity fixture state");
+        events
+    };
     Ok((events, state))
 }
 #[allow(clippy::too_many_lines)]

@@ -9,7 +9,7 @@ fn consensus_caps(fingerprint: [u8; 32]) -> ConsensusConfigCaps {
     }
 }
 #[test]
-fn v2_peer_admission_compares_canonical_shared_config_fingerprint() {
+fn peer_admission_compares_canonical_shared_config_fingerprint() {
     let expected = consensus_caps([0xA5; 32]);
     assert_eq!(
         consensus_config_mismatch(&expected, &expected),

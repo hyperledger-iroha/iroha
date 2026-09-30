@@ -1,9 +1,8 @@
 //! Real writer custody across identity refusal, poison, validation and abort.
 
 use super::*;
-use crate::{
-    internals::bptree::node::allocation_tests::without_allocations, release::ReleaseNotification,
-};
+use crate::internals::bptree::node::allocation_tests::without_allocations;
+use iroha_allocation::release::ReleaseNotification;
 use std::{
     future::Future,
     pin::Pin,

@@ -6,6 +6,10 @@
 //! an unwind conservatively retains credits when destruction cannot be established.
 
 use super::BoundaryInputs;
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
+    ChargedBufferError, ChargedBufferFromChargeError, PrepaidBufferError, RetainedPayload,
+};
 use iroha_crypto::{PublicKey, PublicKeyAllocationError};
 use iroha_data_model::{
     isi::kagemusha_v1::{
@@ -18,10 +22,6 @@ use iroha_data_model::{
 };
 use iroha_model_base::peer::PeerId;
 use iroha_primitives::{bigint::BigIntAdmissionCloneError, numeric::Quantity};
-use mv::allocation::{
-    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
-    ChargedBufferError, ChargedBufferFromChargeError, PrepaidBufferError, RetainedPayload,
-};
 use std::alloc::Layout;
 
 /// A local allocation refusal stays distinct from deterministic invalid boundary inputs.
@@ -401,6 +401,7 @@ impl<'a> Construction<'a> {
         source: &ValidatorEpochContextV1,
     ) -> Result<ValidatorEpochContextV1, BoundaryCaptureError> {
         Ok(ValidatorEpochContextV1 {
+            da_layout: source.da_layout,
             version: source.version,
             network_id: source.network_id,
             mode: source.mode,
@@ -478,6 +479,7 @@ pub(super) fn materialize(
     let mut owner = Construction::new(demand, budget)?;
     let current = owner.context(inputs.current)?;
     let next = ValidatorEpochContextV1 {
+        da_layout: current.da_layout,
         version: 1,
         network_id: current.network_id,
         mode: current.mode,
@@ -787,7 +789,7 @@ fn retain_slots(
     };
     match RetainedConsensusSchedule::from_retained(retained, &mut owner.reservation) {
         Ok(result) => Ok(result),
-        Err((original, mv::allocation::PrepaidSharedError::Allocator { requested_bytes })) => {
+        Err((original, iroha_allocation::PrepaidSharedError::Allocator { requested_bytes })) => {
             drop(original);
             Err(BoundaryCaptureError::Allocator { requested_bytes })
         }

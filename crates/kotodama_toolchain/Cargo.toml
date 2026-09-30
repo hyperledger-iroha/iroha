@@ -1,0 +1,51 @@
+[package]
+name = "kotodama_toolchain"
+autotests = false
+version.workspace = true
+edition = "2024"
+authors = ["Iroha Contributors"]
+description = "VM-backed Kotodama developer toolchain: the koto CLI/LSP and the koto test runner"
+license = "Apache-2.0"
+repository = "https://github.com/hyperledger-iroha/iroha"
+documentation = "https://docs.rs/kotodama_toolchain"
+
+# TODO: adopt [lints] workspace = true once the moved koto CLI/test-driver
+# sources satisfy the workspace lints (kept without [lints] for parity with ivm
+# and kotodama_lang).
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "koto"
+path = "src/bin/koto.rs"
+
+[[bin]]
+name = "dump_program"
+path = "src/bin/dump_program.rs"
+required-features = ["dev-tools"]
+
+[features]
+# Developer-only inspection binaries.
+dev-tools = []
+
+[dependencies]
+iroha_allocation = { workspace = true }
+ivm = { workspace = true }
+ivm_abi = { path = "../ivm_abi" }
+kotodama_lang = { workspace = true }
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "governance", "bls"] }
+iroha_model_base = { workspace = true }
+iroha_primitives = { path = "../iroha_primitives" }
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["json"] }
+norito = { path = "../norito", default-features = false, features = ["node-codec"] }
+ed25519-dalek = "2.2.0"
+
+[dev-dependencies]
+hex = { workspace = true }
+kotodama_surface = { workspace = true }
+mv = { workspace = true }
+
+[[test]]
+name = "cli_smoke"
+path = "tests/cli_smoke.rs"

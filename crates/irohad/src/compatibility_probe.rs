@@ -27,7 +27,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::sumeragi::PROTOCOL_VERSION;
 use iroha_data_model::{
     NetworkId,
-    block::{BlockHeader, consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block},
+    block::{BlockHeader, consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block},
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use norito::derive::{JsonDeserialize, JsonSerialize};
@@ -51,7 +51,7 @@ pub const DRY_RUN_ERROR: &str = "error";
 pub struct ConfigCompatibilityV1 {
     /// `ready` when the configuration and the signed genesis validated, `pending` without genesis.
     pub status: String,
-    /// Sumeragi v2 configuration fingerprint (`/status` `config_fingerprint`, handshake-bound).
+    /// Sumeragi configuration fingerprint (`/status` `config_fingerprint`, handshake-bound).
     pub config_fingerprint: Option<String>,
     /// Consensus wire protocol version.
     pub protocol_version: u16,
@@ -133,7 +133,7 @@ pub fn config_compatibility_v1(
             let (_, _, handshake, _, _) = consensus_caps_from_genesis(block, &caps)
                 .ok_or_else(|| {
                     Report::new(MainError::Config).attach(
-                        "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
+                        "local genesis does not contain one valid canonical Sumeragi handshake context",
                     )
                 })?;
             let context = bootstrap;
@@ -383,11 +383,11 @@ fn snapshot_restore_dry_run(
         .unwrap_or_else(|| config.common.key_pair.public_key());
     // Mirror startup: restored State owners retain this configured execution pool.
     let execution_budget =
-        mv::allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
     let read_buffer_budget =
-        mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
+        iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
     // The same bounded operation-index pool the node's own startup restore uses.
-    let operation_index_budget = mv::allocation::AllocationBudget::new(
+    let operation_index_budget = iroha_allocation::AllocationBudget::new(
         usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get())
             .map_err(|_| "configured operation-index pool exceeds addressable memory".to_owned())?,
     );

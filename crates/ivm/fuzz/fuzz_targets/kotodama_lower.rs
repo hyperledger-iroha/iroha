@@ -1,5 +1,5 @@
 #![no_main]
-use ivm::kotodama::{ir, parser, semantic};
+use kotodama_lang::{ir, parser, semantic};
 use libfuzzer_sys::fuzz_target;
 const MAX_SRC_LEN: usize = 2048;
 fuzz_target!(|data: &[u8]| {

@@ -52,7 +52,7 @@ reference docs that stay in lockstep with Rust data-model changes.
 
 ### D3 — Publishing & Validation (Docs/DevRel + Release Engineering)
 - Add `make android-codegen-docs` that executes:
-  1. `scripts/sumeragi_v2_release_cargo_proxy.sh run --locked --offline -p
+  1. `scripts/sumeragi_release_cargo_proxy.sh run --locked --offline -p
      norito_codegen_exporter --features dev-tools -- --out
      target-codex/android_codegen`, with a fresh owner-private external
      `CARGO_TARGET_DIR`.

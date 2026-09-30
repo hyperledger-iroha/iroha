@@ -477,7 +477,7 @@ fn durable_reservations_and_transient_observations_use_disjoint_typed_commands()
     use crate::kagemusha_device_bridge_v1::{
         COMMAND_HEADER_BYTES_V1, canonical_stock_command_for_tests,
     };
-    use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+    use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
     for operation in KagemushaDeviceLifecycleOperationV1::ALL {
         let (id, binding) = if operation
             == KagemushaDeviceLifecycleOperationV1::PrepareExactNextTransition

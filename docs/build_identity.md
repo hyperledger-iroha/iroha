@@ -1,7 +1,8 @@
 # Executable build identity
 
-Daemon, CLI and PK2 supply immutable `BuildIdentity` values to their runtime or
-verifier. Core, Torii and telemetry libraries do not embed a Git revision. This
+Daemon and CLI executables capture `CompiledBuildMetadata` and pass it to
+their runtime libraries. The runtime validates its `BuildIdentity` at the existing
+admission boundary. PK2 captures and validates its identity directly. Core, Torii and telemetry libraries do not embed a Git revision. This
 keeps a tooling-only commit from invalidating those expensive shared libraries.
 Actual source changes still rebuild the affected libraries; executable metadata
 and dependent executable linking still change for a new revision.
@@ -13,6 +14,15 @@ canonical commit. It is never an alternative source or fallback. Absent, padded,
 malformed or contradictory metadata fails identity construction. The daemon and
 CLI build helper discovers Git HEAD only when no explicit override is supplied;
 PK2 has no package build script and needs explicit compiled metadata.
+
+Only the thin `irohad` and `iroha_cli` executable packages run the Git-aware
+build helper. `irohad_lib` and `iroha_cli_lib` contain the daemon and CLI
+implementations without build scripts. Library tests use their library packages;
+CLI binary integration tests remain with the executable package.
+`compiled_build_metadata!()` expands in the executable, never inside those
+implementation libraries. Daemon startup threads the value explicitly; the CLI
+installs one immutable process identity before command dispatch. Version output
+and daemon welcome diagnostics use that executable metadata as well.
 
 The authenticated release producer supplies the signed source commit to both
 variables. Native release admission and PK2 release verification reject the
@@ -35,8 +45,8 @@ source commit when packaging its prebuilt release binaries. Container builds
 cannot infer a source identity from an empty build argument or omitted `.git`.
 
 The Sumeragi build fingerprint hashes the package version immediately followed
-by the source revision. One immutable daemon identity reaches normal startup,
-pending-Kura recovery and the resumed normal loop. The same identity reaches
+by the source revision. One immutable daemon identity reaches node startup
+and the running Sumeragi driver. The same identity reaches
 Torii public status and prover configuration. Prover reservations retain that
 identity through reconfiguration; processing contexts bind it so proof results
 cannot be reused across executable revisions. Target and feature metadata remain

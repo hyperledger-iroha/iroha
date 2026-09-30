@@ -86,12 +86,15 @@ The operation selects one response representation, enforces the context deadline
 and rejects oversized or ambiguously labelled responses. Transport errors retain
 their I/O category in `TransportErrorKind`; HTTP errors retain their bounded body.
 
-Consensus operational evidence comes from
-`client.get_sumeragi_diagnostics().await?`, which sends an operator-signed request
-and validates Native AMX groups, participant applications, autonomous execution
-and relay evidence. `client.get_cross_lane_transfer_proofs().await?` additionally
-rejects duplicate relay proofs. Synchronous callers use the same method names on
-`iroha::blocking::Client`.
+Bind an operator with `client.operator_client(operator_key_pair)?`, then use
+`operator.consensus().diagnostics().await?` for queue pressure, NPoS election state
+and lane governance readiness. Synchronous callers use the same capability on
+`iroha::blocking::OperatorClient`. These observations do not authenticate finality.
+
+Public Nexus reads use `client.nexus().validator_committee(target_epoch).await?`
+and `client.nexus().prepare_public_lane_plan(&request).await?`. The corresponding
+capability on `iroha::blocking::Client` drives the same implementation. Committee
+attachments still require independent native chain and genesis authentication.
 
 Submission discovers the node's data-model version and signed-transaction schema
 through public `/v1/node/capabilities` metadata before dispatching transaction
@@ -167,3 +170,12 @@ We highly recommend looking at the sample [`iroha_cli`](../iroha_cli) binary
 crate, which builds the `iroha` executable, as well as our
 [tutorial](https://docs.iroha.tech/guide/tutorials/rust.html) for more examples
 and explanations.
+
+### Address formatting
+
+`account_address::encode_account_id_to_i105(&account, network_prefix)` requires
+an explicit address prefix. Obtain it from an immutable client with
+`client.account_chain_discriminant()` when rendering an address for that
+context. Concurrent clients can render different networks without changing
+process-global settings. The SDK helper module exposes no global prefix setter
+or getter; the data model's remaining default-formatting API is separate work.

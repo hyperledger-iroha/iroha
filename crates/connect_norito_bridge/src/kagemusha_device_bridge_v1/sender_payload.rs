@@ -8,7 +8,7 @@
 //! TODO: integrate these public projections with an authenticated, rollback-safe
 //! native operation index and hardware service; never substitute a host map.
 
-use iroha_core::zk::kagemusha_v1_state::{
+use iroha_core_zk::kagemusha_v1_state::{
     DigestV1, HardwareTransitionStatementV1, KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1,
     KagemushaRedemptionTerminalReceiptV1, KagemushaTransitionKindV1,
 };
@@ -29,7 +29,7 @@ use norito::{
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
-use iroha_core::zk::kagemusha_v1_state::{
+use iroha_core_zk::kagemusha_v1_state::{
     DevicePolicyBindingV1, HardwareEpochV1, KagemushaLaneIdV1, KagemushaStateContextV1,
 };
 #[cfg(test)]
@@ -76,12 +76,12 @@ type Result<T> = std::result::Result<T, SenderErrorV1>;
 ///
 /// These are public selectors. The native session must authenticate the sender credential and
 /// Core authorization key; receiver credentials and caller-supplied key references cannot do so.
-pub use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingOperationContextV1 as SenderWalletContextV1;
+pub use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingOperationContextV1 as SenderWalletContextV1;
 
 fn context_error(
-    error: iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingOperationIndexErrorV1,
+    error: iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingOperationIndexErrorV1,
 ) -> SenderErrorV1 {
-    use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingOperationIndexErrorV1 as Error;
+    use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingOperationIndexErrorV1 as Error;
     match error {
         Error::CanonicalEncoding => SenderErrorV1::CanonicalEncoding,
         Error::Conflict => SenderErrorV1::Conflict,
@@ -1691,7 +1691,7 @@ mod tests {
     #[test]
     fn sender_context_and_preimages_match_core_and_shared_archive() {
         use crate::kagemusha_core_coordinator_v1::KagemushaCoreSenderPreparationArchiveV1;
-        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputPreimageV1;
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputPreimageV1;
 
         let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1755,7 +1755,7 @@ mod tests {
 
     #[test]
     fn sender_reservation_binding_matches_core_and_both_mobile_sdks() {
-        use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
 
         let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -2176,7 +2176,7 @@ mod explicit_schema_identity_tests {
             panic!("prepare fixture")
         };
         let inputs_frame = roundtrip(&inputs);
-        let core_inputs: iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1 =
+        let core_inputs: iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1 =
             norito::decode_canonical(&inputs_frame).expect("same canonical Core input projection");
         assert_eq!(
             norito::encode_canonical(&core_inputs).unwrap(),
@@ -2184,7 +2184,7 @@ mod explicit_schema_identity_tests {
         );
         assert_ne!(
             <SenderPublicInputsV1 as norito::NoritoSchema>::nominal_name(),
-            <iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1 as norito::NoritoSchema>::nominal_name(),
+            <iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1 as norito::NoritoSchema>::nominal_name(),
         );
         let preimage = SenderPublicInputPreimageV1 {
             version: VERSION,
@@ -2193,7 +2193,7 @@ mod explicit_schema_identity_tests {
             inputs,
         };
         let frame = roundtrip(&preimage);
-        let core: iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputPreimageV1 =
+        let core: iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputPreimageV1 =
             norito::decode_canonical(&frame).unwrap();
         assert_eq!(norito::encode_canonical(&core).unwrap(), frame);
         assert_eq!(

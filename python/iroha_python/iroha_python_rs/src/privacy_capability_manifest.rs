@@ -4,7 +4,7 @@
 //! catalog. Public archive decoding is inspection-only. Only the native fetch
 //! boundary can bind an authenticated response from the configured Torii client
 //! to its immutable local network identity for transaction construction.
-use iroha_core::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
+use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::id::NetworkId;
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyCapabilityReadinessV1,
@@ -221,7 +221,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
             PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
             PrivacyProtocolLifecycleV1,
         };
-        let catalog = iroha_core::privacy_profiles::compiled_privacy_profile_catalog_v1()
+        let catalog = iroha_core_privacy::privacy_profiles::compiled_privacy_profile_catalog_v1()
             .expect("test compiled-profile catalog");
         let protocols = catalog
             .protocols

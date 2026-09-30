@@ -168,10 +168,6 @@ impl ExternalSoftwareSignerBackendsV1 {
         }
         backends
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the signer subset validator keeps all purpose-separated slots in one auditable match"
-    )]
     fn validate_signer_subset(
         &self,
         bindings: &crate::IrohaRuntimeProviderBindingsV1,

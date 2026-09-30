@@ -14,7 +14,7 @@ cargo build --bin kagami
 
 This places `kagami` in `target/debug/` from the repository root.
 
-Kagami always includes the BLS validator tooling required by Sumeragi v2.
+Kagami always includes the BLS validator tooling required by Sumeragi.
 Optional crypto features come from `iroha_crypto`:
 
 - `--features gost` enables the TC26 GOST R 34.10-2012 parameter sets
@@ -140,8 +140,8 @@ into the output directory.
 
 `kagami localnet`
 - Bare-metal local network generator
-- Requires at least four peers so generated networks use a representative
-  revision-4 committee with mandatory RS16 data availability
+- Requires an exact `3f + 1` validator count in `4..=31`, the Sumeragi global
+  committee geometry
 - Protects validator/client configs and runtime signer/token sidecars with
   owner-only permissions and emits a bundle-wide `.gitignore`
 - Emits `genesis.signed.nrt`, `genesis.public_key`, and
@@ -251,6 +251,16 @@ target/debug/kagami genesis generate \
 ```
 
 Sign with topology and PoPs:
+
+Localnet generation partitions mixed asset and scoped namespace drafts before
+staging and signing. Global permissions and subsequent account/asset registration
+share the generated bootstrap phase. Scoped domain registration has its own input;
+alias binding, global balance minting, ownership transfer and subsequent universal
+service bootstrap continue in the next global input. Routing authenticates that
+input against the original World before installing the asset alias. Normalization preserves authored
+boundaries and refuses sources above the 11-input FASTPQ bootstrap limit. Generated
+crypto and confidential parameters share one global metadata input. Structured
+parameter, topology, and IVM trigger batches cannot be partitioned.
 
 ```bash
 target/debug/kagami genesis sign \

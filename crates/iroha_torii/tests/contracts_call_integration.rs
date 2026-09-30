@@ -21,7 +21,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_model_base::domain::DomainId;
-use ivm::kotodama::session::{CompileRequest, CompilerSession};
+use kotodama_lang::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
@@ -85,7 +85,7 @@ fn commit_contract_operator_genesis(
 }
 fn contract_call_noop_program() -> Vec<u8> {
     let src = include_str!("fixtures/contracts_call/noop.ko");
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile contract call no-op test program")
 }
@@ -116,7 +116,7 @@ seiyaku ContractCallDispatchTest {{
 }}
 "#
     );
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call dispatch test program")
 }
@@ -147,7 +147,7 @@ seiyaku ContractCallDeclaredStateTest {{
 }}
 "#
     );
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call declared state test program")
 }
@@ -173,7 +173,7 @@ seiyaku ContractCallDeclaredStateWithIsiTest {{
 }}
 "#
     );
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call declared state with isi test program")
 }
@@ -201,7 +201,7 @@ seiyaku ContractCallDeclaredStateWithMintTest {{
 }}
 "#
     );
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call declared state with mint test program")
 }
@@ -294,7 +294,7 @@ seiyaku ContractCallN3xLikeTest {{
 }}
 "#
     );
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(&src)
         .expect("compile contract call n3x-like test program")
 }
@@ -310,19 +310,19 @@ fn contract_view_trap_program_with_source_path(source_path: &str) -> Vec<u8> {
 }
 fn contract_view_bytes_program() -> Vec<u8> {
     let src = include_str!("fixtures/contracts_call/bytes.ko");
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile contract view bytes test program")
 }
 fn contract_view_account_id_program() -> Vec<u8> {
     let src = include_str!("fixtures/contracts_call/account_id.ko");
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile contract view AccountId test program")
 }
 fn contract_call_configure_account_map_program() -> Vec<u8> {
     let src = include_str!("fixtures/contracts_call/account_map.ko");
-    ivm::KotodamaCompiler::new()
+    kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile contract call configure account-map test program")
 }

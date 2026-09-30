@@ -203,10 +203,7 @@ struct ReleasePrebuiltFixture {
 }
 impl Drop for ReleasePrebuiltFixture {
     fn drop(&mut self) {
-        for directory in [
-            self.target.join("release"),
-            self.target.clone(),
-        ] {
+        for directory in [self.target.join("release"), self.target.clone()] {
             set_mode(&directory, 0o700);
         }
     }
@@ -285,9 +282,9 @@ fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
     let cargo_lock_sha256 = lowercase_hex(&sha256(b"release-lock-v1\n"));
     let source_manifest_sha256 = "a".repeat(64);
     let target = artifact_root
-        .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
+        .join(SUMERAGI_RELEASE_TARGET_SUBDIR)
         .join(&source_manifest_sha256)
-        .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR)
+        .join(SUMERAGI_RELEASE_PROGRAMS_SUBDIR)
         .join("invocation.A1b2C3");
     for kind in ReleasePrebuiltBinary::ALL {
         let path = target.join(kind.relative_path());
@@ -299,14 +296,11 @@ fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
         .expect("write release binary");
         set_mode(&path, RELEASE_BINARY_MODE);
     }
-    let manifest = target.join(SUMERAGI_V2_PREBUILT_MANIFEST);
+    let manifest = target.join(SUMERAGI_PREBUILT_MANIFEST);
     let manifest_text = release_manifest_text(&source_manifest_sha256, &cargo_lock_sha256, &target);
     fs::write(&manifest, &manifest_text).expect("write prebuilt manifest");
     set_mode(&manifest, RELEASE_MANIFEST_MODE);
-    for directory in [
-        target.join("release"),
-        target.clone(),
-    ] {
+    for directory in [target.join("release"), target.clone()] {
         set_mode(&directory, RELEASE_BINARY_MODE);
     }
     let manifest_sha256 = lowercase_hex(&sha256(manifest_text.as_bytes()));
@@ -465,9 +459,7 @@ fn release_prebuilt_rejects_symlinked_artifact_paths() {
         assert!(err.to_string().contains("not a symlink"));
     }
 
-    let release_root = fixture
-        .artifact_root
-        .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR);
+    let release_root = fixture.artifact_root.join(SUMERAGI_RELEASE_TARGET_SUBDIR);
     let relocated_release_root = fixture.artifact_root.join("relocated-release");
     fs::rename(&release_root, &relocated_release_root).expect("relocate release subtree");
     symlink(&relocated_release_root, &release_root).expect("replace release subtree with symlink");
@@ -1079,7 +1071,7 @@ fn release_prebuilt_taira_launcher_is_mandatory_and_separately_bound() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
     let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
-    let source = fs::read(fixture.target.join(SUMERAGI_V2_PREBUILT_MANIFEST)).unwrap();
+    let source = fs::read(fixture.target.join(SUMERAGI_PREBUILT_MANIFEST)).unwrap();
     let parsed = parse_release_prebuilt_manifest(
         &source,
         &fixture.source_manifest_sha256,

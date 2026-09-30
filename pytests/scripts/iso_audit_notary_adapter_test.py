@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -309,7 +310,6 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
     def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
         hidden = "token=notary-ancestor-secret"
         path_type = type(ADAPTER.Path("."))
-        original_lstat = path_type.lstat
         cases = (
             ("os_error", OSError(5, hidden)),
             ("runtime", RuntimeError(hidden)),
@@ -320,15 +320,12 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._reject_symlinked_existing_ancestors(
                             ADAPTER.Path("ancestor") / "leaf",
                             display_label="receipt output",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt output ancestors", message)
@@ -360,12 +357,9 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._read_regular_file(path, path_label="audit")
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect audit", message)
@@ -398,16 +392,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                         raise error
                     return original_lstat(self)
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._ensure_input_directory(
                             path,
                             "export_dir",
                             display_path=False,
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect export_dir", message)
@@ -506,12 +497,9 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                                 raise error
                             return original_exists(self)
 
-                        path_type.exists = failing_exists
-                        try:
+                        with patch.object(path_type, "exists", failing_exists):
                             with self.assertRaises(ADAPTER.AdapterError) as caught:
                                 action(root)
-                        finally:
-                            path_type.exists = original_exists
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -547,15 +535,12 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                             raise error
                         return original_is_symlink(self)
 
-                    path_type.is_symlink = failing_is_symlink
-                    try:
+                    with patch.object(path_type, "is_symlink", failing_is_symlink):
                         with self.assertRaises(ADAPTER.AdapterError) as caught:
                             ADAPTER.verify_anchor_file(
                                 export_dir,
                                 export_dir / ADAPTER.LATEST_ANCHOR_FILE,
                             )
-                    finally:
-                        path_type.is_symlink = original_is_symlink
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect anchor source digest-addressed peer", message)
@@ -571,7 +556,6 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
     def test_same_existing_path_stat_failures_return_false(self):
         hidden = "token=notary-alias-stat-secret"
         path_type = type(ADAPTER.Path("."))
-        original_stat = path_type.stat
         cases = (
             OSError(5, hidden),
             RuntimeError(hidden),
@@ -584,16 +568,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 def failing_stat(_self, *args, error=failure, **kwargs):
                     raise error
 
-                path_type.stat = failing_stat
-                try:
+                with patch.object(path_type, "stat", failing_stat):
                     self.assertFalse(
                         ADAPTER._same_existing_path(
                             ADAPTER.Path("left"),
                             ADAPTER.Path("right"),
                         )
                     )
-                finally:
-                    path_type.stat = original_stat
 
     def test_path_resolve_failures_do_not_echo_detail(self):
         hidden = "token=notary-resolve-secret"
@@ -681,12 +662,9 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                                 raise error
                             return original_resolve(self, *args, **kwargs)
 
-                        path_type.resolve = failing_resolve
-                        try:
+                        with patch.object(path_type, "resolve", failing_resolve):
                             with self.assertRaises(ADAPTER.AdapterError) as caught:
                                 action(root)
-                        finally:
-                            path_type.resolve = original_resolve
 
                     message = str(caught.exception)
                     self.assertIn(expected, message)
@@ -840,10 +818,6 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
     def test_text_output_target_inspection_failures_do_not_echo_detail(self):
         hidden = "token=notary-output-inspect-secret"
         path_type = type(ADAPTER.Path("."))
-        original_exists = path_type.exists
-        original_is_symlink = path_type.is_symlink
-        original_lstat = path_type.lstat
-        original_mkdir = path_type.mkdir
         leaf_cases = (
             ("leaf_exists_os", "exists", OSError(5, hidden)),
             ("leaf_exists_runtime", "exists", RuntimeError(hidden)),
@@ -864,19 +838,16 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                try:
+                with (
+                    patch.object(path_type, "exists", failing_exists),
+                    patch.object(path_type, "is_symlink", false_is_symlink),
+                    patch.object(path_type, "lstat", failing_lstat),
+                ):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._ensure_output_file_target(
                             ADAPTER.Path("receipt.json"),
                             display_label="receipt output",
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt output leaf", message)
@@ -898,16 +869,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 def failing_lstat(_self, error=failure):
                     raise error
 
-                path_type.lstat = failing_lstat
-                try:
+                with patch.object(path_type, "lstat", failing_lstat):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._write_text_output(
                             ADAPTER.Path("receipt.json"),
                             "{}\n",
                             display_label="receipt output",
                         )
-                finally:
-                    path_type.lstat = original_lstat
 
                 message = str(caught.exception)
                 self.assertIn("cannot inspect receipt output parent", message)
@@ -932,16 +900,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     def failing_mkdir(_self, *args, error=failure, **kwargs):
                         raise error
 
-                    path_type.mkdir = failing_mkdir
-                    try:
+                    with patch.object(path_type, "mkdir", failing_mkdir):
                         with self.assertRaises(ADAPTER.AdapterError) as caught:
                             ADAPTER._write_text_output(
                                 ADAPTER.Path(raw_root) / "out" / "receipt.json",
                                 "{}\n",
                                 display_label="receipt output",
                             )
-                    finally:
-                        path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn("cannot create receipt output parent", message)
@@ -956,8 +921,6 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
     def test_output_directory_inspection_failures_do_not_echo_detail(self):
         hidden = "token=notary-output-dir-inspect-secret"
         path_type = type(ADAPTER.Path("."))
-        original_exists = path_type.exists
-        original_is_symlink = path_type.is_symlink
         original_lstat = path_type.lstat
         original_mkdir = path_type.mkdir
         cases = (
@@ -997,21 +960,17 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                         return None
                     return original_mkdir(self, *args, **kwargs)
 
-                path_type.exists = failing_exists
-                path_type.is_symlink = false_is_symlink
-                path_type.lstat = failing_lstat
-                path_type.mkdir = failing_mkdir
-                try:
+                with (
+                    patch.object(path_type, "exists", failing_exists),
+                    patch.object(path_type, "is_symlink", false_is_symlink),
+                    patch.object(path_type, "lstat", failing_lstat),
+                    patch.object(path_type, "mkdir", failing_mkdir),
+                ):
                     with self.assertRaises(ADAPTER.AdapterError) as caught:
                         ADAPTER._ensure_output_directory(
                             ADAPTER.Path("receipts"),
                             "receipt directory",
                         )
-                finally:
-                    path_type.exists = original_exists
-                    path_type.is_symlink = original_is_symlink
-                    path_type.lstat = original_lstat
-                    path_type.mkdir = original_mkdir
 
                 message = str(caught.exception)
                 self.assertIn(expected, message)

@@ -272,10 +272,6 @@ fn runtime_policy() -> ProviderIngestRuntimePolicyV1 {
     }
 }
 #[tokio::test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the restart test exercises one complete shared-chunk quarantine lifecycle"
-)]
 async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
     let temp = tempfile::tempdir().expect("provider-ingest crash tempdir");
     let root = temp.path().canonicalize().expect("canonical crash tempdir");

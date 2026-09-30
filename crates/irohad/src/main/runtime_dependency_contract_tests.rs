@@ -1,9 +1,5 @@
 // Source contract for exact deployment-owned runtime forwarding into Torii.
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "complete dependency-forwarding contract"
-)]
 fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
     let compact_source: String = include_str!("../main.rs")
         .chars()

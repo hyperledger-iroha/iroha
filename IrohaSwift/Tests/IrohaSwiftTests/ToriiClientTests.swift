@@ -15533,9 +15533,9 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         var invalidResponses: [(Data, Int, [String: String], String)] = [
             (
                 duplicateProtocolVersion,
-                200, ["Content-Type": "application/json"], "duplicate object keys"
+                200, ["Content-Type": "application/json"], #"invalidField("json.duplicateKey")"#
             ),
-            (Data([0xff]), 200, ["Content-Type": "application/json"], "UTF-8 JSON"),
+            (Data([0xff]), 200, ["Content-Type": "application/json"], #"invalidField("json")"#),
             (Data("{}".utf8), 200, ["Content-Type": "text/plain"], "Content-Type"),
             (Data("{}".utf8), 503, ["Content-Type": "application/json"], "503"),
             (
@@ -15587,6 +15587,42 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let exactSnapshot = try await makeClient().getSumeragiStatus()
         XCTAssertEqual(exactSnapshot.height, 15)
         XCTAssertEqual(exactSnapshot, snapshot)
+    }
+
+    func testGetSumeragiLanesParsesRustLaneCorpusAsync() async throws {
+        let payload = try NativeLaneFixtures.json("mixed_lanes")
+        var servedPayload = payload
+        var servedHeaders = ["Content-Type": "application/json"]
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/sumeragi/lanes")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            self.assertOperatorAuthentication(request)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: servedHeaders
+            )!
+            return (response, servedPayload)
+        }
+        let lanes = try await makeClient().getSumeragiLanes()
+        XCTAssertEqual(lanes.count, 3)
+        XCTAssertEqual(lanes[0].record.lane, 1)
+        XCTAssertEqual(lanes[0].instance?.protocolVersion, 1)
+        XCTAssertNil(lanes[1].instance)
+        XCTAssertEqual(lanes[2].record.closing, UInt64.max)
+
+        for (body, headers) in [
+            (try NativeStatusFixtures.json(), ["Content-Type": "application/json"]),
+            (payload, ["Content-Type": "text/plain"]),
+        ] {
+            servedPayload = body
+            servedHeaders = headers
+            do {
+                _ = try await makeClient().getSumeragiLanes()
+                XCTFail("invalid lane response must fail closed")
+            } catch {}
+        }
     }
 
     func testNativeStatusRejectsRetiredExecutionAndCertificateProjections() throws {

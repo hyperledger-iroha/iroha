@@ -4,7 +4,6 @@ use crate::{
         Block, Expr, FunctionKind, HirId, Item, Pattern, PatternBinding, Program, Statement,
         SumPattern, TypeExpr,
     },
-    builtins::Builtin,
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourceSpan},
     source::{SourceFile, SourceRange, TextRange},
     spanned_ast::{
@@ -13,6 +12,7 @@ use crate::{
     },
 };
 use iroha_primitives::bigint::BigInt;
+use kotodama_surface::builtins::Builtin;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -503,7 +503,7 @@ fn duplicate_diagnostic(
     diagnostic
 }
 fn builtin_type(name: &str) -> bool {
-    crate::semantic::V1_SOURCE_TYPE_NAMES.contains(&name)
+    kotodama_surface::source_policy::V1_SOURCE_TYPE_NAMES.contains(&name)
 }
 fn explicit_import_call(name: &str) -> bool {
     name.split_once("::").is_some_and(|(alias, symbol)| {
@@ -1539,7 +1539,7 @@ impl<'a> HirLowerer<'a> {
     ) -> BindingId {
         let id =
             BindingId(u32::try_from(self.arena.bindings.len()).expect("binding budget fits u32"));
-        let reserved = crate::semantic::is_reserved_source_declaration(name, false);
+        let reserved = kotodama_surface::source_policy::is_reserved_source_declaration(name, false);
         let previous = visible.get(name).copied();
         let global = self.globals.all.contains_key(name);
         if name == "_" {
@@ -1604,7 +1604,7 @@ impl<'a> HirLowerer<'a> {
             Some(ResolvedValueTarget::Const(*symbol))
         } else if let Some(code) = self.globals.error_codes.get(name) {
             Some(ResolvedValueTarget::ErrorCode(*code))
-        } else if crate::semantic::V1_ROUNDING_PATHS.contains(&name)
+        } else if kotodama_surface::source_policy::V1_ROUNDING_PATHS.contains(&name)
             || name == "null"
             || crate::testing::REJECTION_SELECTORS.contains(&name)
         {
@@ -1916,9 +1916,12 @@ fn resolve_with_imports_and_externals_inner(
         }
         let id = symbol_id(symbols.len());
         let reserved = if fact.kind.is_type_declaration() {
-            crate::semantic::is_reserved_source_type_declaration(&fact.name)
+            kotodama_surface::source_policy::is_reserved_source_type_declaration(&fact.name)
         } else {
-            crate::semantic::is_reserved_source_declaration(&fact.name, fact.kind.is_function())
+            kotodama_surface::source_policy::is_reserved_source_declaration(
+                &fact.name,
+                fact.kind.is_function(),
+            )
         };
         if reserved {
             diagnostics.push(Diagnostic::error(

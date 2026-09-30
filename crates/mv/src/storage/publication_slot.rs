@@ -1,8 +1,8 @@
 //! Original Storage publication authority retained through aggregate preparation.
 
 use super::*;
-use crate::allocation::OwnedAllocationScope;
 use concread::bptree::{ClonePlanning, Prepaid};
+use iroha_allocation::OwnedAllocationScope;
 
 #[expect(
     clippy::large_enum_variant,

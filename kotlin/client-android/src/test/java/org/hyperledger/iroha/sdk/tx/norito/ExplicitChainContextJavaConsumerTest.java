@@ -155,7 +155,6 @@ class ExplicitChainContextJavaConsumerTest {
                 100_000L,
                 null,
                 expectedFeePayment,
-                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 Collections.emptyMap(),
                 null));
     final TransactionPayload decoded = codec.decodeTransaction(encoded);
@@ -195,9 +194,9 @@ class ExplicitChainContextJavaConsumerTest {
   }
 
   private static byte[] swapMetadataEntries(final byte[] canonicalPayload) {
-    final byte[][] fields = decodeSizedFields(canonicalPayload, 10);
+    final byte[][] fields = decodeSizedFields(canonicalPayload, 9);
     final NoritoDecoder metadata =
-        new NoritoDecoder(fields[8], NoritoCodec.DEFAULT_FLAGS);
+        new NoritoDecoder(fields[7], NoritoCodec.DEFAULT_FLAGS);
     assertEquals(2L, metadata.readLength(false));
     final byte[] first = readSizedField(metadata);
     final byte[] second = readSizedField(metadata);
@@ -207,7 +206,7 @@ class ExplicitChainContextJavaConsumerTest {
     swapped.writeLength(2, false);
     writeSizedField(swapped, second);
     writeSizedField(swapped, first);
-    fields[8] = swapped.toByteArray();
+    fields[7] = swapped.toByteArray();
     return encodeSizedFields(fields);
   }
 

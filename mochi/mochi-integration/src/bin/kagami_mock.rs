@@ -399,7 +399,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, validator)| {
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0xA0_u8.wrapping_add(u8::try_from(index).expect("test index fits u8")); 32],
                     0,
                     validator,
@@ -789,15 +789,23 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "the signing helper must not mutate the input manifest implicitly"
         );
         let bound_manifest = RawGenesisTransaction::from_path(&bound).expect("read bound output");
-        let expected_manifest = initial_manifest.clone().with_consensus_meta();
+        let signed_metadata = iroha_genesis::signed_genesis_consensus_metadata(&block)
+            .expect("decode actual signed consensus metadata");
+        let mut expected_context = initial_manifest.sumeragi_context_parameters();
+        expected_context.execution_policy_hash =
+            signed_metadata.sumeragi_context.execution_policy_hash;
+        expected_context.nexus_amx_context_hash =
+            signed_metadata.sumeragi_context.nexus_amx_context_hash;
+        let expected_manifest = initial_manifest
+            .clone()
+            .with_sumeragi_context_parameters(expected_context)
+            .with_consensus_meta();
         assert!(bound_manifest.consensus_fingerprint().is_some());
         assert_eq!(
             norito::json::value::to_value(&bound_manifest).expect("bound manifest value"),
             norito::json::value::to_value(&expected_manifest).expect("expected manifest value"),
             "every original manifest field must survive canonical metadata binding"
         );
-        let signed_metadata = iroha_genesis::signed_genesis_consensus_metadata(&block)
-            .expect("decode actual signed consensus metadata");
         assert_eq!(
             bound_manifest.consensus_fingerprint(),
             Some(signed_metadata.consensus_fingerprint)
@@ -821,10 +829,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .to_string()
                 .contains("consensus fingerprint")
         );
-        let mut mismatched_context = bound_manifest.sumeragi_v2_context_parameters();
+        let mut mismatched_context = bound_manifest.sumeragi_context_parameters();
         mismatched_context.nexus_amx_context_hash[0] ^= 2;
         let mismatched_manifest =
-            bound_manifest.with_sumeragi_v2_context_parameters(mismatched_context);
+            bound_manifest.with_sumeragi_context_parameters(mismatched_context);
         let mismatch = iroha_genesis::validate_prepared_genesis_bundle(
             &wire,
             &mismatched_manifest,
@@ -832,7 +840,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             block.hash(),
         )
         .expect_err("a changed manifest context must not validate against the signed body");
-        assert!(mismatch.to_string().contains("Sumeragi v2 context"));
+        assert_eq!(
+            mismatch.to_string(),
+            "genesis manifest Sumeragi context differs from signed body"
+        );
         assert_eq!(
             fs::read_to_string(&expected_hash).expect("read exact hash"),
             format!("{}\n", NetworkId::from_genesis_hash(block.hash()))

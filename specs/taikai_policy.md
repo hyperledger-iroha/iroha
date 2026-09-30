@@ -9,7 +9,7 @@ Roadmap item: **SN13-E — Policy/crypto (GAR v2, CEK rotation, RPT)** — GAR v
 payloads (licensing/moderation/metrics + RPT digests) are live in
 `iroha_data_model`/`sorafs_manifest`, `iroha app taikai cek-rotate` +
 `rpt-attest` emit deterministic receipts/attestations (covered by
-`crates/iroha_cli/tests/taikai_policy.rs`), and `cargo xtask taikai-rpt-verify`
+`crates/iroha_cli/bins/tests/taikai_policy.rs`), and `cargo xtask taikai-rpt-verify`
 verifies bundles for rollout gates.
 
 Taikai’s broadcast stack already ships the deterministic

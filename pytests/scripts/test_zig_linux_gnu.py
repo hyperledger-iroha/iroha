@@ -82,7 +82,7 @@ def test_real_child_receives_rewritten_response_and_exit_status(tmp_path):
     assert json.loads(output.read_text()) == DRIVER.rewrite(arguments)
 
 
-def test_launcher_selects_driver_without_changing_cargo_arguments(tmp_path):
+def test_launcher_selects_fixed_driver_and_preserves_cargo_build_options(tmp_path):
     launcher = tmp_path / 'cargo_zigbuild_linux.sh'
     launcher.write_bytes((ROOT / 'scripts/cargo_zigbuild_linux.sh').read_bytes())
     cargo_fast = tmp_path / 'cargo_fast.sh'
@@ -96,7 +96,8 @@ def test_launcher_selects_driver_without_changing_cargo_arguments(tmp_path):
     arguments = ['--jobs', '6', '--', 'zigbuild', '--locked', '--target', 'aarch64-unknown-linux-gnu']
     result = subprocess.run(['bash', str(launcher)] + arguments, env=env, capture_output=True, text=True, check=True)
     value = json.loads(result.stdout)
-    assert value == {'args': arguments, 'zig': str(tmp_path / 'zig_linux_gnu.py'),
+    expected = ['--cargo-zigbuild', '--jobs', '6', '--', 'build', *arguments[4:]]
+    assert value == {'args': expected, 'zig': str(tmp_path / 'zig_linux_gnu.py'),
                      'real': '/usr/bin/true', 'python': '/usr/bin/false', 'cc_trace': '1'}
     rejected = subprocess.run(['bash', str(launcher), '--', 'build'], env=env, capture_output=True)
     assert rejected.returncode == 1

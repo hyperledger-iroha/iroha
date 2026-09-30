@@ -54,7 +54,6 @@ import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.MultisigDraftTestFixtures;
@@ -4044,16 +4043,6 @@ public final class HttpClientTransportTests {
             null),
         request,
         "VK draft must reject another authority");
-    expectVerifierDraftReject(
-        verifyingKeyTransactionPayload(
-            request,
-            VerifyingKeyDraftBinding.Operation.REGISTER,
-            VERIFYING_KEY_NETWORK_ID,
-            (String) request.get("authority"),
-            null,
-            TransactionAdmissionIntent.ORDINARY),
-        request,
-        "VK draft must reject ordinary admission intent");
 
     final Map<String, Object> changedRecord = new LinkedHashMap<>(request);
     changedRecord.put("curve", "pasta");
@@ -4152,7 +4141,6 @@ public final class HttpClientTransportTests {
     final long creationTimeMs = 1_712_345_678_901L;
     final TransactionPayload preparedPayload =
         TransactionPayload.builder()
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setNetworkId(VERIFYING_KEY_NETWORK_ID)
             .setAuthority(authority)
             .setCreationTimeMs(creationTimeMs)
@@ -4274,7 +4262,6 @@ public final class HttpClientTransportTests {
             Map.of("input", 1L));
     final TransactionPayload canonical =
         TransactionPayload.builder()
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setNetworkId(VERIFYING_KEY_NETWORK_ID)
             .setAuthority(authority)
             .setCreationTimeMs(1_712_345_678_902L)
@@ -4309,7 +4296,6 @@ public final class HttpClientTransportTests {
             canonical.toBuilder().setNonce(9L).build(),
             canonical
                 .toBuilder()
-                .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
                 .build(),
             canonical.toBuilder().setAttachments(Collections.emptyList()).build());
     for (final TransactionPayload substituted : rehashedSubstitutions) {
@@ -4911,7 +4897,6 @@ public final class HttpClientTransportTests {
             canonical.toBuilder().setNonce(3L).build(),
             canonical
                 .toBuilder()
-                .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
                 .build(),
             canonical.toBuilder().setAttachments(Collections.emptyList()).build());
     for (final TransactionPayload substituted : rehashedSubstitutions) {
@@ -6548,22 +6533,6 @@ public final class HttpClientTransportTests {
       final NetworkId networkId,
       final String authority,
       final List<InstructionBox> instructions) {
-    return verifyingKeyTransactionPayload(
-        request,
-        operation,
-        networkId,
-        authority,
-        instructions,
-        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
-  }
-
-  private static byte[] verifyingKeyTransactionPayload(
-      final Map<String, Object> request,
-      final VerifyingKeyDraftBinding.Operation operation,
-      final NetworkId networkId,
-      final String authority,
-      final List<InstructionBox> instructions,
-      final TransactionAdmissionIntent admissionIntent) {
     final Integer discriminant =
         org.hyperledger.iroha.android.address.AccountAddress.detectI105Discriminant(authority);
     if (discriminant == null) {
@@ -6582,7 +6551,6 @@ public final class HttpClientTransportTests {
             .setTimeToLiveMs(5_000L)
             .setNonce(1L)
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), null))
-            .setAdmissionIntent(admissionIntent)
             .build();
     try {
       return new NoritoJavaCodecAdapter(discriminant).encodeTransaction(payload);
@@ -8522,7 +8490,6 @@ public final class HttpClientTransportTests {
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce(fillValue & 0xFF)
-            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
             .setMetadata(Map.of("note", "txn-" + fillValue))
             .build();
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);

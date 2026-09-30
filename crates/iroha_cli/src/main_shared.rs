@@ -1,3 +1,9 @@
+//! Iroha client CLI implementation executed by the thin `iroha` binary.
+#![deny(deprecated)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+use iroha_core::release_identity::CompiledBuildMetadata;
+use iroha_model_base::domain::DomainId;
+
 use iroha_model_base::chain::ChainId;
 mod address;
 mod audit;
@@ -75,12 +81,26 @@ fn compiled_build_identity() -> core::result::Result<
     iroha_core::release_identity::BuildIdentity,
     iroha_core::release_identity::BuildIdentityError,
 > {
-    iroha_core::compiled_build_identity!()
+    build_metadata().identity()
 }
-const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
-    Some(value) => value,
-    None => "unknown",
-};
+static BUILD_METADATA: std::sync::OnceLock<CompiledBuildMetadata> = std::sync::OnceLock::new();
+
+fn build_metadata() -> CompiledBuildMetadata {
+    BUILD_METADATA.get().copied().unwrap_or_else(|| {
+        CompiledBuildMetadata::from_compiled_parts(
+            env!("CARGO_PKG_VERSION"),
+            if cfg!(test) {
+                Some("local-fast-build")
+            } else {
+                None
+            },
+            None,
+            None,
+            None,
+            None,
+        )
+    })
+}
 // The first-release CLI accepts instruction JSON and bytecode through stdin. Sixty-four MiB is
 // above the default 10 MiB transaction wire limit (including JSON/base64 expansion) and matches
 // the largest configured signed-transaction corridor, while keeping a pipe from consuming
@@ -257,12 +277,12 @@ fn print_fee_quote_text<C: RunContext + ?Sized>(
     Ok(())
 }
 /// Norito JSON derive macros exported for CLI data definitions.
-pub mod json_macros {
+pub(crate) mod json_macros {
     pub use norito::derive::{FastJsonWrite, JsonDeserialize, JsonSerialize};
 }
 /// Output format for CLI responses.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliOutputFormat {
+pub(crate) enum CliOutputFormat {
     /// Emit JSON only.
     Json,
     /// Emit human-readable text when available.
@@ -363,7 +383,7 @@ pub(crate) fn wait_for_transaction_applied(
 }
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
-#[command(name = env!("CARGO_BIN_NAME"), version = env!("CARGO_PKG_VERSION"), author)]
+#[command(name = "iroha", version = env!("CARGO_PKG_VERSION"), author)]
 struct Args {
     /// Path to the configuration file.
     ///
@@ -1104,14 +1124,17 @@ impl Run for MarkdownHelp {
 struct Version;
 impl Run for Version {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client_version = env!("CARGO_PKG_VERSION");
+        let client_version = build_metadata().version();
         let response = context.server_version()?;
         match context.output_format() {
             CliOutputFormat::Text => {
                 let (client_git_sha, client_version_msg, server_version_msg) = {
                     let i18n = context.i18n();
                     (
-                        i18n.t_with("info.client_git_sha", &[("sha", VERGEN_GIT_SHA)]),
+                        i18n.t_with(
+                            "info.client_git_sha",
+                            &[("sha", build_metadata().source_commit_label())],
+                        ),
                         i18n.t_with("info.client_version", &[("version", client_version)]),
                         i18n.t_with("info.server_version", &[("version", response.as_str())]),
                     )
@@ -1123,7 +1146,10 @@ impl Run for Version {
             }
             CliOutputFormat::Json => {
                 let value = json_utils::json_object(vec![
-                    ("client_git_sha", json_utils::json_value(&VERGEN_GIT_SHA)?),
+                    (
+                        "client_git_sha",
+                        json_utils::json_value(&build_metadata().source_commit_label())?,
+                    ),
                     ("client_version", json_utils::json_value(&client_version)?),
                     ("server_version", json_utils::json_value(&response)?),
                 ])?;
@@ -1132,7 +1158,16 @@ impl Run for Version {
         }
     }
 }
-fn main() -> std::process::ExitCode {
+/// Execute the CLI with immutable metadata captured by its executable.
+///
+/// The process installs its metadata once, before parsing or dispatching commands.
+pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
+    if let Err(build) = BUILD_METADATA.set(build)
+        && BUILD_METADATA.get() != Some(&build)
+    {
+        eprintln!("CLI executable build metadata is already installed with a different identity");
+        return std::process::ExitCode::from(7);
+    }
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let output_format = output_format_override_from_args(
         raw_args
@@ -1150,6 +1185,9 @@ fn main() -> std::process::ExitCode {
         }
     }
 }
+fn args_command(build: CompiledBuildMetadata) -> clap::Command {
+    Args::command().version(build.version())
+}
 #[allow(clippy::too_many_lines)]
 fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
@@ -1161,7 +1199,7 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     );
     let help_language = detect_language(language_override.as_deref());
     let help_i18n = Localizer::new(Bundle::Cli, help_language);
-    let cmd = Args::command();
+    let cmd = args_command(build_metadata());
     let matches = match cmd.try_get_matches_from(&raw_args) {
         Ok(matches) => matches,
         Err(err) => match err.kind() {
@@ -6225,7 +6263,7 @@ mod trigger {
         if backend.is_empty() {
             eyre::bail!("--data-verifying-key backend must be non-empty");
         }
-        if !iroha_core::zk::is_verifier_backend_registry_label_v1(backend) {
+        if !iroha_core_zk::is_verifier_backend_registry_label_v1(backend) {
             eyre::bail!(
                 "--data-verifying-key backend uses unsupported verifier-registry label `{backend}`"
             );
@@ -6249,7 +6287,7 @@ mod trigger {
         if backend.is_empty() {
             eyre::bail!("--data-proof backend must be non-empty");
         }
-        if !iroha_core::zk::is_verifier_backend_registry_label_v1(backend) {
+        if !iroha_core_zk::is_verifier_backend_registry_label_v1(backend) {
             eyre::bail!(
                 "--data-proof backend uses unsupported verifier-registry label `{backend}`"
             );

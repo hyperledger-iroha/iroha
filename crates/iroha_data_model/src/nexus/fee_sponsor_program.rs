@@ -534,10 +534,6 @@ impl FeeSponsorProgramRevision {
     ///
     /// Returns a precise [`FeeSponsorProgramRevisionError`] for the first
     /// non-canonical revision, rule, selector, or asset-budget invariant.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "ordered validation preserves deterministic first-error precedence"
-    )]
     pub fn validate(&self) -> Result<(), FeeSponsorProgramRevisionError> {
         if self.revision == 0 {
             return Err(FeeSponsorProgramRevisionError::ZeroRevision);

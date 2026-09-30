@@ -617,10 +617,6 @@ impl AtomicWriteRoot {
     /// cleanup, synchronization, or exact readback could not be proven. Retrying never
     /// overwrites the destination, but an unrecovered two-link residue can continue to
     /// fail closed as [`AtomicWriteErrorCode::UnsafeTarget`].
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the immutable-install state machine keeps identity validation, no-clobber publication, cleanup, durability, and readback in one auditable sequence"
-    )]
     pub fn install_immutable(
         &self,
         relative: &Path,
@@ -902,10 +898,6 @@ impl AtomicWriteRoot {
     }
 }
 #[cfg(unix)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "private-root creation keeps each ancestor identity and durability check adjacent to the filesystem operation it protects"
-)]
 fn create_or_open_private_root(root: &Path) -> Result<PathBuf, AtomicWriteError> {
     if !root.is_absolute()
         || root
@@ -1356,10 +1348,6 @@ enum ImmutableReadOutcome {
     Within(Vec<u8>),
     Exceeded,
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "bounded immutable readback keeps the pre-open, open-handle, and post-read identity checks together as one fail-closed state machine"
-)]
 fn read_immutable_target_bounded(
     target: &Path,
     max_bytes: usize,

@@ -1,7 +1,7 @@
 //! Prepaid restoration using the sole Norito Cell parser and real EBR owners.
 
 use super::*;
-use crate::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{

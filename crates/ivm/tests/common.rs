@@ -452,7 +452,7 @@ fn encode_domain_id_payload(payload: &[u8]) -> Vec<u8> {
 
 /// Retain an explicitly funded diagnostic fixture without raw owning exports.
 pub fn diagnostic_snapshot(vm: &IVM) -> ivm::zk::DiagnosticTraceSnapshot {
-    let budget = mv::allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     vm.try_diagnostic_snapshot(&budget)
         .expect("fund diagnostic fixture")
 }

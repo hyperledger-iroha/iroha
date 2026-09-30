@@ -1,7 +1,7 @@
 //! Real lifecycle index releases must follow every enclosing fence.
 
 use super::*;
-use concread::release::{DeferredRelease, ReleaseFuture};
+use iroha_allocation::release::{DeferredRelease, ReleaseFuture};
 use std::{
     future::Future,
     sync::{

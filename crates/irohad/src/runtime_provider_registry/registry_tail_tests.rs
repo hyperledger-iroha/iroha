@@ -396,10 +396,6 @@ fn reputation_retention_projection_rejects_test_marked_and_stale_bindings() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the test audits the complete public Governance DAG service projection"
-)]
 fn governance_service_catalog_projects_only_exact_public_provider_bindings() {
     let mut config = default_runtime_config();
     configure_governance_service(&mut config);

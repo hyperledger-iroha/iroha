@@ -5,7 +5,7 @@
 //! charge until the final reference frees the allocation and owned backings.
 
 use super::*;
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, PrepaidSharedError};
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, PrepaidSharedError};
 use std::fmt;
 
 #[path = "levels.rs"]
@@ -173,7 +173,7 @@ impl NoritoKeyDigestRangeTreeV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::InsufficientReservation;
+    use iroha_allocation::InsufficientReservation;
 
     #[test]
     fn shared_owner_failures_preserve_prepaid_demand_and_local_allocator_error() {

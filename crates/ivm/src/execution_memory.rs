@@ -11,7 +11,7 @@
 
 use std::alloc::Layout;
 
-use mv::allocation::{
+use iroha_allocation::{
     AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
     InsufficientReservation, PrepaidBufferError,
 };
@@ -122,7 +122,7 @@ impl<T> ExecutionBuffer<T> {
         lease: &mut ExecutionMemoryLease,
     ) -> Result<Self, PrepaidBufferError> {
         let layout = Layout::array::<T>(capacity).map_err(|_| {
-            PrepaidBufferError::Allocation(mv::allocation::ChargedBufferError::Admission(
+            PrepaidBufferError::Allocation(iroha_allocation::ChargedBufferError::Admission(
                 AllocationRefusal::DemandOverflow,
             ))
         })?;
@@ -189,6 +189,11 @@ impl<T> ExecutionBuffer<T> {
 
     pub(crate) fn mark_unmeasured(&mut self) {
         self.retention.mark_unmeasured();
+    }
+
+    /// Restore the exact measure of this fixed backing after active work.
+    pub(crate) fn remeasure_fixed(&mut self) {
+        self.retention.remeasure_fixed();
     }
 }
 

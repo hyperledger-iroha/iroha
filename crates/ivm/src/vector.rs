@@ -29,8 +29,6 @@ pub use metal_receipts::{MetalKernel, metal_completed_dispatches};
 mod metal_qualification;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
-use objc2::Message;
-#[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2_foundation::NSUInteger;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2_metal::*;
@@ -2877,7 +2875,7 @@ pub fn vadd64_slice(a: &[u32], b: &[u32], out: &mut [u32]) {
 pub fn zero_vector(
     lanes: usize,
     lease: &mut crate::execution_memory::ExecutionMemoryLease,
-) -> Result<crate::execution_memory::ExecutionBuffer<u32>, mv::allocation::PrepaidBufferError> {
+) -> Result<crate::execution_memory::ExecutionBuffer<u32>, iroha_allocation::PrepaidBufferError> {
     let mut output = crate::execution_memory::ExecutionBuffer::new(lanes, lease)?;
     for _ in 0..lanes {
         output.push_reserved(0);

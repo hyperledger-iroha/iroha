@@ -10,10 +10,10 @@ use super::{
     touches::{PreparedTouch, SortedTouches},
     *,
 };
-use crate::allocation::AllocationBudget;
 use concread::bptree::{
     AllocationDemand, ClonePlanning, PairInsertError, PairRemoveError, Prepaid,
 };
+use iroha_allocation::AllocationBudget;
 
 // Keep this as the LAST Transaction field, after both checkpoints and touches.
 // Transaction::drop records whether unwinding began before field cleanup. The

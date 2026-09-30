@@ -1,14 +1,16 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        builtins::{Builtin, BuiltinSurface},
         compiler::{Compiler, CompilerOptions},
         lexer::{
             V1_KEYWORD_DOC_TABLE, V1_KEYWORD_EDITOR_PATTERN, V1_KEYWORDS, V1_OPERATOR_DOC_TABLE,
             V1_OPERATOR_EDITOR_PATTERN,
         },
-        semantic::{V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS},
         session::{CompileRequest, CompilerSession},
+    };
+    use kotodama_surface::builtins::{Builtin, BuiltinSurface};
+    use kotodama_surface::source_policy::{
+        V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS,
     };
     use std::{fs, path::PathBuf};
     fn docs_roots() -> [PathBuf; 2] {

@@ -40,6 +40,7 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
         calls.append(lines[start : end + 1])
 
     expected_slices = (
+        ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_ARM_TRIPLE"),
         ("apple-ios-device", "$IPHONEOS_SDKROOT", "$DEVICE_TRIPLE"),
         (
             "apple-ios-simulator",
@@ -51,7 +52,6 @@ def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
             "$IPHONESIMULATOR_SDKROOT",
             "$SIM_X64_TRIPLE",
         ),
-        ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_ARM_TRIPLE"),
         ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_X64_TRIPLE"),
     )
     for start, call, (profile, sdkroot, triple) in zip(

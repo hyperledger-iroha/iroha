@@ -85,7 +85,7 @@ fn framed_xof_binds_secret_policy_and_associated_data_without_split_aliases() {
         include_str!("../../tests/fixtures/ram_lfe_initializer_v1_frame.hex").trim(),
     );
     assert_eq!(
-        hex::encode(&*bytes),
+        hex::encode(bytes.as_slice()),
         include_str!("../../tests/fixtures/ram_lfe_initializer_v1_xof.hex").trim(),
     );
     assert_eq!(

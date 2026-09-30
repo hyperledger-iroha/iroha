@@ -175,10 +175,6 @@ fn enabled_archive_projects_one_exact_non_secret_binding() {
     assert_eq!(archive.max_successor_proof_bytes, 1_048_576);
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the rejection matrix keeps every archive identity and worker-bound diagnostic together"
-)]
 fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() {
     let key = ed25519_public_key_hex(0x83);
     let weak_key = format!("01{}", "00".repeat(31));

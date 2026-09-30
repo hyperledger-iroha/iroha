@@ -43,7 +43,7 @@ fn private_settlement_snapshot_recipient_reservations_follow_replacement() {
         _marker: PhantomData,
     };
     let restored = parse_world(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         SnapshotJsonMap::parse(&encoded, "world").unwrap(),
@@ -79,7 +79,7 @@ fn private_settlement_snapshot_recipient_reservations_follow_replacement() {
     );
     let replaced = json::to_json(&restored).unwrap();
     let restarted = parse_world(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         SnapshotJsonMap::parse(&replaced, "world").unwrap(),
@@ -122,7 +122,7 @@ fn private_settlement_snapshot_rejects_duplicate_recipients_in_prior_outputs() {
     let operation_index_refusal = std::cell::RefCell::new(None);
     let ivm = IVM::new(0);
     let result = parse_world(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         SnapshotJsonMap::parse(&encoded, "world").unwrap(),

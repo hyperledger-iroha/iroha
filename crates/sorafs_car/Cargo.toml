@@ -124,3 +124,8 @@ required-features = ["cli", "dev-tools"]
 [[test]]
 name = "sorafs_car_integration"
 path = "tests/sorafs_car_integration.rs"
+
+[[test]]
+name = "sorafs_fetch_cli"
+path = "tests/sorafs_fetch_cli.rs"
+required-features = ["cli"]

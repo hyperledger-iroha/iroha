@@ -8,7 +8,7 @@ fn hash(n: u64) -> Hash {
 
 #[test]
 fn bounded_paths_authenticate_present_absent_and_retained_versions() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let empty = map.prove_lookup(&hash(1));
     assert_eq!(empty.claimed_root(), map.root());
     assert_eq!(empty.verify(&map.root(), &hash(1)), Ok(None));
@@ -54,7 +54,7 @@ fn bounded_paths_authenticate_present_absent_and_retained_versions() {
 
 #[test]
 fn compressed_prefix_and_leaf_divergence_prove_absence() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     let first = Hash::prehashed([0; Hash::LENGTH]);
     let mut bytes = [0; Hash::LENGTH];
     bytes[0] = 0x40;
@@ -67,7 +67,7 @@ fn compressed_prefix_and_leaf_divergence_prove_absence() {
     assert_eq!(proof.used, 1);
     assert_eq!(proof.verify(&map.root(), &divergent), Ok(None));
 
-    let mut singleton = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut singleton = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     singleton.replace(first, None, Some(hash(3))).unwrap();
     let proof = singleton.prove_lookup(&divergent);
     assert_eq!(proof.used, 1);
@@ -76,7 +76,7 @@ fn compressed_prefix_and_leaf_divergence_prove_absence() {
 
 #[test]
 fn forged_or_omitted_path_cannot_prove_absence() {
-    let mut map = MerkleMap::new(&mv::allocation::AllocationBudget::new(64 * 1024 * 1024));
+    let mut map = MerkleMap::new(&iroha_allocation::AllocationBudget::new(64 * 1024 * 1024));
     for n in 0..8 {
         map.replace(hash(n), None, Some(hash(n + 100))).unwrap();
     }

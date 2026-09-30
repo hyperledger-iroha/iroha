@@ -9,7 +9,7 @@ These guidelines apply to the `crates/iroha_cli` command-line interface.
 ## Development workflow
 - Keep commands idempotent and safe by default; confirm destructive actions explicitly.
 - Add tests for argument parsing and output formatting where feasible.
-- Test: `cargo test -p iroha_cli` and run subsets as needed.
+- Runtime library tests: `cargo test -p iroha_cli_lib --lib`; binary interface tests: `cargo test -p iroha_cli --tests`. Run focused subsets as needed.
 - Follow root/crates `AGENTS.md` for formatting and linting.
 
 ## Notes

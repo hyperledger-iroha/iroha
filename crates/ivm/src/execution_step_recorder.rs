@@ -14,7 +14,7 @@ use crate::{
     error::{ExecutionDeferral, VmTrapKind},
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
 };
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 mod private_disposal;
 

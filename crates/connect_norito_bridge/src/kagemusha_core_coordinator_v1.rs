@@ -14,7 +14,11 @@ mod archives;
 mod enrollment_attempt_journal;
 mod enrollment_phase_one_backend;
 mod exclusive_backend;
+mod pre_enrollment_qualification;
 mod qualified_enrollment_delegate;
+pub use pre_enrollment_qualification::{
+    KagemushaPreEnrollmentQualificationOwnerV1, KagemushaVerifiedPreEnrollmentQualificationV1,
+};
 mod signed_app_preparation;
 pub use enrollment_attempt_journal::{
     KagemushaEnrollmentAttemptJournalV1, KagemushaEnrollmentJournalDispatchV1,
@@ -51,7 +55,6 @@ mod initial_enrollment;
 pub(crate) mod native_deadline;
 #[cfg(test)]
 mod session_registry;
-#[cfg(test)]
 pub(crate) mod startup_qualification;
 pub use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderPreparationSelectorV1 as KagemushaCoreSenderPreparationSelectorV1,
@@ -113,6 +116,7 @@ const INITIAL_ENROLLMENT_READ_PROOF_V1: u32 = 4;
 const INITIAL_ENROLLMENT_COMPLETE_V1: u32 = 5;
 const INITIAL_ENROLLMENT_CANCEL_V1: u32 = 6;
 const INITIAL_ENROLLMENT_READ_SELECTION_V1: u32 = 7;
+const INITIAL_ENROLLMENT_VERIFY_APP_PREPARATION_V1: u32 = 8;
 const APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:hardware-transition-selection\0";
 const APP_ATTEST_SELECTION_BODY_BYTES_V1: u64 = 403;
@@ -136,7 +140,7 @@ pub const KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1: [u32; 12] = [
 
 // The read-only Core archive export and the pinned testnet observer accept the same public input.
 const _: () = assert!(
-    iroha_core::zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1
+    iroha_core_zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1
         == crate::kagemusha_testnet_observation_v1::KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1
 );
 
@@ -304,7 +308,7 @@ pub trait KagemushaCoreCoordinatorBackendV1: Send + Sync + 'static {
         _handle: u64,
         _operation_id: [u8; 32],
     ) -> Result<
-        iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
+        iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
         KagemushaCoreCoordinatorBackendErrorV1,
     > {
         Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
@@ -539,6 +543,11 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
                 INITIAL_ENROLLMENT_BEGIN_V1 | INITIAL_ENROLLMENT_READ_SELECTION_V1 => {
                     require_field_count(&fields, 2)?;
                     require_bounded_nonempty_field(fields.get(1), 512)
+                }
+                INITIAL_ENROLLMENT_VERIFY_APP_PREPARATION_V1 => {
+                    require_field_count(&fields, 3)?;
+                    require_nonzero_ticket_field(fields.get(1))?;
+                    require_exact_length_field(fields.get(2), 273)
                 }
                 INITIAL_ENROLLMENT_ACCEPT_CHALLENGE_V1 => {
                     require_field_count(&fields, 11)?;
@@ -881,7 +890,7 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
             require_equal_fields(response.first(), request.first())?;
             require_bounded_nonempty_field(
                 response.get(1),
-                iroha_core::zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
+                iroha_core_zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
             )?;
             require_bounded_nonempty_field(
                 response.get(2),
@@ -950,6 +959,14 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
                         require_nonzero_digest_field(response.get(index))?;
                     }
                     require_nonzero_ticket_field(response.get(6))
+                }
+                INITIAL_ENROLLMENT_VERIFY_APP_PREPARATION_V1 => {
+                    require_field_count(&response, 1)?;
+                    require_nonzero_digest_field(response.first())?;
+                    if response[0].as_slice() != &request[2][49..81] {
+                        return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+                    }
+                    Ok(())
                 }
                 INITIAL_ENROLLMENT_ACCEPT_CHALLENGE_V1 => {
                     require_field_count(&response, 4)?;
@@ -1521,7 +1538,7 @@ mod tests {
     fn coordinator_contract_and_methods_are_exact() {
         assert_eq!(
             KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-            [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
+            [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),

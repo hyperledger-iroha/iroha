@@ -91,7 +91,8 @@ fn certified_capture_refuses_bad_certificate_and_timestamp_substitution() {
         .capture_certified_view(&chain.state().view(), chain.kura())
         .unwrap();
     let before = archive.health_generation().unwrap();
-    chain.commit_with(Some(2_000), Vec::new(), Signers::BelowQuorum);
+    chain.commit_at(2_000, Vec::new());
+    chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
     assert!(
         archive
             .capture_certified_view(&chain.state().view(), chain.kura())

@@ -1,9 +1,9 @@
 //! End-to-end tests for canonical role and permission builtins.
 use ivm::{
     IVM,
-    kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const TEST_CALLER_PUBLIC_KEY: &str =

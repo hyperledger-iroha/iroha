@@ -2036,10 +2036,6 @@ mod tests {
         ));
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test validates the full height-zero archive activation boundary"
-    )]
     fn fresh_height_zero_opens_empty_archive_for_genesis_capture() {
         let daemon_root = physical_tempdir().expect("daemon root");
         let kura = Kura::blank_kura_for_testing();

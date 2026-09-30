@@ -7,7 +7,7 @@ use concread::bptree::{BptreeMapPreparedCommit, OwnedWriteError};
 /// Field order releases locks before notification or caller installation custody.
 pub(crate) struct PreparedBlockHashes<'target, Installation> {
     owner: NativeLaneStateOwner,
-    prepared: concread::release::ReleaseGuard<
+    prepared: iroha_allocation::release::ReleaseGuard<
         'target,
         BptreeMapPreparedCommit<'target, usize, HashOf<BlockHeader>, BlockHashMode>,
     >,
@@ -16,14 +16,14 @@ pub(crate) struct PreparedBlockHashes<'target, Installation> {
     height: usize,
     committed_height: &'target AtomicUsize,
     installation: Installation,
-    preflight_release: Option<concread::release::DeferredRelease>,
+    preflight_release: Option<iroha_allocation::release::DeferredRelease>,
 }
 /// Original abort notifications and resources after the hash writer unlocks.
 pub(crate) struct AbortedBlockHashes<Installation> {
     _owner: NativeLaneStateOwner,
-    _release: [concread::release::DeferredRelease; 2],
+    _release: [iroha_allocation::release::DeferredRelease; 2],
     _installation: Installation,
-    _preflight_release: Option<concread::release::DeferredRelease>,
+    _preflight_release: Option<iroha_allocation::release::DeferredRelease>,
 }
 
 #[path = "retained_hash_slot.rs"]
@@ -33,7 +33,7 @@ use retained_hash_slot::RetainedHashSlot;
 
 fn refusal<E>(
     error: OwnedWriteError,
-    wait: concread::release::ReleaseWait,
+    wait: iroha_allocation::release::ReleaseWait,
 ) -> mv::PublicationPreparationError<E> {
     match error {
         OwnedWriteError::Changed => mv::PublicationPreparationError::Changed,
@@ -121,12 +121,12 @@ impl<'target, Installation> PreparedBlockHashes<'target, Installation> {
 }
 /// Released tree cleanup and wake custody. Drop after other publication fences.
 pub(crate) struct PublishedBlockHashes<'a, Installation> {
-    _retirement: concread::release::ReleaseGuard<
+    _retirement: iroha_allocation::release::ReleaseGuard<
         'a,
         concread::bptree::BptreeMapCommitRetirement<usize, HashOf<BlockHeader>, BlockHashMode>,
     >,
     _installation: Installation,
-    _preflight_release: Option<concread::release::DeferredRelease>,
+    _preflight_release: Option<iroha_allocation::release::DeferredRelease>,
 }
 
 #[cfg(test)]

@@ -8,16 +8,14 @@ import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.hyperledger.iroha.android.IrohaKeyManager
-import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference
-import org.hyperledger.iroha.android.KeyManagementException
-import org.hyperledger.iroha.android.SigningException
-import org.hyperledger.iroha.android.address.AccountAddress
-import org.hyperledger.iroha.android.norito.NoritoException
-import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter
-import org.hyperledger.iroha.android.model.TransactionPayload
-import org.hyperledger.iroha.android.tx.SignedTransactionHasher
-import org.hyperledger.iroha.android.tx.TransactionBuilder
+import org.hyperledger.iroha.sdk.IrohaKeyManager
+import org.hyperledger.iroha.sdk.crypto.keystore.KeySecurityPreference
+import org.hyperledger.iroha.sdk.crypto.KeyManagementException
+import org.hyperledger.iroha.sdk.crypto.SigningException
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.tx.norito.NoritoException
+import org.hyperledger.iroha.samples.preview.PreviewTransactions
+import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.samples.operator.env.HarnessArtifacts
 import org.hyperledger.iroha.samples.operator.env.SampleClientFactory
 import org.hyperledger.iroha.samples.operator.env.SampleEnvironment
@@ -30,11 +28,7 @@ class OperatorConsoleViewModel(application: Application) : AndroidViewModel(appl
     private val environment = SampleEnvironment.fromBuildConfig()
     private val harnessArtifacts = environment.harnessArtifacts()
     private val keyManager = IrohaKeyManager.withDefaultProviders()
-    private val transactionBuilder =
-        TransactionBuilder(
-            NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT),
-            keyManager,
-        )
+
     private val clientFactory = SampleClientFactory(application.applicationContext, environment)
     private val clientArtifactsResult = runCatching { clientFactory.createArtifacts() }
     private val clientArtifacts = clientArtifactsResult.getOrNull()
@@ -117,19 +111,16 @@ class OperatorConsoleViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
+    override fun onCleared() {
+        clientArtifacts?.close()
+        super.onCleared()
+    }
+
     private fun buildSampleHash(): String =
         try {
-            val payload =
-                TransactionPayload.builder()
-                    .setAuthority("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-                    .putMetadata("sample", "operator-console")
-                    .build()
-            val signed =
-                transactionBuilder.encodeAndSign(
-                    payload,
-                    "operator-console-demo",
-                    KeySecurityPreference.SOFTWARE_ONLY
-                )
+            val alias = "operator-console-demo"
+            val signer = keyManager.signerForAlias(alias, KeySecurityPreference.SOFTWARE_ONLY)
+            val signed = PreviewTransactions.sign(signer, alias, "operator-console preview")
             SignedTransactionHasher.hashHex(signed)
         } catch (ex: Exception) {
             when (ex) {

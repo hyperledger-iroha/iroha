@@ -1,7 +1,7 @@
 //! Operational read refusals survive TLV, crypto, numeric and loader consumers.
 
 use super::*;
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 fn funded() -> (IVM, AllocationBudget) {
     let budget = AllocationBudget::new(64 * 1024 * 1024);
@@ -47,7 +47,12 @@ fn public_and_input_only_tlv_decoders_preserve_header_and_envelope_refusals() {
                 VMError::NoritoInvalid
             );
             budget.set_limit_bytes(occupied + 8 * std::mem::size_of::<crate::AccessRange>());
-            assert_eq!(vm.validate_tlv(Memory::INPUT_START).unwrap().payload, &[]);
+            assert!(
+                vm.validate_tlv(Memory::INPUT_START)
+                    .unwrap()
+                    .payload
+                    .is_empty()
+            );
         }
     }
 }
@@ -212,7 +217,7 @@ fn input_cursor_refusal_does_not_publish_a_partial_prefix_or_overwrite_preloaded
 
 #[test]
 fn program_loader_returns_cursor_scan_refusal_and_succeeds_after_resource_retry() {
-    let compiled = crate::KotodamaCompiler::new()
+    let compiled = kotodama_lang::compiler::Compiler::new()
         .compile_source("seiyaku ReadLoader { view fn main() { () } }")
         .unwrap();
     let contract = crate::prepare_contract(Arc::<[u8]>::from(compiled)).unwrap();
@@ -293,7 +298,7 @@ fn program_loader_returns_cursor_scan_refusal_and_succeeds_after_resource_retry(
 
 #[test]
 fn failed_cold_prepared_load_drops_its_original_pool_before_fresh_owner_retry() {
-    let compiled = crate::KotodamaCompiler::new()
+    let compiled = kotodama_lang::compiler::Compiler::new()
         .compile_source("seiyaku ColdReadLoader { view fn main() { () } }")
         .unwrap();
     let contract = crate::prepare_contract(Arc::<[u8]>::from(compiled)).unwrap();

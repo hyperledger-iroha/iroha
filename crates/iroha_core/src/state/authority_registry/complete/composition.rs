@@ -155,10 +155,13 @@ fn field_descriptor_digest(field: &'static Field) -> Result<Hash, CompositionErr
             }
             let source_count =
                 u64::try_from(sources.len()).map_err(|_| CompositionError::LengthOverflow)?;
-            let DerivationCheck::Rebuild(procedure) = check;
+            let (tag, procedure) = match check {
+                DerivationCheck::Rebuild(procedure) => (3, procedure),
+                DerivationCheck::Commitment(procedure) => (6, procedure),
+            };
             let procedure = text_digest(procedure)?;
             (
-                3,
+                tag,
                 Hash::new_from_chunks(&[
                     DESCRIPTOR_FINISH,
                     source_fold.as_ref(),

@@ -33,7 +33,7 @@ use iroha::{
         block::BlockHeader,
         domain::Domain,
         isi::{
-            Grant, GrantBox, InstructionBox, Log, Mint, Register,
+            Grant, GrantBox, InstructionBox, Log, Mint, Register, SetParameter, Transfer,
             privacy::{RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1},
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
@@ -61,6 +61,7 @@ use iroha::{
             PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
             PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementRouteV1,
         },
+        parameter::{FastpqSourcePolicyV1, Parameter, system::SumeragiParameters},
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
@@ -71,13 +72,18 @@ use iroha::{
             PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
         },
         query::block::prelude::FindBlocks,
+        sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy},
         transaction::{
             FeeChargeKind, FeeChargeLimit, FeePaymentIntent, SignedTransaction,
             TransactionEntrypoint,
         },
     },
 };
-use iroha_core::{
+use iroha_core::private_settlement::{
+    PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditorSidecarViewV1,
+    PrivateSettlementSidecarLifecycleV1, approve_private_settlement_leg_v1,
+};
+use iroha_core_privacy::{
     privacy_engines::{
         atomic_private_settlement::{
             AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementProvisionalLegInputV1,
@@ -98,11 +104,6 @@ use iroha_core::{
         },
     },
     privacy_profiles::compiled_privacy_profile_v1,
-    private_settlement::{
-        PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditorSidecarViewV1,
-        PrivateSettlementSidecarLifecycleV1, approve_private_settlement_leg_v1,
-        seal_private_settlement_audit_capsule_v1_with_rng,
-    },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, HybridKeyPair, KeyPair, SignatureOf};
 use iroha_data_model::prelude::QueryBuilderExt;
@@ -119,7 +120,7 @@ use iroha_test_network::{
     CommitteeValidatorP2pBootstrap, Network, NetworkBuilder, NetworkPeer,
     unexecuted_genesis_factory_with_post_topology,
 };
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
 use reqwest::Url;
 use std::{
     ops::Range,
@@ -132,6 +133,7 @@ const PARTICIPANT_COUNT: usize = 3;
 const PRIMARY_PUBLIC_PARTICIPANT_ORDINAL: usize = 0;
 const VALIDATORS_PER_LANE: usize = 4;
 const REAL_PROCESS_VALIDATOR_WORKER_THREADS: u64 = 4;
+const REAL_PROCESS_BLOCK_CADENCE: Duration = Duration::from_secs(4);
 const GLOBAL_LANE_ID: u32 = 0;
 const VALIDATOR_STAKE: u64 = 2_000;
 const PRIVACY_GENESIS_PROPOSAL_HEIGHT: u64 = 1;
@@ -401,13 +403,79 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
     nexus_fee_asset_definition_id()
 }
 
+fn settlement_domain_id() -> DomainId {
+    DomainId::try_new("settlement", "universal").expect("settlement domain")
+}
+
+fn participant_domain_bootstrap() -> [InstructionBox; 2] {
+    [
+        Register::domain(Domain::new(settlement_domain_id())).into(),
+        Transfer::domain(
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            settlement_domain_id(),
+            ALICE_ID.clone(),
+        )
+        .into(),
+    ]
+}
+
 fn cbdc_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
-        DomainId::try_new("settlement", "universal").expect("settlement domain"),
+        settlement_domain_id(),
         format!("cbdc{}", ordinal + 1)
             .parse()
             .expect("CBDC asset name"),
     )
+}
+
+fn participant_lane_policy(
+    shape: TopologyShape,
+    committee_validator_entries: &[GenesisTopologyEntry],
+) -> SumeragiLanePolicy {
+    assert_eq!(
+        committee_validator_entries.len(),
+        shape.participant_validator_count()
+    );
+    let lane_params = SumeragiParameters {
+        block_cadence_ms: std::num::NonZeroU64::new(
+            u64::try_from(REAL_PROCESS_BLOCK_CADENCE.as_millis())
+                .expect("signed lane cadence fits u64"),
+        )
+        .expect("signed lane cadence is positive"),
+        ..SumeragiParameters::default()
+    };
+    let mut policy = SumeragiLanePolicy::for_chain(
+        lane_params,
+        iroha_sumeragi::availability::recommended_data_availability_layout(),
+    );
+    policy.fixed = committee_validator_entries
+        .chunks_exact(VALIDATORS_PER_LANE)
+        .enumerate()
+        .map(|(ordinal, entries)| {
+            let mut committee = entries
+                .iter()
+                .map(|entry| SumeragiLaneMember {
+                    peer: entry.peer.clone(),
+                    pop: entry
+                        .pop_bytes()
+                        .expect("participant lane PoP is valid hex")
+                        .expect("participant lane member carries a PoP"),
+                })
+                .collect::<Vec<_>>();
+            committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+            SumeragiFixedLane {
+                lane: LaneId::new(u32::try_from(ordinal + 1).expect("lane fits u32")),
+                dataspace: DataSpaceId::new(
+                    u64::try_from(ordinal + 1).expect("dataspace fits u64"),
+                ),
+                committee,
+            }
+        })
+        .collect();
+    policy
+        .validate()
+        .expect("canonical fixed participant lanes");
+    policy
 }
 
 fn genesis_post_topology(
@@ -416,6 +484,11 @@ fn genesis_post_topology(
     committee_validator_entries: &[GenesisTopologyEntry],
 ) -> Vec<Vec<InstructionBox>> {
     assert_eq!(topology.len(), shape.process_count());
+    assert_eq!(
+        topology.iter().collect::<BTreeSet<_>>().len(),
+        topology.len(),
+        "global and participant committees must have disjoint process identities"
+    );
     assert_eq!(
         committee_validator_entries.len(),
         shape.participant_validator_count()
@@ -452,10 +525,6 @@ fn genesis_post_topology(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
         ))
         .into(),
-        Register::domain(Domain::new(
-            DomainId::try_new("settlement", "universal").expect("settlement domain"),
-        ))
-        .into(),
         Register::asset_definition(AssetDefinition::new(
             stake_definition.clone(),
             "XOR".to_owned(),
@@ -471,22 +540,15 @@ fn genesis_post_topology(
         .into(),
         Grant::account_permission(Permission::from(CanEnactGovernance), ALICE_ID.clone()).into(),
     ]);
-    for ordinal in 0..shape.participants {
-        let definition = cbdc_asset_definition_id(ordinal);
-        universal.push(
-            Register::asset_definition(AssetDefinition::numeric(
-                definition,
-                format!("CBDC {}", ordinal + 1),
-                AssetBalancePolicy::Global,
-                None,
-            ))
-            .into(),
-        );
-    }
+    // This static fixture domain is original signed bootstrap state. Raw domain
+    // registration is genesis-only; the exact transfer authorizes Alice to
+    // register the required CBDCs later through ordinary paid transactions.
+    universal.extend(participant_domain_bootstrap());
+    let mut stake_funding = Vec::<InstructionBox>::with_capacity(topology.len());
     for (index, _) in topology.iter().enumerate() {
         let validator = AccountId::new(validator_authority_keypair(index).public_key().clone());
         universal.push(Register::account(Account::new(validator.clone())).into());
-        universal.push(
+        stake_funding.push(
             Mint::asset_quantity(
                 VALIDATOR_STAKE,
                 AssetId::new(stake_definition.clone(), validator),
@@ -509,9 +571,22 @@ fn genesis_post_topology(
         )
         .into(),
     );
+    universal.push(
+        SetParameter::new(Parameter::Custom(
+            participant_lane_policy(shape, committee_validator_entries).into_custom_parameter(),
+        ))
+        .into(),
+    );
     let mut transactions = vec![universal];
-    // Staking uses one globally scoped stake asset, so all lane registrations
-    // remain together in the targetless transaction routed through universal.
+    // The signed bootstrap source policy bounds each original logical entry.
+    // Keep fee funding/profile governance atomic above, and preserve all stake
+    // amounts in bounded universal funding and registration entries below.
+    let intrinsic = FastpqSourcePolicyV1::bootstrap().intrinsic;
+    let monetary_per_entry = usize::try_from(intrinsic.max_transcripts.min(intrinsic.max_deltas))
+        .expect("bootstrap source count fits usize");
+    transactions.extend(stake_funding.chunks(monetary_per_entry).map(<[_]>::to_vec));
+    // Staking uses one globally scoped asset; every targetless entry remains
+    // routed through universal, including participant committee registrations.
     let mut authority_registration =
         Vec::with_capacity(shape.lane_count() * VALIDATORS_PER_LANE * 2);
     for lane_ordinal in 0..shape.lane_count() {
@@ -538,7 +613,11 @@ fn genesis_post_topology(
             authority_registration.push(ActivatePublicLaneValidator::new(lane, validator).into());
         }
     }
-    transactions.push(authority_registration);
+    transactions.extend(
+        authority_registration
+            .chunks(monetary_per_entry * 2)
+            .map(<[_]>::to_vec),
+    );
     transactions
 }
 
@@ -559,7 +638,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         // Keep every release profile, including the correctness-only N=3
         // smoke, on a production-like signed cadence. Privacy activation is
         // explicit in genesis; independent pool-policy notice remains enforced.
-        .with_block_cadence(Duration::from_secs(4))
+        .with_block_cadence(REAL_PROCESS_BLOCK_CADENCE)
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
         .with_npos_consensus()
         .without_npos_genesis_bootstrap()
@@ -656,6 +735,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     ["logger", "filter"],
                     "iroha_torii::queue_plan_admission=debug",
                 )
+                .write(["logger", "format"], "json")
                 .write(
                     ["concurrency", "scheduler_min_threads"],
                     validator_worker_threads,
@@ -796,10 +876,9 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
 }
 
 // EnvFilter matches target prefixes. Keep unselected Sumeragi modules at INFO,
-// then enable the exact body-progress adapter and selected runner/worker owners.
+// then enable the selected driver and executor owners.
 const N3_DIAGNOSTIC_LOG_FILTER: &str = concat!(
     "iroha_torii::queue_plan_admission=debug,",
-    "iroha_core::sumeragi::v2=debug,",
     "iroha_core::sumeragi=info,",
     "iroha_core::sumeragi::driver=debug,",
     "iroha_core::sumeragi::executor=debug",
@@ -819,6 +898,157 @@ fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
             // This diagnostic-only smoke retains the shared admission filter.
             layer.write(["logger", "filter"], N3_DIAGNOSTIC_LOG_FILTER);
         })
+}
+
+fn participant_asset_registrations(shape: TopologyShape) -> Vec<InstructionBox> {
+    (0..shape.participants)
+        .map(|ordinal| {
+            Register::asset_definition(AssetDefinition::numeric(
+                cbdc_asset_definition_id(ordinal),
+                format!("CBDC {}", ordinal + 1),
+                AssetBalancePolicy::Global,
+                Some(settlement_domain_id()),
+            ))
+            .into()
+        })
+        .collect()
+}
+
+fn prepare_participant_assets(network: &Network, shape: TopologyShape) -> Result<()> {
+    let sponsor = network.client();
+    let account = sponsor.account_client();
+    // The signed genesis domain belongs to Alice. Each required CBDC is one
+    // ordinary paid global transaction and commits before the next one. For
+    // N=3 these real setup transactions occupy heights 2–4, past the native
+    // lane active_from=3 boundary, before any measured settlement workflow.
+    for instruction in participant_asset_registrations(shape) {
+        let transaction = account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [instruction],
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+            .wrap_err("build required participant asset registration")?;
+        sponsor
+            .submit_transaction_and_wait(&transaction)
+            .wrap_err("commit required participant asset registration")?;
+    }
+    Ok(())
+}
+
+fn signed_participant_lane_policy(
+    network: &Network,
+    shape: TopologyShape,
+) -> Result<SumeragiLanePolicy> {
+    let genesis = network.genesis();
+    let mut signed_policy = None;
+    for transaction in genesis.0.external_transactions() {
+        let iroha::data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            return Err(eyre!("signed genesis contains a non-instruction entry"));
+        };
+        for instruction in instructions {
+            let Some(parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                continue;
+            };
+            let Parameter::Custom(custom) = parameter.inner() else {
+                continue;
+            };
+            if let Some(policy) = SumeragiLanePolicy::from_custom_parameter(custom) {
+                ensure!(
+                    signed_policy.is_none(),
+                    "signed genesis repeats its native lane policy"
+                );
+                signed_policy = Some(policy.map_err(|error| eyre!(error))?);
+            }
+        }
+    }
+    let policy =
+        signed_policy.ok_or_else(|| eyre!("signed genesis omits its native lane policy"))?;
+    let entries = network
+        .all_peers()
+        .skip(shape.global_validator_count())
+        .map(|peer| {
+            Ok(GenesisTopologyEntry::new(
+                PeerId::new(
+                    peer.bls_public_key()
+                        .ok_or_else(|| eyre!("participant BLS key missing"))?
+                        .clone(),
+                ),
+                peer.bls_pop()
+                    .ok_or_else(|| eyre!("participant BLS PoP missing"))?
+                    .to_vec(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        policy == participant_lane_policy(shape, &entries),
+        "signed native policy differs from the exact participant processes or cadence"
+    );
+    iroha_core::sumeragi::lanes::step::validate_policy(&policy).map_err(|error| eyre!(error))?;
+    Ok(policy)
+}
+
+fn routes_from_signed_lane_records(
+    network_id: iroha::data_model::NetworkId,
+    policy: &SumeragiLanePolicy,
+    statuses: &[iroha::data_model::sumeragi_lanes::SumeragiLaneStatus],
+    committed_height: u64,
+) -> Result<Vec<PrivateSettlementRouteV1>> {
+    ensure!(
+        statuses.len() == policy.fixed.len(),
+        "native lane status population differs from signed genesis"
+    );
+    policy
+        .fixed
+        .iter()
+        .enumerate()
+        .map(|(ordinal, fixed)| {
+            let incarnation = iroha_core::sumeragi::lanes::step::incarnation(
+                &network_id,
+                fixed.lane,
+                fixed.dataspace,
+                PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+                u64::try_from(ordinal).expect("lane incarnation counter fits u64"),
+            );
+            let record = &statuses
+                .iter()
+                .find(|status| status.record.lane == fixed.lane)
+                .ok_or_else(|| {
+                    eyre!(
+                        "signed participant lane {} is absent from native state",
+                        fixed.lane
+                    )
+                })?
+                .record;
+            ensure!(
+                record.dataspace == fixed.dataspace
+                    && record.incarnation == incarnation
+                    && record.committee == fixed.committee
+                    && record.params == policy.lane_params
+                    && record.da_layout == policy.da_layout
+                    && record.anchor_freshness == policy.anchor_freshness
+                    && record.created_at == PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                    && record.active_from == PRIVACY_GENESIS_PROPOSAL_HEIGHT + 2
+                    && record.closing.is_none(),
+                "native lane {} differs from its exact signed genesis creation",
+                fixed.lane
+            );
+            ensure!(
+                record.admits_anchor(committed_height),
+                "native lane {} is not active at authenticated height {committed_height}",
+                fixed.lane
+            );
+            Ok(PrivateSettlementRouteV1 {
+                dataspace_id: fixed.dataspace,
+                lane_id: fixed.lane,
+                lane_incarnation: Hash::from_marked_bytes(incarnation)
+                    .ok_or_else(|| eyre!("native incarnation lacks its canonical marker"))?,
+            })
+        })
+        .collect()
 }
 
 fn routes_from_network(
@@ -845,22 +1075,23 @@ fn routes_from_network(
             expected.as_str()
         );
     }
-    (1..=shape.participants)
-        .map(|lane| {
-            let lane_id = LaneId::new(u32::try_from(lane).expect("lane fits u32"));
-            let incarnation = status
-                .incarnations
-                .iter()
-                .find(|entry| entry.lane_id == lane_id)
-                .ok_or_else(|| eyre!("lane {lane} has no active incarnation"))?
-                .incarnation;
-            Ok(PrivateSettlementRouteV1 {
-                dataspace_id: DataSpaceId::new(u64::try_from(lane).expect("dataspace fits u64")),
-                lane_id,
-                lane_incarnation: incarnation,
-            })
-        })
-        .collect()
+    let sponsor = network.client();
+    let history = authenticated_native_history(network, &sponsor)?;
+    let height = history
+        .last()
+        .ok_or_else(|| eyre!("participant setup lacks a certified successor"))?
+        .committed()
+        .block()
+        .header()
+        .height()
+        .get();
+    let policy = signed_participant_lane_policy(network, shape)?;
+    let native = sponsor.client().get_sumeragi_lanes()?;
+    // Route identities come from the independently signed fixed policy and
+    // deterministic genesis creation. Endpoint records are consistency checks;
+    // this is not a complete current lane-state inclusion proof. The final
+    // native finality and signed availability evidence gates remain mandatory.
+    routes_from_signed_lane_records(network.network_id(), &policy, &native, height)
 }
 
 fn committees_from_network(
@@ -1334,18 +1565,17 @@ fn validate_pool_activation_context(
     Ok(committed_height)
 }
 
-fn activate_governed_private_pools(
-    sponsor: &Client,
+fn governed_pool_activation_instructions(
     network_id: iroha::data_model::NetworkId,
     governed: &[GovernedLeg],
     private_data: &[PrivateSettlementLegPrivateData],
-    expiry_height: u64,
-) -> Result<u64> {
+) -> Result<Vec<ActivatePrivateSettlementPoolV1>> {
+    ensure!(!governed.is_empty(), "pool setup requires governed legs");
     ensure!(
         governed.len() == private_data.len(),
         "pool funding omitted a leg"
     );
-    let activations = governed
+    governed
         .iter()
         .zip(private_data)
         .enumerate()
@@ -1356,20 +1586,49 @@ fn activate_governed_private_pools(
                 funding.activation_commitments().to_vec(),
             )?)
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect()
+}
+
+fn activate_governed_private_pools(
+    sponsor: &Client,
+    network_id: iroha::data_model::NetworkId,
+    governed: &[GovernedLeg],
+    private_data: &[PrivateSettlementLegPrivateData],
+    expiry_height: u64,
+) -> Result<u64> {
+    // Derive every funded setup instruction before committing any setup work.
+    let activations = governed_pool_activation_instructions(network_id, governed, private_data)?;
     let account = sponsor.account_client();
-    let activation = account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            activations,
-            bounded_nexus_fee(),
-            Metadata::default(),
-        ))
-        .and_then(|payload| account.sign_transaction(payload))
-        .wrap_err("build governed pool activation transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation)
-        .wrap_err("activate governed pools before proof generation")?;
-    // Applied finality establishes the pools before this context is selected.
+    // These independently governed pools are separate setup operations. Each
+    // original transaction is signed for one native route with its own fee bound.
+    for (ordinal, activation) in activations.into_iter().enumerate() {
+        let timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PoolActivation, Some(ordinal));
+        let transaction = account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [activation],
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+            .wrap_err_with(|| format!("build governed pool activation for leg {ordinal}"))?;
+        let transaction_hash = transaction.hash();
+        emit_pool_setup_transaction_diagnostic_v1(
+            &mut std::io::stderr().lock(),
+            SmokeDiagnosticScopeV1::capture().is_some(),
+            ordinal,
+            transaction_hash,
+        );
+        sponsor
+            .submit_transaction_and_wait(&transaction)
+            .wrap_err_with(|| {
+                format!(
+                    "activate governed pool for leg {ordinal}, transaction {transaction_hash}, before proof generation"
+                )
+            })?;
+        timing.complete();
+    }
+    // Every pool has applied finality before this shared context is selected.
     // Extra admission blocks and a later capability response are both valid;
     // uploads still enforce the exact historical committee at this height.
     let committed_height = sponsor
@@ -1377,6 +1636,71 @@ fn activate_governed_private_pools(
         .get_privacy_capabilities()?
         .committed_height;
     validate_pool_activation_context(governed, committed_height, expiry_height)
+}
+
+/// Public leg identity only, with best-effort output restricted to diagnostic scope.
+fn emit_pool_setup_transaction_diagnostic_v1(
+    writer: &mut impl std::io::Write,
+    diagnostic_active: bool,
+    ordinal: usize,
+    transaction_hash: HashOf<SignedTransaction>,
+) {
+    if !diagnostic_active {
+        return;
+    }
+    use std::io::Write as _;
+    let mut record = std::io::Cursor::new([0_u8; 256]);
+    if writeln!(
+        &mut record,
+        "APS_POOL_SETUP_TRANSACTION_V1 leg={ordinal} transaction_hash={transaction_hash}"
+    )
+    .is_ok()
+    {
+        let length = record.position() as usize;
+        let _ = writer.write_all(&record.get_ref()[..length]);
+    }
+}
+
+#[test]
+fn pool_setup_transaction_diagnostic_is_scoped_and_contains_only_public_identity() {
+    let transaction_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(hash(0xD1));
+    let mut record = Vec::new();
+    emit_pool_setup_transaction_diagnostic_v1(&mut record, false, 2, transaction_hash);
+    assert!(
+        record.is_empty(),
+        "ordinary runs emit no setup identity diagnostic"
+    );
+    emit_pool_setup_transaction_diagnostic_v1(&mut record, true, 2, transaction_hash);
+    assert_eq!(
+        String::from_utf8(record).unwrap(),
+        format!("APS_POOL_SETUP_TRANSACTION_V1 leg=2 transaction_hash={transaction_hash}\n")
+    );
+}
+
+#[test]
+fn pool_setup_transaction_diagnostic_sink_failure_preserves_operation_result() {
+    struct FailedSink(usize);
+    impl std::io::Write for FailedSink {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            self.0 += 1;
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            panic!("the diagnostic must not flush or own the caller's sink")
+        }
+    }
+    let transaction_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(hash(0xD1));
+    let mut sink = FailedSink(0);
+    emit_pool_setup_transaction_diagnostic_v1(&mut sink, false, 2, transaction_hash);
+    assert_eq!(sink.0, 0);
+    for expected in [Ok(7_u64), Err("original submission failure")] {
+        let mut operation = || {
+            emit_pool_setup_transaction_diagnostic_v1(&mut sink, true, 2, transaction_hash);
+            expected
+        };
+        assert_eq!(operation(), expected);
+    }
+    assert_eq!(sink.0, 2);
 }
 
 fn private_settlement_reimbursement_terms_salt(
@@ -3116,6 +3440,7 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
     )?);
     startup_timing.complete();
     let sponsor = network.client();
+    prepare_participant_assets(&network, shape)?;
     let privacy_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrivacyActivation, None);
     let activated_height = require_genesis_private_note_active(&sponsor)?;
@@ -3485,7 +3810,9 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
     let (finality, files) = collect_signed_rs16_finality(
         &network,
+        &runtime,
         receipt.finalized_height,
+        FinalityObservationV1::LiveTransport,
         Some((&evidence_root, "finality-before")),
     )?;
     evidence_files.extend(files);
@@ -3668,7 +3995,9 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
     let (recovered_finality, files) = collect_signed_rs16_finality(
         &network,
+        &runtime,
         receipt.finalized_height,
+        FinalityObservationV1::Restored(finality.anchor),
         Some((&evidence_root, "finality-after")),
     )?;
     ensure!(
@@ -3831,6 +4160,97 @@ fn genesis_registers_only_participant_processes_as_committee_peers() {
     let committee_validator_entries = process_entries[shape.global_validator_count()..].to_vec();
 
     let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
+    for bootstrap in participant_domain_bootstrap() {
+        assert_eq!(
+            transactions
+                .iter()
+                .flatten()
+                .filter(|instruction| *instruction == &bootstrap)
+                .count(),
+            1,
+            "signed genesis contains exactly one domain registration and exact ownership transfer"
+        );
+    }
+    let setup = participant_asset_registrations(shape);
+    assert!(
+        transactions
+            .iter()
+            .flatten()
+            .all(|genesis_instruction| setup
+                .iter()
+                .all(|setup_instruction| genesis_instruction != setup_instruction)),
+        "required paid CBDC registrations are not repeated in genesis"
+    );
+    let policies = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| {
+            let parameter = instruction.as_any().downcast_ref::<SetParameter>()?;
+            let Parameter::Custom(custom) = parameter.inner() else {
+                return None;
+            };
+            SumeragiLanePolicy::from_custom_parameter(custom)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        policies.len(),
+        1,
+        "genesis signs exactly one native lane policy"
+    );
+    let policy = policies[0].as_ref().expect("canonical signed lane policy");
+    iroha_core::sumeragi::lanes::step::validate_policy(policy)
+        .expect("every actual participant BLS PoP verifies");
+    assert_eq!(policy.fixed.len(), shape.participants);
+    assert_eq!(policy.lane_params.block_cadence_ms.get(), 4_000);
+    for (ordinal, lane) in policy.fixed.iter().enumerate() {
+        assert_eq!(lane.lane, LaneId::new((ordinal + 1) as u32));
+        assert_eq!(lane.dataspace, DataSpaceId::new((ordinal + 1) as u64));
+        let mut expected = committee_validator_entries
+            [ordinal * VALIDATORS_PER_LANE..(ordinal + 1) * VALIDATORS_PER_LANE]
+            .iter()
+            .map(|entry| SumeragiLaneMember {
+                peer: entry.peer.clone(),
+                pop: entry.pop_bytes().unwrap().unwrap(),
+            })
+            .collect::<Vec<_>>();
+        expected.sort_by(|left, right| left.peer.cmp(&right.peer));
+        assert_eq!(lane.committee, expected);
+        assert!(
+            lane.committee
+                .iter()
+                .all(|member| !topology[..shape.global_validator_count()].contains(&member.peer))
+        );
+    }
+    let intrinsic = FastpqSourcePolicyV1::bootstrap().intrinsic;
+    let mut minted = 0;
+    for transaction in &transactions {
+        let mints = transaction
+            .iter()
+            .filter(|instruction| {
+                matches!(
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha::data_model::isi::MintBox>(),
+                    Some(iroha::data_model::isi::MintBox::Asset(_))
+                )
+            })
+            .count();
+        minted += mints;
+        let stake_transfers = transaction
+            .iter()
+            .filter(|instruction| instruction.as_any().is::<RegisterPublicLaneValidator>())
+            .count();
+        assert!(
+            mints + stake_transfers <= intrinsic.max_deltas as usize,
+            "each genesis quantity tape fits the signed bootstrap entry limit"
+        );
+        assert!(stake_transfers <= intrinsic.max_transcripts as usize);
+    }
+    assert_eq!(
+        minted,
+        shape.process_count() + 1,
+        "preserve every original stake and fee mint"
+    );
     let monetary_registrations = transactions
         .iter()
         .flatten()
@@ -3898,6 +4318,286 @@ fn genesis_registers_only_participant_processes_as_committee_peers() {
     assert!(registrations.iter().all(|registration| {
         !topology[..shape.global_validator_count()].contains(&registration.peer)
     }));
+}
+
+#[test]
+fn participant_assets_bind_explicit_owned_domain_before_registration() {
+    use iroha::data_model::isi::RegisterBox;
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    let instructions = participant_asset_registrations(shape);
+    assert_eq!(instructions.len(), shape.participants);
+    for (ordinal, instruction) in instructions.iter().enumerate() {
+        let Some(RegisterBox::AssetDefinition(asset)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        else {
+            panic!("each paid setup operation must register one CBDC");
+        };
+        assert_eq!(asset.object.id, cbdc_asset_definition_id(ordinal));
+        assert_eq!(
+            asset.object.owning_domain.as_ref(),
+            Some(&settlement_domain_id())
+        );
+        assert_eq!(
+            asset.object.balance_scope_policy,
+            AssetBalancePolicy::Global
+        );
+    }
+}
+
+#[test]
+fn participant_assets_execute_paid_setup_after_signed_genesis_domain_transfer() {
+    thread::Builder::new()
+        .name("participant-asset-runtime-setup".to_owned())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(|| {
+            use iroha::data_model::{Registrable, transaction::TransactionBuilder};
+            use iroha_core::{
+                state::{StateReadOnly, World, WorldReadOnly},
+                sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+            };
+            use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let world = World::with(
+                [],
+                [
+                    Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                    Account::new(BOB_ID.clone()).build(&BOB_ID),
+                ],
+                [],
+            );
+            let mut config = TestChainConfig::new(world, 10_000);
+            config.genesis_key = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
+            config
+                .genesis_instructions
+                .extend(participant_domain_bootstrap());
+            config.genesis_instructions.extend([
+                Register::asset_definition(AssetDefinition::new(
+                    nexus_fee_asset_definition_id(),
+                    "XOR".to_owned(),
+                    NumericSpec::fractional(9),
+                    AssetBalancePolicy::Global,
+                    None,
+                ))
+                .into(),
+                Mint::asset_quantity(
+                    NEXUS_FEE_SEED_BALANCE,
+                    AssetId::new(nexus_fee_asset_definition_id(), ALICE_ID.clone()),
+                )
+                .into(),
+                Mint::asset_quantity(
+                    NEXUS_FEE_SEED_BALANCE,
+                    AssetId::new(nexus_fee_asset_definition_id(), BOB_ID.clone()),
+                )
+                .into(),
+            ]);
+            let mut nexus = iroha_config::parameters::actual::Nexus::default();
+            nexus.fees.fee_asset_id = nexus_fee_asset_definition_id().to_string();
+            nexus.fees.fee_sink_account_id = BOB_ID.to_string();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee =
+                NEXUS_FEE_PER_PRIVATE_SETTLEMENT_CARRIER.parse().unwrap();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+            config.nexus = Some(nexus);
+            let mut chain = CertifiedTestChain::start(config)
+                .expect("the actual signed genesis registers and transfers the bootstrap domain");
+            assert_eq!(chain.genesis_account(), &SAMPLE_GENESIS_ACCOUNT_ID.clone());
+            assert_eq!(chain.height(), 1);
+            assert_eq!(
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .domain(&settlement_domain_id())
+                    .unwrap()
+                    .owned_by(),
+                &ALICE_ID.clone(),
+                "ownership comes from the exact signed genesis transfer"
+            );
+            let sign = |chain: &CertifiedTestChain, key: &KeyPair, instruction: InstructionBox| {
+                let parent_time = chain
+                    .state()
+                    .view()
+                    .latest_block()
+                    .unwrap()
+                    .header()
+                    .creation_time();
+                let mut transaction = TransactionBuilder::new(
+                    chain.network_id(),
+                    AccountId::new(key.public_key().clone()),
+                    bounded_nexus_fee(),
+                );
+                transaction.set_creation_time(parent_time + Duration::from_millis(1));
+                transaction
+                    .with_instructions([instruction])
+                    .sign(key.private_key())
+            };
+            let balance = |chain: &CertifiedTestChain| {
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .asset(&AssetId::new(
+                        nexus_fee_asset_definition_id(),
+                        ALICE_ID.clone(),
+                    ))
+                    .unwrap()
+                    .value()
+                    .as_ref()
+                    .clone()
+            };
+            let shape = TopologyShape::new(PARTICIPANT_COUNT);
+            for (ordinal, instruction) in participant_asset_registrations(shape)
+                .into_iter()
+                .enumerate()
+            {
+                let before = balance(&chain);
+                let transaction = sign(&chain, &ALICE_KEYPAIR, instruction);
+                assert_eq!(chain.commit(vec![transaction]), vec![true]);
+                assert_eq!(chain.height(), ordinal as u64 + 2);
+                ensure_exact_private_settlement_carrier_fee(
+                    &before,
+                    &balance(&chain),
+                    "paid CBDC setup",
+                )
+                .expect("each required registration pays the ordinary configured fee");
+                let definition = chain
+                    .state()
+                    .view()
+                    .world()
+                    .asset_definition(&cbdc_asset_definition_id(ordinal))
+                    .unwrap();
+                assert_eq!(definition.owned_by(), &ALICE_ID.clone());
+                assert_eq!(
+                    definition.owning_domain().as_ref(),
+                    Some(&settlement_domain_id())
+                );
+            }
+            // These go through the same signed transaction/block Runtime path,
+            // with real fees and no custom permissive executor or direct Execute call.
+            let unauthorized =
+                participant_asset_registrations(TopologyShape::new(PARTICIPANT_COUNT + 1))
+                    .pop()
+                    .unwrap();
+            let transaction = sign(&chain, &BOB_KEYPAIR, unauthorized);
+            assert_eq!(chain.commit(vec![transaction]), vec![false]);
+            assert!(
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .asset_definition(&cbdc_asset_definition_id(PARTICIPANT_COUNT))
+                    .is_err()
+            );
+            let rejected = chain.committed(chain.height());
+            let (_, output) = rejected
+                .block()
+                .network_output_at(0)
+                .expect("unauthorized registration output");
+            assert!(format!("{:?}", output.result).contains("Can't register asset definition"));
+            let forbidden_domain = DomainId::try_new("runtime_forbidden", "universal").unwrap();
+            let transaction = sign(
+                &chain,
+                &ALICE_KEYPAIR,
+                Register::domain(Domain::new(forbidden_domain.clone())).into(),
+            );
+            assert_eq!(chain.commit(vec![transaction]), vec![false]);
+            assert!(
+                chain
+                    .state()
+                    .view()
+                    .world()
+                    .domain(&forbidden_domain)
+                    .is_err()
+            );
+            let rejected = chain.committed(chain.height());
+            let (_, output) = rejected
+                .block()
+                .network_output_at(0)
+                .expect("rejected transaction output");
+            assert!(
+                format!("{:?}", output.result)
+                    .contains("raw domain registration is reserved for genesis; use EnsureAlias")
+            );
+        })
+        .expect("spawn bounded runtime setup regression")
+        .join()
+        .expect("runtime setup regression completes");
+}
+
+#[test]
+fn native_participant_routes_reject_substitution_and_inactive_genesis() {
+    use iroha::data_model::sumeragi_lanes::{
+        SumeragiLaneFrontier, SumeragiLaneRecord, SumeragiLaneStatus,
+    };
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    let entries = (0..shape.participant_validator_count())
+        .map(|index| {
+            let key =
+                KeyPair::try_from_seed(vec![(index + 1) as u8; 32], Algorithm::BlsNormal).unwrap();
+            GenesisTopologyEntry::new(
+                PeerId::new(key.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let policy = participant_lane_policy(shape, &entries);
+    let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xE1)),
+    );
+    let records = policy
+        .fixed
+        .iter()
+        .enumerate()
+        .map(|(ordinal, fixed)| SumeragiLaneStatus {
+            record: SumeragiLaneRecord {
+                da_layout: policy.da_layout,
+                lane: fixed.lane,
+                dataspace: fixed.dataspace,
+                incarnation: iroha_core::sumeragi::lanes::step::incarnation(
+                    &network_id,
+                    fixed.lane,
+                    fixed.dataspace,
+                    1,
+                    ordinal as u64,
+                ),
+                params: policy.lane_params.clone(),
+                committee: fixed.committee.clone(),
+                created_at: 1,
+                active_from: 3,
+                closing: None,
+                anchor_freshness: policy.anchor_freshness,
+                merged: SumeragiLaneFrontier::default(),
+                merged_at: 3,
+                rescued: 0,
+            },
+            instance: None,
+        })
+        .collect::<Vec<_>>();
+    let routes = routes_from_signed_lane_records(network_id, &policy, &records, 3).unwrap();
+    assert_eq!(routes.len(), PARTICIPANT_COUNT);
+    assert!(routes_from_signed_lane_records(network_id, &policy, &records, 2).is_err());
+    for mutation in 0..9 {
+        let mut changed = records.clone();
+        match mutation {
+            0 => changed[0].record.incarnation[0] ^= 1,
+            1 => changed[0].record.committee = records[1].record.committee.clone(),
+            2 => changed[0].record.params = SumeragiParameters::default(),
+            3 => changed[0].record.created_at = 2,
+            4 => changed[0].record.active_from = 2,
+            5 => changed[0].record.closing = Some(4),
+            6 => changed[0].record.dataspace = DataSpaceId::new(2),
+            7 => {
+                changed.pop();
+            }
+            8 => changed[1] = changed[0].clone(),
+            _ => unreachable!(),
+        }
+        assert!(
+            routes_from_signed_lane_records(network_id, &policy, &changed, 3).is_err(),
+            "native route substitution {mutation} must fail"
+        );
+    }
 }
 
 #[test]
@@ -4150,7 +4850,33 @@ fn genesis_ivm_private_note_activation_is_exact() {
         .stack_size(TEST_STACK_BYTES)
         .spawn(move || {
             let network = n3_smoke_builder(shape).build();
-            let _validated_genesis = network.genesis();
+            let validated_genesis = network.genesis();
+            signed_participant_lane_policy(&network, shape)
+                .expect("signed genesis retains exact native participant committees");
+            let intrinsic = FastpqSourcePolicyV1::bootstrap().intrinsic;
+            for transaction in validated_genesis.0.external_transactions() {
+                let iroha::data_model::transaction::Executable::Instructions(instructions) =
+                    transaction.instructions()
+                else {
+                    panic!("genesis is an instruction batch");
+                };
+                let monetary = instructions
+                    .iter()
+                    .filter(|instruction| {
+                        instruction.as_any().is::<RegisterPublicLaneValidator>()
+                            || matches!(
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<iroha::data_model::isi::MintBox>(),
+                                Some(iroha::data_model::isi::MintBox::Asset(_))
+                            )
+                    })
+                    .count();
+                assert!(
+                    monetary <= intrinsic.max_deltas as usize,
+                    "signed final packing must preserve each original monetary entry bound"
+                );
+            }
         })
         .expect("spawn normalized genesis regression");
     if let Err(panic) = handle.join() {
@@ -4304,6 +5030,109 @@ fn pool_activation_orders_commitments_without_reordering_spend_slots() {
         assert_eq!((bootstrap.old_epoch, bootstrap.new_epoch), (1, 2));
     }
     assert_eq!(seen_input_orders, [true, true]);
+}
+
+#[test]
+fn governed_pool_setup_transactions_keep_exact_single_routes() {
+    use iroha::data_model::{
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
+        transaction::TransactionBuilder,
+    };
+    use iroha_core::queue::{ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan};
+    let routes = (1..=3)
+        .map(|id| PrivateSettlementRouteV1 {
+            dataspace_id: DataSpaceId::new(u64::from(id)),
+            lane_id: LaneId::new(id),
+            lane_incarnation: hash(id as u8),
+        })
+        .collect::<Vec<_>>();
+    let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xF8)),
+    );
+    let governed = governed_legs(&routes, 301, 401).unwrap();
+    let private_data = (0..3)
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    let activations = governed_pool_activation_instructions(network_id, &governed, &private_data)
+        .expect("all funding is derived before any independent setup submission");
+    let router = ConfigLaneRouter::new(
+        iroha_config::parameters::actual::LaneRoutingPolicy::default(),
+        DataSpaceCatalog::new(
+            (0..=3)
+                .map(|id| DataSpaceMetadata {
+                    id: DataSpaceId::new(id),
+                    alias: if id == 0 {
+                        "universal".to_owned()
+                    } else {
+                        format!("pool{id}")
+                    },
+                    description: None,
+                    fault_tolerance: 1,
+                })
+                .collect(),
+        )
+        .unwrap(),
+        LaneCatalog::new(
+            std::num::NonZeroU32::new(4).unwrap(),
+            (0..=3)
+                .map(|id| LaneConfig {
+                    id: LaneId::new(id),
+                    dataspace_id: DataSpaceId::new(u64::from(id)),
+                    alias: format!("lane{id}"),
+                    ..LaneConfig::default()
+                })
+                .collect(),
+        )
+        .unwrap(),
+    );
+    for (ordinal, activation) in activations.iter().enumerate() {
+        let funding = private_settlement_funding(
+            network_id,
+            &governed[ordinal],
+            ordinal,
+            &private_data[ordinal],
+        )
+        .unwrap();
+        assert_eq!(
+            activation.initial_commitments,
+            funding.activation_commitments()
+        );
+        assert_eq!(activation.route, routes[ordinal]);
+        assert_eq!(
+            activation.governance_digest,
+            governed[ordinal].governance.governance_digest
+        );
+        let transaction =
+            TransactionBuilder::new(network_id, ALICE_ID.clone(), bounded_nexus_fee())
+                .with_instructions([activation.clone()])
+                .sign(ALICE_KEYPAIR.private_key());
+        let expected = RoutingPlan::single(RoutingDecision::new(
+            routes[ordinal].lane_id,
+            routes[ordinal].dataspace_id,
+        ));
+        assert_eq!(
+            router
+                .try_route_plan_without_state(transaction.payload())
+                .unwrap(),
+            Some(expected)
+        );
+    }
+    let bundled = TransactionBuilder::new(network_id, ALICE_ID.clone(), bounded_nexus_fee())
+        .with_instructions(activations)
+        .sign(ALICE_KEYPAIR.private_key());
+    let plan = router
+        .try_route_plan_without_state(bundled.payload())
+        .unwrap()
+        .unwrap();
+    assert!(
+        !matches!(plan, RoutingPlan::Single(_)),
+        "a signed multi-pool batch is not admissible as one native transaction"
+    );
+    assert_eq!(plan.legs().len(), 4);
+    assert!(
+        governed_pool_activation_instructions(network_id, &governed, &private_data[..2]).is_err()
+    );
+    assert!(governed_pool_activation_instructions(network_id, &[], &[]).is_err());
 }
 
 #[test]
@@ -4462,12 +5291,11 @@ fn n3_diagnostic_logger_filter_parses_and_preserves_info_and_admission() {
     let directives = resolved.split(',').collect::<Vec<_>>();
     assert_eq!(
         directives.len(),
-        6,
-        "one default and five target directives"
+        5,
+        "one default and four target directives"
     );
     assert_eq!(directives[0], "info", "ordinary node logging stays at INFO");
     assert!(directives.contains(&"iroha_torii::queue_plan_admission=debug"));
-    assert!(directives.contains(&"iroha_core::sumeragi::v2=debug"));
     assert!(directives.contains(&"iroha_core::sumeragi=info"));
     assert!(directives.contains(&"iroha_core::sumeragi::driver=debug"));
     assert!(directives.contains(&"iroha_core::sumeragi::executor=debug"));
@@ -4562,3 +5390,5 @@ fn leakage_canary_identifiers_are_canonical_typed_values() {
 }
 
 include!("atomic_private_settlement_real_process_harness.rs");
+
+use iroha_core_privacy::privacy_engines::atomic_private_settlement::audit::seal_private_settlement_audit_capsule_v1_with_rng;

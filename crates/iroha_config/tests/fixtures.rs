@@ -628,14 +628,14 @@ fn nexus_atomic_private_settlement_rejects_default_auditor_threshold_above_v1_ro
     assert!(emitter.into_result().is_err());
 }
 #[test]
-fn sumeragi_v2_rejects_each_retired_v1_table_independently() {
+fn sumeragi_rejects_each_retired_table_independently() {
     for (fixture, expected_parameter) in [
         ("bad.sumeragi_retired_collectors_table.toml", "collectors"),
         ("bad.sumeragi_retired_advanced_rbc_table.toml", "advanced"),
         ("bad.sumeragi_retired_recovery_table.toml", "recovery"),
     ] {
         let report = match load_config_from_fixtures(fixture) {
-            Ok(_) => panic!("retired v1 fixture {fixture} was accepted"),
+            Ok(_) => panic!("retired fixture {fixture} was accepted"),
             Err(report) => report,
         };
         let message = strip_ansi_codes(&format!("{report:?}"));
@@ -646,7 +646,7 @@ fn sumeragi_v2_rejects_each_retired_v1_table_independently() {
     }
 }
 #[test]
-fn sumeragi_v2_rejects_each_retired_byzantine_rbc_debug_field_independently() {
+fn sumeragi_rejects_each_retired_byzantine_rbc_debug_field_independently() {
     for fixture in [
         "bad.sumeragi_retired_debug_rbc_conflicting_ready_mask.toml",
         "bad.sumeragi_retired_debug_rbc_duplicate_inits.toml",
@@ -744,10 +744,6 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
     assert_contains!(debug, "greater than zero");
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the profile fixture keeps secret-file substitution and every multilane default assertion in one end-to-end contract"
-)]
 fn nexus_profile_template_enables_multilane_defaults() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1933,6 +1929,11 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .get("sumeragi")
         .and_then(TomlValue::as_table)
         .expect("Taira node-local Sumeragi configuration");
+    assert_eq!(
+        sumeragi.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["role"],
+        "Taira configures only the node-local Sumeragi role; block limits come from chain parameters"
+    );
     let parsed = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(sumeragi.clone()))

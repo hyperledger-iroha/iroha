@@ -15,7 +15,7 @@ Virtual Machine (IVM).
 
 Iroha 3 is the first public release described by this repository. Workspace
 defaults, quickstarts, SDK guidance, and operator documentation target Iroha 3,
-where data availability and reliable broadcast are consensus requirements.
+where signed payload availability is a consensus requirement.
 Public and in-depth guidance is maintained in the sibling `iroha-docs`
 repository; this repository retains only concise contributor notes and
 code-adjacent specifications.
@@ -214,9 +214,9 @@ the resolved P2P total-connection ceiling, and proof-retention status aggregates
 counts in one pass without materializing proof identifiers.
 
 For liveness checks, prefer the queue-aware fields in `/status`: use
-`queue_size` as the gate and compare `time_since_last_block_ms` or
-`time_since_last_non_empty_block_ms` against the
-`/v1/pipeline/preflight.sumeragi.stall_threshold_ms` value. An old block
+`queue_size` as the gate and compare `time_since_last_block_ms` against your
+alert threshold; `/v1/pipeline/preflight` reports the chain
+`sumeragi.block_cadence_ms`. An old block
 timestamp alone is not a stall when the queue is empty.
 
 See the full endpoint reference in the
@@ -321,8 +321,7 @@ Consensus is the sans-IO Sumeragi core in
 and liveness argument in [`specs/sumeragi.md`](./specs/sumeragi.md). Its
 deterministic simulator tests run with `cargo test -p iroha_sumeragi`, and
 `scripts/sumeragi_mutation_gate.py` checks that every protocol mutation listed
-in the spec is killed by a named test. The retired Sumeragi v2 TLAPS, Verus and
-release-ledger corridor was removed with the v2 consensus tooling.
+in the spec is killed by a named test.
 
 ## Translations
 

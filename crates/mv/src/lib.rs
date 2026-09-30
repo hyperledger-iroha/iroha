@@ -12,7 +12,7 @@ pub mod allocation;
 mod capture;
 mod publication;
 pub use capture::{BlockCapture, CaptureCleanup};
-use concread::release::{ReleaseGuard, ReleaseNotification, ReleaseWait};
+use iroha_allocation::release::{ReleaseGuard, ReleaseNotification, ReleaseWait};
 pub use publication::{
     BlockPublicationIdentity, PublicationCleanup, PublicationPreparationError,
     PublicationPreparationResult,
@@ -117,3 +117,8 @@ pub trait FrozenBlockPublication: BlockPublication {
     /// All release notices remain in this slot, which must stay aggregate-owned.
     fn recover_frozen(&mut self) -> Self::Frozen;
 }
+
+#[cfg(test)]
+mod allocation_runtime_tests;
+#[cfg(test)]
+mod allocation_test_support;

@@ -15,7 +15,7 @@ summary: Operator procedure for responding to DA quorum degradation and attester
 |-------|--------|-------|
 | Telemetry metrics | Grafana board `nexus_lanes` (`dashboards/grafana/nexus_lanes.json`) — panels “DA Quorum Ratio” and “Finality Lag (slots)”. | Driven by `iroha_da_quorum_ratio` and `nexus_lane_finality_lag_slots`. |
 | Prometheus queries | `iroha_da_quorum_ratio{lane=...,dataspace=...}` and `nexus_lane_attester_health`. | Use `promtool query instant` or Grafana Explore to capture snapshots. |
-| Torii/Sumeragi status | `iroha_cli sumeragi status --format json` or `/v1/sumeragi/status`. | Provides `lane_governance[].da_profile`, attester roster, and `lane_settlement_commitments`. |
+| Sumeragi diagnostics and lanes | `ops sumeragi diagnostics` (`/v1/sumeragi/diagnostics`) and `GET /v1/sumeragi/lanes`, both operator-signed. | Provide `lane_governance[]` (manifest readiness, validator roster, quorum) and the committed lane records (`specs/sumeragi_lanes.md` §8). |
 | DA attester manifests | Space Directory manifest bundle or `scripts/nexus_lane_registry_bundle.sh`. | Confirms which attesters should be active. |
 | Evidence log | `ops/drill-log.md`. | Record every alert, mitigation, and verification artefact. |
 
@@ -46,15 +46,15 @@ summary: Operator procedure for responding to DA quorum degradation and attester
    promtool query instant "$PROM" \
      'iroha_da_quorum_ratio{lane="lane-A",dataspace="profile.defi.v1"}'
    ```
-3. Dump the relevant section of `sumeragi status`:
+3. Dump the lane's governance entry from the Sumeragi diagnostics:
    ```bash
-   iroha_cli sumeragi status --format json |
-     jq '.lane_governance[] | select(.lane_id=="lane-A")'
+   iroha --operator-private-key-file /absolute/runtime/operator.key --output-format json ops sumeragi diagnostics |
+     jq '.lane_governance[] | select(.alias=="lane-A")'
    ```
 
 ### Step 2 — Identify the Failure Mode
 
-- Compare `lane_governance[].da_profile` with the manifest bundle to ensure the expected attester set is active.
+- Compare `lane_governance[].validator_ids` and `quorum` with the manifest bundle to ensure the expected attester set is active.
 - Query `nexus_lane_attester_health` for `status="degraded"` to isolate specific attester IDs; cross-reference with gossip/attester logs.
 - If reschedules correlate with a specific cluster, inspect network telemetry (`torii_p2p_latency_ms`, `nexus_lane_link_latency_ms`).
 

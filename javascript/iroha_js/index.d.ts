@@ -5813,13 +5813,16 @@ export interface ToriiStatusSnapshot {
   metrics: ToriiStatusMetrics;
 }
 
+/**
+ * Typed `GET /v1/pipeline/preflight` body. Every object carries exactly the
+ * fields Torii serves; any other field is rejected as protocol drift.
+ */
 export interface ToriiPipelinePreflight {
   schema_version: number;
   chain_height: number;
   sumeragi: {
-    block_time_ms: number;
-    commit_time_ms: number;
-    stall_threshold_ms: number;
+    /** Signed-genesis target block time in milliseconds (always positive). */
+    block_cadence_ms: number;
   };
   admission: {
     max_signatures: number;
@@ -5849,24 +5852,47 @@ export interface ToriiPipelinePreflight {
   fees: {
     fee_asset_id: string;
     fee_sink_account_id: string;
-    base_fee: unknown;
-    per_byte_fee: unknown;
-    per_instruction_fee: unknown;
-    per_gas_unit_fee: unknown;
+    /** Canonical decimal quantity string. */
+    base_fee: string;
+    /** Canonical decimal quantity string. */
+    per_byte_fee: string;
+    /** Canonical decimal quantity string. */
+    per_instruction_fee: string;
+    /** Canonical decimal quantity string. */
+    per_gas_unit_fee: string;
     sponsor_vault_custody_account_id: string;
-    settlement_mode: string;
+    settlement_mode: "direct" | "lane_relay_burn";
     successful_claim_fee_exempt_authorities: string[];
   };
   raw: Readonly<Record<string, unknown>>;
+  /**
+   * SDK-derived stall threshold, not a served field:
+   * `20 * sumeragi.block_cadence_ms`, saturated at `Number.MAX_SAFE_INTEGER`.
+   * Twenty target block cadences cover one crashed leader's view change at
+   * the Sumeragi default timings (`specs/sumeragi.md` §8.2 P4, §9.3).
+   */
+  stallThresholdMs: number;
+  /**
+   * `isStatusQueueStalled(status, stallThresholdMs)`: queued work exists and
+   * no non-empty block was committed for longer than `stallThresholdMs`.
+   */
   isStatusStalled(
     status: ToriiStatusPayload | Record<string, unknown>,
   ): boolean;
 }
 
+/**
+ * Milliseconds since the last committed non-empty block, or since the last
+ * block while the peer has not reported a non-empty one.
+ */
 export function statusLivenessElapsedMs(
   status: ToriiStatusPayload | Record<string, unknown>,
 ): number;
 
+/**
+ * True when `queue_size > 0` and `statusLivenessElapsedMs(status)` exceeds
+ * `stallThresholdMs`.
+ */
 export function isStatusQueueStalled(
   status: ToriiStatusPayload | Record<string, unknown>,
   stallThresholdMs: number | string | bigint,
@@ -6137,50 +6163,70 @@ export interface ToriiSumeragiBeaconHorizon {
 export type ToriiSumeragiHaltReason =
   | Readonly<{ reason: "safety_record_corrupt" | "safety_record_inconsistent" | "driver_anomaly"; details: null }>
   | Readonly<{ reason: "safety_violation" | "apply_diverged" | "publication_recovery_required"; details: ToriiU64 }>;
-
-export interface ToriiConsensusCaps {
-  collectors_k: number;
-  redundant_send_r: number;
-  da_enabled: boolean;
-  rbc_chunk_max_bytes: number;
-  rbc_session_ttl_ms: number;
-  rbc_store_max_sessions: number;
-  rbc_store_soft_sessions: number;
-  rbc_store_max_bytes: number;
-  rbc_store_soft_bytes: number;
+/** Chain parameters pinned into one lane incarnation (Rust `SumeragiParameters`). */
+export interface ToriiSumeragiParameters {
+  block_cadence_ms: ToriiU64;
+  max_clock_drift_ms: ToriiU64;
+  key_activation_lead_blocks: ToriiU64;
+  key_overlap_grace_blocks: ToriiU64;
+  key_expiry_grace_blocks: ToriiU64;
+  key_allowed_algorithms: ReadonlyArray<string>;
+  payload_retry_interval_ms: ToriiU64;
+  exec_budget_ms: ToriiU64;
+  apply_budget_ms: ToriiU64;
+  max_block_bytes: number;
+  epoch_length_blocks: ToriiU64;
+  demotion_window: ToriiU64;
+}
+/** One pinned lane committee member: canonical BLS-normal key and base64 96-byte possession proof. */
+export interface ToriiSumeragiLaneMember {
+  peer: string;
+  pop: string;
+}
+/** Highest merged lane block; `height` 0 means nothing merged yet. Hashes are uppercase hex. */
+export interface ToriiSumeragiLaneFrontier {
+  height: ToriiU64;
+  block_hash: string;
+  result: string;
+}
+/** Mandatory signed RS16 geometry pinned into one lane incarnation. */
+export interface ToriiSumeragiDataAvailabilityLayout {
+  encoding: Readonly<{ encoding: "reed_solomon16"; details: null }>;
+  chunk_size_bytes: number;
+  data_shards: number;
+  parity_shards: number;
+  max_payload_size_bytes: ToriiU64;
+  max_chunk_count: number;
+}
+/** Committed lifecycle record of one lane incarnation; all nullable keys are mandatory. */
+export interface ToriiSumeragiLaneRecord {
+  lane: number;
+  dataspace: ToriiU64;
+  incarnation: string;
+  params: ToriiSumeragiParameters;
+  da_layout: ToriiSumeragiDataAvailabilityLayout;
+  committee: ReadonlyArray<ToriiSumeragiLaneMember>;
+  created_at: ToriiU64;
+  active_from: ToriiU64;
+  closing: ToriiU64 | null;
+  anchor_freshness: ToriiU64;
+  merged: ToriiSumeragiLaneFrontier;
+  merged_at: ToriiU64;
+  rescued: ToriiU64;
+}
+/** One served lane with the node's instance status (`null` while the node runs none). */
+export interface ToriiSumeragiLaneStatus {
+  record: ToriiSumeragiLaneRecord;
+  instance: ToriiSumeragiStatus | null;
 }
 
-export interface ToriiSumeragiCommitQuorumSummary {
-  height: number;
-  view: number;
-  block_hash: string | null;
-  signatures_present: number;
-  signatures_counted: number;
-  signatures_set_b: number;
-  signatures_required: number;
-  last_updated_ms: number;
-}
-
-export interface ToriiSumeragiPrfContext {
-  height: number;
-  view: number;
-  epoch_seed?: string | null;
-}
-
-export interface ToriiSumeragiLeaderSnapshot {
-  leader_index: number;
-  prf: ToriiSumeragiPrfContext;
-}
-
+/** Committed Sumeragi timing parameters and chain height (`GET /v1/sumeragi/params`). */
 export interface ToriiSumeragiParamsSnapshot {
-  block_time_ms: number;
-  commit_time_ms: number;
+  /** Target block cadence in milliseconds; never zero. */
+  block_cadence_ms: number;
+  /** Maximum tolerated clock drift in milliseconds. */
   max_clock_drift_ms: number;
-  collectors_k: number;
-  redundant_send_r: number;
-  da_enabled: boolean;
-  next_mode?: string | null;
-  mode_activation_height?: number | null;
+  /** Committed chain height the snapshot was read at. */
   chain_height: number;
 }
 
@@ -10002,6 +10048,7 @@ export declare class ToriiBrowserClient {
   ): Promise<unknown>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<Record<string, unknown>>;
   getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
+  getSumeragiLanes(options?: { signal?: AbortSignal }): Promise<ReadonlyArray<ToriiSumeragiLaneStatus>>;
   listKaigiRelays(options?: { signal?: AbortSignal }): Promise<KaigiRelaySummaryList>;
   getKaigiRelay(
     relayId: string,
@@ -10927,12 +10974,12 @@ export declare class ToriiClient {
   getSumeragiStatusTyped(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiStatus>;
+  getSumeragiLanes(options?: {
+    signal?: AbortSignal;
+  }): Promise<ReadonlyArray<ToriiSumeragiLaneStatus>>;
   getSumeragiBlsKeys(options?: {
     signal?: AbortSignal;
   }): Promise<Record<string, string | null>>;
-  getSumeragiLeader(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiLeaderSnapshot>;
   getSumeragiParams(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiParamsSnapshot>;

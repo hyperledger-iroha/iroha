@@ -1,8 +1,8 @@
 //! `Transaction`-related functionality of Iroha.
 //!
-//! Admission derives the Nexus lane/dataspace assignment for every transaction
-//! using the configured routing policy (see `specs/nexus_transition_notes.md`)
-//! so telemetry, fraud monitoring, and queue accounting observe the real topology.
+//! Admission enforces the captured physical Nexus policy independently of the
+//! authenticated native execution route. Ordinary policy routes stay frozen at
+//! the predecessor state; authenticated genesis uses its in-progress bootstrap state.
 //!
 //! Types represent various stages of a `Transaction`'s lifecycle. For example, `Transaction` is the
 //! start, when a transaction had been received by Torii.
@@ -11,6 +11,9 @@
 //! as various forms of validation are performed.
 mod authority_admission;
 use crate::execution_attempt::{ExecutionAttemptError, ExecutionDeferred};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height;
+use crate::state::network_policy_routes::CapturedNetworkPolicyRoute;
 
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
@@ -21,7 +24,6 @@ use crate::{
         extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
     smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -2956,10 +2958,13 @@ impl StateBlock<'_> {
     ///
     /// This helper intentionally does not execute instructions or apply state. Callers must only
     /// commit the returned sequence after the transaction itself succeeds.
+    /// Physical policy uses the captured source capability independently of the native execution
+    /// route. Only an authenticated genesis input may omit runtime fraud-assessment metadata.
     pub(crate) fn validate_stateful_admission(
         tx: &SignedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
-        routing_decision: Option<crate::queue::RoutingDecision>,
+        routing_decision: crate::queue::RoutingDecision,
+        policy_route: CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         if let Some(genesis) = genesis {
@@ -3103,39 +3108,17 @@ impl StateBlock<'_> {
                 ));
             }
         }
-        // The certified native lane owns execution and provenance; the physical route
-        // independently owns application policy. A native lane number is never a key
-        // into the physical manifest/privacy/compliance registries.
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-        let policy_plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
-            &state_transaction.nexus,
-            &accepted,
-            &state_transaction.world,
-            state_transaction.block_unix_timestamp_ms(),
-            state_transaction.block_height(),
-        )
-        .map_err(|err| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                "transaction policy routing could not be resolved: {err}"
-            )))
-        })?;
-        crate::queue::validate_current_admission_route(&policy_plan)
-            .map_err(|error| reject_not_permitted(error.to_string()))?;
-        let policy_route = policy_plan.coordinator_route();
-        let routing_decision = routing_decision.unwrap_or(policy_route);
-        if policy_route.dataspace_id != routing_decision.dataspace_id {
-            return Err(reject_not_permitted(
-                "physical application policy and authenticated execution disagree on the transaction dataspace",
-            ));
-        }
+        let physical = policy_route
+            .for_signed(tx, state_transaction, routing_decision)?
+            .decision();
         state_transaction.current_lane_id = Some(routing_decision.lane_id);
         state_transaction.current_dataspace_id = Some(routing_decision.dataspace_id);
         state_transaction.world.current_dataspace_id = Some(routing_decision.dataspace_id);
         crate::executor::validate_transaction_fee_admission(state_transaction, tx)
             .map_err(TransactionRejectionReason::Validation)?;
         let lane_assignment = LaneAssignment {
-            lane_id: policy_route.lane_id,
-            dataspace_id: policy_route.dataspace_id,
+            lane_id: physical.lane_id,
+            dataspace_id: physical.dataspace_id,
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
@@ -3170,7 +3153,8 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
-        routing_decision: Option<crate::queue::RoutingDecision>,
+        routing_decision: crate::queue::RoutingDecision,
+        policy_route: CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         if let Some(reason) = state_transaction.execution_deferral() {
@@ -3191,12 +3175,14 @@ impl StateBlock<'_> {
                 state_transaction,
                 ivm_cache,
                 routing_decision,
+                policy_route,
             );
         }
         let admission = Self::validate_stateful_admission(
             tx.as_ref(),
             state_transaction,
             routing_decision,
+            policy_route,
             genesis,
         )?;
         let authority = admission.authority.clone();
@@ -3352,7 +3338,8 @@ impl StateBlock<'_> {
         reveal: &SealedTransactionReveal,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
-        routing_decision: Option<crate::queue::RoutingDecision>,
+        routing_decision: crate::queue::RoutingDecision,
+        policy_route: CapturedNetworkPolicyRoute,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         let key = sealed_commitment_state_key(&reveal.commitment);
         let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
@@ -3377,6 +3364,7 @@ impl StateBlock<'_> {
             state_transaction,
             ivm_cache,
             routing_decision,
+            policy_route,
             None,
         )
     }
@@ -5266,11 +5254,13 @@ pub fn execute_component_transaction_for_testing(
     overlay.current_lane_id = Some(route.lane_id);
     overlay.current_dataspace_id = Some(route.dataspace_id);
     overlay.world.current_dataspace_id = Some(route.dataspace_id);
+    let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route);
     match StateBlock::execute_accepted_transaction_in_overlay(
         accepted,
         &mut overlay,
         cache,
-        Some(route),
+        route,
+        policy_route,
         None,
     ) {
         Ok(sequence) => {
@@ -6620,8 +6610,10 @@ pub mod tests {
         let mut overlay = block.transaction();
         let native =
             crate::queue::RoutingDecision::new(TestLaneId::new(1), TestDataSpaceId::UNIVERSAL);
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(&tx));
+        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native);
         assert_not_permitted_contains(
-            StateBlock::validate_stateful_admission(&tx, &mut overlay, Some(native), None)
+            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
                 .map(|_| ()),
             "runtime upgrade hook prohibits runtime upgrade instructions",
         );
@@ -6651,18 +6643,14 @@ pub mod tests {
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut overlay = block.transaction();
+        let native =
+            crate::queue::RoutingDecision::new(TestLaneId::new(1), TestDataSpaceId::new(7));
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(&tx));
+        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, native);
         assert_not_permitted_contains(
-            StateBlock::validate_stateful_admission(
-                &tx,
-                &mut overlay,
-                Some(crate::queue::RoutingDecision::new(
-                    TestLaneId::new(1),
-                    TestDataSpaceId::new(7),
-                )),
-                None,
-            )
-            .map(|_| ()),
-            "physical application policy and authenticated execution disagree",
+            StateBlock::validate_stateful_admission(&tx, &mut overlay, native, policy_route, None)
+                .map(|_| ()),
+            "physical policy dataspace differs from authenticated native source",
         );
         assert_eq!(overlay.current_lane_id, None);
         assert_eq!(overlay.current_dataspace_id, None);
@@ -9669,7 +9657,7 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
-        let (artifact, _) = ivm::KotodamaCompiler::new()
+        let (artifact, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku StaleAbi { view fn inspect() -> int { return 1; } }",
             )
@@ -11915,7 +11903,7 @@ pub mod tests {
                 )
             }};
         }
-        let (code, _) = ivm::KotodamaCompiler::new()
+        let (code, _) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 "seiyaku NativeUploadGovernance { view fn inspect() -> int { return 1; } }",
             )
@@ -12443,7 +12431,10 @@ pub mod tests {
             execute_component_transaction_for_testing(&mut block, accepted, &mut ivm_cache, None);
         result.expect("live autoscale-routed transaction should bypass blocked base lane");
     }
-    fn state_with_guarded_base_and_open_elastic_lane(chain: &ChainId, world: World) -> State {
+    fn state_with_guarded_base_and_open_elastic_lane(
+        chain: &ChainId,
+        world: World,
+    ) -> (State, Arc<LaneManifestRegistry>) {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -12508,10 +12499,12 @@ pub mod tests {
                 privacy_commitments: Vec::new(),
             },
         );
-        state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-            statuses,
-        )));
-        state
+        // The deliberately unavailable base manifest belongs only to the component overlay;
+        // canonical State retains the materialized source established by lane lifecycle.
+        (
+            state,
+            Arc::new(LaneManifestRegistry::from_statuses(statuses)),
+        )
     }
     #[test]
     fn sealed_reveal_preserves_authenticated_routing_context() {
@@ -12520,7 +12513,8 @@ pub mod tests {
         };
         let chain: ChainId = "sealed-reveal-authenticated-route".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
-        let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
+        let (state, policy_manifests) =
+            state_with_guarded_base_and_open_elastic_lane(&chain, world);
         let signed = (0_u64..256)
             .find_map(|attempt| {
                 let mut metadata = Metadata::default();
@@ -12590,19 +12584,48 @@ pub mod tests {
             crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        block.lane_manifests = state.lane_manifests.read().clone();
+        block.lane_manifests = policy_manifests;
         let mut ivm_cache = IvmCache::new();
-        let external_result = execute_component_transaction_for_testing(
+        // Capture the governed physical route in this explicit component scope, then
+        // reopen elastic routing. Both outer and inner execution must keep that capability.
+        let execute = |block: &mut StateBlock<'_>,
+                       accepted: AcceptedTransaction<'_>,
+                       index,
+                       cache: &mut IvmCache| {
+            let mut overlay = block.transaction_for_fastpq_testing(Hash::from(
+                accepted.entrypoint().execution_call_hash(),
+            ));
+            overlay.current_entrypoint_index = Some(index);
+            overlay.current_network_entrypoint_hash = Some(accepted.hash_as_entrypoint());
+            overlay.current_tx_hash = accepted.external().map(SignedTransaction::hash);
+            overlay.current_lane_id = Some(explicit_route.lane_id);
+            overlay.current_dataspace_id = Some(explicit_route.dataspace_id);
+            overlay.world.current_dataspace_id = Some(explicit_route.dataspace_id);
+            overlay.nexus.autoscale.enabled = false;
+            let captured =
+                CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, explicit_route);
+            overlay.nexus.autoscale.enabled = true;
+            StateBlock::execute_accepted_transaction_in_overlay(
+                accepted,
+                &mut overlay,
+                cache,
+                explicit_route,
+                captured,
+                None,
+            )
+            .map_err(crate::execution_attempt::expect_completed_rejection)
+        };
+        let external_result = execute(
             &mut block,
             AcceptedTransaction::new_unchecked(Cow::Owned(signed)),
+            0,
             &mut ivm_cache,
-            Some((0, explicit_route)),
         );
-        let reveal_result = execute_component_transaction_for_testing(
+        let reveal_result = execute(
             &mut block,
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal)),
+            1,
             &mut ivm_cache,
-            Some((1, explicit_route)),
         );
         assert!(matches!(
             &external_result,
@@ -12612,7 +12635,7 @@ pub mod tests {
         ));
         assert_eq!(
             reveal_result, external_result,
-            "sealed reveal must preserve the authenticated route instead of re-deriving the open elastic route"
+            "sealed reveal must preserve the captured physical policy instead of re-deriving the open elastic route"
         );
         assert!(
             block
@@ -12771,8 +12794,8 @@ pub mod tests {
         let alias_bytes = std::alloc::Layout::array::<HashOf<TransactionEntrypoint>>(2)
             .unwrap()
             .size();
-        let alias_budget = mv::allocation::AllocationBudget::new(alias_bytes);
-        let mut paid_aliases = mv::allocation::ChargedBuffer::new(2, &alias_budget)
+        let alias_budget = iroha_allocation::AllocationBudget::new(alias_bytes);
+        let mut paid_aliases = iroha_allocation::ChargedBuffer::new(2, &alias_budget)
             .expect("exact two-identity backing admits at its capacity boundary");
         for_each_canonical_carrier_membership_hash(
             &open_block,
@@ -12863,14 +12886,15 @@ pub mod tests {
         let mut overlay = block.transaction_for_fastpq_testing(Hash::from(
             accepted.entrypoint().execution_call_hash(),
         ));
+        let route =
+            crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
+        let policy_route = CapturedNetworkPolicyRoute::for_component(&accepted, &overlay, route);
         let result = StateBlock::execute_accepted_transaction_in_overlay(
             accepted,
             &mut overlay,
             &mut cache,
-            Some(crate::queue::RoutingDecision::new(
-                TestLaneId::SINGLE,
-                TestDataSpaceId::UNIVERSAL,
-            )),
+            route,
+            policy_route,
             None,
         );
         result.expect("zero block gas limit must mean unlimited");
@@ -13017,7 +13041,7 @@ pub mod tests {
         let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
         let restarted = crate::state::deserialize::KuraSeed {
             operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-            execution_budget: mv::allocation::AllocationBudget::new(
+            execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             lane_manifests: state.lane_manifests.read().clone(),

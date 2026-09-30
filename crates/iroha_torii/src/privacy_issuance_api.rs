@@ -17,26 +17,24 @@ use axum::{
 };
 use base64::{Engine as _, encoded_len, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
-use iroha_core::{
-    privacy_engines::bootle_lantern::{
-        codec::{
-            BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1, BLIND_ISSUANCE_REQUEST_BYTES_V1,
-            BLIND_ISSUANCE_RESPONSE_BYTES_V1,
-        },
-        issuer::{
-            BootleLanternBlindIssuanceRequestV1, BootleLanternBlindIssuanceResponseV1,
-            BootleLanternFileIssuanceStoreV1, BootleLanternIssuanceAuthorizationV1,
-            BootleLanternIssuanceClaimV1, BootleLanternIssuanceErrorV1,
-            BootleLanternIssuancePreflightV1, BootleLanternIssuanceStoreConfigV1,
-            BootleLanternIssuanceStoreErrorV1, BootleLanternIssuanceStoreV1,
-            MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1,
-            MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1,
-            issuer_validate_blind_issuance_request_encoded_v1,
-            issuer_validate_cached_blind_issuance_response_encoded_v1,
-            issuer_validate_prepared_blind_issuance_authorization_v1,
-        },
+use iroha_core::state::{State as CoreState, StateReadOnly, WorldReadOnly};
+use iroha_core_privacy::privacy_engines::bootle_lantern::{
+    codec::{
+        BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1, BLIND_ISSUANCE_REQUEST_BYTES_V1,
+        BLIND_ISSUANCE_RESPONSE_BYTES_V1,
     },
-    state::{State as CoreState, StateReadOnly, WorldReadOnly},
+    issuer::{
+        BootleLanternBlindIssuanceRequestV1, BootleLanternBlindIssuanceResponseV1,
+        BootleLanternFileIssuanceStoreV1, BootleLanternIssuanceAuthorizationV1,
+        BootleLanternIssuanceClaimV1, BootleLanternIssuanceErrorV1,
+        BootleLanternIssuancePreflightV1, BootleLanternIssuanceStoreConfigV1,
+        BootleLanternIssuanceStoreErrorV1, BootleLanternIssuanceStoreV1,
+        MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1,
+        MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1,
+        issuer_validate_blind_issuance_request_encoded_v1,
+        issuer_validate_cached_blind_issuance_response_encoded_v1,
+        issuer_validate_prepared_blind_issuance_authorization_v1,
+    },
 };
 use iroha_data_model::privacy::{
     BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
@@ -1874,7 +1872,7 @@ pub async fn handle_post_bootle_lantern_issuance_issue(
 mod tests {
     use super::*;
     use http_body_util::BodyExt as _;
-    use iroha_core::privacy_engines::bootle_lantern::issuer::{
+    use iroha_core_privacy::privacy_engines::bootle_lantern::issuer::{
         BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
         BootleLanternIssuerPolicyMetadataV1, holder_prepare_blind_issuance_with_rng_v1,
         issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1,

@@ -13,12 +13,12 @@ export GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
 export GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROCESS_POLICY="${ROOT_DIR}/scripts/sumeragi_v2_release_process_policy.sh"
+PROCESS_POLICY="${ROOT_DIR}/scripts/sumeragi_release_process_policy.sh"
 if [[ ! -f "${PROCESS_POLICY}" || -L "${PROCESS_POLICY}" ]]; then
   echo "[android-codegen] error: shared release process policy is unavailable or symbolic" >&2
   exit 2
 fi
-# shellcheck source=../scripts/sumeragi_v2_release_process_policy.sh
+# shellcheck source=../scripts/sumeragi_release_process_policy.sh
 source "${PROCESS_POLICY}"
 
 DOCS_REL="specs/sdk/android/generated"
@@ -360,7 +360,7 @@ run_replay() {
       --report-dir "${codegen_root}/sorafs_manifest" \
       --tracked-fixture-out \
         "${generated_root}/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json" \
-      --cargo-bin "${source_root}/scripts/sumeragi_v2_release_cargo_proxy.sh"
+      --cargo-bin "${source_root}/scripts/sumeragi_release_cargo_proxy.sh"
 
   write_hash_tree "${generated_root}" "${generated_root}/codegen_hash_tree.json"
   python3 "${source_root}/scripts/check_android_codegen_parity.py" \

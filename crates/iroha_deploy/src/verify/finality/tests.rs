@@ -26,7 +26,7 @@ use iroha_data_model::{
         },
     },
     sumeragi::{
-        SumeragiStatus,
+        SumeragiFootprint, SumeragiStatus,
         epoch::{ValidatorCommitteeMemberV1, ValidatorEpochBoundaryV1, ValidatorEpochContextV1},
     },
     sumeragi_finality::{
@@ -34,7 +34,7 @@ use iroha_data_model::{
         ScheduleOutcome, ScheduledConfig, SumeragiFinalityAttestationBody, chain_hash, core_epoch,
         genesis_epoch, global_threshold_beacon_npos_successor_seed_v1,
         global_threshold_beacon_pulse_id_v1, global_threshold_beacon_pulse_payload_v1,
-        test_fixtures::NativeFinalityFixture,
+        test_fixtures::{NativeFinalityFixture, author_payload},
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
@@ -115,6 +115,13 @@ fn core(proof: &SumeragiFinalityProof) -> CoreHeader {
     )
     .unwrap()
 }
+/// Committee seat indices in certificate bitmap form.
+fn seats(range: impl IntoIterator<Item = usize>) -> Vec<u32> {
+    range
+        .into_iter()
+        .map(|seat| u32::try_from(seat).unwrap())
+        .collect()
+}
 fn sign_qc(qc: &mut Qc, keys: &[KeyPair], indices: &[u32]) {
     qc.signers = Bitmap::from_indices(keys.len(), indices.iter().copied()).unwrap();
     let signatures: Vec<_> = indices
@@ -140,10 +147,12 @@ fn replace_certificate(
     result: &ExecutionResultCommitment,
 ) {
     let mut b = block(proof);
+    let availability = b.commit_certificate().unwrap().availability().to_vec();
     b.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
         norito::encode_canonical(header).unwrap(),
         norito::encode_canonical(qc).unwrap(),
         result.preimage().unwrap(),
+        availability,
     )));
     proof.block_wire = b.encode_wire().unwrap();
 }
@@ -164,9 +173,19 @@ impl Chain {
         let keys = ordered_keys(ranges[0].0.clone());
         let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
         let metadata = ConsensusHandshakeMetadata {
-            mode: SumeragiConsensusMode::Npos, block_cadence_ms: nz(1000), wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION), consensus_fingerprint: ConsensusFingerprint::new([0x71;32]),
-            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 { authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 { version:1,generation:0, validators:pasta(&keys,0) } },
-            sumeragi_v2: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            mode: SumeragiConsensusMode::Npos,
+            block_cadence_ms: nz(1000),
+            wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
+            consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
+            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 {
+                authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+                    version: 1,
+                    generation: 0,
+                    validators: pasta(&keys, 0),
+                },
+            },
+            sumeragi_context:
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
         };
         let mut instructions: Vec<InstructionBox> = validators(&keys)
             .into_iter()
@@ -235,7 +254,7 @@ impl Chain {
                 transition_id: if retained {
                     [0; 32]
                 } else {
-                    [generation as u8; 32]
+                    [u8::try_from(generation).unwrap(); 32]
                 },
                 decision: if retained {
                     KagemushaMintFinalityEpochDecisionV1::Retain
@@ -310,26 +329,22 @@ impl Chain {
                 );
                 builder.build(BTreeSet::new())
             };
-            NativeFinalityFixture::install_network_results(&mut b, vec![Ok(Default::default())]);
+            NativeFinalityFixture::install_network_results(&mut b, vec![Ok(Vec::default())]);
             let context = chain.epochs[index].context.clone();
             let parent = height
                 .checked_sub(1)
                 .filter(|h| *h > 0)
                 .map(|h| chain.proof(h).clone());
-            let parent_hash = parent
-                .as_ref()
-                .map(|p| {
-                    if p.height() == 1 {
-                        Hash32(Hash::from(p.block_header.hash()).into())
-                    } else {
-                        chain_hash(&block_hash_preimage(&core(p)))
-                    }
-                })
-                .unwrap_or(Hash32([1; 32]));
+            let parent_hash = parent.as_ref().map_or(Hash32([1; 32]), |p| {
+                if p.height() == 1 {
+                    Hash32(Hash::from(p.block_header.hash()).into())
+                } else {
+                    chain_hash(&block_hash_preimage(&core(p)))
+                }
+            });
             let parent_result = parent
                 .as_ref()
-                .map(|p| result(p).result().unwrap())
-                .unwrap_or(Hash32([1; 32]));
+                .map_or(Hash32([1; 32]), |p| result(p).result().unwrap());
             let boundary = if height == context.authorization.last_height {
                 let pulse = result(parent.as_ref().unwrap()).beacon.unwrap();
                 chain.epochs[index + 1].context.leader_seed =
@@ -426,6 +441,9 @@ impl Chain {
                     ordinary_writes_root: ordinary_root,
                     kagemusha_top_up_root: None,
                     kagemusha_top_up_count: 0,
+                    parent_world_state_root: Hash::new(b"synthetic parent world"),
+                    world_state_root: Hash::new(b"synthetic world"),
+                    event_commitment: None,
                     executed_block_wire_len: len,
                     executed_block_wire_hash: hash,
                     transaction_input_commitment: b.network_input_merkle_commitment(),
@@ -441,9 +459,14 @@ impl Chain {
                     vec![],
                     vec![],
                     commitment.preimage().unwrap(),
+                    vec![],
                 )
             } else {
-                let payload = b.canonical_resultless_proposal().encode_wire().unwrap();
+                let payload = b
+                    .canonical_resultless_proposal()
+                    .expect("valid original proposal")
+                    .encode_wire()
+                    .unwrap();
                 let header = CoreHeader {
                     instance: native.instance(),
                     epoch: core_epoch(&context).unwrap().id,
@@ -452,6 +475,7 @@ impl Chain {
                     parent_hash,
                     parent_result,
                     payload_hash: Hash32(Hash::new_from_chunks(&[TAG_PAY, &payload]).into()),
+                    availability_digest: Hash32::ZERO,
                     payload_len: payload.len().try_into().unwrap(),
                     proposer: 0,
                     skipped_leaders: vec![],
@@ -459,6 +483,25 @@ impl Chain {
                     attest: commitment.schedule.boundary.is_some(),
                 };
                 let keys = &chain.epochs[index].keys;
+                let parent_decision = native
+                    .verify_retained_decision(parent.as_ref().unwrap())
+                    .unwrap();
+                let ScheduledSlot::Ready(scheduled) = &parent_decision.commitment().schedule.next
+                else {
+                    panic!("fixture parent must authorize the proposed height");
+                };
+                assert_eq!(scheduled.height, height);
+                let config = scheduled.height_config().unwrap();
+                let budget = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
+                let authored = author_payload(
+                    header,
+                    &payload,
+                    &config,
+                    &budget,
+                    &validators(keys),
+                    &keys[0],
+                );
+                let header = authored.body.header();
                 let q = CommitteeSize::new(keys.len()).unwrap().quorum();
                 let mut qc = Qc {
                     kind: VoteKind::Commit,
@@ -466,7 +509,7 @@ impl Chain {
                     epoch: header.epoch,
                     height,
                     view: 0,
-                    block_hash: chain_hash(&block_hash_preimage(&header)),
+                    block_hash: chain_hash(&block_hash_preimage(header)),
                     result: commitment.result().unwrap(),
                     attest: header.attest,
                     signers: Bitmap::new(keys.len()),
@@ -486,11 +529,12 @@ impl Chain {
                         ResultWitness::from_untrusted(commitment.preimage().unwrap()).unwrap(),
                     );
                 }
-                sign_qc(&mut qc, keys, &(0..q as u32).collect::<Vec<_>>());
+                sign_qc(&mut qc, keys, &seats(0..q));
                 CommitCertificate::from_untrusted_parts(
-                    norito::encode_canonical(&header).unwrap(),
+                    norito::encode_canonical(header).unwrap(),
                     norito::encode_canonical(&qc).unwrap(),
                     commitment.preimage().unwrap(),
+                    norito::encode_canonical(authored.body.availability()).unwrap(),
                 )
             };
             b.set_commit_certificate(Some(certificate));
@@ -505,7 +549,7 @@ impl Chain {
         chain
     }
     fn proof(&self, height: u64) -> &SumeragiFinalityProof {
-        &self.proofs[height as usize - 1]
+        &self.proofs[usize::try_from(height - 1).unwrap()]
     }
     fn epoch(&self, height: u64) -> &Epoch {
         self.epochs
@@ -562,7 +606,7 @@ impl Chain {
                 unanchored: false,
                 abstaining: false,
                 halted: None,
-                footprint: Default::default(),
+                footprint: SumeragiFootprint::default(),
             },
             finality_proof: self.proof(height).clone(),
         };
@@ -577,13 +621,15 @@ impl Chain {
             norito::decode_canonical(block(&p).commit_certificate().unwrap().commit_qc()).unwrap();
         let keys = &self.epoch(height).keys;
         let q = CommitteeSize::new(keys.len()).unwrap().quorum();
-        sign_qc(&mut qc, keys, &(1..=q as u32).collect::<Vec<_>>());
+        sign_qc(&mut qc, keys, &seats(1..=q));
         replace_certificate(&mut p, &h, &qc, &r);
         p
     }
 }
 struct Source<'a> {
     chain: &'a Chain,
+    /// Highest height the source serves; above it every request fails.
+    served: u64,
     proofs: RefCell<BTreeMap<u64, SumeragiFinalityProof>>,
     tips: BTreeMap<PeerId, u64>,
     faults: BTreeSet<PeerId>,
@@ -596,6 +642,7 @@ impl<'a> Source<'a> {
     fn new(chain: &'a Chain) -> Self {
         Self {
             chain,
+            served: chain.proofs.len() as u64,
             proofs: RefCell::new(BTreeMap::new()),
             tips: BTreeMap::new(),
             faults: BTreeSet::new(),
@@ -610,12 +657,13 @@ impl FinalitySource for Source<'_> {
     type Error = std::io::Error;
     fn finality_proof(&self, height: NonZeroU64) -> Result<SumeragiFinalityProof, Self::Error> {
         self.proof_calls.borrow_mut().push(height.get());
-        Ok(self
-            .proofs
-            .borrow()
-            .get(&height.get())
-            .unwrap_or_else(|| self.chain.proof(height.get()))
-            .clone())
+        if let Some(proof) = self.proofs.borrow().get(&height.get()) {
+            return Ok(proof.clone());
+        }
+        if height.get() > self.served {
+            return Err(std::io::Error::other("height not served"));
+        }
+        Ok(self.chain.proof(height.get()).clone())
     }
     fn latest_attestation(
         &self,
@@ -649,6 +697,93 @@ impl FinalitySource for Source<'_> {
 }
 fn resign(a: &mut SumeragiFinalityAttestation, k: &KeyPair) {
     a.signature = SignatureOf::try_from_hash(k.private_key(), a.body.signing_hash()).unwrap();
+}
+fn commit_qc(proof: &SumeragiFinalityProof) -> Qc {
+    norito::decode_canonical(block(proof).commit_certificate().unwrap().commit_qc()).unwrap()
+}
+/// Name `named` in the signer bitmap but aggregate the signatures of `signers` over `message`.
+fn forge_qc(qc: &mut Qc, members: usize, named: &[u32], signers: &[&KeyPair], message: &[u8]) {
+    qc.signers = Bitmap::from_indices(members, named.iter().copied()).unwrap();
+    let signatures: Vec<_> = signers
+        .iter()
+        .map(|k| Signature::try_new(k.private_key(), message).unwrap())
+        .collect();
+    qc.agg_sig = AggregateSignature(
+        bls_normal_aggregate_signatures(
+            &signatures
+                .iter()
+                .map(Signature::payload)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .try_into()
+        .unwrap(),
+    );
+}
+/// `context` with its equal-vote committee and paired Pasta authority replaced by `keys`.
+fn with_committee(context: &ValidatorEpochContextV1, keys: &[KeyPair]) -> ValidatorEpochContextV1 {
+    let authority = KagemushaMintFinalityAuthorityGenerationV1 {
+        validators: pasta(keys, 900),
+        ..context.authority.clone()
+    };
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        authority_id: authority.authority_id().unwrap(),
+        ..context.authorization
+    };
+    ValidatorEpochContextV1 {
+        authority,
+        authorization,
+        committee: validators(keys)
+            .into_iter()
+            .map(|v| ValidatorCommitteeMemberV1 {
+                validator: PeerId::new(v.public_key),
+                proof_of_possession: v.proof_of_possession,
+            })
+            .collect(),
+        ..context.clone()
+    }
+}
+/// Re-certify `proof`'s block under `context` with an exact quorum of `keys`. The result is a
+/// self-consistent certificate of the committee it names; only the authenticated schedule
+/// can tell whether that committee governs the height.
+fn recertify(
+    proof: &SumeragiFinalityProof,
+    context: &ValidatorEpochContextV1,
+    keys: &[KeyPair],
+) -> SumeragiFinalityProof {
+    let mut p = proof.clone();
+    let mut r = result(&p);
+    r.schedule.current = context.clone();
+    for slot in [&mut r.schedule.next, &mut r.schedule.after_next] {
+        if let ScheduledSlot::Ready(config) = slot {
+            config.epoch = context.clone();
+        }
+    }
+    let mut h = core(&p);
+    h.epoch = core_epoch(context).unwrap().id;
+    let mut qc = commit_qc(&p);
+    qc.epoch = h.epoch;
+    qc.block_hash = chain_hash(&block_hash_preimage(&h));
+    qc.result = r.result().unwrap();
+    let q = CommitteeSize::new(keys.len()).unwrap().quorum();
+    sign_qc(&mut qc, keys, &seats(0..q));
+    replace_certificate(&mut p, &h, &qc, &r);
+    p.committee = validators(keys);
+    p
+}
+/// `member`'s genuinely signed statement of a tip at `height` whose certificate is internally
+/// consistent, but signed by a foreign committee that the certificate itself names.
+fn fake_claim(chain: &Chain, member: &KeyPair, height: u64) -> SumeragiFinalityAttestation {
+    let context = &chain.epoch(height).context;
+    let foreign = ordered_keys(200..200 + context.committee.len());
+    let mut attestation = chain.attest(member, height);
+    attestation.body.finality_proof = recertify(
+        chain.proof(height),
+        &with_committee(context, &foreign),
+        &foreign,
+    );
+    resign(&mut attestation, member);
+    attestation
 }
 
 #[test]
@@ -755,40 +890,36 @@ fn advance_rejects_missing_or_reordered_successors_atomically() {
 #[test]
 fn exact_quorum_requires_distinct_members_and_valid_possession_proofs() {
     for size in SIZES {
-        let c = Chain::constant(size, 2);
+        let chain = Chain::constant(size, 2);
         let q = CommitteeSize::new(size).unwrap().quorum();
         for count in [q - 1, q + 1] {
-            let mut p = c.proof(2).clone();
+            let mut p = chain.proof(2).clone();
             let h = core(&p);
             let r = result(&p);
             let mut qc: Qc =
                 norito::decode_canonical(block(&p).commit_certificate().unwrap().commit_qc())
                     .unwrap();
-            sign_qc(
-                &mut qc,
-                &c.epoch(2).keys,
-                &(0..count as u32).collect::<Vec<_>>(),
-            );
+            sign_qc(&mut qc, &chain.epoch(2).keys, &seats(0..count));
             replace_certificate(&mut p, &h, &qc, &r);
-            assert!(c.verifier().advance(&Source::new(&c), &p).is_err());
+            assert!(chain.verifier().advance(&Source::new(&chain), &p).is_err());
         }
-        let mut p = c.proof(2).clone();
+        let mut p = chain.proof(2).clone();
         p.committee[1] = p.committee[0].clone();
-        assert!(c.verifier().advance(&Source::new(&c), &p).is_err());
-        let mut p = c.proof(2).clone();
+        assert!(chain.verifier().advance(&Source::new(&chain), &p).is_err());
+        let mut p = chain.proof(2).clone();
         p.committee[0].proof_of_possession[0] ^= 1;
-        assert!(c.verifier().advance(&Source::new(&c), &p).is_err());
-        let mut p = c.proof(2).clone();
+        assert!(chain.verifier().advance(&Source::new(&chain), &p).is_err());
+        let mut p = chain.proof(2).clone();
         p.committee.swap(0, 1);
-        assert!(c.verifier().advance(&Source::new(&c), &p).is_err());
-        assert!(Bitmap::from_indices(size, [size as u32]).is_none());
+        assert!(chain.verifier().advance(&Source::new(&chain), &p).is_err());
+        assert!(Bitmap::from_indices(size, seats([size])).is_none());
     }
 }
 #[test]
 fn advance_rejects_mutated_proofs_and_keeps_original_checkpoint() {
-    let c = Chain::constant(4, 4);
+    let chain = Chain::constant(4, 4);
     for mutation in 0..7 {
-        let mut p = c.proof(4).clone();
+        let mut p = chain.proof(4).clone();
         let mut h = core(&p);
         let mut r = result(&p);
         let mut qc: Qc =
@@ -803,10 +934,10 @@ fn advance_rejects_mutated_proofs_and_keeps_original_checkpoint() {
             _ => h.payload_hash.0[0] ^= 1,
         }
         replace_certificate(&mut p, &h, &qc, &r);
-        let mut v = c.verifier();
+        let mut v = chain.verifier();
         let cp = v.checkpoint().clone();
         assert!(
-            v.advance(&Source::new(&c), &p).is_err(),
+            v.advance(&Source::new(&chain), &p).is_err(),
             "mutation {mutation}"
         );
         assert_eq!(*v.checkpoint(), cp);
@@ -814,9 +945,9 @@ fn advance_rejects_mutated_proofs_and_keeps_original_checkpoint() {
 }
 #[test]
 fn altered_boundary_cannot_select_a_foreign_committee_or_freshness_seed() {
-    let c = Chain::new(&[(0..4, 3), (0..7, 6), (3..7, 9)], 5);
+    let chain = Chain::new(&[(0..4, 3), (0..7, 6), (3..7, 9)], 5);
     for mutation in 0..3 {
-        let mut p = c.proof(3).clone();
+        let mut p = chain.proof(3).clone();
         let h = core(&p);
         let mut r = result(&p);
         let mut qc: Qc =
@@ -831,20 +962,20 @@ fn altered_boundary_cannot_select_a_foreign_committee_or_freshness_seed() {
         // to bypass deterministic epoch/parent/pulse bindings.
         if let Some(b) = &r.schedule.boundary {
             for slot in [&mut r.schedule.next, &mut r.schedule.after_next] {
-                if let ScheduledSlot::Ready(s) = slot {
-                    s.epoch = b.next.clone();
+                if let ScheduledSlot::Ready(config) = slot {
+                    config.epoch = b.next.clone();
                 }
             }
         }
         qc.result = r.result().unwrap();
-        sign_qc(&mut qc, &c.epoch(3).keys, &[0, 1, 2]);
+        sign_qc(&mut qc, &chain.epoch(3).keys, &[0, 1, 2]);
         replace_certificate(&mut p, &h, &qc, &r);
-        let s = Source::new(&c);
-        s.proofs.borrow_mut().insert(3, p);
-        let mut v = c.verifier();
-        let cp = v.checkpoint().clone();
-        assert!(v.advance(&s, c.proof(5)).is_err());
-        assert_eq!(*v.checkpoint(), cp);
+        let source = Source::new(&chain);
+        source.proofs.borrow_mut().insert(3, p);
+        let mut verifier = chain.verifier();
+        let cp = verifier.checkpoint().clone();
+        assert!(verifier.advance(&source, chain.proof(5)).is_err());
+        assert_eq!(*verifier.checkpoint(), cp);
     }
 }
 #[test]
@@ -960,7 +1091,7 @@ fn attestations_bind_challenge_signature_network_status_and_runtime_identity() {
             6 => a.body.status.signer = Some(key(100).public_key().clone()),
             7 => a.body.genesis_block_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign")),
             _ => a.body.config_fingerprint = Hash::new(b"changed after signing"),
-        };
+        }
         if mutation != 8 {
             resign(&mut a, k);
         }
@@ -988,24 +1119,28 @@ fn independent_certificate_witnesses_attest_same_authenticated_decision() {
 }
 #[test]
 fn genuinely_signed_conflicting_result_is_rejected_even_one_block_behind() {
-    let c = Chain::constant(4, 5);
-    let v = c.verifier_at(5);
+    let chain = Chain::constant(4, 5);
+    let verifier = chain.verifier_at(5);
     for height in [4, 5] {
-        let mut p = c.proof(height).clone();
+        let mut p = chain.proof(height).clone();
         let h = core(&p);
         let mut r = result(&p);
         r.execution.parent_state_root = Hash::new(b"conflicting execution");
         let mut qc: Qc =
             norito::decode_canonical(block(&p).commit_certificate().unwrap().commit_qc()).unwrap();
         qc.result = r.result().unwrap();
-        sign_qc(&mut qc, &c.epoch(height).keys, &[0, 1, 2]);
+        sign_qc(&mut qc, &chain.epoch(height).keys, &[0, 1, 2]);
         replace_certificate(&mut p, &h, &qc, &r);
         assert!(p.decode_checked().is_ok());
-        let k = &c.epoch(5).keys[0];
-        let mut a = c.attest(k, height);
-        a.body.finality_proof = p;
-        resign(&mut a, k);
-        assert!(v.verify_attestation(&CHALLENGE, &a).is_err());
+        let member = &chain.epoch(5).keys[0];
+        let mut attestation = chain.attest(member, height);
+        attestation.body.finality_proof = p;
+        resign(&mut attestation, member);
+        assert!(
+            verifier
+                .verify_attestation(&CHALLENGE, &attestation)
+                .is_err()
+        );
     }
 }
 #[test]
@@ -1093,18 +1228,46 @@ fn observe_rejects_zero_challenge_and_substituted_nodes_without_advancing() {
 }
 #[test]
 fn invalid_higher_tip_does_not_block_a_valid_lower_quorum() {
-    let c = Chain::constant(4, 5);
-    let mut s = Source::new(&c);
-    for k in &c.epoch(4).keys {
-        s.tips.insert(peer(k), 4);
+    let chain = Chain::constant(4, 5);
+    let keys = &chain.epoch(4).keys;
+    // One member claims H5 while the source answers H4 with a reordered proof. The other
+    // members' own H4 proofs bridge that gap; the source is asked for each height once.
+    for fake in [true, false] {
+        let mut source = Source::new(&chain);
+        for k in keys {
+            source.tips.insert(peer(k), 4);
+        }
+        source.tips.insert(peer(&keys[0]), 5);
+        if fake {
+            source
+                .attestation_overrides
+                .insert(peer(&keys[0]), fake_claim(&chain, &keys[0], 5));
+        }
+        source.proofs.borrow_mut().insert(4, chain.proof(3).clone());
+        let mut verifier = chain.verifier();
+        let report = verifier.observe(&source, &CHALLENGE).unwrap();
+        let (_, outcome) = report
+            .peers
+            .iter()
+            .find(|(member, _)| *member == peer(&keys[0]))
+            .unwrap();
+        if fake {
+            // The invalid H5 claim is rejected for its member alone.
+            assert_eq!((report.verified(), verifier.checkpoint().height()), (3, 4));
+            assert!(matches!(
+                outcome,
+                AttestationOutcome::Rejected(FinalityError::Native(_))
+            ));
+        } else {
+            // A genuine H5 extends the prefix that the other members' H4 proofs reached.
+            assert_eq!((report.verified(), verifier.checkpoint().height()), (4, 5));
+            assert!(matches!(
+                outcome,
+                AttestationOutcome::Verified(tip) if tip.height.get() == 5
+            ));
+        }
+        assert_eq!(*source.proof_calls.borrow(), [2, 3, 4]);
     }
-    s.tips.insert(peer(&c.epoch(4).keys[0]), 5);
-    // H5 is supplied by one peer but its intermediate H4 source response is reordered.
-    // The remaining peers' direct H4 tips still extend H1 via genuine H2/H3.
-    s.proofs.borrow_mut().insert(4, c.proof(3).clone());
-    let mut v = c.verifier();
-    assert_eq!(v.observe(&s, &CHALLENGE).unwrap().verified(), 3);
-    assert_eq!(v.checkpoint().height(), 4);
 }
 
 #[test]
@@ -1213,4 +1376,496 @@ fn native_result_decode_bounds_complete_committee_graphs_and_preserves_outer_lim
         .advance(&Source::new(&chain), chain.proof(5))
         .unwrap();
     assert_eq!(verifier.committee_size().members(), 31);
+}
+
+#[test]
+fn self_consistent_certificate_of_a_foreign_committee_is_rejected() {
+    for size in SIZES {
+        let chain = Chain::constant(size, 3);
+        let foreign = ordered_keys(200..200 + size);
+        let context = with_committee(&chain.epoch(2).context, &foreign);
+        let proof = recertify(chain.proof(2), &context, &foreign);
+        // Structurally, the proof is an exact quorum of the committee it names.
+        proof.decode_checked().unwrap();
+        let mut verifier = chain.verifier();
+        let checkpoint = verifier.checkpoint().clone();
+        assert!(matches!(
+            verifier.advance(&Source::new(&chain), &proof),
+            Err(FinalityError::Native(_))
+        ));
+        // As an intermediate successor it cannot carry the verifier to a genuine tip either.
+        let source = Source::new(&chain);
+        source.proofs.borrow_mut().insert(2, proof.clone());
+        assert!(verifier.advance(&source, chain.proof(3)).is_err());
+        assert_eq!(*verifier.checkpoint(), checkpoint);
+        // Nor does a genuine member's statement count when it carries this certificate.
+        let verifier = chain.verifier_at(2);
+        let member = &chain.epoch(2).keys[0];
+        let mut attestation = chain.attest(member, 2);
+        attestation.body.finality_proof = proof;
+        resign(&mut attestation, member);
+        assert!(matches!(
+            verifier.verify_attestation(&CHALLENGE, &attestation),
+            Err(FinalityError::Native(_))
+        ));
+    }
+}
+
+#[test]
+fn epoch_handoff_admits_only_the_committee_its_boundary_certified() {
+    let chain = Chain::new(&[(0..4, 3), (0..7, 6), (3..7, 9)], 5);
+    let mut verifier = chain.verifier_at(3);
+    let checkpoint = verifier.checkpoint().clone();
+    assert_eq!(verifier.committee_size().members(), 4);
+    // The boundary at height 3 certified the seven-member successor, which signs height 4.
+    verifier
+        .advance(&Source::new(&chain), chain.proof(5))
+        .unwrap();
+    assert_eq!(verifier.committee_size().members(), 7);
+    // A self-consistent foreign committee, or the retired incumbent extending its own epoch
+    // past the boundary, certifies height 4 with an exact quorum of the committee it names.
+    let foreign = ordered_keys(200..207);
+    let mut extended = chain.epoch(3).context.clone();
+    extended.authorization.last_height = 9;
+    for substitute in [
+        recertify(
+            chain.proof(4),
+            &with_committee(&chain.epoch(4).context, &foreign),
+            &foreign,
+        ),
+        recertify(chain.proof(4), &extended, &chain.epoch(3).keys),
+    ] {
+        substitute.decode_checked().unwrap();
+        let source = Source::new(&chain);
+        source.proofs.borrow_mut().insert(4, substitute.clone());
+        let mut verifier =
+            FinalityVerifier::from_checkpoint(checkpoint.clone(), chain.anchor.network_id, CHAIN)
+                .unwrap();
+        assert!(matches!(
+            verifier.advance(&source, &substitute),
+            Err(FinalityError::Native(_))
+        ));
+        assert!(verifier.advance(&source, chain.proof(5)).is_err());
+        assert_eq!(*verifier.checkpoint(), checkpoint);
+    }
+}
+
+#[test]
+fn forged_quorum_certificates_are_rejected_without_progress() {
+    for size in SIZES {
+        let chain = Chain::constant(size, 2);
+        let keys = &chain.epoch(2).keys;
+        let q = CommitteeSize::new(size).unwrap().quorum();
+        let named = seats(0..q);
+        let outsider = key(1000);
+        let original = commit_qc(chain.proof(2));
+        let mut elsewhere = original.clone();
+        elsewhere.height += 1;
+        let members = keys[..q].iter().collect::<Vec<_>>();
+        let mut with_outsider = members[..q - 1].to_vec();
+        with_outsider.push(&outsider);
+        for (signers, message) in [
+            // One named member's signature comes from a key outside the committee.
+            (with_outsider, original.preimage()),
+            // The bitmap names an exact quorum, but one named member never signed.
+            (members[..q - 1].to_vec(), original.preimage()),
+            // Every named member signed, but a different certificate.
+            (members, elsewhere.preimage()),
+        ] {
+            let mut qc = original.clone();
+            forge_qc(&mut qc, size, &named, &signers, &message);
+            let mut proof = chain.proof(2).clone();
+            let header = core(&proof);
+            let commitment = result(&proof);
+            replace_certificate(&mut proof, &header, &qc, &commitment);
+            assert!(proof.decode_checked().is_err());
+            let mut verifier = chain.verifier();
+            let checkpoint = verifier.checkpoint().clone();
+            assert!(matches!(
+                verifier.advance(&Source::new(&chain), &proof),
+                Err(FinalityError::Native(_))
+            ));
+            assert_eq!(*verifier.checkpoint(), checkpoint);
+        }
+    }
+}
+
+#[test]
+fn stale_challenge_statements_never_count_toward_a_quorum() {
+    for size in SIZES {
+        let chain = Chain::constant(size, 3);
+        let keys = &chain.epoch(3).keys;
+        let f = CommitteeSize::new(size).unwrap().faults();
+        let replay = |k: &KeyPair| {
+            let mut attestation = chain.attest(k, 3);
+            attestation.body.challenge = [0x5A; 32];
+            resign(&mut attestation, k);
+            attestation
+        };
+        let verifier = chain.verifier_at(3);
+        let stale = keys.iter().map(replay).collect::<Vec<_>>();
+        assert!(matches!(
+            verifier.verify_attestation(&CHALLENGE, &stale[0]),
+            Err(FinalityError::StaleChallenge)
+        ));
+        let Err(FinalityError::InsufficientAttestations(report)) =
+            verifier.attestation_quorum(&CHALLENGE, &stale)
+        else {
+            panic!("statements for another challenge formed a quorum");
+        };
+        assert_eq!(report.verified(), 0);
+        assert!(report.peers.iter().all(|(_, outcome)| matches!(
+            outcome,
+            AttestationOutcome::Rejected(FinalityError::StaleChallenge)
+        )));
+        assert!(matches!(
+            verifier.attestation_quorum(&[0; 32], &stale),
+            Err(FinalityError::ZeroChallenge)
+        ));
+        // An observation tolerates f replayed members; f + 1 leave too few fresh statements.
+        for replayed in [f, f + 1] {
+            let mut source = Source::new(&chain);
+            for k in &keys[..replayed] {
+                source.attestation_overrides.insert(peer(k), replay(k));
+            }
+            let mut verifier = chain.verifier();
+            let checkpoint = verifier.checkpoint().clone();
+            match verifier.observe(&source, &CHALLENGE) {
+                Ok(report) if replayed == f => {
+                    assert_eq!(report.verified(), size - f);
+                    assert_eq!(verifier.checkpoint().height(), 3);
+                }
+                Err(FinalityError::InsufficientAttestations(report)) if replayed > f => {
+                    assert_eq!(
+                        (report.verified(), report.required),
+                        (size - f - 1, size - f)
+                    );
+                    assert_eq!(*verifier.checkpoint(), checkpoint);
+                }
+                other => panic!("unexpected observation with {replayed} replayed: {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn insufficient_attestations_report_every_member_outcome() {
+    let chain = Chain::constant(7, 3);
+    let verifier = chain.verifier_at(3);
+    let keys = &chain.epoch(3).keys;
+    let q = verifier.committee_size().quorum();
+    let mut supplied = keys[..q - 1]
+        .iter()
+        .map(|k| chain.attest(k, 3))
+        .collect::<Vec<_>>();
+    // Member q - 1's statement signed with member 0's key, and a statement from an outsider.
+    let mut forged = chain.attest(&keys[q - 1], 3);
+    resign(&mut forged, &keys[0]);
+    supplied.push(forged);
+    supplied.push(chain.attest(&key(100), 3));
+    let Err(FinalityError::InsufficientAttestations(report)) =
+        verifier.attestation_quorum(&CHALLENGE, &supplied)
+    else {
+        panic!("q - 1 genuine statements formed a quorum");
+    };
+    assert_eq!((report.verified(), report.required), (q - 1, q));
+    assert_eq!(report.height.get(), 3);
+    assert_eq!(report.block_hash, chain.proof(3).block_header.hash());
+    assert_eq!(report.peers.len(), keys.len());
+    for (index, (member, outcome)) in report.peers.iter().enumerate() {
+        assert_eq!(*member, peer(&keys[index]));
+        match index {
+            i if i < q - 1 => assert!(matches!(
+                outcome,
+                AttestationOutcome::Verified(tip) if tip.height.get() == 3
+            )),
+            i if i == q - 1 => assert!(matches!(
+                outcome,
+                AttestationOutcome::Rejected(FinalityError::Native(_))
+            )),
+            _ => assert!(matches!(outcome, AttestationOutcome::Missing)),
+        }
+    }
+}
+
+#[test]
+fn foreign_network_genesis_or_chain_label_is_refused() {
+    let chain = Chain::constant(4, 3);
+    let other = Chain::constant(4, 4);
+    assert_ne!(chain.anchor.network_id, other.anchor.network_id);
+    assert!(matches!(
+        FinalityVerifier::from_genesis(&chain.anchor, other.proof(1)),
+        Err(FinalityError::WrongGenesis)
+    ));
+    let mut anchor = chain.anchor.clone();
+    anchor.network_id = other.anchor.network_id;
+    assert!(matches!(
+        FinalityVerifier::from_genesis(&anchor, chain.proof(1)),
+        Err(FinalityError::WrongNetwork { .. })
+    ));
+    assert!(
+        FinalityVerifier::from_checkpoint(
+            other.verifier_at(3).checkpoint().clone(),
+            chain.anchor.network_id,
+            CHAIN
+        )
+        .is_err()
+    );
+    // The same validator keys sign for both networks; the statement's network decides.
+    let verifier = chain.verifier_at(3);
+    assert!(matches!(
+        verifier.verify_attestation(&CHALLENGE, &other.attest(&other.epoch(3).keys[0], 3)),
+        Err(FinalityError::WrongNetwork { .. })
+    ));
+    let mut verifier = chain.verifier();
+    assert!(
+        verifier
+            .advance(&Source::new(&other), other.proof(3))
+            .is_err()
+    );
+    // A chain label selects the consensus instance: the right genesis under another label
+    // anchors, but no certified successor extends it.
+    let mut anchor = chain.anchor.clone();
+    anchor.chain_id = "foreign-chain".into();
+    let mut verifier = FinalityVerifier::from_genesis(&anchor, chain.proof(1)).unwrap();
+    assert!(matches!(
+        verifier.advance(&Source::new(&chain), chain.proof(3)),
+        Err(FinalityError::Native(_))
+    ));
+    assert_eq!(verifier.checkpoint().height(), 1);
+}
+
+#[test]
+fn lagging_checkpoint_is_caught_up_across_observations_before_any_publish() {
+    let chain = Chain::constant(4, 8);
+    let source = Source::new(&chain);
+    let page = || Budget {
+        proofs: 3,
+        bytes: MAX_ADVANCE_BYTES,
+    };
+    let mut verifier = chain.verifier();
+    let checkpoint = verifier.checkpoint().clone();
+    let member = &chain.epoch(8).keys[0];
+    // Every member's tip lies beyond one three-proof observation budget. Each observation keeps
+    // what its budget verified for the next one, and none publishes it without a fresh quorum.
+    for reached in [4, 7] {
+        let result = verifier.observe_with_budget(&source, &CHALLENGE, &mut page());
+        assert!(
+            matches!(
+                result,
+                Err(FinalityError::CatchingUp { verified, claimed: 8 }) if verified == reached
+            ),
+            "{result:?}"
+        );
+        assert_eq!(*verifier.checkpoint(), checkpoint);
+        assert_eq!(
+            verifier
+                .pending
+                .as_ref()
+                .map(SumeragiFinalityCheckpoint::height),
+            Some(reached)
+        );
+        assert!(matches!(
+            verifier.verify_attestation(&CHALLENGE, &chain.attest(member, 8)),
+            Err(FinalityError::AheadOfCheckpoint { checkpoint: 1, .. })
+        ));
+    }
+    let report = verifier
+        .observe_with_budget(&source, &CHALLENGE, &mut page())
+        .unwrap();
+    assert_eq!((report.verified(), verifier.checkpoint().height()), (4, 8));
+    assert!(verifier.pending.is_none());
+    // Each successor was fetched once across the observations; H8 came from the members.
+    assert_eq!(*source.proof_calls.borrow(), [2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn catch_up_publishes_bounded_verified_pages_explicitly() {
+    let chain = Chain::constant(4, 8);
+    let source = Source::new(&chain);
+    let page = || Budget {
+        proofs: 3,
+        bytes: MAX_ADVANCE_BYTES,
+    };
+    let mut verifier = chain.verifier();
+    for (height, fetched) in [(4, vec![2, 3, 4]), (7, vec![5, 6, 7]), (8, vec![8])] {
+        source.proof_calls.borrow_mut().clear();
+        assert_eq!(
+            verifier
+                .catch_up_with_budget(&source, nz(8), &mut page())
+                .unwrap(),
+            height
+        );
+        assert_eq!(*source.proof_calls.borrow(), fetched);
+        assert_eq!(verifier.checkpoint().height(), height);
+    }
+    source.proof_calls.borrow_mut().clear();
+    assert_eq!(verifier.catch_up(&source, nz(3)).unwrap(), 8);
+    assert!(source.proof_calls.borrow().is_empty());
+    assert_eq!(verifier.observe(&source, &CHALLENGE).unwrap().verified(), 4);
+}
+
+#[test]
+fn catch_up_stops_before_the_byte_budget_and_publishes_only_verified_pages() {
+    let chain = Chain::constant(4, 5);
+    let source = Source::new(&chain);
+    let mut verifier = chain.verifier();
+    let checkpoint = verifier.checkpoint().clone();
+    let first = chain.proof(2).block_wire.len();
+    // A first successor alone beyond the byte budget refuses without progress.
+    assert!(matches!(
+        verifier.catch_up_with_budget(
+            &source,
+            nz(5),
+            &mut Budget {
+                proofs: 8,
+                bytes: first - 1,
+            }
+        ),
+        Err(FinalityError::ResourceLimit("proof bytes"))
+    ));
+    assert_eq!(*verifier.checkpoint(), checkpoint);
+    // Otherwise the page ends before the successor that would exceed it.
+    let two = first + chain.proof(3).block_wire.len();
+    assert_eq!(
+        verifier
+            .catch_up_with_budget(
+                &source,
+                nz(5),
+                &mut Budget {
+                    proofs: 8,
+                    bytes: two,
+                }
+            )
+            .unwrap(),
+        3
+    );
+    let paged = verifier.checkpoint().clone();
+    // A reordered or invalid successor anywhere in a page publishes nothing from that page.
+    let reordered = Source::new(&chain);
+    reordered
+        .proofs
+        .borrow_mut()
+        .insert(4, chain.proof(3).clone());
+    assert!(matches!(
+        verifier.catch_up(&reordered, nz(5)),
+        Err(FinalityError::UnexpectedHeight {
+            expected: 4,
+            actual: 3
+        })
+    ));
+    let mut invalid = chain.proof(5).clone();
+    invalid.committee[0].proof_of_possession[0] ^= 1;
+    let tampered = Source::new(&chain);
+    tampered.proofs.borrow_mut().insert(5, invalid);
+    assert!(matches!(
+        verifier.catch_up(&tampered, nz(5)),
+        Err(FinalityError::Native(_))
+    ));
+    assert_eq!(*verifier.checkpoint(), paged);
+    assert_eq!(verifier.catch_up(&source, nz(5)).unwrap(), 5);
+}
+
+#[test]
+fn fake_tip_member_cannot_starve_an_honest_quorum_behind_a_lagging_checkpoint() {
+    for size in SIZES {
+        // Nine certified blocks exist and the source serves seven, the honest tip. The checkpoint
+        // lags six blocks behind, more than half of an eight-proof observation budget, so
+        // verifying the prefix again for a second claim would exhaust it.
+        let chain = Chain::constant(size, 9);
+        let keys = &chain.epoch(7).keys;
+        let byzantine = &keys[0];
+        // One member claims the honest height, then a height beyond it, with a certificate that
+        // is internally consistent but signed by a foreign committee it names.
+        for claim in [7, 9] {
+            let mut source = Source::new(&chain);
+            source.served = 7;
+            for k in keys {
+                source.tips.insert(peer(k), 7);
+            }
+            source
+                .attestation_overrides
+                .insert(peer(byzantine), fake_claim(&chain, byzantine, claim));
+            let mut verifier = chain.verifier();
+            let report = verifier
+                .observe_with_budget(
+                    &source,
+                    &CHALLENGE,
+                    &mut Budget {
+                        proofs: 8,
+                        bytes: MAX_ADVANCE_BYTES,
+                    },
+                )
+                .unwrap();
+            assert_eq!((report.height.get(), report.verified()), (7, size - 1));
+            assert_eq!(report.block_hash, chain.proof(7).block_header.hash());
+            assert_eq!(verifier.checkpoint().height(), 7);
+            for (member, outcome) in &report.peers {
+                if *member != peer(byzantine) {
+                    assert!(matches!(
+                        outcome,
+                        AttestationOutcome::Verified(tip) if tip.height.get() == 7
+                    ));
+                } else if claim == 7 {
+                    assert!(matches!(
+                        outcome,
+                        AttestationOutcome::Rejected(FinalityError::Native(_))
+                    ));
+                } else {
+                    assert!(matches!(
+                        outcome,
+                        AttestationOutcome::Rejected(FinalityError::AheadOfCheckpoint {
+                            checkpoint: 7,
+                            height: 9
+                        })
+                    ));
+                }
+            }
+            // Each height is requested once; the honest tip comes from a member's own proof,
+            // and the one request above the served range fails without a retry.
+            let expected: Vec<u64> = if claim == 7 {
+                (2..=6).collect()
+            } else {
+                (2..=8).collect()
+            };
+            assert_eq!(*source.proof_calls.borrow(), expected);
+        }
+    }
+}
+
+#[test]
+fn budget_exhaustion_on_one_claim_does_not_abort_the_observation() {
+    for size in [4, 7] {
+        let chain = Chain::constant(size, 9);
+        let keys = &chain.epoch(9).keys;
+        let mut source = Source::new(&chain);
+        for k in keys {
+            source.tips.insert(peer(k), 4);
+        }
+        // One member attests a genuine tip that the proof count covers but the bytes do not.
+        source.tips.insert(peer(&keys[0]), 9);
+        let bytes: usize = (2..=6)
+            .map(|height| chain.proof(height).block_wire.len())
+            .sum();
+        let mut verifier = chain.verifier();
+        let report = verifier
+            .observe_with_budget(&source, &CHALLENGE, &mut Budget { proofs: 16, bytes })
+            .unwrap();
+        assert_eq!(report.verified(), size - 1);
+        // The prefix stops where the bytes ran out, above every honest tip it confirms.
+        assert_eq!(verifier.checkpoint().height(), 6);
+        for (member, outcome) in &report.peers {
+            if *member == peer(&keys[0]) {
+                assert!(matches!(
+                    outcome,
+                    AttestationOutcome::Rejected(FinalityError::ResourceLimit("proof bytes"))
+                ));
+            } else {
+                assert!(matches!(
+                    outcome,
+                    AttestationOutcome::Verified(tip) if tip.height.get() == 4
+                ));
+            }
+        }
+    }
 }

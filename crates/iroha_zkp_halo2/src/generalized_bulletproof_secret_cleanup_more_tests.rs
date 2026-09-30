@@ -809,9 +809,9 @@ fn vector_commitment_values_rehome_without_copy_or_allocation() {
 fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
     let source = include_str!("generalized_bulletproof.rs");
     let fcmp_bulletproof =
-        include_str!("../../iroha_core/src/privacy_engines/fcmp_plus_plus/bulletproof.rs");
+        include_str!("../../iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/bulletproof.rs");
     let fcmp_circuit =
-        include_str!("../../iroha_core/src/privacy_engines/fcmp_plus_plus/circuit.rs");
+        include_str!("../../iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/circuit.rs");
     assert!(source.contains("struct ScalarCommitmentOpening<F: ProofScalar>"));
     assert!(!source.contains("pub struct ScalarCommitmentOpening"));
     assert!(source.contains("struct ScalarCommitmentOpeningInputs<F: ProofScalar>"));

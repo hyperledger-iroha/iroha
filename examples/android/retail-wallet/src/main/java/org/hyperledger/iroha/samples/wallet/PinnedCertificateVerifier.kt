@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.samples.wallet
 
 import android.content.Context
-import android.util.Base64
+import java.util.Base64
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Locale
@@ -53,12 +53,12 @@ object PinnedCertificateVerifier {
     }
 
     private fun decodePem(data: ByteArray): ByteArray {
-        val pem = String(data)
+        val pem = String(data, Charsets.US_ASCII)
         val stripped = pem
             .replace("-----BEGIN CERTIFICATE-----", "")
             .replace("-----END CERTIFICATE-----", "")
             .replace("\\s".toRegex(), "")
-        return Base64.decode(stripped, Base64.DEFAULT)
+        return Base64.getDecoder().decode(stripped)
     }
 
 }

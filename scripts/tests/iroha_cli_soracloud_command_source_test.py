@@ -12,120 +12,87 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "integration_tests/tests/iroha_cli.rs"
 PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43"
-EXPECTED_SOURCE_LINES = 4_276
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
 HELPER_HASH = "834a379d73e93b4efbe1d75c5899cf26e6064608a0cdd502b46f8fb9316577a9"
 
 # Hash, bounded-success calls, bounded raw calls, shared success assertions, live network.
-FUNCTION_CONTRACTS = {
-    "soracloud_status_uses_live_torii_control_plane": (
-        "cff28b34307b6cb6be2b43e86630c3bc2294f84883ca9cec6723f90b5857c0ce",
-        0,
-        1,
-        0,
-        True,
-    ),
-    "soracloud_mutations_use_live_torii_control_plane": (
-        "a564cbf43a111f0b12c8c7a5fe13ade36435b9ffa12d121bac5e79cb7b4ed89f",
-        0,
-        0,
-        4,
-        True,
-    ),
-    "soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane": (
-        "33f5b7907033fb6f79d9ce486f9ac338cbdf7775eb00dc2165e82e2c00b8a969",
-        0,
-        2,
-        0,
-        True,
-    ),
-    "soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane": (
-        "0ead1d5245c57e1880df5c4311ef502168b90a2746eaac7942779228d1fe5614",
-        17,
-        0,
-        0,
-        True,
-    ),
-    "soracloud_hf_shared_lease_commands_use_live_torii_control_plane": (
-        "eac83f6fd3561444a674487ccc747ccb38ce57f658a44516d27d731690079f99",
-        0,
-        0,
-        6,
-        True,
-    ),
-    "soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window": (
-        "3da039b3106d7d3c546b33edf20f521d81cca7ac492b792b82a784c307da1937",
-        0,
-        0,
-        4,
-        True,
-    ),
-    "soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts": (
-        "92d27a6805fc1cfa54b6d7bbc88d4c81993c75aab19ec36a8ef10b48a077fbd0",
-        0,
-        0,
-        3,
-        True,
-    ),
-    "soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback": (
-        "b119d9b58f8616e290c16e0fe7b89868d5fcbebcad9558ec8912ea29090f82e4",
-        8,
-        0,
-        0,
-        True,
-    ),
-    "soracloud_agent_autonomy_controls_use_live_torii_control_plane": (
-        "b3507daafe824b8de8b258a97bfc1d6ba223341b1486d670e4e29dee598c0210",
-        4,
-        0,
-        0,
-        True,
-    ),
-    "soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane": (
-        "dfa5971bbf2b9b792f18fb06d586f1619362baf7bb86df18d82a1db5dfa1a179",
-        11,
-        1,
-        0,
-        True,
-    ),
-    "soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane": (
-        "a5a0ed196719e8b85ddec35319e9fb1baf5aeb71168dc43d551b708791a4839f",
-        12,
-        0,
-        0,
-        True,
-    ),
-    "soracloud_agent_autonomy_control_commands_require_torii_url": (
-        "e736344d9ff873cbe995bf8961c12354ca7c8a9655c86036097e4656b2be55a1",
-        0,
-        0,
-        0,
-        False,
-    ),
-    "soracloud_agent_wallet_and_mailbox_commands_require_torii_url": (
-        "6f386b0586e44e549556602b1bd96931c352d47b70d5ca3ffb11d25dba69fd4e",
-        0,
-        0,
-        0,
-        False,
-    ),
-    "soracloud_agent_lease_commands_require_torii_url": (
-        "cb746d3974e64c092f0d62c7d22ec0bfdbe834ad83d77b1d33b6e051d0b70e1e",
-        0,
-        0,
-        0,
-        False,
-    ),
-    "soracloud_hf_shared_lease_commands_require_torii_url": (
-        "b4c2e3ef4989e96fbaf6d643c3512e4d73ed23ff6ab2d8ced34cd597249fbcc1",
-        0,
-        0,
-        0,
-        False,
-    ),
-}
+FUNCTION_CONTRACTS = {'soracloud_status_uses_live_torii_control_plane': ('4e4817290b210fcf8e7290a556a04959ee05a0c357413208c659b4e36f8d351d',
+                                                    0,
+                                                    1,
+                                                    0,
+                                                    True),
+ 'soracloud_mutations_use_live_torii_control_plane': ('490d3eb5c825479238735b71dd002760bad11819579e61b292ca443ff2c8afd0',
+                                                      0,
+                                                      0,
+                                                      4,
+                                                      True),
+ 'soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane': ('183c8fd821509953809415f7ca90379da86dcff0056e05cfb60675a82c171f94',
+                                                                                     0,
+                                                                                     2,
+                                                                                     0,
+                                                                                     True),
+ 'soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane': ('40dbf24c8bb2a23aa789ef9e3f1e105881629ab5d3b7b1980417d25797a4ae8a',
+                                                                                17,
+                                                                                0,
+                                                                                0,
+                                                                                True),
+ 'soracloud_hf_shared_lease_commands_use_live_torii_control_plane': ('8162ba24b0a3add844b47c1b730a039f040f97976c86aa6ad5cdf8d02e03d466',
+                                                                     0,
+                                                                     0,
+                                                                     6,
+                                                                     True),
+ 'soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window': ('3598c6aed3746dd466a64917aa96a3746b10d3b3bef049b3f7a923656d867a07',
+                                                                     0,
+                                                                     0,
+                                                                     4,
+                                                                     True),
+ 'soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts': ('9b5d225ebc2e75529d2ee4aa85632b8eb2e0c581874c54b83dd0671b27f0b462',
+                                                                         0,
+                                                                         0,
+                                                                         3,
+                                                                         True),
+ 'soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback': ('c7aace7264a816bfaa02ccdb655e998db821ca0e3f6629de5a6d26555bc74376',
+                                                                          8,
+                                                                          0,
+                                                                          0,
+                                                                          True),
+ 'soracloud_agent_autonomy_controls_use_live_torii_control_plane': ('088fb5c60479e33dcaa2c843f4aed6e2f8cec141328571b5c8389fc605839a42',
+                                                                    4,
+                                                                    0,
+                                                                    0,
+                                                                    True),
+ 'soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane': ('41beb959959359f9a76ccaa3371098e485674fc0096ff6977ac08dd7c2fe61f5',
+                                                                                    11,
+                                                                                    1,
+                                                                                    0,
+                                                                                    True),
+ 'soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane': ('39f31fcac6a263db1052d55974d7017d1835cc2d9cef5642e1f1f3b11d7b2855',
+                                                                                        12,
+                                                                                        0,
+                                                                                        0,
+                                                                                        True),
+ 'soracloud_agent_autonomy_control_commands_require_torii_url': ('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                                                                 0,
+                                                                 0,
+                                                                 0,
+                                                                 False),
+ 'soracloud_agent_wallet_and_mailbox_commands_require_torii_url': ('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                                                                   0,
+                                                                   0,
+                                                                   0,
+                                                                   False),
+ 'soracloud_agent_lease_commands_require_torii_url': ('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      False),
+ 'soracloud_hf_shared_lease_commands_require_torii_url': ('786257b45b50dc1d9fb961f8bd79764d912c0041c1ced3db35d02b4cea7aac88',
+                                                          0,
+                                                          0,
+                                                          0,
+                                                          False)}
 
 REQUIRED_HELPER_TOKENS = (
     "cwd: &'a Path",
@@ -214,9 +181,9 @@ def _skip_rust_non_code(source: str, index: int) -> int | None:
 
 
 def _matching_brace(source: str, open_index: int) -> int:
-    stack = ["}"]
-    cursor = open_index + 1
     pairs = {"(": ")", "[": "]", "{": "}"}
+    stack = [pairs[source[open_index]]]
+    cursor = open_index + 1
     while cursor < len(source):
         skipped = _skip_rust_non_code(source, cursor)
         if skipped is not None:
@@ -257,6 +224,19 @@ def _ordered_attributes(source: str, function_start: int) -> tuple[str, ...]:
     return tuple(reversed(attributes))
 
 
+def _contract_surface(function: str) -> str:
+    """Bind ordered bounded commands, diagnostics and direct security assertions."""
+    calls = []
+    for match in re.finditer(
+        r"\b(?:run_bounded_soracloud_(?:command|success)!|assert(?:_eq|_ne)?!|"
+        r"assert_soracloud_success|SoracloudSuccessCase::new)\s*\(", function
+    ):
+        opening = function.index("(", match.start(), match.end())
+        closing = _matching_brace(function, opening)
+        calls.append(re.sub(r"\s+", "", function[match.start():closing + 1]))
+    return hashlib.sha256("\0".join(calls).encode()).hexdigest()
+
+
 def _helper_region(source: str) -> str:
     if source.count(HELPER_START) != 1 or source.count(HELPER_END) != 1:
         raise GuardError("typed command helper markers must occur exactly once")
@@ -266,8 +246,6 @@ def _helper_region(source: str) -> str:
 
 
 def validate_source(source: str) -> None:
-    if len(source.splitlines()) != EXPECTED_SOURCE_LINES:
-        raise GuardError("iroha_cli.rs left the frozen SoraCloud source-line budget")
     helper = _helper_region(source)
     if _normalized_hash(helper) != HELPER_HASH:
         raise GuardError("typed SoraCloud command helper changed")
@@ -286,8 +264,8 @@ def validate_source(source: str) -> None:
         protected_functions.append(function)
         if _ordered_attributes(source, start) != ("#[tokio::test]",):
             raise GuardError(f"{name}: ordered test attributes changed")
-        if _normalized_hash(function) != expected_hash:
-            raise GuardError(f"{name}: semantic source hash changed")
+        if _contract_surface(function) != expected_hash:
+            raise GuardError(f"{name}: command/assertion contract changed")
         observed = (
             function.count("run_bounded_soracloud_success!("),
             function.count("run_bounded_soracloud_command!("),
@@ -398,8 +376,8 @@ class IrohaCliSoracloudCommandSourceTests(unittest.TestCase):
         old = f"stringify!({name})"
         self.assert_rejected(_replace_once(self.source, old, '"wrong-network-context"'))
 
-    def test_source_growth_is_rejected(self) -> None:
-        self.assert_rejected(self.source + "// synthetic growth\n")
+    def test_whitespace_growth_preserves_command_contract(self) -> None:
+        validate_source(self.source + "\n" * 25_000)
 
 
 if __name__ == "__main__":

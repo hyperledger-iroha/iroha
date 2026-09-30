@@ -13,12 +13,10 @@ use std::{
 };
 
 use clap::Parser as _;
-use iroha_core::{
-    governance::timed_ovn::{
-        TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
-    },
-    tle_release::ValidatedTleKeySessionV1,
-};
+use iroha_core_timed_ovn::evidence::TimedOvnLifecycleStateV1;
+use iroha_core_timed_ovn::evidence::TimedOvnSessionPublicV1;
+use iroha_core_timed_ovn::evidence::timed_ovn_parameter_hash_v1;
+use iroha_core_timed_ovn::tle::ValidatedTleKeySessionV1;
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, MerkleTree,
     threshold_bls::{
@@ -384,7 +382,7 @@ fn ballot_commands_parse_their_flags() {
     ));
     assert!(
         parse(&["anchor", "--height", "12"]).is_err(),
-        "the v2 finality-anchor lookup is retired"
+        "the finality-anchor lookup is retired"
     );
 
     let nested = ParliamentFixture::try_parse_from([
@@ -775,6 +773,7 @@ fn state_promotion_accepts_another_exact_quorum_for_the_same_certified_decision(
         certificate.consensus_header().to_vec(),
         norito::encode_canonical(&qc).unwrap(),
         certificate.result_preimage().to_vec(),
+        certificate.availability().to_vec(),
     );
     block.set_commit_certificate(Some(replacement));
     proof.block_wire = block.encode_wire().unwrap();

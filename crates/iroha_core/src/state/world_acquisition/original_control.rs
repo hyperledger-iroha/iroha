@@ -7,12 +7,11 @@ use super::{OperationAcquisition, OrdinaryAcquisition, WorldFieldAcquisition};
 use crate::state::{
     Storage, TriggerSet, WorldBlockFields, kagemusha_operation_indexes::OperationIndexMode,
 };
+use iroha_allocation::{
+    AllocationBudget, AllocationReservation, ChargedBuffer, ChargedBufferError, PrepaidBufferError,
+};
 use mv::{
     Key, Value,
-    allocation::{
-        AllocationBudget, AllocationReservation, ChargedBuffer, ChargedBufferError,
-        PrepaidBufferError,
-    },
     cell::{Cell, CellAllocationCharges, CellPublicationSuccessor, CellPublicationSuccessorError},
     storage::AdmittedStorageError,
 };
@@ -102,10 +101,33 @@ pub(in crate::state) trait OriginalControlSource {
     }
     fn original_acquisition<'a>(
         &'a self,
-        index_scope: &mv::allocation::OwnedAllocationScope,
+        index_scope: &iroha_allocation::OwnedAllocationScope,
         budget: &AllocationBudget,
         parent: &mut AllocationReservation,
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError>;
+}
+
+/// Account for one store before reserving the complete World control inventory.
+/// Per-store iterators must leave the stack before acquisition starts; a macro
+/// expansion of every iterator otherwise retains all of them in the World frame.
+#[inline(never)]
+pub(in crate::state) fn add_original_control_demand<S: OriginalControlSource>(
+    source: &S,
+    demand: &mut usize,
+) -> Result<(), AdmittedStorageError> {
+    for layout in source
+        .generation_layouts()
+        .into_iter()
+        .chain([source.successor_layout()])
+        .flatten()
+    {
+        *demand = demand
+            .checked_add(layout.size())
+            .ok_or(AdmittedStorageError::Allocation(
+                iroha_allocation::AllocationRefusal::DemandOverflow,
+            ))?;
+    }
+    Ok(())
 }
 
 /// Fill one original inert slot without returning its large acquisition value
@@ -114,7 +136,7 @@ pub(in crate::state) trait OriginalControlSource {
 pub(in crate::state) fn initialize_original_field<'a, S: OriginalControlSource>(
     slot: &mut Option<S::Acquisition<'a>>,
     target: &'a S,
-    scope: &mv::allocation::OwnedAllocationScope,
+    scope: &iroha_allocation::OwnedAllocationScope,
     budget: &AllocationBudget,
     parent: &mut AllocationReservation,
 ) -> Result<(), AdmittedStorageError> {
@@ -176,7 +198,7 @@ impl<V: Value> OriginalControlSource for Cell<V> {
     }
     fn original_acquisition<'a>(
         &'a self,
-        _: &mv::allocation::OwnedAllocationScope,
+        _: &iroha_allocation::OwnedAllocationScope,
         budget: &AllocationBudget,
         parent: &mut AllocationReservation,
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError> {
@@ -184,28 +206,29 @@ impl<V: Value> OriginalControlSource for Cell<V> {
     }
 }
 
-impl<V: Value> OriginalControlSource for Cell<V, mv::allocation::AllocationCharge> {
+impl<V: Value> OriginalControlSource for Cell<V, iroha_allocation::AllocationCharge> {
     type Acquisition<'a>
-        =
-        OrdinaryAcquisition<mv::cell::BlockAcquisitionSlot<'a, V, mv::allocation::AllocationCharge>>
+        = OrdinaryAcquisition<
+        mv::cell::BlockAcquisitionSlot<'a, V, iroha_allocation::AllocationCharge>,
+    >
     where
         Self: 'a;
     fn successor_layout(&self) -> Option<Layout> {
         Some(CellPublicationSuccessor::allocation_layout())
     }
     fn generation_layouts(&self) -> [Option<Layout>; 2] {
-        Cell::<V, mv::allocation::AllocationCharge>::allocation_layouts().map(Some)
+        Cell::<V, iroha_allocation::AllocationCharge>::allocation_layouts().map(Some)
     }
     fn original_acquisition<'a>(
         &'a self,
-        _: &mv::allocation::OwnedAllocationScope,
+        _: &iroha_allocation::OwnedAllocationScope,
         budget: &AllocationBudget,
         parent: &mut AllocationReservation,
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError> {
         if !parent.belongs_to(budget) {
             return Err(AdmittedStorageError::PolicyIdentity);
         }
-        let [current, undo] = Cell::<V, mv::allocation::AllocationCharge>::allocation_layouts();
+        let [current, undo] = Cell::<V, iroha_allocation::AllocationCharge>::allocation_layouts();
         let split = |parent: &mut AllocationReservation, layout| {
             parent
                 .try_split(layout)
@@ -272,7 +295,7 @@ impl<K: Key, V: Value> OriginalControlSource for Storage<K, V> {
     }
     fn original_acquisition<'a>(
         &'a self,
-        _: &mv::allocation::OwnedAllocationScope,
+        _: &iroha_allocation::OwnedAllocationScope,
         _: &AllocationBudget,
         _: &mut AllocationReservation,
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError> {
@@ -290,7 +313,7 @@ impl OriginalControlSource for Storage<[u8; 32], [u8; 32], OperationIndexMode> {
     }
     fn original_acquisition<'a>(
         &'a self,
-        index_scope: &mv::allocation::OwnedAllocationScope,
+        index_scope: &iroha_allocation::OwnedAllocationScope,
         _: &AllocationBudget,
         _: &mut AllocationReservation,
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError> {
@@ -309,7 +332,7 @@ impl OriginalControlSource for TriggerSet {
     }
     fn original_acquisition<'a>(
         &'a self,
-        _: &mv::allocation::OwnedAllocationScope,
+        _: &iroha_allocation::OwnedAllocationScope,
         _: &AllocationBudget,
         _: &mut AllocationReservation,
     ) -> Result<Self::Acquisition<'a>, AdmittedStorageError> {

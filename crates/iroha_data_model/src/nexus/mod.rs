@@ -2462,10 +2462,6 @@ mod tests {
         assert!(!restricted.is_autoscale_managed_elastic());
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the inheritance audit checks every identity, reserved-metadata, and operator field boundary together"
-    )]
     fn autoscale_profile_inheritance_ignores_identity_and_reserved_metadata_only() {
         let mut base = LaneConfig {
             id: LaneId::new(2),

@@ -42,7 +42,7 @@ Capture the three Torii surfaces separately:
 
 - `/v1/nexus/lifecycle` is the lane catalog/incarnation and autoscale lifecycle
   snapshot.
-- `/v1/sumeragi/status` is only the authoritative `SumeragiV2Status` reducer
+- `/v1/sumeragi/status` is only the authoritative `SumeragiStatus` instance
   snapshot.
 - `/v1/sumeragi/diagnostics` is non-authoritative operational evidence derived
   from State and revalidated Kura artifacts. It must never be used to authorize

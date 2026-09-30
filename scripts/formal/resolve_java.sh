@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resolve one canonical, working Java runtime for the Sumeragi v2 formal gates.
+# Resolve one canonical, working Java runtime for the TLC formal gates.
 
 set -euo pipefail
 

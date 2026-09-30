@@ -1824,22 +1824,6 @@ fn sample_status() -> Status {
         },
         sumeragi: Some(SumeragiConsensusStatus {
             mode_tag: PERMISSIONED_TAG.to_string(),
-            leader_index: 1,
-            highest_qc_height: 10,
-            locked_qc_height: 9,
-            locked_qc_view: 3,
-            commit_signatures_present: 6,
-            commit_signatures_counted: 5,
-            commit_signatures_set_b: 2,
-            commit_signatures_required: 5,
-            commit_qc_height: 12,
-            commit_qc_view: 4,
-            commit_qc_epoch: 1,
-            commit_qc_signatures_total: 5,
-            commit_qc_validator_set_len: 7,
-            block_created_dropped_by_lock_total: 1,
-            block_created_hint_mismatch_total: 0,
-            block_created_proposal_mismatch_total: 0,
             tx_queue_depth: 5,
             tx_queue_capacity: 20,
             tx_queue_retained_bytes: 1_024,
@@ -1849,17 +1833,6 @@ fn sample_status() -> Status {
             tx_queue_saturated_by_bytes: false,
             tx_queue_saturated_by_age: false,
             tx_queue_oldest_queued_age_ms: 250,
-            epoch_length_blocks: 0,
-            epoch_commit_deadline_offset: 0,
-            epoch_reveal_deadline_offset: 0,
-            view_change_proof_accepted_total: 4,
-            view_change_proof_stale_total: 1,
-            view_change_proof_rejected_total: 0,
-            view_change_install_total: 0,
-            view_change_suggest_total: 0,
-            prf_epoch_seed: Some("cafebabe42".to_string()),
-            prf_height: 11,
-            prf_view: 2,
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
         }),
@@ -1914,8 +1887,6 @@ fn sample_status() -> Status {
                 public_target_reshuffle_ms: None,
                 restricted_target_reshuffle_ms: None,
                 drop_unknown_dataspace: false,
-                restricted_fallback: "drop".to_string(),
-                restricted_public_policy: "refuse".to_string(),
             },
             targets: Vec::new(),
         },
@@ -1950,18 +1921,10 @@ fn sumeragi_status_v1_binary_roundtrip_preserves_every_field() {
     let mut status = sample_status()
         .sumeragi
         .expect("sample status includes consensus telemetry");
-    status.block_created_hint_mismatch_total = 2;
-    status.block_created_proposal_mismatch_total = 3;
     status.tx_queue_saturated = true;
     status.tx_queue_saturated_by_count = true;
     status.tx_queue_saturated_by_bytes = true;
     status.tx_queue_saturated_by_age = true;
-    status.epoch_length_blocks = 100;
-    status.epoch_commit_deadline_offset = 60;
-    status.epoch_reveal_deadline_offset = 80;
-    status.view_change_proof_rejected_total = 2;
-    status.view_change_suggest_total = 3;
-    status.view_change_install_total = 4;
     status.lane_governance_sealed_total = 1;
     status.lane_governance_sealed_aliases = vec!["sealed-lane".to_owned()];
 
@@ -1983,34 +1946,6 @@ fn build_sumeragi_status_uses_cached_immutable_mode() {
     metrics.set_sumeragi_mode_tag("custom-mode");
     let status = build_sumeragi_status(&metrics);
     assert_eq!(status.mode_tag, "custom-mode");
-}
-#[test]
-fn build_sumeragi_status_promotes_stale_qc_gauges_to_commit_qc() {
-    let metrics = Metrics::default();
-    metrics.sumeragi_highest_qc_height.set(3_052);
-    metrics.sumeragi_locked_qc_height.set(3_052);
-    metrics.sumeragi_locked_qc_view.set(1);
-    metrics.sumeragi_commit_qc_height.set(4_468);
-    metrics.sumeragi_commit_qc_view.set(7);
-    let status = build_sumeragi_status(&metrics);
-    assert_eq!(status.commit_qc_height, 4_468);
-    assert_eq!(status.commit_qc_view, 7);
-    assert_eq!(status.highest_qc_height, 4_468);
-    assert_eq!(status.locked_qc_height, 4_468);
-    assert_eq!(status.locked_qc_view, 7);
-}
-#[test]
-fn build_sumeragi_status_preserves_qc_gauges_newer_than_commit_qc() {
-    let metrics = Metrics::default();
-    metrics.sumeragi_highest_qc_height.set(4_470);
-    metrics.sumeragi_locked_qc_height.set(4_469);
-    metrics.sumeragi_locked_qc_view.set(2);
-    metrics.sumeragi_commit_qc_height.set(4_468);
-    metrics.sumeragi_commit_qc_view.set(7);
-    let status = build_sumeragi_status(&metrics);
-    assert_eq!(status.highest_qc_height, 4_470);
-    assert_eq!(status.locked_qc_height, 4_469);
-    assert_eq!(status.locked_qc_view, 2);
 }
 #[test]
 fn build_sumeragi_status_includes_tx_queue_pressure_causes() {
@@ -2099,22 +2034,6 @@ fn serialize_status_json() {
         },
         "sumeragi": {
             "mode_tag": "iroha3-consensus::permissioned-sumeragi@v1",
-            "leader_index": 1,
-            "highest_qc_height": 10,
-            "locked_qc_height": 9,
-            "locked_qc_view": 3,
-            "commit_signatures_present": 6,
-            "commit_signatures_counted": 5,
-            "commit_signatures_set_b": 2,
-            "commit_signatures_required": 5,
-            "commit_qc_height": 12,
-            "commit_qc_view": 4,
-            "commit_qc_epoch": 1,
-            "commit_qc_signatures_total": 5,
-            "commit_qc_validator_set_len": 7,
-            "block_created_dropped_by_lock_total": 1,
-            "block_created_hint_mismatch_total": 0,
-            "block_created_proposal_mismatch_total": 0,
             "tx_queue_depth": 5,
             "tx_queue_capacity": 20,
             "tx_queue_retained_bytes": 1_024,
@@ -2124,17 +2043,6 @@ fn serialize_status_json() {
             "tx_queue_saturated_by_bytes": false,
             "tx_queue_saturated_by_age": false,
             "tx_queue_oldest_queued_age_ms": 250,
-            "epoch_length_blocks": 0,
-            "epoch_commit_deadline_offset": 0,
-            "epoch_reveal_deadline_offset": 0,
-            "prf_epoch_seed": "cafebabe42",
-            "prf_height": 11,
-            "prf_view": 2,
-            "view_change_proof_accepted_total": 4,
-            "view_change_proof_stale_total": 1,
-            "view_change_proof_rejected_total": 0,
-            "view_change_suggest_total": 0,
-            "view_change_install_total": 0,
             "lane_governance_sealed_total": 0,
             "lane_governance_sealed_aliases": []
         },
@@ -2181,9 +2089,7 @@ fn serialize_status_json() {
         "tx_gossip": {
             "caps": {
                 "frame_cap_bytes": 0,
-                "drop_unknown_dataspace": false,
-                "restricted_fallback": "drop",
-                "restricted_public_policy": "refuse"
+                "drop_unknown_dataspace": false
             }
         }
     });

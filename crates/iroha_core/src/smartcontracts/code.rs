@@ -1155,7 +1155,7 @@ mod tests {
         Vec<u8>,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     ) {
-        ivm::KotodamaCompiler::new()
+        kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(source)
             .expect("compile lifecycle contract")
     }

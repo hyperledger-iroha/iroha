@@ -77,8 +77,8 @@ def test_lifecycle_rejects_invalid_or_empty_runtime_root(runtime_root: object) -
 
 @pytest.mark.parametrize("first", [None, "hash:" + "A1" * 32 + "#30FA"])
 @pytest.mark.parametrize("second", [None, "hash:" + "A1" * 32 + "#30FA"])
-def test_lifecycle_sources_reject_duplicate_runtime_root(
-    first: str | None, second: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_lifecycle_file_rejects_duplicate_runtime_root(
+    first: str | None, second: str | None, tmp_path: Path
 ) -> None:
     status = lifecycle_status()
     del status["runtime_catalog_hash"]
@@ -94,9 +94,6 @@ def test_lifecycle_sources_reject_duplicate_runtime_root(
     source.write_text(payload, encoding="utf-8")
     with pytest.raises(SMOKE.SmokeError, match="duplicate key `runtime_catalog_hash`"):
         SMOKE.read_json_file(str(source), label="lane lifecycle")
-    monkeypatch.setattr(SMOKE, "fetch_text", lambda *args, **kwargs: payload)
-    with pytest.raises(SMOKE.SmokeError, match="duplicate key `runtime_catalog_hash`"):
-        SMOKE.fetch_json("https://example.invalid/v1/nexus/lifecycle", 1, False)
 
 
 def test_parse_args_accepts_only_canonical_source_flags() -> None:
@@ -118,7 +115,8 @@ def test_parse_args_accepts_only_canonical_source_flags() -> None:
 @pytest.mark.parametrize(
     "retired_args",
     [
-        ["--status-url", "https://example.invalid/v1/nexus/lifecycle"],
+        ["--lifecycle-url", "https://example.invalid/lanes"],
+        ["--lifecycle-file", "lifecycle.json", "--lifecycle-url", "https://example.invalid/lanes"],
         ["--status-file", "lifecycle.json"],
         ["--lifecycle-file", "lifecycle.json", "--from-telemetry", "events.ndjson"],
     ],

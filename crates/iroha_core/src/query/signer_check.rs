@@ -9,7 +9,7 @@ use crate::state::{State, StateReadOnly, StateView, TransactionsReadOnly};
 use iroha_crypto::{Algorithm, HashOf, Signature};
 use iroha_data_model::{
     account::AccountId,
-    block::consensus_v2::HeightContextId,
+    block::consensus::HeightContextId,
     isi::{
         InstructionBox,
         sorafs::{

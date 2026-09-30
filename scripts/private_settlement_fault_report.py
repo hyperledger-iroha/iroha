@@ -240,7 +240,9 @@ def _parse_crash_recoveries(
     # Node-local persistence fault injection is outside the first-release contract.
     # Keep the empty inventory explicit so reports cannot claim those trials.
     if value != []:
-        raise FaultEvidenceError(f"{label} must be empty; persistence-cut injection is retired")
+        raise FaultEvidenceError(
+            f"{label} must be empty; persistence-cut injection is outside the fault matrix"
+        )
 
 
 def _parse_atomicity(value: Any, participants: int, label: str) -> None:
@@ -298,7 +300,7 @@ def parse_run(value: Any, source: str) -> tuple[int, int, int, str, str, str]:
             "run",
             "validators_per_dataspace",
             "quorum",
-            "mandatory_signed_rs16_da_rbc",
+            "mandatory_signed_rs16_da",
             "authenticated_private_settlement_route_control",
             "committee_validator_restarts",
             "maximum_simultaneously_unavailable_per_committee",
@@ -339,8 +341,8 @@ def parse_run(value: Any, source: str) -> tuple[int, int, int, str, str, str]:
             f"{source}: committee must be exact four-validator 3-of-4"
         )
     _require_true(
-        record["mandatory_signed_rs16_da_rbc"],
-        f"{source}.mandatory_signed_rs16_da_rbc",
+        record["mandatory_signed_rs16_da"],
+        f"{source}.mandatory_signed_rs16_da",
     )
     _require_true(
         record["authenticated_private_settlement_route_control"],

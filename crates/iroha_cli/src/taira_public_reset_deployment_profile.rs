@@ -228,9 +228,11 @@ mod tests {
                 }
             }
         }
-        inventory.beacon_bootstrap =
-            host::beacon::fixture_plan(&inventory.validators, &inventory.validator_clients);
-        inventory.beacon_bootstrap.request.dkg_session.network_id = public.network_id;
+        inventory.beacon_bootstrap = host::beacon::fixture_plan(
+            &inventory.validators,
+            &inventory.validator_clients,
+            public.network_id,
+        );
         inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
         validate_inventory_structure(&inventory).expect("complete profile binding fixture");
         (inventory, public, wire)

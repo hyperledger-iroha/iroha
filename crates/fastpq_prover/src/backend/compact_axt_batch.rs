@@ -91,6 +91,11 @@ impl AxtTransferBatch {
     /// before cloning/commitment hashing. All remote occurrences are validated
     /// against the whole batch; no individual delta is re-prepared or validated
     /// as if it were the complete AXT source transaction.
+    #[allow(
+        clippy::large_types_passed_by_value,
+        reason = "the 272-byte `Copy` view of borrowed AXT inputs is copied once per batch; \
+                  sibling producer, verifier, diagnostic and test modules pass it by value"
+    )]
     pub(super) fn new<V: CompactTransferValue>(
         prepared: &PreparedPublicTransfers<'_, V>,
         expected: &PublicIO,
@@ -812,6 +817,7 @@ mod tests {
         original: &AxtTransferBatch,
         original_roots: &[fastpq_isi::GoldilocksDigest384V1],
     ) {
+        use crate::axt_binding::source_occurrence::test_occurrences;
         use crate::backend::deep_relation::tests as deep;
 
         let mut changed_fixture = fixture.clone();
@@ -829,10 +835,29 @@ mod tests {
         for (ordinal, root) in original_roots.iter().enumerate() {
             assert_ne!(*root, deep::bound_root(&changed.segment(ordinal).unwrap()));
         }
+        // Each source occurrence commits to its exact remote claim, so the
+        // occurrences are derived again from the prepared transcripts.
+        assert_eq!(
+            test_occurrences(prepared.claims(), fixture.remote.as_deref().unwrap()),
+            fixture.occurrences
+        );
         let mut remote_fixture = fixture.clone();
         let remote = remote_fixture.remote.as_mut().unwrap();
         remote[0].handle_replay_key.handle_era = 17;
         recommit(&mut remote_fixture.binding, remote);
+        assert!(matches!(
+            AxtTransferBatch::new(
+                prepared,
+                expected,
+                root_chain,
+                context(&remote_fixture),
+                BatchContextLimits::default()
+            ),
+            Err(Error::InvalidAxtBinding { details })
+                if details == "source transfer occurrence belongs to another handle/intent claim"
+        ));
+        remote_fixture.occurrences =
+            test_occurrences(prepared.claims(), remote_fixture.remote.as_deref().unwrap());
         let changed = AxtTransferBatch::new(
             prepared,
             expected,

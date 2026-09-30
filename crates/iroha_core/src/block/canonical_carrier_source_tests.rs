@@ -24,7 +24,7 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
     assert!(
         matches!(*refusal, BlockValidationError::MembershipAdmission(
         crate::state::MembershipAdmissionError::Capacity(
-            mv::allocation::AllocationRefusal::Capacity { requested_bytes, .. }
+            iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. }
         )
     ) if requested_bytes == source_bytes)
     );
@@ -41,6 +41,7 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
         valid
             .as_ref()
             .canonical_resultless_proposal()
+            .expect("valid fixture proposal projection")
             .encode_wire()
             .unwrap(),
         original
@@ -86,7 +87,7 @@ fn ordinary_signed_carrier_admits_exact_source_and_block_owner_boundary() {
                 assert_eq!(retained.encode_wire().unwrap(), original);
                 let BlockValidationError::MembershipAdmission(
                     crate::state::MembershipAdmissionError::Capacity(
-                        mv::allocation::AllocationRefusal::Capacity {
+                        iroha_allocation::AllocationRefusal::Capacity {
                             requested_bytes,
                             reserved_bytes,
                             ..
@@ -117,7 +118,7 @@ fn ordinary_signed_carrier_admits_exact_source_and_block_owner_boundary() {
         *error,
         BlockValidationError::MembershipAdmission(
             crate::state::MembershipAdmissionError::Capacity(
-                mv::allocation::AllocationRefusal::Capacity { .. }
+                iroha_allocation::AllocationRefusal::Capacity { .. }
             )
         )
     ));

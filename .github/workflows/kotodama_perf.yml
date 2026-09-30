@@ -15,6 +15,10 @@ on:
       - "crates/norito_derive/**"
       - "crates/kotodama_lang/Cargo.toml"
       - "crates/kotodama_lang/src/**"
+      - "crates/kotodama_surface/Cargo.toml"
+      - "crates/kotodama_surface/src/**"
+      - "crates/kotodama_toolchain/Cargo.toml"
+      - "crates/kotodama_toolchain/src/**"
       - "crates/iroha_core/src/**"
       - "crates/iroha_core/benches/kotodama_runtime_cache.rs"
       - "crates/iroha_core/benches/queries.rs"
@@ -325,7 +329,7 @@ jobs:
 
       - name: Build canonical Kotodama release tools
         working-directory: candidate
-        run: cargo build --locked -p ivm --bin koto -p iroha_cli --bin iroha
+        run: cargo build --locked -p kotodama_toolchain --bin koto -p iroha_cli --bin iroha
 
       - name: Compile every Kotodama documentation source
         working-directory: candidate

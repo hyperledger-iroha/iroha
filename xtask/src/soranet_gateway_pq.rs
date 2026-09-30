@@ -772,8 +772,16 @@ emit_metrics = true
 "#,
         )
         .expect("write invalid trustless config");
-        let (state, summary) =
-            load_trustless_status(&trustless_path).expect("parse invalid readiness policy");
+        let (state, summary) = readiness_component(load_trustless_status(&trustless_path));
+        assert!(
+            summary
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some_and(|error| {
+                    error.contains("trusted_setup") && error.contains("value must not be empty")
+                }),
+            "strict parse refusal must remain an error component"
+        );
         assert_eq!(state, ComponentState::Error);
         assert_eq!(
             summary
@@ -781,6 +789,30 @@ emit_metrics = true
                 .and_then(|object| object.get("state"))
                 .and_then(Value::as_str),
             Some("error")
+        );
+        let policy = fs::read_to_string(&trustless_path)
+            .expect("read invalid policy fixture")
+            .replace(
+                "trusted_setup = \"\"",
+                "trusted_setup = \"/missing/kzg.params\"",
+            )
+            .replace("receipt_dir = \"\"", "receipt_dir = \"/missing/sdr\"");
+        fs::write(&trustless_path, policy).expect("write parseable unsafe policy");
+        let (state, summary) = load_trustless_status(&trustless_path)
+            .expect("nonempty paths permit auditing the unsafe pipeline flags");
+        assert_eq!(state, ComponentState::Error);
+        assert_eq!(summary.get("state").and_then(Value::as_str), Some("error"));
+        assert_eq!(
+            summary
+                .get("pipeline_reject_stale_cache_versions")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("pipeline_verify_cache_binding_header")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
     #[test]

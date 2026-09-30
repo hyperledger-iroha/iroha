@@ -1,7 +1,7 @@
 //! Public call grammar and caller-owned artifact/schema binding.
 use super::*;
 fn fixture() -> (Vec<u8>, ContractAddress) {
-    let artifact = ivm::kotodama::compiler::Compiler::new().compile_source(
+    let artifact = kotodama_lang::compiler::Compiler::new().compile_source(
         "seiyaku Example { kotoage fn write(int value) authorize(\"CanInvokeContractEntrypoint\") {} kotoage fn ping() authorize(\"CanInvokeContractEntrypoint\") {} view fn read() -> int { return 1; } }",
     ).expect("compile current artifact");
     let key = iroha::crypto::KeyPair::random();
@@ -183,4 +183,128 @@ fn mutable_call_continuation_without_client_override_keeps_network_selection() {
     assert_eq!(args.network.as_deref(), Some("other-taira"));
     assert!(args.config.is_none());
     assert_eq!(args.resume.as_deref(), Some(journal));
+}
+
+fn parsed_call(arguments: &[&str]) -> CallArgs {
+    let parsed = Cli::try_parse_from(["musubi", "call"].iter().chain(arguments))
+        .expect("call grammar accepts the fixture");
+    let Command::Call(args) = parsed.command else {
+        panic!("call command");
+    };
+    args
+}
+
+fn human_failure(diagnostic: Diagnostic) -> String {
+    CommandOutput::failure("call", diagnostic)
+        .render(OutputFormat::Human)
+        .expect("render call failure")
+        .stderr()
+        .to_owned()
+}
+
+#[test]
+fn mutable_call_requires_one_canonical_entrypoint_selector() {
+    let args = parsed_call(&["--entrypoint", "write"]);
+    assert_eq!(requested_entrypoint(&args).expect("canonical"), "write");
+    for selector in ["", " write", "write\t"] {
+        let diagnostic = requested_entrypoint(&parsed_call(&["--entrypoint", selector]))
+            .expect_err("non-canonical selector");
+        assert_eq!(diagnostic.code(), ErrorCode::Usage);
+        assert!(human_failure(diagnostic).contains("non-empty canonical selector"));
+    }
+    let diagnostic = requested_entrypoint(&parsed_call(&["--resume", "/private/call"]))
+        .expect_err("a new call names its entrypoint");
+    assert_eq!(diagnostic.code(), ErrorCode::Usage);
+    assert!(human_failure(diagnostic).contains("call requires --entrypoint"));
+}
+
+#[test]
+fn mutable_call_builds_online_with_only_the_caller_lock_policy() {
+    let args = parsed_call(&[
+        "--package",
+        "demo/coffee-club",
+        "--network",
+        "other-taira",
+        "--config",
+        "/runtime/client.toml",
+        "--locked",
+        "--entrypoint",
+        "write",
+    ]);
+    let build = call_build_args(&args);
+    assert!(build.mode.locked);
+    assert!(!build.mode.offline);
+    assert!(!build.mode.frozen);
+    assert_eq!(
+        build.registry.config.as_deref(),
+        Some(Path::new("/runtime/client.toml"))
+    );
+    assert_eq!(build.network.as_deref(), Some("other-taira"));
+    assert_eq!(build.chain_discriminant, None);
+    assert!(!build.selection.workspace);
+    assert_eq!(
+        build.selection.packages,
+        vec![
+            "demo/coffee-club"
+                .parse::<MusubiPackageSelectorV1>()
+                .expect("package")
+        ]
+    );
+    assert!(build.selection.exclude.is_empty());
+    let unlocked = call_build_args(&parsed_call(&["--entrypoint", "write"]));
+    assert!(!unlocked.mode.locked);
+    assert!(unlocked.registry.config.is_none());
+    assert!(unlocked.network.is_none());
+}
+
+#[test]
+fn mutable_call_binds_the_configured_fee_payer_to_its_gas_limit() {
+    use iroha::crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        nexus::FeeSponsorProgramId,
+        transaction::{FeeChargeKind, FeeChargeLimit},
+    };
+    let _profile = ChainDiscriminantGuard::enter(369);
+    let gas_limit = NonZeroU64::new(1_500_000).expect("gas limit");
+    let mut network = continuation_network(None);
+    let missing = gas_limited_fee_payment(&network, gas_limit).expect_err("explicit payer");
+    assert_eq!(missing.code(), ErrorCode::Usage);
+    let limits = vec![FeeChargeLimit {
+        kind: FeeChargeKind::Nexus,
+        asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().expect("asset"),
+        max_amount: "2".parse().expect("fee"),
+    }];
+    network.fee_payment = Some(FeePaymentIntent::authority(limits.clone(), None));
+    assert_eq!(
+        gas_limited_fee_payment(&network, gas_limit).expect("authority payer"),
+        FeePaymentIntent::authority(limits.clone(), Some(gas_limit))
+    );
+    let key = KeyPair::try_from_seed(vec![3; 32], Algorithm::Ed25519).expect("test key");
+    let sponsor = FeeSponsorProgramId::new(
+        AccountId::new(key.public_key().clone()),
+        "coffee-fees".parse().expect("program name"),
+    );
+    network.fee_payment = Some(FeePaymentIntent::sponsor(
+        sponsor.clone(),
+        7,
+        limits.clone(),
+        NonZeroU64::new(9),
+    ));
+    assert_eq!(
+        gas_limited_fee_payment(&network, gas_limit).expect("sponsor payer"),
+        FeePaymentIntent::sponsor(sponsor, 7, limits, Some(gas_limit))
+    );
+}
+
+#[test]
+fn mutable_call_failure_keeps_the_redacted_cause_chain() {
+    let diagnostic = call_diagnostic(
+        &eyre::eyre!("route_unavailable; private_key=secret-value").wrap_err("call failed"),
+    );
+    assert_eq!(diagnostic.code(), ErrorCode::Network);
+    let rendered = human_failure(diagnostic);
+    assert!(rendered.contains("call failed"), "{rendered}");
+    assert!(rendered.contains("route_unavailable"), "{rendered}");
+    assert!(!rendered.contains("secret-value"), "{rendered}");
 }

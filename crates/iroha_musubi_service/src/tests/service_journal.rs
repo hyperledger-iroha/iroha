@@ -698,10 +698,6 @@ fn control_commitment() -> MusubiArchiveCommitmentV1 {
         chunk_count: 4,
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the control-service fixture constructs one fully cross-bound authenticated request and response surface"
-)]
 fn control_service_fixture(
     substitute_storage: bool,
     substitute_readback: bool,
@@ -977,10 +973,6 @@ fn readback_request_rejects_substituted_finalized_registration_fields() {
     substituted.location.finalized_height = 1;
     assert!(substituted.validate().is_err());
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the private-service fixture constructs one fully cross-bound publication and storage surface"
-)]
 fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
     let (regressing_client, _) = client();
     let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(

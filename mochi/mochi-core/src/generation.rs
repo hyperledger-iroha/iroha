@@ -1844,15 +1844,14 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
             )
             .expect("derive fixture mint-finality parameters");
         let manifest = iroha_genesis::GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-            .with_sumeragi_v2_context_parameters(
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            .with_sumeragi_context_parameters(
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
             )
             .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .set_topology(topology)
             .build_raw()
             .expect("build complete generation fixture manifest")
-            .with_chain_discriminant(chain_discriminant)
-            .with_consensus_meta();
+            .with_chain_discriminant(chain_discriminant);
         let manifest_path = genesis_dir.join("genesis.json");
         fs::write(
             &manifest_path,

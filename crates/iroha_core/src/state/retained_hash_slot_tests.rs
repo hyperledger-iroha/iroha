@@ -31,7 +31,7 @@ impl Wake for Probe {
 struct Group<'a> {
     hash: RetainedHashSlot<'a, ()>,
     outer: Option<crate::publication_lock::PublicationGuard<'a>>,
-    outer_retirement: Option<concread::release::DeferredRelease>,
+    outer_retirement: Option<iroha_allocation::release::DeferredRelease>,
 }
 impl Drop for Group<'_> {
     fn drop(&mut self) {

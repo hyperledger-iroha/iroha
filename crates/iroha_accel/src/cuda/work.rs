@@ -9,7 +9,7 @@ use cust::{
     memory::{DeviceCopy, DevicePointer},
     sys,
 };
-use mv::allocation::{AllocationCharge, ChargedBuffer, ChargedShared};
+use iroha_allocation::{AllocationCharge, ChargedBuffer, ChargedShared};
 use parking_lot::Mutex;
 use std::{
     alloc::Layout,

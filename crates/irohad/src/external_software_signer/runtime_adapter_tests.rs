@@ -123,10 +123,6 @@ fn evidence_checkpoint_anchor_message(binding: &super::SoftwareSignerPublicBindi
     message
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the purpose-separation matrix validates all external signer roles in one cohesive test"
-)]
 fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     let peer = b"12D3KooWPhaseOneGovernancePublisher".to_vec();
     let (_parent, governance_service) = direct_signer(

@@ -136,11 +136,11 @@ const MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1: usize = 256 * 1024;
 // framing while keeping signer operations far below the generic 32 MiB cap.
 const MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1: usize = 4 * 1024 * 1024;
 const BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1: usize =
-    iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1;
+    iroha_core_privacy::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1;
 const BOOTLE_LANTERN_REQUEST_BYTES_V1: usize =
-    iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_REQUEST_BYTES_V1;
+    iroha_core_privacy::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_REQUEST_BYTES_V1;
 const BOOTLE_LANTERN_RESPONSE_BYTES_V1: usize =
-    iroha_core::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
+    iroha_core_privacy::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
 const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize =
     fixed_u64_bound(provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1);
 const MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1: usize = 16 * 1024;
@@ -955,10 +955,6 @@ fn soracloud_runtime_signer_binding_from_wire(
     .map_err(|_| BrokerError::BindingMismatch)
 }
 impl ProviderBindingWireV1 {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixed V1 binding projection is exhaustive"
-    )]
     fn try_from_binding(
         binding: &IrohaRuntimeProviderBindingV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
@@ -1207,10 +1203,6 @@ fn validate_webauthn_wire_policy(
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixed V1 binding matrix is exhaustive"
-)]
 fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerError> {
     let runtime_slot = binding.runtime_slot()?;
     let governance_signer = runtime_slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner;
@@ -2104,7 +2096,7 @@ fn decode_bootle_lantern_issue_request(
 ) -> Result<
     (
         BootleLanternIssueRequestWireV1,
-        iroha_core::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
+        iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
     ),
     BrokerError,
 > {
@@ -2122,7 +2114,7 @@ fn decode_bootle_lantern_issue_request(
     {
         return Err(BrokerError::Rejected);
     }
-    let authorization = iroha_core::privacy_engines::bootle_lantern::issuer::
+    let authorization = iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
         BootleLanternIssuanceAuthorizationV1::decode_exact(&request.authorization)
         .map_err(|_| BrokerError::Rejected)?;
     if authorization.issued_at_height() == 0
@@ -2134,14 +2126,14 @@ fn decode_bootle_lantern_issue_request(
     {
         return Err(BrokerError::Rejected);
     }
-    iroha_core::privacy_engines::bootle_lantern::issuer::
+    iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
         BootleLanternBlindIssuanceRequestV1::decode_exact(
             &request.request,
             u32::try_from(BOOTLE_LANTERN_REQUEST_BYTES_V1)
                 .map_err(|_| BrokerError::Protocol)?,
         )
         .map_err(|_| BrokerError::Rejected)?;
-    iroha_core::privacy_engines::bootle_lantern::issuer::
+    iroha_core_privacy::privacy_engines::bootle_lantern::issuer::
         issuer_validate_blind_issuance_request_encoded_v1(
             &request.context,
             request.canonical_genesis_hash,

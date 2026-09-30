@@ -15,7 +15,7 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::SumeragiDiagnosticsStatus,
-        consensus_v2::SumeragiV2GenesisContextParameters,
+        consensus::SumeragiGenesisContextParameters,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
         output_budget::ExecutionOutputLimits,
         stream::{BlockMessage, BlockSubscriptionRequest},
@@ -27,7 +27,7 @@ use iroha_data_model::{
     },
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::system::SumeragiConsensusMode,
-    sumeragi::{PROTOCOL_VERSION, SumeragiStatus},
+    sumeragi::SumeragiStatus,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -665,12 +665,12 @@ pub fn kagami_default_manifest_json(
     );
     manifest.insert(
         "wire_protocol_version".to_string(),
-        norito::json::value::to_value(&u32::from(PROTOCOL_VERSION))
+        norito::json::value::to_value(&u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION))
             .expect("serialize wire protocol version"),
     );
     manifest.insert(
-        "sumeragi_v2".to_string(),
-        norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+        "sumeragi_context".to_string(),
+        norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
             .expect("serialize Sumeragi v2 genesis context"),
     );
     manifest.insert(
@@ -703,7 +703,7 @@ mod tests {
                         .public_key()
                         .clone(),
                 );
-                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0xA0_u8.wrapping_add(seed); 32],
                     0,
                     validator,
@@ -784,11 +784,11 @@ mod tests {
         );
         assert_eq!(
             value.get("wire_protocol_version").and_then(Value::as_u64),
-            Some(u64::from(PROTOCOL_VERSION))
+            Some(u64::from(iroha_data_model::sumeragi::PROTOCOL_VERSION))
         );
         assert_eq!(
             value
-                .get("sumeragi_v2")
+                .get("sumeragi_context")
                 .and_then(Value::as_object)
                 .and_then(|context| context.get("da_layout"))
                 .and_then(Value::as_object)

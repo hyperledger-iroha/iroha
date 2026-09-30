@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 use super::rng::Rng;
 use crate::{
-    message::{Block, BlockHeader, Qc, TimeoutCert, TrafficClass, WireMessage},
+    message::{BlockHeader, PayloadManifest, Qc, TimeoutCert, TrafficClass, WireMessage},
     types::Millis,
 };
 
@@ -57,7 +57,9 @@ fn tc_size(tc: &TimeoutCert) -> u64 {
 }
 
 fn header_size(header: &BlockHeader) -> u64 {
-    32 + 8
+    32 + 40
+        + 32
+        + 8
         + 8
         + 32
         + 32
@@ -70,8 +72,8 @@ fn header_size(header: &BlockHeader) -> u64 {
         + len64(header.control_witness.len())
 }
 
-fn block_size(block: &Block) -> u64 {
-    header_size(&block.header) + 8 + len64(block.payload.len())
+fn manifest_size(manifest: &PayloadManifest) -> u64 {
+    header_size(&manifest.header) + 8 + len64(manifest.availability.as_slice().len())
 }
 
 fn len64(len: usize) -> u64 {
@@ -84,12 +86,13 @@ pub fn approx_size(msg: &WireMessage) -> u64 {
         WireMessage::Proposal(p) => {
             32 + 8
                 + 8
-                + header_size(&p.header)
+                + header_size(&p.proposal.header)
                 + 1
-                + p.justify.as_ref().map_or(0, tc_size)
-                + opt_qc_size(p.parent_qc.as_ref())
+                + p.proposal.justify.as_ref().map_or(0, tc_size)
+                + opt_qc_size(p.proposal.parent_qc.as_ref())
                 + 1
-                + p.payload.as_ref().map_or(0, |b| 8 + len64(b.len()))
+                + 8
+                + len64(p.availability.as_slice().len())
                 + 96
         }
         WireMessage::Vote(v) => {
@@ -121,11 +124,12 @@ pub fn approx_size(msg: &WireMessage) -> u64 {
             32 + 8
                 + r.blocks
                     .iter()
-                    .map(|e| block_size(&e.block) + qc_size(&e.commit_qc))
+                    .map(|e| manifest_size(&e.manifest) + qc_size(&e.commit_qc))
                     .sum::<u64>()
         }
-        WireMessage::BlockRequest(_) => 32 + 8 + 32,
-        WireMessage::BlockResponse(r) => 32 + block_size(&r.block),
+        WireMessage::PayloadRequest(_) => 32 + 8 + 32,
+        WireMessage::PayloadManifest(r) => manifest_size(r),
+        WireMessage::PayloadChunk(r) => 32 + 8 + 32 + 4 + 8 + len64(r.bytes.as_slice().len()),
         WireMessage::ApplicationControl(message) => {
             32 + 40 + 8 + 64 + 8 + len64(message.bytes.len())
         }

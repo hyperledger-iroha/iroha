@@ -15,11 +15,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILE = ROOT / "crates/iroha_core/src/privacy_engines/zk_x509/profile.rs"
-STARK = ROOT / "crates/iroha_core/src/privacy_engines/zk_x509/stark.rs"
-CREDENTIAL = ROOT / "crates/iroha_core/src/privacy_engines/zk_x509/credential_stark.rs"
-ACCUMULATOR = ROOT / "crates/iroha_core/src/privacy_engines/zk_x509/accumulator_stark.rs"
-NATIVE_TEST = ROOT / "crates/iroha_core/src/privacy_engines/zk_x509/stark/der_and_native_proof_tests.rs"
+PROFILE = ROOT / "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs"
+STARK = ROOT / "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs"
+CREDENTIAL = ROOT / "crates/iroha_core_privacy/src/privacy_engines/zk_x509/credential_stark.rs"
+ACCUMULATOR = ROOT / "crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark.rs"
+NATIVE_TEST = ROOT / "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/der_and_native_proof_tests.rs"
 
 
 class GeometryError(ValueError):
@@ -54,7 +54,7 @@ def _arithmetic(expression: str) -> int:
 
 def _constant(source: str, name: str) -> int:
     match = re.search(
-        rf"(?m)^(?:pub\(crate\)\s+)?const\s+{re.escape(name)}\s*:\s*"
+        rf"(?m)^(?:pub(?:\(crate\))?\s+)?const\s+{re.escape(name)}\s*:\s*"
         r"(?:u8|u16|u32|u64|usize)\s*=\s*([^;]+);",
         source,
     )

@@ -113,7 +113,7 @@ async fn signed_snapshot_restore_accepts_configured_governed_lane() {
     )
     .unwrap();
     let mut state = State::try_new_with_chain_and_network_id(
-        mv::allocation::AllocationBudget::new(
+        iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         world,
@@ -217,7 +217,7 @@ async fn can_read_snapshot_after_writing() {
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let kura = Kura::blank_kura_for_testing();
     let snapshot_state = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -313,7 +313,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     write_snapshot_bundle_from_bytes(&store_dir, &snapshot_bytes, &key_pair);
     let kura = chain.kura();
     let error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -717,7 +717,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         .expect("read signed snapshot payload");
     let kura = Kura::blank_kura_for_testing();
     let restored = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -828,7 +828,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
         let error = match try_read_snapshot(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             &store_dir,
@@ -924,7 +924,7 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
             let store_dir = tmp_root.path().join("snapshot");
             write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
             let result = try_read_snapshot(
-                &mv::allocation::AllocationBudget::new(
+                &iroha_allocation::AllocationBudget::new(
                     iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ),
                 &store_dir,
@@ -996,7 +996,7 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
     )
     .expect("replace snapshot signature");
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1031,7 +1031,7 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
     std::fs::write(&signature_path, signature_hex.to_ascii_uppercase())
         .expect("replace signature with equivalent noncanonical hex");
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1067,7 +1067,7 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
     )
     .expect("replace snapshot signature");
     let Err(error) = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1115,7 +1115,7 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
         )
         .expect("replace snapshot signature");
         let Err(error) = try_read_snapshot(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             &store_dir,
@@ -1173,7 +1173,7 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
         )
         .expect("replace snapshot signature");
         let Err(error) = try_read_snapshot(
-            &mv::allocation::AllocationBudget::new(
+            &iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
             &store_dir,
@@ -1217,7 +1217,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         "new snapshots must carry a Space Directory manifest section"
     );
     let snapshot_state = try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1269,7 +1269,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,
@@ -1308,7 +1308,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
     write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
-        &mv::allocation::AllocationBudget::new(
+        &iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
         &store_dir,

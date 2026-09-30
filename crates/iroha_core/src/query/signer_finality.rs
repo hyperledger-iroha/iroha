@@ -11,7 +11,7 @@
 //! Instruction execution must not use this read: a block's `CommitQC` is node-local. Deterministic
 //! code reads [`committed_block`](crate::sumeragi::certified_chain::committed_block) instead.
 
-use iroha_data_model::block::consensus_v2::HeightContextId;
+use iroha_data_model::block::consensus::HeightContextId;
 
 use crate::{
     state::StateReadOnly,

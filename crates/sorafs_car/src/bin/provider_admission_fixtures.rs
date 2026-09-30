@@ -795,9 +795,11 @@ The generator uses test-only Ed25519 seeds `[0x21; 32]` for the provider and `[0
 the one-member council. These keys are public fixture material and must never be used by a live\n\
 provider or governance council. Binary `.to` files are canonical Norito; matching `.json` files\n\
 are human-readable summaries, not alternative wire payloads.\n\n\
-Additional artifacts include a payload-bound `sorafs.chunk_fetch_plan.v1` multi-source plan so SDKs\n\
-can exercise chunk scheduling end-to-end. Standalone plans are strict V1 envelopes; the retired\n\
-bare-array representation is not an accepted interchange format.\n\n\
+Additional artifacts include a payload-bound `sorafs.chunk_fetch_plan.v1` multi-source plan for\n\
+isolated SDK scheduling tests. Standalone plans are strict V1 envelopes; the retired bare-array\n\
+representation is not an accepted interchange format. These fixtures do not provide or qualify\n\
+authenticated multi-provider transport, a governance-aware external software completion signer,\n\
+a sealed-CAS retention backend, or four-validator deployment evidence.\n\n\
 Do not edit manually; rerun the generator if data changes.\n",
     );
     let mut file = open_output_file(&path, "README fixture")?;

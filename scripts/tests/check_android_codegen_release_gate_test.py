@@ -82,7 +82,7 @@ def test_android_codegen_gate_obeys_shared_cargo_policy() -> None:
     """Every reachable Android generator Cargo call uses the shared policy."""
 
     gate = read("ci/check_android_codegen.sh")
-    proxy = read("scripts/sumeragi_v2_release_cargo_proxy.sh")
+    proxy = read("scripts/sumeragi_release_cargo_proxy.sh")
     makefile = read("Makefile")
     replay = read("scripts/android_codegen_replay_sorafs_fixture.py")
 
@@ -95,14 +95,14 @@ def test_android_codegen_gate_obeys_shared_cargo_policy() -> None:
     assert 'require_external_cargo_target_dir "${REPO_ROOT}"' in proxy
     assert 'run_cargo "$@"' in proxy
     assert "cargo run --locked -p norito_codegen_exporter" not in makefile
-    assert "sumeragi_v2_release_cargo_proxy.sh run --locked --offline" in makefile
+    assert "sumeragi_release_cargo_proxy.sh run --locked --offline" in makefile
     assert '"--locked",\n        "--offline",' in replay
     assert "CARGO_BIN" not in replay
     assert "require_policy_cargo_proxy" in replay
 
     for relative in (
         "ci/check_android_codegen.sh",
-        "scripts/sumeragi_v2_release_cargo_proxy.sh",
+        "scripts/sumeragi_release_cargo_proxy.sh",
         "scripts/android_codegen_replay_sorafs_fixture.py",
         "scripts/android_codegen_docs.py",
         "scripts/check_android_codegen_parity.py",

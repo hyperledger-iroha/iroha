@@ -1,5 +1,7 @@
 //! Native global consensus and lane instances, executed and published by the node driver.
 
+/// AMX two-phase commit on the global chain (`specs/sumeragi.md` §11).
+pub mod amx;
 /// Native source-complete Pasta Commit attestations.
 pub mod attestation;
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
@@ -29,6 +31,8 @@ pub mod finality;
 pub mod genesis_meta;
 /// Lanes of the global chain: identity, pinned configuration, batches and admission.
 pub mod lanes;
+/// Per-instance observations of the current Sumeragi core and driver.
+pub mod metrics;
 /// Bounded canonical native journals for offline operators and qualification.
 pub mod native_journal;
 /// The Sumeragi driver's P2P transport: the frame envelope, traffic classes, egress and
@@ -64,3 +68,27 @@ pub(crate) mod evidence;
 
 // Original-tip authority for native evidence and mandatory staking penalties.
 pub(crate) mod evidence_history;
+
+/// Retained funded artifact reads.
+pub(crate) mod artifact_read;
+
+/// Source-bound body read jobs.
+pub mod body_read;
+
+/// Independent historical availability authority.
+pub mod availability_schedule;
+
+/// Canonical durable body records.
+pub(crate) mod body_record;
+
+/// Bounded canonical record decoder.
+pub(crate) mod durable_record_codec;
+
+/// Bounded canonical certificate metadata.
+pub(crate) mod durable_qc_codec;
+
+/// Original-funded durable availability artifacts.
+pub mod durable_artifact;
+
+/// Native State availability authority.
+pub(crate) mod runtime_availability;

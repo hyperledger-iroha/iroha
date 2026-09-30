@@ -1,4 +1,6 @@
 //! Reed-Solomon (16-bit) parity helpers shared across Torii and tooling.
+#[path = "rs16/compact.rs"]
+pub mod compact;
 use std::{
     collections::HashMap,
     sync::{
@@ -735,6 +737,62 @@ mod tests {
         if std::arch::is_aarch64_feature_detected!("neon") {
             let neon = encode_parity_with_backend(&data, 4, Backend::Neon).expect("neon");
             assert_eq!(scalar, neon);
+        }
+    }
+    /// Every available SIMD backend computes exactly the scalar `out ^= coef · data` over
+    /// GF(2^16): the special coefficients 0 and 1, the reduction boundaries, arbitrary ones,
+    /// zero and all-ones symbols, and every row length through two vector widths (the scalar
+    /// tails included). Payload availability relies on this for bit-identical chunks on every
+    /// node.
+    #[test]
+    fn backends_agree_on_every_coefficient_class_and_tail() {
+        /// The SIMD backend of this machine, whatever the global toggle says.
+        fn simd_backend() -> Option<Backend> {
+            #[cfg(all(
+                feature = "simd-accel",
+                any(target_arch = "x86", target_arch = "x86_64")
+            ))]
+            if std::arch::is_x86_feature_detected!("avx2") {
+                return Some(Backend::Avx2);
+            }
+            #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                return Some(Backend::Neon);
+            }
+            None
+        }
+        let backends: Vec<Backend> = std::iter::once(Backend::Scalar)
+            .chain(simd_backend())
+            .collect();
+        let coefficients = [0u16, 1, 2, 3, 0x8000, 0x100B, 0x1234, 0xFFFE, 0xFFFF];
+        let mut state = 0x9E37_79B9_u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            u16::try_from(state & 0xFFFF).expect("masked")
+        };
+        for len in 0..=40usize {
+            let data: Vec<u16> = (0..len)
+                .map(|i| match i % 5 {
+                    0 => 0,
+                    1 => 0xFFFF,
+                    _ => next(),
+                })
+                .collect();
+            let start: Vec<u16> = (0..len).map(|_| next()).collect();
+            for coef in coefficients.into_iter().chain([next(), next()]) {
+                let mut expected = start.clone();
+                mul_add_row(coef, &data, &mut expected, Backend::Scalar);
+                for (slot, (value, symbol)) in expected.iter().zip(start.iter().zip(&data)) {
+                    assert_eq!(*slot, value ^ gf_mul(coef, *symbol), "scalar {coef:#x}");
+                }
+                for backend in &backends {
+                    let mut out = start.clone();
+                    mul_add_row(coef, &data, &mut out, *backend);
+                    assert_eq!(out, expected, "{backend:?} len {len} coef {coef:#x}");
+                }
+            }
         }
     }
     #[test]

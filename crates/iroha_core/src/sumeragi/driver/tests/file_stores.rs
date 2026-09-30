@@ -23,7 +23,7 @@ use iroha_sumeragi::{
 use super::{
     super::{
         Driver, DriverConfig, DriverStart, NodeGate, SharedCrypto, assemble_init,
-        traits::{BlockStore, BodyStore, Observer, RecordStore, SystemClock},
+        traits::{BlockStore, Observer, RecordStore, SystemClock},
     },
     fakes::{FakeBlocks, FakeExecutor, FakeNet, RecordingObserver},
 };
@@ -130,6 +130,7 @@ fn file_stores_survive_disk_errors() {
             &instance,
             Arc::clone(&crypto),
             BodyLimits::default(),
+            super::test_budget(),
             body_faults.clone(),
         )
         .unwrap(),
@@ -174,10 +175,10 @@ fn file_stores_survive_disk_errors() {
         DriverConfig::default(),
         DriverStart {
             node_gate: Arc::new(NodeGate::new()),
-            allocation_budget: mv::allocation::AllocationBudget::new(1 << 24),
+            allocation_budget: super::test_budget(),
             local: LocalParams::default(),
             init,
-            signers: vec![Box::new(signer)],
+            signers: vec![Arc::new(signer)],
             crypto: Arc::clone(&crypto),
             attestor: Box::new(NoAttestation),
             verifier: Box::new(NoAttestation),
@@ -228,7 +229,16 @@ fn file_stores_survive_disk_errors() {
         "bodies {held:?} with {applied} applied"
     );
     for height in 1..applied.saturating_sub(3) {
-        let entry = blocks.entry(height).unwrap();
-        assert!(bodies.get(height, &entry.commit_qc.block_hash).is_none());
+        use crate::sumeragi::durable_artifact::{BodyReadPoll, BodyReader};
+        let entry = blocks.entry(height).unwrap().unwrap();
+        let source = blocks
+            .availability_source(height, entry.commit_qc.block_hash)
+            .unwrap()
+            .unwrap();
+        let mut read = bodies.begin_read(source).unwrap();
+        assert!(matches!(
+            read.poll(&super::test_budget()).unwrap(),
+            BodyReadPoll::Absent
+        ));
     }
 }

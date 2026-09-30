@@ -8,8 +8,8 @@ use futures::executor;
 use iroha_config::parameters::actual;
 use iroha_core::{query::store::LiveQueryStore, state::State as IrohaState};
 use iroha_crypto::{
-    Algorithm, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode,
-    Signature as IrohaSignature, SignatureOf, ram_lfe_output_hash,
+    Algorithm, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode, Signature as IrohaSignature,
+    SignatureOf, ram_lfe_output_hash,
 };
 use iroha_data_model::{
     Identifiable, Registrable, ValidationFail,
@@ -2008,13 +2008,13 @@ fn sample_stark_vk_box(
     backend: &str,
     circuit_id: &str,
 ) -> iroha_data_model::proof::VerifyingKeyBox {
-    let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
+    let vk_payload = iroha_core_zk::stark::StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.to_owned(),
-        n_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
-        blowup_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        n_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+        blowup_log2: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
         fold_arity: 2,
-        queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+        queries: iroha_core_zk::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
         merkle_arity: 2,
     };
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");

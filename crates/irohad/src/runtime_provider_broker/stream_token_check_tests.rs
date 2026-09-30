@@ -7,7 +7,7 @@ fn native_check_fixture() -> (
 ) {
     use iroha_data_model::{
         account::AccountId,
-        block::consensus_v2::HeightContextId,
+        block::consensus::HeightContextId,
         sorafs::{capacity::ProviderId, stream_token_authority::*},
     };
     let observer = KeyPair::try_from_seed(vec![0xD3; 32], Algorithm::Ed25519).unwrap();

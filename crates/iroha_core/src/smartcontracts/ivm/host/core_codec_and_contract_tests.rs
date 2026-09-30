@@ -699,11 +699,12 @@ fn install_contract_with_interface_and_lifecycle(
     leave_lifecycle_pending: bool,
     customize_interface: impl FnOnce(&mut ivm::EmbeddedContractInterfaceV1),
 ) -> ContractAddress {
-    let compiler =
-        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-            mode: ivm::kotodama::compiler::CompilerMode::Production,
-            ..ivm::kotodama::compiler::CompilerOptions::default()
-        });
+    let compiler = kotodama_lang::compiler::Compiler::new_with_options(
+        kotodama_lang::compiler::CompilerOptions {
+            mode: kotodama_lang::compiler::CompilerMode::Production,
+            ..kotodama_lang::compiler::CompilerOptions::default()
+        },
+    );
     let (mut code, _manifest) = compiler
         .compile_source_with_manifest(source)
         .expect("compile contract with manifest");

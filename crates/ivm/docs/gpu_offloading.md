@@ -175,4 +175,5 @@ It requires real completed kernel work on every discovered usable device and
 scalar parity for all ten families. Driverless policy tests establish loading
 and state transitions only; they do not qualify GPU execution. The same
 candidate must then pass CPU/SIMD/Metal/CUDA parity and a four-validator
-mixed-hardware network with mandatory DA/RBC before release.
+mixed-hardware network with mandatory signed RS16 payload availability before
+release.

@@ -8764,7 +8764,7 @@ pub enum ReputationFinalizedArchiveError {
     #[error("finalized reputation archive index is busy")]
     IndexBusy {
         /// Release Kura and State fences before awaiting this actual index owner.
-        wait: concread::release::ReleaseWait,
+        wait: iroha_allocation::release::ReleaseWait,
     },
     /// Archive resource ceilings are zero, inconsistent, or unrepresentable.
     #[error("invalid finalized reputation archive bounds: {reason}")]

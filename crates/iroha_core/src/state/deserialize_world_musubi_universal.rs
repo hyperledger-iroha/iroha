@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 #[path = "deserialize_world_musubi_universal/accumulator.rs"]
 mod accumulator;

@@ -2713,7 +2713,10 @@ def prepare_compiler_measurement(
     finally:
         os.close(tools_fd)
     environment["RUSTC"] = str(wrapper)
-    environment.pop("RUSTC_WRAPPER", None)
+    # Empty values override configured Cargo wrappers as well as inherited ones. A cache
+    # replay cannot supply the compiler-child measurements this profiler authenticates.
+    environment["RUSTC_WRAPPER"] = ""
+    environment["RUSTC_WORKSPACE_WRAPPER"] = ""
     return {
         "helper_sha256": sha256_bytes(helper_payload),
         "profiler": RUSTC_PROFILE.stable_file_identity(Path(__file__).resolve()),

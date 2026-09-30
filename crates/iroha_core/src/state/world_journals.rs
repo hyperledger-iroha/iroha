@@ -13,10 +13,10 @@ use super::{
     WorldBlockFields,
 };
 use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet, SetBlockCapture};
+use iroha_allocation::{AllocationBudget, OwnedAllocationScope};
 use iroha_data_model::{events::EventBox, nexus::DataSpaceCatalog};
 use mv::{
     BlockCapture, BlockMode, Key, Value,
-    allocation::{AllocationBudget, OwnedAllocationScope},
     cell::BlockCaptureSlot as CellCaptureSlot,
     storage::{BlockCaptureSlot as StorageCaptureSlot, StorageMode},
 };

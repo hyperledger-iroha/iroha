@@ -9,7 +9,8 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, prelude::*};
 use iroha_model_base::name::Name;
-use ivm::{IVM, KotodamaCompiler, ProgramMetadata};
+use ivm::{IVM, ProgramMetadata};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 fn seeded_authority(seed: u8) -> AccountId {

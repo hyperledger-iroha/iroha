@@ -338,10 +338,6 @@ impl PricingScheduleRecord {
     /// # Errors
     ///
     /// Returns [`PricingValidationError`] when the schedule violates currency or tier constraints.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one fail-closed validator keeps all first-release pricing invariants together"
-    )]
     pub fn validate(&self) -> Result<(), PricingValidationError> {
         if self.version != PRICING_SCHEDULE_VERSION_V1 {
             return Err(PricingValidationError::UnsupportedVersion(self.version));

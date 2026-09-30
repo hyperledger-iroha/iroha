@@ -1,7 +1,7 @@
 //! Exact original-pool identity allocation before a Cell's physical acquisition.
 
 use super::NextPublication;
-use crate::allocation::{AllocationBudget, AllocationCharge};
+use iroha_allocation::{AllocationBudget, AllocationCharge};
 use std::{alloc::Layout, fmt};
 
 /// One move-only prepaid identity for an original Cell publication.

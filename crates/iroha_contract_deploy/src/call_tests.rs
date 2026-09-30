@@ -54,7 +54,6 @@ fn fixture() -> Result<(Config, PreparedContractCall, TransactionRecord)> {
         config.account.clone(),
         prepared.plan.requested_fee.clone(),
     )
-    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
     .with_metadata(prepared.plan.intent.metadata.clone())
     .with_executable(Executable::ContractCall(
         prepared.plan.intent.invocation.clone(),
@@ -168,13 +167,13 @@ fn call_signed_plan_and_transaction_reject_substitution() -> Result<()> {
         validate_plan(&later, &config).is_err(),
         "even a signed plan must retain its operation tag"
     );
+    // Re-signing the exact executable without the plan-bound operation metadata is a substitution.
     let original = decode_transaction(&step)?;
     let changed = TransactionBuilder::new(
         config.network_id,
         config.account.clone(),
         prepared.plan.requested_fee.clone(),
     )
-    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
     .with_executable(original.instructions().clone())
     .try_sign(config.key_pair.private_key())?;
     assert!(
@@ -229,7 +228,6 @@ fn call_self_grant_is_exact_and_precedes_call_preparation() -> Result<()> {
         config.account.clone(),
         prepared.plan.requested_fee.clone(),
     )
-    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
     .with_instructions([Grant::account_permission(
         permission,
         config.account.clone(),
@@ -250,7 +248,6 @@ fn call_self_grant_is_exact_and_precedes_call_preparation() -> Result<()> {
         config.account.clone(),
         prepared.plan.requested_fee.clone(),
     )
-    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
     .with_metadata(prepared.plan.intent.metadata.clone())
     .with_executable(Executable::ContractCall(
         prepared.plan.intent.invocation.clone(),

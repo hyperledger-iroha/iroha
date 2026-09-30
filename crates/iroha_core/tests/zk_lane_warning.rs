@@ -134,6 +134,6 @@ fn funded_snapshot(
         register_events: &[],
         steps: &[],
     }
-    .try_snapshot(&mv::allocation::AllocationBudget::new(64 * 1024))
+    .try_snapshot(&iroha_allocation::AllocationBudget::new(64 * 1024))
     .expect("fund lane integration fixture")
 }

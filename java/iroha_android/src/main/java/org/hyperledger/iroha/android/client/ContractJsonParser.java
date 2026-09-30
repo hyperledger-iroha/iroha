@@ -13,7 +13,6 @@ import java.util.stream.Collectors;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 
@@ -60,8 +59,7 @@ public final class ContractJsonParser {
         response.operationReceipt().feePayment(),
         response.transactionPayloadB64(),
         response.signingMessageB64(),
-        "contract call response",
-        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
+        "contract call response");
     if (!response.submitted()
         && (response.entrypointHashHex() != null
             || response.operationReceipt().txHashHex() != null
@@ -148,8 +146,7 @@ public final class ContractJsonParser {
         response.feePayment(),
         response.transactionPayloadB64(),
         response.signingMessageB64(),
-        "multisig response",
-        TransactionAdmissionIntent.ORDINARY);
+        "multisig response");
     return response;
   }
 
@@ -576,8 +573,7 @@ public final class ContractJsonParser {
       final FeePaymentIntent feePayment,
       final String transactionPayloadB64,
       final String signingMessageB64,
-      final String context,
-      final TransactionAdmissionIntent expectedAdmissionIntent) {
+      final String context) {
     if (submitted) {
       if (txHashHex == null || transactionPayloadB64 != null || signingMessageB64 != null) {
         throw new IllegalStateException(
@@ -593,8 +589,7 @@ public final class ContractJsonParser {
     final byte[] signingMessage = Base64.getDecoder().decode(signingMessageB64);
     final TransactionPayload decodedPayload;
     try {
-      decodedPayload = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
-          transactionPayload, expectedAdmissionIntent);
+      decodedPayload = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(transactionPayload);
     } catch (final Exception ex) {
       throw new IllegalStateException(
           context + ".transaction_payload_b64 must contain one canonical TransactionPayload", ex);

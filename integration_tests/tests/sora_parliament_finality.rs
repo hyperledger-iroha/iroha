@@ -5,6 +5,7 @@ use super::*;
 use iroha_data_model::sumeragi_finality::{
     FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier, VerifiedSumeragiBlock,
 };
+use iroha_sumeragi::availability::recommended_data_availability_layout;
 
 /// Authenticate one exact block through the bounded contiguous native prefix.
 /// Each HTTP proof remains untrusted until the existing verifier admits its committee and result.
@@ -30,7 +31,7 @@ pub(super) async fn certified_block(
     )?;
     if iroha_data_model::NetworkId::from_genesis_hash(genesis.expected_hash())
         != network.network_id()
-        || genesis.consensus_metadata().sumeragi_v2.da_layout
+        || genesis.consensus_metadata().sumeragi_context.da_layout
             != recommended_data_availability_layout()
     {
         return Err(eyre!(

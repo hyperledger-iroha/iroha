@@ -1,8 +1,8 @@
 //! Actual original-pool refunds reenter retry queues only after physical unlock.
 
 use super::*;
+use iroha_allocation::{AllocationBudget, AllocationRefusal};
 use ivm::zk::{DiagnosticRegisterSource, DiagnosticTraceSource};
-use mv::allocation::{AllocationBudget, AllocationRefusal};
 use std::{
     future::Future,
     pin::Pin,

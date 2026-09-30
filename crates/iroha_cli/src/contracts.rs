@@ -943,6 +943,9 @@ impl<H> IVMHost for TracingHost<H>
 where
     H: IVMHost + 'static,
 {
+    fn prepared_entrypoint_arguments(&self) -> Option<ivm::PreparedArgumentRecord> {
+        self.inner.prepared_entrypoint_arguments()
+    }
     fn prepare_syscall(&self, number: u32, vm: &ivm::IVM) -> Result<u64, ivm::VMError> {
         self.inner.prepare_syscall(number, vm)
     }
@@ -1742,7 +1745,7 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::DataSpaceId;
-    use ivm::kotodama::session::{CompileRequest, CompilerSession};
+    use kotodama_lang::session::{CompileRequest, CompilerSession};
     use url::Url;
     #[test]
     fn package_project_commands_are_owned_by_musubi() {
@@ -1818,14 +1821,14 @@ mod tests {
             include_str!("contracts/fixtures/minimal_view.ko"),
             "        "
         );
-        let compiler = ivm::KotodamaCompiler::new();
+        let compiler = kotodama_lang::compiler::Compiler::new();
         let (program, _manifest) = compiler
             .compile_source_with_manifest(source)
             .expect("compile view contract");
         program
     }
     fn compile_contract_program(source: &str) -> Vec<u8> {
-        let compiler = ivm::KotodamaCompiler::new();
+        let compiler = kotodama_lang::compiler::Compiler::new();
         let (program, _manifest) = compiler
             .compile_source_with_manifest(source)
             .expect("compile contract");
@@ -2592,7 +2595,14 @@ mod tests {
                 payload_file: None,
             },
         };
+        ivm::reset_argument_record_decode_count();
         args.run(&mut ctx).expect("debug call");
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            1,
+            "tracing must retain the prepared arguments without decoding them again"
+        );
         let output = ctx.take_output().expect("debug call output");
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),

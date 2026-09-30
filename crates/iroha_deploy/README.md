@@ -33,7 +33,10 @@ What exists so far:
   §11.2 D-7). It is anchored in an authenticated genesis or a stored
   complete native `checkpoint.norito`, verifies every contiguous successor under
   finite proof and peer budgets, and requires `2f + 1` fresh
-  challenge-bound attestations from the authenticated committee. Exact retained
+  challenge-bound attestations from the authenticated committee. Each epoch's
+  committee comes only from the boundary result its predecessor certified. A
+  checkpoint that lags by more than one observation budget catches up in
+  bounded, individually published pages (`catch_up`). Exact retained
   predecessor decisions permit one block of lag after checkpoint import. Within an
   observation, earlier responses count when their exact decisions were verified in
   its contiguous prefix, including across boundaries. Supplied proofs cannot select

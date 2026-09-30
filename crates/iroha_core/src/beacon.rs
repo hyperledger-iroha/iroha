@@ -121,7 +121,7 @@ pub fn active_global_threshold_beacon_session_id_v1(
 
 /// Hash the exact ordered, domainless validator identities used as DKG seats.
 ///
-/// Consensus power is fixed to one in Sumeragi v2, so the public beacon
+/// Consensus power is fixed to one in Sumeragi, so the public beacon
 /// session binds the canonical `PeerId` roster rather than duplicating that
 /// invariant in its DKG transcript.
 #[must_use]

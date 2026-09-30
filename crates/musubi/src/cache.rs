@@ -1762,10 +1762,6 @@ fn decode_cached_verification_lock_v1(
         )
     })
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "compiler admission deliberately verifies every bound bundle transcript and cross-reference in one fail-closed sequence"
-)]
 fn verify_compiler_bundle(
     root: &Path,
     node: &MusubiVerificationNodeV1,
@@ -1955,10 +1951,6 @@ fn compare_inventory(plan: &CarBuildPlan, files: &[FileInventory]) -> Result<(),
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "bundle verification deliberately keeps all canonical transcript fields and cross-commitments in one auditable fail-closed sequence"
-)]
 fn verify_bundle_commitments(
     root: &Path,
     commitment: &MusubiArchiveCommitmentV1,

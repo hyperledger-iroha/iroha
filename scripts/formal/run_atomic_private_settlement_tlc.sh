@@ -390,7 +390,7 @@ for config in "${selected_configs[@]}"; do
       ;;
     safety_violation)
       primary_diagnostic_count="$(
-        grep -Ec "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" "$stdout_log" || true
+        grep -Ec "$TLC_PRIMARY_DIAGNOSTIC_PATTERN" "$stdout_log" || true
       )"
       if [[ "$status" -ne 12 ]]; then
         cat "$stdout_log" >&2

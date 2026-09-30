@@ -42,7 +42,7 @@ def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
         "run": run,
         "validators_per_dataspace": 4,
         "quorum": "3-of-4",
-        "mandatory_signed_rs16_da_rbc": True,
+        "mandatory_signed_rs16_da": True,
         "authenticated_private_settlement_route_control": True,
         "committee_validator_restarts": list(range(participants)),
         "maximum_simultaneously_unavailable_per_committee": 1,

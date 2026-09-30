@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 use parking_lot::Mutex;
 
 use crate::{

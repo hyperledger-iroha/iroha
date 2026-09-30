@@ -142,7 +142,7 @@ pub fn quantity_artifact_resources(
 impl QuantityArtifactResources {
     #[allow(
         clippy::large_types_passed_by_value,
-        reason = "keeps the by-value `Copy` limits contract of its sibling-module callers"
+        reason = "keeps the by-value `Copy` limits contract of its quantity-producer caller"
     )]
     pub(in crate::backend) fn check_proving_limits(
         self,

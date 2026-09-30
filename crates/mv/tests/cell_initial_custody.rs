@@ -1,9 +1,7 @@
 //! Actual allocator refusal and allocation-free movement of initial Cell backing.
 
-use mv::{
-    allocation::AllocationBudget,
-    cell::{CellInitialization, CellInitializationError},
-};
+use iroha_allocation::AllocationBudget;
+use mv::cell::{CellInitialization, CellInitializationError};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

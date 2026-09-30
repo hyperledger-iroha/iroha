@@ -680,6 +680,7 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
         } <= sealed
     assert {
         Path(".cargo/config.toml"),
+        Path(".config/nextest.toml"),
         Path("Cargo.lock"),
         Path("Cargo.toml"),
         Path("CHANGELOG.md"),
@@ -736,7 +737,7 @@ def test_trusted_release_surface_includes_ignored_autoloaded_controls(
     initialize_tracked_release_surface(tmp_path)
     baseline = checker.trusted_release_surface_digest(tmp_path)
     (tmp_path / ".gitignore").write_text(
-        ".cargo/config\nDirectory.Build.targets\n", encoding="utf-8"
+        ".cargo/config\n.config/nextest.toml\nDirectory.Build.targets\n", encoding="utf-8"
     )
     cargo_override = tmp_path / ".cargo" / "config"
     cargo_override.write_text(
@@ -747,15 +748,43 @@ def test_trusted_release_surface_includes_ignored_autoloaded_controls(
         '<Project><Target Name="ReplaceReleaseOutput" /></Project>\n',
         encoding="utf-8",
     )
+    nextest_override = tmp_path / ".config" / "nextest.toml"
+    nextest_override.parent.mkdir()
+    nextest_override.write_text(
+        '[profile.release-gate]\ndefault-filter = "none()"\n', encoding="utf-8"
+    )
 
     inventoried = set(checker.trusted_release_surface_paths(tmp_path))
     assert Path(".cargo/config") in inventoried
     assert Path("Directory.Build.targets") in inventoried
+    assert Path(".config/nextest.toml") in inventoried
     assert checker.trusted_release_surface_digest(tmp_path) != baseline
 
     cargo_override.unlink()
     msbuild_override.unlink()
+    nextest_override.unlink()
     assert checker.trusted_release_surface_digest(tmp_path) == baseline
+
+
+def test_trusted_release_surface_rejects_changed_or_removed_nextest_selection(
+    tmp_path: Path,
+) -> None:
+    checker = load_checker()
+    initialize_tracked_release_surface(tmp_path)
+    config = tmp_path / ".config" / "nextest.toml"
+    config.parent.mkdir()
+    config.write_text(
+        '[profile.release-gate]\ndefault-filter = "all()"\n', encoding="utf-8"
+    )
+    subprocess.run(["git", "add", ".config/nextest.toml"], cwd=tmp_path, check=True)
+    baseline = checker.trusted_release_surface_digest(tmp_path)
+    assert Path(".config/nextest.toml") in checker.trusted_release_surface_paths(tmp_path)
+    config.write_text(
+        '[profile.release-gate]\ndefault-filter = "none()"\n', encoding="utf-8"
+    )
+    assert_seal_rejects(checker, tmp_path, baseline)
+    config.unlink()
+    assert_seal_rejects(checker, tmp_path, baseline)
 
 
 def _nix_test_catalog(checker):
@@ -978,6 +1007,14 @@ def test_feature_graph_queries_all_targets(monkeypatch, tmp_path: Path) -> None:
             "safe",
         ]
     ]
+
+
+@pytest.mark.parametrize("package", ("iroha_core_privacy", "iroha_core_timed_ovn"))
+def test_extracted_native_owner_test_helpers_are_rejected(package: str) -> None:
+    checker = load_checker()
+    marker = f'{package} feature "test-utils"'
+    assert checker.forbidden_features_in_graph(marker + "\n") == (marker,)
+    assert checker.forbidden_features_in_graph(f'{package} feature "default"\n') == ()
 
 
 def test_shipping_packages_exclude_test_fixtures() -> None:

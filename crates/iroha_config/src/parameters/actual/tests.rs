@@ -768,25 +768,25 @@ mod tests {
         assert!(defaults.submitters.is_empty());
     }
     #[test]
-    fn sumeragi_v2_default_nexus_amx_hash_is_stable() {
+    fn sumeragi_default_nexus_amx_hash_is_stable() {
         assert_eq!(
             Nexus::default().staking.stake_asset_id,
             Nexus::default().fees.fee_asset_id,
             "recommended staking custody and fees must use the canonical XOR asset",
         );
         let hash =
-            sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
+            sumeragi_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "dce8d3d33d72ba736401006ef023976f5800b28529336e0d7cbd9b6feef61515",
+            "b8c9897f84a0fd3162c821e06afdd659466c3ca3193d7853b76e819e840d2a4b",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
-            iroha_data_model::block::consensus_v2::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
+            iroha_data_model::block::consensus::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             "data-model genesis defaults must track the canonical config projection",
         );
         assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+            sumeragi_nexus_amx_context_hash_with_catalog_policy(
                 &Nexus::default(),
                 &Pipeline::default(),
                 &[],
@@ -798,13 +798,13 @@ mod tests {
         );
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_binds_committed_catalog_policy() {
+    fn sumeragi_nexus_amx_hash_binds_committed_catalog_policy() {
         let nexus = Nexus::default();
         let pipeline = Pipeline::default();
-        let baseline = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
+        let baseline = sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
         let root = Hash::new(b"first committed catalog with exact four-validator manifest");
         let changed_root = Hash::new(b"changed committed manifest authority");
-        let committed = sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+        let committed = sumeragi_nexus_amx_context_hash_with_catalog_policy(
             &nexus,
             &pipeline,
             &[],
@@ -817,7 +817,7 @@ mod tests {
         );
         assert_ne!(
             committed,
-            sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+            sumeragi_nexus_amx_context_hash_with_catalog_policy(
                 &nexus,
                 &pipeline,
                 &[],
@@ -834,7 +834,7 @@ mod tests {
         .expect("valid changed geometry");
         assert_ne!(
             committed,
-            sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+            sumeragi_nexus_amx_context_hash_with_catalog_policy(
                 &changed_geometry,
                 &pipeline,
                 &[],
@@ -845,7 +845,7 @@ mod tests {
         );
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_canonicalizes_dataspace_catalog_order() {
+    fn sumeragi_nexus_amx_hash_canonicalizes_dataspace_catalog_order() {
         let universal = DataSpaceMetadata::default();
         let settlement = DataSpaceMetadata {
             id: DataSpaceId::new(7),
@@ -863,13 +863,13 @@ mod tests {
             .expect("valid reordered dataspace catalog");
 
         assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
             "dataspace catalog iteration order must not affect the signed Nexus/AMX commitment"
         );
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_excludes_operator_descriptions() {
+    fn sumeragi_nexus_amx_hash_excludes_operator_descriptions() {
         let mut left = Nexus::default();
         let mut left_lane = LaneConfigMetadata {
             description: Some("left lane note".to_owned()),
@@ -924,13 +924,13 @@ mod tests {
         right.routing_policy.rules[0].matcher.description = Some("right routing note".to_owned());
 
         assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
             "operator-only lane/dataspace descriptions, lane metadata, and routing descriptions must not affect consensus"
         );
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_canonicalizes_fee_exempt_authorities() {
+    fn sumeragi_nexus_amx_hash_canonicalizes_fee_exempt_authorities() {
         let authority = |seed| {
             AccountId::new(
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -953,15 +953,15 @@ mod tests {
             BTreeSet::from([authority_a, authority_b]);
 
         assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
             "set order and duplicate entries must not affect the signed Nexus/AMX commitment"
         );
 
         right.fees.successful_claim_fee_exempt_authorities = BTreeSet::from([authority_c]);
         assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
-            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
             "changing the canonical authority set must change the signed commitment"
         );
     }
@@ -990,14 +990,14 @@ mod tests {
         ((lane, validator), record)
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_binds_every_projection_category() {
+    fn sumeragi_nexus_amx_hash_binds_every_projection_category() {
         let nexus = Nexus::default();
         let pipeline = Pipeline::default();
-        let baseline = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
+        let baseline = sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
         let assert_nexus_change = |label: &str, changed: Nexus| {
             assert_ne!(
                 baseline,
-                sumeragi_v2_nexus_amx_context_hash(&changed, &pipeline, &[], &[]),
+                sumeragi_nexus_amx_context_hash(&changed, &pipeline, &[], &[]),
                 "{label} must change the signed Nexus/AMX commitment"
             );
         };
@@ -1072,43 +1072,43 @@ mod tests {
         changed_pipeline.amx_per_instruction_ns += 1;
         assert_ne!(
             baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &changed_pipeline, &[], &[]),
+            sumeragi_nexus_amx_context_hash(&nexus, &changed_pipeline, &[], &[]),
             "deterministic AMX budgets must change the signed commitment"
         );
         let active = [test_active_validator(0xA1, LaneId::SINGLE)];
         assert_ne!(
             baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active, &[]),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &active, &[]),
             "staged active validators must change the signed commitment"
         );
-        let lifecycle = [SumeragiV2LaneLifecycleEntry {
+        let lifecycle = [SumeragiLaneLifecycleEntry {
             lane_id: LaneId::SINGLE,
             generation: 0,
-            incarnation: Hash::new(b"sumeragi-v2-test-incarnation"),
+            incarnation: Hash::new(b"sumeragi-test-incarnation"),
             activation_height: 7,
         }];
         assert_ne!(
             baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
             "lane lifecycle history must change the signed commitment"
         );
         let mut changed_generation = lifecycle;
         changed_generation[0].generation += 1;
         assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_generation),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_generation),
             "retained lane generation must be committed independently of the current catalog"
         );
         let mut changed_lifecycle = lifecycle;
         changed_lifecycle[0].activation_height += 1;
         assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_lifecycle),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_lifecycle),
             "activation height must be committed independently of the current catalog"
         );
         let retained_with_retired_lane = [
             lifecycle[0],
-            SumeragiV2LaneLifecycleEntry {
+            SumeragiLaneLifecycleEntry {
                 lane_id: LaneId::new(7),
                 generation: 3,
                 incarnation: Hash::new(b"retired-lane-incarnation"),
@@ -1116,13 +1116,13 @@ mod tests {
             },
         ];
         assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &retained_with_retired_lane,),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &[], &retained_with_retired_lane,),
             "retired lane lineage must remain committed after catalog removal"
         );
     }
     #[test]
-    fn sumeragi_v2_nexus_amx_hash_canonicalizes_validator_and_lineage_order() {
+    fn sumeragi_nexus_amx_hash_canonicalizes_validator_and_lineage_order() {
         let nexus = Nexus::default();
         let pipeline = Pipeline::default();
         let first = test_active_validator(0xA2, LaneId::new(1));
@@ -1130,29 +1130,29 @@ mod tests {
         let forward = [first.clone(), second.clone()];
         let reverse = [second, first];
         assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &forward, &[]),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &reverse, &[]),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &forward, &[]),
+            sumeragi_nexus_amx_context_hash(&nexus, &pipeline, &reverse, &[]),
         );
-        let first_lifecycle = SumeragiV2LaneLifecycleEntry {
+        let first_lifecycle = SumeragiLaneLifecycleEntry {
             lane_id: LaneId::new(1),
             generation: 2,
             incarnation: Hash::new(b"first-lifecycle"),
             activation_height: 3,
         };
-        let second_lifecycle = SumeragiV2LaneLifecycleEntry {
+        let second_lifecycle = SumeragiLaneLifecycleEntry {
             lane_id: LaneId::SINGLE,
             generation: 0,
             incarnation: Hash::new(b"second-lifecycle"),
             activation_height: 0,
         };
         assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(
+            sumeragi_nexus_amx_context_hash(
                 &nexus,
                 &pipeline,
                 &[],
                 &[first_lifecycle, second_lifecycle],
             ),
-            sumeragi_v2_nexus_amx_context_hash(
+            sumeragi_nexus_amx_context_hash(
                 &nexus,
                 &pipeline,
                 &[],

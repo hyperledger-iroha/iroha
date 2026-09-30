@@ -13,7 +13,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import org.hyperledger.iroha.android.client.mock.ToriiMockServer;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -114,7 +113,6 @@ public final class HttpClientTransportPendingQueueTests {
             .setInstructionBytes(marker.getBytes(StandardCharsets.UTF_8))
             .setTimeToLiveMs(5_000L)
             .setNonce(nonce)
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(Map.of("marker", marker))
             .build();
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);

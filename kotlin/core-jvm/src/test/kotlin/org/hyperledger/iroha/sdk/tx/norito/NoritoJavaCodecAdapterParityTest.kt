@@ -46,6 +46,39 @@ class NoritoJavaCodecAdapterParityTest {
     private val testIvmFeePayment = FeePaymentIntent.authority(emptyList(), 1L)
 
     @Test
+    fun canonicalLogInstructionPreservesEveryLevelAndMessage() {
+        val message = "sample preview: こんにちは / \u0000"
+        for (level in 0L..4L) {
+            val instruction = NoritoJavaCodecAdapter.logInstruction(level, message)
+            assertEquals("iroha.log", instruction.name)
+            val encoded = NoritoJavaCodecAdapter.encodeInstructionBox(instruction)
+            val decoded = TransactionPayloadAdapter.decodeCanonicalLogInstruction(encoded)
+            assertEquals(level, decoded.level)
+            assertEquals(message, decoded.message)
+            assertContentEquals(
+                TransactionPayloadAdapter.encodeCanonicalLogInstruction(level, message),
+                encoded,
+            )
+            assertContentEquals(
+                encoded,
+                NoritoJavaCodecAdapter.encodeInstructionBox(
+                    NoritoJavaCodecAdapter.decodeInstructionBox(encoded),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun canonicalLogInstructionRejectsUnknownLevelTags() {
+        for (level in listOf(-1L, 5L, Long.MIN_VALUE, Long.MAX_VALUE)) {
+            val failure = assertFailsWith<NoritoException> {
+                NoritoJavaCodecAdapter.logInstruction(level, "sample preview")
+            }
+            assertTrue(failure.cause?.message.orEmpty().contains("canonical Level tag"))
+        }
+    }
+
+    @Test
     fun `codec round-trips payload as bare payload`() {
         val instructions = "android-instructions".toByteArray()
         val payload = TransactionPayload(

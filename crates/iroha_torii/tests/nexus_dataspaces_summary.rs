@@ -477,8 +477,8 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
-async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_dataspace() {
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserves_global_portfolio()
+{
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let dataspace = DataSpaceId::new(404);
@@ -495,12 +495,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         domain_id.clone(),
         "lotus".parse().expect("asset definition name"),
     );
-    let mut world = World::default();
-    let mut bindings = UaidDataspaceBindings::default();
-    bindings.bind_account(dataspace, account_id.clone());
-    world
-        .uaid_dataspaces_mut_for_testing()
-        .insert(uaid, bindings);
+    let world = World::default();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
@@ -554,7 +549,47 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         .world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-    let router = build_test_router(Arc::new(state));
+    // Reconstruct an initial World containing a dataspace absent from the active
+    // catalog. Configured genesis must prune both its manifest and derived binding;
+    // the account's global asset remains owned by the same canonical account.
+    {
+        let world = state.world_view();
+        assert!(
+            world
+                .uaid_dataspaces()
+                .get(&uaid)
+                .expect("seeded bindings")
+                .is_bound_to(dataspace, &account_id)
+        );
+        assert!(
+            world
+                .space_directory_manifests()
+                .get(&uaid)
+                .and_then(|set| set.get(&dataspace))
+                .expect("seeded uncataloged manifest")
+                .is_active()
+        );
+    }
+    let before = iroha_core::nexus::portfolio::collect_portfolio(&state.view(), uaid);
+    assert_eq!(before.dataspaces.len(), 1);
+    assert_eq!(before.dataspaces[0].dataspace_id, dataspace);
+    assert_eq!(before.dataspaces[0].dataspace_alias, None);
+    assert_eq!(before.dataspaces[0].accounts.len(), 1);
+    let before_account = &before.dataspaces[0].accounts[0];
+    assert_eq!(before_account.account_id, account_id);
+    assert_eq!(before_account.assets.len(), 1);
+    assert_eq!(before_account.assets[0].quantity, Quantity::from(9u32));
+    let (router, state) = build_test_router_with_state(Arc::new(state));
+    {
+        let world = state.world_view();
+        assert!(world.uaid_dataspaces().get(&uaid).is_none());
+        assert!(world.space_directory_manifests().get(&uaid).is_none());
+    }
+    let after = iroha_core::nexus::portfolio::collect_portfolio(&state.view(), uaid);
+    assert_eq!(after.totals, before.totals);
+    assert_eq!(after.dataspaces.len(), 1);
+    assert_eq!(after.dataspaces[0].dataspace_id, DataSpaceId::UNIVERSAL);
+    assert_eq!(after.dataspaces[0].accounts, before.dataspaces[0].accounts);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
@@ -568,15 +603,20 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     assert_eq!(payload["totals"]["accounts_bound"], Value::from(1));
     assert_eq!(payload["totals"]["portfolio_accounts"], Value::from(1));
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
-    assert_eq!(payload["totals"]["manifests_total"], Value::from(1));
-    assert_eq!(payload["totals"]["manifests_active"], Value::from(1));
+    assert_eq!(payload["totals"]["manifests_total"], Value::from(0));
+    assert_eq!(payload["totals"]["manifests_active"], Value::from(0));
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
-    assert_eq!(row["dataspace_id"], Value::from(dataspace.as_u64()));
+    assert_eq!(
+        row["dataspace_id"],
+        Value::from(DataSpaceId::UNIVERSAL.as_u64())
+    );
+    assert_eq!(row["dataspace_alias"], Value::from("universal"));
     assert!(
-        row["dataspace_alias"].is_null(),
-        "expected null alias for uncataloged dataspace: {body}"
+        dataspaces
+            .iter()
+            .all(|row| row["dataspace_id"] != Value::from(dataspace.as_u64()))
     );
     assert_eq!(
         row["accounts"].as_array().expect("accounts"),
@@ -585,11 +625,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     assert_eq!(row["portfolio"]["accounts"], Value::from(1));
     assert_eq!(row["portfolio"]["positions"], Value::from(1));
     assert_eq!(row["portfolio"]["asset_definitions"], Value::from(1));
-    assert_eq!(row["manifest"]["status"], Value::from("Active"));
+    assert_eq!(row["manifest"]["present"], Value::Bool(false));
+    assert_eq!(row["manifest"]["status"], Value::from("Missing"));
+    assert_eq!(row["manifest"]["active"], Value::Bool(false));
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
-async fn nexus_dataspaces_summary_endpoint_joins_multiple_bound_accounts_and_portfolio() {
+async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uaid_owner() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let query = LiveQueryStore::start_test();
     let dataspace = DataSpaceId::new(52);
@@ -655,6 +697,16 @@ async fn nexus_dataspaces_summary_endpoint_joins_multiple_bound_accounts_and_por
     Register::account(NewAccount::new(primary_account_id.clone()).with_uaid(Some(uaid)))
         .execute(&ALICE_ID, &mut stx)
         .expect("register primary account with uaid");
+    let duplicate =
+        Register::account(NewAccount::new(secondary_account_id.clone()).with_uaid(Some(uaid)))
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("a UAID has exactly one canonical account owner");
+    assert_eq!(
+        duplicate,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+            format!("UAID {uaid} already bound to account {primary_account_id}").into()
+        )
+    );
     Register::account(NewAccount::new(secondary_account_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register secondary account");
@@ -689,12 +741,29 @@ async fn nexus_dataspaces_summary_endpoint_joins_multiple_bound_accounts_and_por
         .get(&uaid)
         .cloned()
         .expect("bindings should exist after active manifest registration");
-    bindings.bind_account(dataspace, secondary_account_id.clone());
+    assert!(bindings.is_bound_to(dataspace, &primary_account_id));
+    assert!(!bindings.is_bound_to(dataspace, &secondary_account_id));
+    // A stale derived cache must not turn a different account into a UAID owner.
+    assert!(bindings.bind_account(dataspace, secondary_account_id.clone()));
     state
         .world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-    let router = build_test_router(Arc::new(state));
+    let (router, state) = build_test_router_with_state(Arc::new(state));
+    {
+        let world = state.world_view();
+        assert_eq!(world.uaid_accounts().get(&uaid), Some(&primary_account_id));
+        assert_eq!(
+            world.account(&secondary_account_id).unwrap().value().uaid(),
+            None
+        );
+        let bindings = world
+            .uaid_dataspaces()
+            .get(&uaid)
+            .expect("rebuilt bindings");
+        assert!(bindings.is_bound_to(dataspace, &primary_account_id));
+        assert!(!bindings.is_bound_to(dataspace, &secondary_account_id));
+    }
     let literal = urlencoding::encode(&primary_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
@@ -708,7 +777,7 @@ async fn nexus_dataspaces_summary_endpoint_joins_multiple_bound_accounts_and_por
     );
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
     assert_eq!(payload["totals"]["dataspaces"], Value::from(1));
-    assert_eq!(payload["totals"]["accounts_bound"], Value::from(2));
+    assert_eq!(payload["totals"]["accounts_bound"], Value::from(1));
     assert_eq!(payload["totals"]["portfolio_accounts"], Value::from(1));
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_total"], Value::from(1));
@@ -724,10 +793,8 @@ async fn nexus_dataspaces_summary_endpoint_joins_multiple_bound_accounts_and_por
         .iter()
         .map(|value| value.as_str().expect("account string").to_owned())
         .collect();
-    assert_eq!(
-        accounts,
-        HashSet::from([primary_i105_literal.clone(), secondary_i105_literal.clone(),])
-    );
+    assert_eq!(accounts, HashSet::from([primary_i105_literal.clone()]));
+    assert!(!accounts.contains(&secondary_i105_literal));
     assert_eq!(row["portfolio"]["accounts"], Value::from(1));
     assert_eq!(row["portfolio"]["positions"], Value::from(1));
     assert_eq!(row["portfolio"]["asset_definitions"], Value::from(1));
@@ -837,6 +904,11 @@ fn valid_missing_account_literal() -> String {
     AccountId::new(key_pair.public_key().clone()).to_string()
 }
 fn build_test_router(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
+    build_test_router_with_state(state).0
+}
+fn build_test_router_with_state(
+    state: Arc<State>,
+) -> (iroha_torii::TestApiRouterRuntime, Arc<State>) {
     // The fixture assembly above only populates a pre-genesis World. Authenticate that exact
     // initial World through original signed genesis before exercising native fanout reads.
     assert_eq!(state.committed_height(), 0);
@@ -903,7 +975,7 @@ fn build_test_router(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
         broadcast::channel(1).0,
         iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
-    torii.router()
+    (torii.router(), state)
 }
 fn block_header(height: u64) -> BlockHeader {
     BlockHeader::new(

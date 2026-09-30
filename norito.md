@@ -247,8 +247,14 @@ layout:
 
 Every length-delimited field is sized by running its serializer against a
 counting sink. Norito then emits that measured length and constrains the output
-pass to the same byte count. `encoded_len_hint` and `encoded_len_exact` are
-optional diagnostics; canonical encoding never trusts them for framing,
+pass to the same byte count. Nested counted children share the original encoder
+and an active exact-length scope: successful writes advance one offset, and
+scopes enforce the smaller child/enclosing end before forwarding bytes. This
+avoids routing each emitted byte through a separate writer for every ancestor.
+Overruns remain sticky even when a serializer suppresses an I/O error; short
+successful writes fail the final exact-length check. The arbitrary-writer
+`serialize_to_writer_exact` seam still verifies actual output separately.
+`encoded_len_hint` and `encoded_len_exact` are optional diagnostics; canonical encoding never trusts them for framing,
 admission, or buffer reservation. This prevents a recursive or incorrect
 length oracle from exhausting the stack, forcing a payload-sized speculative
 allocation, or understating the bytes accepted by the output pass.
@@ -502,59 +508,30 @@ once for the transaction rather than once per item. Trigger actions may store
 the same `Batch` form. One trigger invocation executes the items atomically and
 shares its deterministic trigger gas budget across the complete sequence.
 
-## Merge-ledger historical authority catalog
+## Block execution context
 
-The current first-release merge-ledger entry layout is version 3. It contains
-an explicit `MergeLaneAuthorityCatalogV1` next to the complete `active_lanes`
-vector. The catalog encodes deduplicated ordered rosters (hash version, roster
-hash, validators) and one `u16` roster index for each active lane. Canonical
-first-use order, complete reference coverage, exact `3f+1` geometry with at
-least four BLS-normal validators in increasing canonical `PeerId` order,
-roster hashes, unique validators/rosters, and index bounds are validated before
-admission. The entry hash uses `iroha:merge:ledger-entry:v3\0`; the QC payload
-includes the entry version and complete catalog under `iroha:merge:qc:v3\0`.
-Previous development entry layouts are rejected without compatibility decoding.
-Prospective lane geometry reserves a full 12-MiB execution batch, a 1-MiB QC,
-and conservative canonical catalog/framing bytes within the 16-MiB full entry.
-Admission does not assume shared rosters; exact encoded-size checks still apply.
-See [`specs/merge_ledger.md`](specs/merge_ledger.md) for finalized carrier binding
-and the distinction between historical read authority and live write authority.
-
-## Native lane Decision carrier field
-
-The first-release `BlockExecutionContextBundle` encodes these required fields
-in order: `version`, `external`, `autonomous_lane_payloads`,
-`lane_payload_ownerships`, `queue_plan_admissions`, `merge_entry`, and
-`native_lane_decisions`. The final two fields are explicit nullable slots.
-The native slot is `Option<Box<LaneDecisionBatchV1>>`, with Norito's canonical
-owned-value length prefix. Omitted slots, the old field name, and output-bearing
-native batch layouts are rejected; there is no compatibility decoder.
-
-`block::lane_decision_batch::LaneDecisionBatchV1` encodes exactly
-`base_state_height`, `base_state_hash`, and `groups` in that order. The hash is
-an exact canonical WSV snapshot identity, not a global block hash. Groups are
-strictly ordered by actual first-admission priority, have distinct route slots,
-and do not repeat outer entrypoint, inner signed, or sealed commitment owners.
-Each group contains its complete input once and the route-ordered native
-CommitQCs. Batch hashing covers `iroha:lane-consensus:decision-batch:v1\0`
-followed by its complete canonical Norito encoding. Shape, signature, actual
-first-carrier inclusion, current membership, and pre-State authentication remain
-distinct checks; decoding supplies no execution or finality authority.
+The first-release `BlockExecutionContextBundle` (version 1) encodes, in order,
+`version`, `external` (routing contexts aligned with the block's external
+entrypoints) and the required nullable
+`lane_merge: Option<SumeragiLaneMergeSection>`, which names the lane blocks the
+global block merges (`specs/sumeragi_lanes.md` §4.2). Omitted slots and unknown
+fields are rejected; there is no compatibility decoder.
 
 No economic result, settlement, replay alias, FASTPQ output claim, applying
 header copy, or execution-prefix write root belongs in this proposal field.
 Execution uses the actual carrier header; proposal construction cannot depend
 on outputs that themselves persist that header's hash. `BlockHeader` no longer
 carries the generic result Merkle root. Attaching outputs preserves its bytes,
-hash and signatures; global CommitQC `ExecutionCommitment` authenticates the
-complete executed wire and state transition. State's private execution seals
+hash and signatures; the CommitQC-certified execution result `R`
+(`specs/sumeragi.md` §4.1) authenticates the complete executed wire and state
+transition. State's private execution seals
 are not additional proposal claims or a second finality authority.
 
-The complete network-input projection comes from physical external inputs or
-native `groups`, with no synthetic Time inputs. Physical `external_*` APIs keep
-their named payload-field semantics. The header input Merkle root remains
-physical external only (absent for a native-only carrier); native membership is
-bound by `execution_context_hash`. Network input and execution-output counts
+The complete network-input projection comes from physical external inputs,
+with no synthetic Time inputs. Physical `external_*` APIs keep their named
+payload-field semantics. The header input Merkle root remains physical external
+only; merged lane blocks are bound by `execution_context_hash` through
+`lane_merge`. Network input and execution-output counts
 are independent. A SealedReveal's outer entrypoint owns its network input proof,
 while the actual transcript key and each `TransferTranscript.batch_hash` retain
 the inner execution-call hash.
@@ -674,107 +651,26 @@ before BLS verification. A context copied from an unverified artifact cannot
 establish trust; an authenticated successor uses its own target context rather
 than the initial predecessor pin. Anchors verify exact executed-wire hash and length, recompute the
 complete input/output commitments and validate the Network index join. Internal
-Pipeline/Time outputs use an output-only finality anchor. No synthetic input or
-old merge-query fallback grants authority. A structurally valid replacement row
+Pipeline/Time outputs use an output-only finality anchor. No synthetic input
+grants authority. A structurally valid replacement row
 still fails the original finalized executed-wire commitment. The existing
 32-MiB full-proof carrier cap and 256-MiB consensus wire ceiling are unchanged;
 admission/proof delivery policy must reconcile them before activation.
 
-The native field remains inactive in production until the sole consumer and
-Apply cutover are complete. It cannot coexist with another economic carrier
-form (external execution context, autonomous envelope, lane ownership, or merge
-entry). Other State-changing controls require deliberate one-overlay composition
-and enclosing capacity checks; model shape alone does not authorize that work.
-Historical inclusion additionally requires exact applying pre-State replay.
+## Sumeragi consensus messages
 
-## Sumeragi v2 Consensus Evidence Layout
+Votes, certificates, timeout votes and evidence are specified with their signing
+preimages in [`specs/sumeragi.md`](specs/sumeragi.md) §3; `crates/iroha_sumeragi`
+owns their Norito encoding.
 
-Sumeragi v2 votes and quorum certificates carry both `round` and
-`proposal_round`, but first-release validity requires them to be equal for
-every Prepare and Commit item. The duplicated authenticated fields make the
-proposal carrier explicit; they do not permit a split-round Commit. The
-canonical struct field order is:
-
-```text
-Vote:
-round
-proposal_round
-phase
-subject
-execution_commitment
-signer
-signature
-
-QuorumCertificateRef:
-round
-proposal_round
-phase
-subject
-execution_commitment
-
-QuorumCertificate:
-round
-proposal_round
-phase
-subject
-execution_commitment
-signers
-aggregate_signature
-
-SumeragiV2VoteQuorumStatus:
-round
-proposal_round
-subject
-execution_commitment
-signer_count
-signed_power
-min_signers
-total_power
-
-SumeragiV2OutboundIntentStatus:
-kind
-round
-proposal_round
-subject
-execution_commitment
-stage
-```
-
-`proposal_round` is mandatory and is included in the vote signature preimage.
-For both Prepare and Commit evidence it must equal `round`, including context,
-height, and view. Body requests, durable manifests, validation receipts, and
-finality artifacts bind the exact round-specific carrier. Application and
-successor-context derivation additionally use semantic decision identity:
-context, height, Commit phase, subject, and execution commitment. That
-projection ignores the reproposal/QC round, signer subset, and aggregate bytes,
-so an unchanged locked body decided after reproposal cannot fork successor
-context. The unreleased Vote/QC layout without `proposal_round` has no decoder
-or compatibility fallback. Liveness vote-quorum rows carry the same mandatory
-round. Outbound proposal,
-Prepare-vote, Commit-vote, Prepare-QC, and Commit-QC intents carry
-`Some(proposal_round)`; timeout-vote and timeout-certificate intents carry
-`None`. This status field is diagnostic, but every proposal-authenticating row
-obeys the same exact-round rule as the evidence it describes. An old durable
-same-round Commit may remain visible for retransmission after timeout; a later
-intent cannot reuse its `proposal_round`.
-
-The successor [`HeightContext`](crates/iroha_data_model/src/block/consensus_v2.rs)
-identity projection excludes the parent's `round` and `proposal_round` together
-with its signer subset and aggregate signature. It retains the parent context,
-height, Commit phase, subject, and execution commitment. Consequently nodes
-that decide an unchanged body in different reproposal rounds derive one
-successor context, while body- or execution-distinct parent decisions cannot
-alias.
-
-## Kura Native AMX publication locator
-
-`NativeAmxPublicationIndexRecordV1` carries a required `origin` enum and
-`selection_marker` in its sole first-release canonical layout. `CanonicalWrite`
-admits an exact append or tip replacement; `CompletedRepair` binds repair of the
-complete already committed carrier within the selected frontier and forbids
-`replaced`. Repair records never infer that a missing or different carrier was
-uncommitted. Frames remain bounded at 4,096 bytes and require exact canonical
-decoding; layouts without the explicit origin are rejected.
+The executable release wire identity includes the compiled layouts of
+`WireMessage` and native `Evidence`, including every `Defect` discriminant,
+and a separate root for the canonical compact `ExecutionResultCommitment` payload.
+`IntoSchema` describes composite enum variants through schema-only payload
+identities: ordered tuple fields or ordered named fields under the owning enum.
+These descriptions add no wire wrapper and do not change Norito frame identities.
+The release identity therefore changes when an evidence field or defect tag
+changes, even though block effects carry the canonical evidence frame as bytes.
 
 ## Hidden RAM-FHE program encoding
 
@@ -1196,3 +1092,24 @@ replay; mobile enrollment, concrete mint/state/payment/terminal and Guard
 verification, hardware transaction admission, and testnet proof observation
 enforce the same release-to-operation network match. There is one first-release
 layout and no decoder for the networkless pre-release shape.
+
+### Sumeragi execution-result schedule projection
+
+The sole `iroha_data_model::sumeragi_finality::ExecutionResultCommitment` frame
+contains `height`, `execution`, `schedule`, `beacon`, and `native_lanes` in that
+order. Its schedule contains `height`, the complete `current` epoch context,
+the optional complete `boundary` (including its next context and frozen
+preparation), then `next` and `after_next`. Each successor is either
+`Ready { height, params }` (tag 0), or
+`PendingBoundary { height, boundary_height, predecessor_context_id, params }`
+(tag 1). A ready successor derives its epoch from `boundary.next` when a
+boundary exists, otherwise from `current`; no duplicate epoch bytes occur in
+the successor slots. The encoder rejects an owned successor whose epoch differs
+from that exact source before writing the frame. The decoder reconstructs the
+complete owned graph, charging every additional roster, public-key and proof
+allocation to the inherited decode budget, and the result reader validates the
+complete graph. The result's `IntoSchema` projection describes these exact wire
+fields. The 64 KiB result-preimage/shared-witness limit is unchanged, including
+31-member boundaries with frozen preparations. The standalone `ScheduleOutcome`
+codec still represents its full owned graph; it is not the result frame's
+schedule codec. There is no decoder for the repeated-successor result layout.

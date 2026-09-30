@@ -17,10 +17,10 @@ pub(crate) mod native_capture;
 mod current_release_capture;
 
 /// Number of retained nominal codec identities in the reviewed fixture.
-const EXPECTED_CODEC_COUNT: usize = 1_695;
+const EXPECTED_CODEC_COUNT: usize = 1_644;
 const CAPTURE_REPORT_SHA256: &str =
     "5fae6cc228a9cd2a7e4575de0c7e54d2c8f94808da2c40dd8bac96b497c2ae58";
-const FIXTURE_SHA256: &str = "e60331ade37ae6e42ee1f07ef35f870c26942f63886629cccd09ddaeed0b78a6";
+const FIXTURE_SHA256: &str = "0b01baac8eb9f4296ad9de9ea3945a3c91ac1d1399dca43671161f412d66659c";
 
 fn fixture() -> &'static BTreeMap<String, Value> {
     static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
@@ -94,7 +94,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
                 "capture names must be unique"
             );
         }
-        assert_eq!(direction_counts, [1_622, 66, 7]);
+        assert_eq!(direction_counts, [1_572, 65, 7]);
         names
     })
 }
@@ -160,6 +160,39 @@ where
     assert_deserialize::<T>(nominal);
 }
 
+// New first-release owners have an explicit current capture; the historical report stays exact.
+fn assert_current_bidirectional<T>(nominal: &str)
+where
+    T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
+{
+    let source = include_str!("../tests/fixtures/native_availability_codec_identities.json");
+    assert_eq!(
+        hex::encode(Sha256::digest(source.as_bytes())),
+        "607b58230d83a9404847c8dbb1afc80aec14f4deaee30524ad7e58082e7b3ba0"
+    );
+    let document: Value = norito::json::from_str(source).expect("current native codec capture");
+    assert_eq!(document.get("schema").and_then(Value::as_u64), Some(1));
+    let rows = document.get("rows").and_then(Value::as_array).unwrap();
+    assert_eq!(rows.len(), 2, "complete new availability codec inventory");
+    let row = rows
+        .iter()
+        .find(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal))
+        .expect("explicit current captured nominal");
+    assert_eq!(
+        row.as_object().unwrap().len(),
+        4,
+        "nominal, root and both codec directions"
+    );
+    assert_eq!(T::nominal_name(), nominal);
+    assert_eq!(
+        T::frame_name(),
+        row.get("root").and_then(Value::as_str).unwrap()
+    );
+    let hash = norito::schema::identity::frame_hash::<T>();
+    assert_eq!(hash, expected_hash(row, "serialize_hash"));
+    assert_eq!(hash, expected_hash(row, "deserialize_hash"));
+}
+
 /// One compiler-captured codec owner and its supported assertion directions.
 ///
 /// Inventories are static data; walking them preserves declaration order without
@@ -200,6 +233,19 @@ impl Case {
         Self {
             nominal,
             assertion: assert_bidirectional::<T>,
+            capture: native_capture::bidirectional::<T>,
+        }
+    }
+
+    /// Bind both codec directions to an explicit current native capture for a new owner.
+    /// Historical capture identities retain their own original evidence and are never replaced.
+    pub const fn current_bidirectional<T>(nominal: &'static str) -> Self
+    where
+        T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
+    {
+        Self {
+            nominal,
+            assertion: assert_current_bidirectional::<T>,
             capture: native_capture::bidirectional::<T>,
         }
     }

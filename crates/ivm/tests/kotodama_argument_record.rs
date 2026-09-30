@@ -67,7 +67,7 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
         .get("entrypoint")
         .and_then(norito::json::Value::as_str)
         .expect("fixture entrypoint name");
-    let code = ivm::kotodama::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile shared fixture contract");
     let parsed = ProgramMetadata::parse(&code).expect("parse shared fixture contract");
@@ -182,7 +182,7 @@ seiyaku ArgumentRecordRuntime {
   }
 }
 "#;
-    let code = ivm::kotodama::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile parameterized view");
     let parsed = ProgramMetadata::parse(&code).expect("parse compiled metadata");
@@ -217,7 +217,7 @@ seiyaku JsonArgumentRecordRuntime {
   }
 }
 "#;
-    let code = ivm::kotodama::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile Json parameter view");
     let parsed = ProgramMetadata::parse(&code).expect("parse compiled metadata");
@@ -295,7 +295,7 @@ seiyaku RecursiveArgumentRecordRuntime {
   }
 }
 "#;
-    let code = ivm::kotodama::compiler::Compiler::new()
+    let code = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile recursive public arguments");
     let parsed = ProgramMetadata::parse(&code).expect("parse compiled metadata");

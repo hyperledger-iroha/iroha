@@ -4,22 +4,12 @@ Status: unresolved construction, first-release blocker F11. This specifies the
 construction's required behavior, not an admitted circuit, protocol proof or key
 registry entry. The [release goals](first_release_completion_goals.md) and
 [audit matrix](zk_audit_matrix.md#election-statement-completion) remain authoritative.
-The [candidate review](../docs/history/2026-09-21/standalone-election-candidates.md)
-records why the constructions examined so far do not establish completion. A
-[later rejection trace](../docs/history/2026-09-23/election-fresh-mask-correction-rejection.md)
-shows that publishing a fresh-mask correction for an accepted conviction update
-reveals its hidden choice even when the final aggregate is unchanged.
-The [late-dropout aggregate-opening review](../docs/history/2026-09-23/standalone-election-dropout-aggregate-blocker.md)
-states the remaining recovery interface and its scoped disclosure tests.
-The [fault-matrix source review](../docs/history/2026-09-24/standalone-election-dropout-fault-matrix.md)
-maps those obligations to the present closed instruction and state shapes.
-The [primary-source functional-opening review](../docs/history/2026-09-24/standalone-election-primary-source-functional-opening-review.md)
-compares additional authority-free aggregation papers with this fault and
-disclosure boundary without selecting a production construction.
-The [programmed-opening screen](../docs/history/2026-09-25/standalone-election-programmed-opening-screen.md)
-checks later functional-encryption candidates against exact closed-corpus and
-late-dropout requirements. It identifies no qualifying construction; this is a
-bounded review of the cited candidates, not an impossibility proof.
+Publishing a fresh-mask correction for an accepted conviction update reveals
+its hidden choice even when the final aggregate is unchanged. The
+[primary-source functional-opening review](../docs/validation/standalone-election-functional-opening-review.md)
+compares authority-free aggregation papers with this fault/disclosure boundary.
+It establishes no qualifying production construction and makes no impossibility
+claim.
 
 The retained Core election state has one bounded, ordered sequence of fixed
 `(nullifier, commitment)` ballot pairs. This preserves the association and

@@ -173,12 +173,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             )
         };
         if self.oracle == Oracle::Terminal {
-            replay.visit_all(|stripe| {
-                for row in 0..stripe.rows() {
-                    selected[stripe.global_index(row)] = stripe.value(0, row)?;
-                }
-                Ok(())
-            })?;
+            gather_terminal(replay, &mut selected)?;
             pack(&selected, &mut bytes)?;
             super::deep_leaf_batch::hash(
                 binding,
@@ -241,6 +236,16 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             fields: self.fields,
         })
     }
+}
+
+/// Retain every terminal value at its natural-order position in `selected`.
+fn gather_terminal(replay: &mut CoefficientReplay<'_>, selected: &mut [F]) -> Result<()> {
+    replay.visit_all(|stripe| {
+        for row in 0..stripe.rows() {
+            selected[stripe.global_index(row)] = stripe.value(0, row)?;
+        }
+        Ok(())
+    })
 }
 
 /// Leaf layout of one nonterminal oracle, copied out of its consumed plan.
@@ -378,7 +383,7 @@ fn pack(values: &[F], output: &mut [u8]) -> Result<()> {
 }
 #[allow(
     clippy::needless_pass_by_value,
-    reason = "`map_err` adapter; the sibling test module passes it point-free"
+    reason = "`map_err` adapter; this module and its `tests` child pass it point-free"
 )]
 fn binding_error(error: BindingError) -> Error {
     Error::InvalidTraceShape {

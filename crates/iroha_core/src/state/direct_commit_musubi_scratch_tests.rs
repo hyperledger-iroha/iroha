@@ -6,8 +6,9 @@
 
 use super::fixture;
 use crate::state::{State, StateBlock, WorldBlock, deserialize, storage_transactions};
+use iroha_allocation::AllocationBudget;
 use iroha_data_model::{block::BlockHeader, musubi::MusubiOrderedPackageEntryV1};
-use mv::{allocation::AllocationBudget, storage::StorageReadOnly};
+use mv::storage::StorageReadOnly;
 use std::{
     collections::HashSet,
     future::Future,
@@ -141,7 +142,7 @@ fn check_direct_refusal(replacement: bool) {
     // Equality includes the actual release notification owner and generation,
     // not just the numeric demand/limit diagnostics.
     assert_eq!(actual, &expected);
-    let mv::allocation::AllocationRefusal::Capacity { release, .. } = actual else {
+    let iroha_allocation::AllocationRefusal::Capacity { release, .. } = actual else {
         panic!("occupied original pool yields temporary capacity refusal");
     };
     assert_eq!(
@@ -191,7 +192,7 @@ fn check_direct_refusal(replacement: bool) {
     // the independent occupied reservation still holds this SAME finite pool.
     let fresh_request = budget.limit_bytes() - budget.reserved_bytes() + 1;
     let fresh = budget.try_reserve_bytes(fresh_request).unwrap_err();
-    let mv::allocation::AllocationRefusal::Capacity {
+    let iroha_allocation::AllocationRefusal::Capacity {
         release: fresh_release,
         ..
     } = fresh
@@ -277,7 +278,7 @@ fn retained_state_retries_actual_musubi_capacity_without_rebuilding_its_world_ta
         };
         assert!(matches!(
             reason.allocation_refusal(),
-            Some(mv::allocation::AllocationRefusal::Capacity { .. })
+            Some(iroha_allocation::AllocationRefusal::Capacity { .. })
         ));
         assert_eq!(std::ptr::from_ref(&*block), owner);
         let identity = block.publication_identity_for_test();

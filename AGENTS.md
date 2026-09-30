@@ -36,9 +36,11 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   `iroha_core::sumeragi` node driver. Lanes are separate core instances whose
   certified blocks the global chain merges (`specs/sumeragi_lanes.md`). Signed
   RS16 `PayloadManifest`/`PayloadChunk` payload availability remains a
-  first-release requirement that the core's full-body transport does not
-  integrate yet (goals, open question 8); raw full-body dissemination is not
-  its qualified replacement. Consensus faults are injected only in the
+  mandatory first-release requirement. The Core/worker integration candidate
+  replaces raw full-body transport with signed availability metadata, actual
+  row acquisition and opaque source-bound custody. Whole-node/network
+  qualification remains open; component
+  tests alone do not establish release or settlement readiness. Consensus faults are injected only in the
   deterministic simulator, never through node configuration.
 - IVM is the Iroha Virtual Machine for Hyperledger Iroha 3.
 - Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
@@ -164,13 +166,14 @@ Note: First release policy
 
 - Docs & status updates (same PR):
   - Update `crates/ivm/docs/syscalls.md` (ABI Evolution section) and any syscall tables.
-  - Update `status.md` and `roadmap.md` with a brief summary of ABI changes and test updates.
+  - Update `status.md` when ABI changes affect current health or blockers, and `roadmap.md` when outstanding outcomes or completion criteria change. Put routine validation results in the PR's `Testing` section.
 
 
 ## Project Status and Plan
 - Check `status.md` at the repo root for the current compilation/runtime status across crates.
 - Check `roadmap.md` for the prioritized TODOs and implementation plan.
-- Keep `status.md` focused on current health, scoped evidence and blockers, and `roadmap.md` on outstanding outcomes, component owners and completion criteria. Each root is limited to 300 lines. Historical evidence belongs once in dated subsystem records under `docs/history/`; preserve exact originals and verify with `python3 scripts/archive_project_history.py verify --archive docs/history/2026-09-06 --check-current`. Do not assert release readiness from historical prose.
+- Keep `status.md` concise and focused on current health and blockers, and `roadmap.md` on outstanding outcomes, component owners and completion criteria.
+- Update these files only when those current facts change. Replace resolved or obsolete entries in place; do not append per-edit updates, test transcripts or historical archives. Routine validation results belong in the PR's `Testing` section, and release qualification must come from the current candidate's checks.
 
 ## Agent workflow (for code editors/automation)
 - If you need clarification on any requirement, stop and draft a ChatGPT prompt with your question, then share it with the user before continuing.
@@ -203,8 +206,8 @@ Note: First release policy
   mutation killed by a named deterministic test
   (`python3 scripts/sumeragi_mutation_gate.py`, run nightly by
   `.github/workflows/nightly_sumeragi.yml`). A liveness fix lands only with a
-  seed or test that fails before the fix and passes after it. Keep the core
-  within the spec §12.6 line budget. Real-peer coverage is
+  seed or test that fails before the fix and passes after it. Preserve protocol
+  safety, liveness and custody checks. Real-peer coverage is
   `integration_tests/tests/sumeragi.rs` and `sumeragi_lanes.rs`.
 - When the user asks about the live SORA Taira testnet or deployed Torii MCP
   workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and

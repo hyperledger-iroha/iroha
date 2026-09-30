@@ -1,0 +1,44 @@
+path	marker
+IrohaSwift/Sources/IrohaSwift/ToriiGovernanceProposalKinds.swift	// TODO: decode each action `payload` into its typed `SccpGovernanceActionV1` body and
+crates/iroha_config/src/parameters/actual.rs	/// TODO(P2): reserved for the deploy engine's network-authority keys (spec §7.2); no
+crates/iroha_config/src/parameters/defaults.rs	// TODO(S4): re-derive the 16,844,237-byte sizing from the current Sumeragi full-body
+crates/iroha_config/src/parameters/defaults.rs	// TODO(ws70): re-check these entries against the live global config before release;
+crates/iroha_config/src/parameters/defaults.rs	// TODO(ws70): verify terms of use and route coverage of every compiled endpoint (spec §13 item 10).
+crates/iroha_config/src/parameters/defaults.rs	/// TODO(S8): decoded native proof/history graphs need original funded owners.
+crates/iroha_config/src/parameters/defaults.rs	/// TODO: the SoraFS provider sub-states (`sorafs.storage.pop_credentials.*`,
+crates/iroha_core/src/smartcontracts/isi/sorafs_release_manifest_authority.rs	//! TODO: Implement the purpose-owned State transition and Kura-backed Check proof as one
+crates/iroha_core/src/smartcontracts/isi/sorafs_topology_authority.rs	// TODO: retain and authenticate role-16 topology State, execution source, and finality
+crates/iroha_data_model/src/isi/sorafs/topology_authority.rs	/// TODO: connect the purpose-owned Core adapter and finalized Check proof before admission.
+crates/iroha_data_model/src/sorafs/release_manifest_authority.rs	//! TODO: Add persisted indices, same-State Check consumer and finalized daemon state source
+crates/iroha_data_model/src/sorafs/topology_authority.rs	//! The typed V1 ISI is registered but Core admission is closed. TODO: integrate this reducer into
+crates/iroha_torii/src/lib.rs	// TODO: routed iterable fanout is parked (`bounded_canonical_iterable_fanout_variant`
+crates/iroha_torii/src/mcp.rs	// TODO: Move audited `AdditiveOnly` declarations into explicit curated capability entries as
+crates/iroha_torii/src/routing.rs	// TODO: fetch bounded multi-page prefixes from each shard before admitting wider fanout
+crates/iroha_torii/src/routing.rs	// TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
+crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/release_evidence.rs	// TODO: Install authenticated proof-size, SoraFS, work, and RSS reports
+crates/irohad/src/sorafs_provider_ingest_finalized_query.rs	// TODO: an independently administered HTTPS gateway-grant resolver must still join
+crates/irohad/src/sorafs_provider_ingest_runtime.rs	// TODO: Compile this composer outside tests once the provider-attestation archive,
+crates/sorafs_manifest/src/signer/custody.rs	//! TODO: Finish the remaining SoraFS runtime/receipt consumers and production state adapters.
+crates/sorafs_manifest/src/signer/mod.rs	//! TODO: Complete the production consumer hard cut and real signer/state adapters; this public
+crates/sorafs_manifest/src/signer/stream_token/subject_tests.rs	// TODO: the complete receipt/coordinator integration must reject recovery of initial under
+crates/sorafs_manifest/src/signer/topology.rs	//! a permitted operation. TODO: add native topology custody/current-Check/operation producers and
+crates/sorafs_node/src/provider_ingest_runtime/completed_musubi_capture.rs	// TODO: compile outside tests once the opaque attestation driver is
+crates/sorafs_node/src/provider_ingest_runtime/completed_musubi_capture.rs	// TODO: compile the drive loop outside tests once irohad supervises the bound driver; until then
+javascript/iroha_js/src/toriiClient.js	// TODO: Carry the attestor statement and independent trust pins for phone requests.
+javascript/iroha_js/src/toriiClient.js	// TODO: validate each SccpGovernanceBaseRevisionV1 and SccpGovernanceActionV1
+python/iroha_torii_client/governance_proposals.py	# TODO: decode SccpGovernanceProposalV1 base revisions and actions into typed
+scripts/check_sorafs_production_promotion_bundle.py	# TODO: Connect purpose-owned native completed-operation/current-state verification for
+scripts/check_sorafs_production_promotion_bundle.py	# TODO: Replace this with a purpose-owned native custody/operation Check verifier, never
+scripts/check_sorafs_production_promotion_bundle.py	# TODO: Replace this with purpose-owned native custody, Reserve/Complete and finalized
+scripts/check_sorafs_production_promotion_bundle.py	# TODO: Verify the role-16 topology subject, current native Check, exact executed
+scripts/sorafs_javascript_archive.py	TODO: connect this owner to the installed JavaScript producer and original-index
+scripts/sorafs_javascript_child.mjs	// TODO: the source-owned parent must retain every actual pipe byte, require
+scripts/sorafs_javascript_child_files.mjs	// TODO: connect the fixed installed child after its original source/runtime,
+scripts/sorafs_javascript_native_cache.mjs	// TODO: connect to that installed child and its retained snapshot file owner.
+scripts/sorafs_javascript_package_source.py	TODO: consume this relation in the fixed installed-package producer and index
+scripts/sorafs_javascript_qualification_source.py	TODO: join this private core to the fixed runner/tool closure and candidate owner.
+scripts/sorafs_javascript_runtime_custody.py	# TODO: Join this complete physical input set to the fixed child and retain it
+scripts/sorafs_python_consumer_artifact.py	# joins. TODO: complete their signed producer/aggregate approval integration.
+scripts/taira_devnet.py	# TODO(ws42): run the SCCP Parliament driver (`iroha sccp governance drive`)
+specs/network_deployment.md	- Governance accounts (security fix, an intentional difference): kagami's Taira names the published sample key for every governance escrow, receiver, viral pool and the SoraFS pin-fee treasury (and the VPN operator). The profile gives each role its own keyless account, `iroha_config::profile::keyless_role_account`; the test proves kagami's side is the sample account and the profile's the keyless derivation, then normalizes them. TODO(P2): the genesis builder registers these accounts.
+specs/sorafs/negative_promotion_archive.md	TODO: Qualify the production signing workflow and actual signed SoraFS subject;

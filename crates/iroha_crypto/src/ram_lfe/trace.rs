@@ -35,12 +35,12 @@ impl OwnedCiphertext {
             .0
             .c0
             .try_reserve_exact(value.c0.len())
-            .map_err(allocation_error)?;
+            .map_err(|error| allocation_error(&error))?;
         result
             .0
             .c1
             .try_reserve_exact(value.c1.len())
-            .map_err(allocation_error)?;
+            .map_err(|error| allocation_error(&error))?;
         result.0.c0.extend_from_slice(&value.c0);
         result.0.c1.extend_from_slice(&value.c1);
         Ok(result)
@@ -72,7 +72,9 @@ pub(super) struct OwnedCiphertexts(Vec<BfvCiphertext>);
 impl OwnedCiphertexts {
     pub(super) fn with_capacity(count: usize) -> Result<Self, RamLfeError> {
         let mut values = Vec::new();
-        values.try_reserve_exact(count).map_err(allocation_error)?;
+        values
+            .try_reserve_exact(count)
+            .map_err(|error| allocation_error(&error))?;
         Ok(Self(values))
     }
 
@@ -124,7 +126,9 @@ impl OwnedCiphertexts {
             ));
         }
         let mut bytes = Zeroizing::new(Vec::new());
-        bytes.try_reserve_exact(length).map_err(allocation_error)?;
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|error| allocation_error(&error))?;
         bytes.resize(length, 0);
         let mut writer = std::io::Cursor::new(bytes.as_mut_slice());
         norito::core::write_canonical_to_writer(&output.0, &mut writer)
@@ -266,12 +270,14 @@ impl Drop for RamLfeProgramExecutionTrace {
 
 fn zeroed(count: usize) -> Result<Zeroizing<Vec<u64>>, RamLfeError> {
     let mut values = Zeroizing::new(Vec::new());
-    values.try_reserve_exact(count).map_err(allocation_error)?;
+    values
+        .try_reserve_exact(count)
+        .map_err(|error| allocation_error(&error))?;
     values.resize(count, 0);
     Ok(values)
 }
 
-fn allocation_error(error: std::collections::TryReserveError) -> RamLfeError {
+fn allocation_error(error: &std::collections::TryReserveError) -> RamLfeError {
     invalid_program_error(&format!("private interpreter allocation failed: {error}"))
 }
 

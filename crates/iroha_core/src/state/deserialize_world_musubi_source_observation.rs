@@ -12,7 +12,7 @@ use crate::state::authority_registry::world::{
     musubi_availability_policy::MusubiAvailabilityAuthorityV1,
     musubi_universal_policy::{MusubiDirectoryAuthorityV1, MusubiResolverAuthorityV1},
 };
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 // The public WorldReadOnly trait alone cannot promise immutable observations:
 // outside implementations may replace rows through interior mutability.

@@ -81,7 +81,9 @@ impl DriverHost {
             }
             Op::Serve(request) => {
                 // The world serves at once (a local body arrives through `deliver`).
-                out.push(SimOp::Effect(Box::new(request.into_action())));
+                if let Some(action) = payload_action(request) {
+                    out.push(SimOp::Effect(Box::new(action)));
+                }
                 self.complete_kernel(Completion::Served(Served::default()));
             }
             Op::Report(Report::Evidence(evidence)) => {
@@ -178,6 +180,7 @@ impl Host for DriverHost {
         STARTS.with(|s| s.set(s.get() + 1));
         self.now = start.now;
         let (kernel, actions) = Kernel::start(KernelStart {
+            allocation_budget: start.budget,
             local: start.local,
             init: start.init,
             signers: start.signers,
@@ -213,7 +216,7 @@ impl Host for DriverHost {
         match event {
             Event::PayloadBuilt {
                 payload, attest, ..
-            } => self.complete_kernel(Completion::Exec(ExecDone::Built { payload, attest })),
+            } => self.complete_kernel(Completion::Exec(ExecDone::Built(Ok((payload, attest))))),
             other => {
                 if let Some(kernel) = self.kernel() {
                     kernel.deliver(other);
@@ -339,4 +342,53 @@ fn requests(actions: &[Action]) -> BTreeSet<u64> {
             _ => None,
         })
         .collect()
+}
+
+/// The simulated devices run the same actual author/acquisition APIs from Core actions.
+fn payload_action(request: super::super::serve::ServeRequest) -> Option<Action> {
+    use super::super::{payload_worker::PayloadWork, serve::ServeRequest};
+    Some(match request {
+        ServeRequest::Blocks {
+            to,
+            from_height,
+            max_count,
+            max_bytes,
+        } => Action::ServeBlocks {
+            to,
+            from_height,
+            max_count,
+            max_bytes,
+        },
+        ServeRequest::Payload(work) => match *work {
+            PayloadWork::Author {
+                req,
+                config,
+                header,
+                payload,
+            } => Action::AuthorPayload {
+                req,
+                config,
+                header,
+                payload,
+            },
+            PayloadWork::Acquire { source, manifest } => {
+                Action::AcquirePayload { source, manifest }
+            }
+            PayloadWork::Chunk { from, chunk } => Action::ReceivePayloadChunk { from, chunk },
+            PayloadWork::Disseminate { peers, body } => Action::DisseminatePayload { peers, body },
+            PayloadWork::Fetch { source, peers } => Action::FetchPayload { source, peers },
+            PayloadWork::Serve {
+                to,
+                height,
+                block_hash,
+            } => Action::ServePayload {
+                to,
+                height,
+                block_hash,
+            },
+            PayloadWork::Applied(_) | PayloadWork::Retain { .. } | PayloadWork::Poll => {
+                return None;
+            }
+        },
+    })
 }

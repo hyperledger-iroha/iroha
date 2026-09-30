@@ -24,7 +24,7 @@ MAX_SOURCE_ENTRIES = 4096
 # Full original recipe pins: a changed backend, package finder, dynamic hook or
 # data policy requires a reviewed source-selection change, never a fallback.
 RECIPE_SHA256 = {
-    "iroha_native": "147dfed7432ce18c72e547022c27617e378dbd2519f49e9b5c1b85a9cc22a22a",
+    "iroha_native": "71b2e31cd3cfee58fd0e5c357d76ff7b4ee59c57d564ec23deb2d7ecb08ebd83",
     "iroha_python": "2aaa565e9e4ec1dd0d3b2d613c80dc96a81a75cfcbe117caecb6e29359a06a8e",
 }
 SDK_DATA = frozenset(("py.typed", "examples/connect_app_metadata.json"))

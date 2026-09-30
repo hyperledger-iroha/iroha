@@ -9,16 +9,15 @@ a new absolute directory outside the repository; evidence is retained with
 owner-only permissions, including failures. No inherited APS/Iroha test knobs
 are accepted. ``validate`` and :func:`validate_campaign` are read-only.
 
-The Rust client cryptographically verifies the genuine BridgeFinalityProof
-objects before retaining them. Python checks their inventory and cross-record
-bindings; it does not implement or claim independent BLS verification. This
+The Rust harness verifies canonical SumeragiFinalityProof carriers through
+CertifiedPrefix from the configured signed genesis. Python checks their inventory,
+retained transport log replay, and cross-record bindings; it does not implement or claim independent BLS verification. This
 campaign is correctness evidence, not an independent cryptographic audit.
 """
 
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import importlib.util
 import os
@@ -65,6 +64,8 @@ PEER_COUNT = 16
 RAYON_WORKER_THREADS = 8
 WORKER_ENVIRONMENT_KEYS = ("RAYON_NUM_THREADS", "RUST_TEST_THREADS", "CARGO_BUILD_JOBS", "CARGO_INCREMENTAL")
 MAX_JSON_BYTES = 16 * 1024 * 1024
+MAX_TRANSPORT_LOG_BYTES = 64 * 1024 * 1024
+TRANSPORT_PROVENANCE = "retained process binary and local authenticated-ingress observations"
 REQUEST_FIELDS = {
     "version", "protocol", "kind", "request_id", "invocation_nonce", "commit", "seed", "run"
 }
@@ -79,6 +80,8 @@ EVIDENCE_NAMES = frozenset(
     | {f"{prefix}-{peer:02}.json" for prefix in (
         "continuous", "state-restarted", "finality-before", "finality-after"
     ) for peer in range(PEER_COUNT)}
+    | {f"finality-before-transport-{peer:02}.{extension}"
+       for peer in range(PEER_COUNT) for extension in ("json", "log")}
 )
 HAPPY_DAY_EVIDENCE_NAMES = frozenset(
     EVIDENCE_NAMES - {"restarts.json"}
@@ -86,8 +89,10 @@ HAPPY_DAY_EVIDENCE_NAMES = frozenset(
        for peer in range(PEER_COUNT)}
 )
 CRYPTOGRAPHIC_SCOPE = (
-    "Rust get_bridge_finality_anchor verifies BLS and the canonical finality proof; "
-    "Python validates retained evidence and bindings, not BLS signatures. "
+    "Rust CertifiedPrefix verifies contiguous native finality from the configured signed genesis, "
+    "including exact-quorum BLS and original signed RS16 availability. Python validates retained "
+    "proof bindings and replays source-bound local authenticated-ingress logs; it does not verify "
+    "BLS signatures or establish Byzantine remote-transport provenance. "
     "Independent cryptographic review remains a separate requirement."
 )
 
@@ -458,67 +463,193 @@ def byte_vector(value: Any, label: str, *, minimum: int = 1, maximum: int = 1024
             and any(value), f"missing or invalid {label} bytes")
 
 
-def validate_finality(proof: Any, result: dict[str, Any], identities: list[Any]) -> bytes:
-    """Bind a full Rust-verified RS16 artifact to the exact network/global roster/height.
+def consensus_key(peer: Any) -> str:
+    """Extract the current canonical BLS-normal PeerId's 48-byte consensus key.
 
-    This is structural validation. Canonical Norito hashing and BLS verification
-    belong to the source-bound Rust client, not this Python evidence reader.
+    PublicKey Display/JSON uses lowercase multihash varints ea0130 and uppercase
+    payload hex. This binds identities, not BLS key validity or signatures.
     """
-    proof = fields(proof, {"version", "block_header", "finality_artifact"}, "finality proof")
-    require(type(proof["version"]) is int and proof["version"] == 2, "wrong finality proof version")
-    artifact = fields(proof["finality_artifact"], {"format_version", "protocol_version", "height",
-        "height_context", "subject", "block_hash", "commit_qc", "validator_set_pops"}, "finality artifact")
-    context = fields(artifact["height_context"], {"network_id", "protocol_version", "height", "epoch",
-        "kagemusha_mint_finality_authorization", "kagemusha_mint_finality_authority", "epoch_end_height",
-        "next_epoch_snapshot", "mode", "parent_commit_qc", "snapshot_bootstrap", "roster", "quorum",
-        "nexus_amx_context_hash", "execution_policy_hash", "da_layout", "leader_seed"}, "height context")
-    header = fields(proof["block_header"], {"height", "prev_block_hash", "merkle_root", "result_merkle_root",
+    require(isinstance(peer, str) and re.fullmatch(r"ea0130[0-9A-F]{96}", peer) is not None,
+            "invalid canonical BLS-normal peer identity")
+    return peer[6:].lower()
+
+
+def validate_finality(proof: Any, result: dict[str, Any], identities: list[Any]) -> bytes:
+    """Check the current native proof schema; Rust authenticates its opaque carrier.
+
+    CertifiedPrefix is a verification capability, not another JSON proof format.
+    Do not guess Norito layouts here or equate different valid QC subsets with
+    different decisions. Rust compares the before/recovery block and context.
+    """
+    proof = fields(proof, {"block_header", "block_wire", "committee"}, "finality proof")
+    header = fields(proof["block_header"], {"height", "prev_block_hash", "merkle_root",
         "da_proof_policies_hash", "da_commitments_hash", "da_pin_intents_hash", "npos_effects_hash",
-        "creation_time_ms", "view_change_index", "confidential_features", "execution_context_hash"},
-        "block header")
-    require(all(type(value) is int and value == result["finalized_height"] for value in
-                (header["height"], artifact["height"], context["height"])), "finality height substitution")
-    require(all(type(value) is int and value == 4 for value in
-                (artifact["format_version"], artifact["protocol_version"], context["protocol_version"]))
-            and context["network_id"] == result["network_id"], "finality network/protocol substitution")
-    require(isinstance(context["roster"], list) and len(context["roster"]) == 4, "wrong global finality roster")
-    roster = [fields(entry, {"validator", "power"}, "global voter") for entry in context["roster"]]
-    require(all(type(entry["power"]) is int and entry["power"] == 1 for entry in roster)
-            and len({canonical(entry["validator"]) for entry in roster}) == 4
-            and {canonical(entry["validator"]) for entry in roster} == {canonical(peer) for peer in identities[:4]},
-            "finality substituted or duplicated a global validator")
-    require(context["quorum"] == {"min_signers": 3, "total_power": 4}, "wrong equal-vote quorum")
-    require(context["da_layout"] == {"encoding": {"encoding": "reed_solomon16", "details": None},
-        "chunk_size_bytes": 256 * 1024, "data_shards": 4, "parity_shards": 2,
-        "max_payload_size_bytes": 16 * 1024 * 1024, "max_chunk_count": 1024}, "mandatory signed RS16 layout mismatch")
-    qc = fields(artifact["commit_qc"], {"round", "proposal_round", "phase", "subject",
-                                      "execution_commitment", "signers", "aggregate_signature"}, "CommitQC")
-    require(qc["round"] == qc["proposal_round"] and qc["round"]["height"] == result["finalized_height"]
-            and qc["phase"] == {"phase": "commit", "details": None}
-            and qc["subject"] == artifact["subject"]
-            and artifact["subject"]["block_hash"] == artifact["block_hash"], "CommitQC decision binding mismatch")
-    protocol_hash(artifact["block_hash"], "finality block hash")
-    require(isinstance(qc["signers"], list) and len(qc["signers"]) == 3
-            and all(type(index) is int and 0 <= index < 4 for index in qc["signers"])
-            and sorted(set(qc["signers"])) == qc["signers"], "CommitQC lacks exact three-of-four signers")
-    byte_vector(qc["aggregate_signature"], "CommitQC aggregate")
-    require(isinstance(artifact["validator_set_pops"], list) and len(artifact["validator_set_pops"]) == 4,
-            "finality omits historical BLS proofs of possession")
-    for pop in artifact["validator_set_pops"]:
-        byte_vector(pop, "validator PoP", minimum=96, maximum=96)
-    # HeightContext::id normalizes parent certificates to their semantic decision
-    # and excludes the parent QC view, signer subset and aggregate signature.
-    semantic_context = copy.deepcopy(context)
-    parent = semantic_context.pop("parent_commit_qc")
-    if parent is not None:
-        semantic_context["parent_commit"] = {
-            "context_id": parent["round"]["context_id"], "height": parent["round"]["height"],
-            **{name: parent[name] for name in ("phase", "subject", "execution_commitment")},
-        }
-    else:
-        semantic_context["parent_commit"] = None
-    return canonical({"header": header, "block_hash": artifact["block_hash"],
-        "context_id": qc["round"]["context_id"], "context": semantic_context})
+        "creation_time_ms", "view_change_index", "confidential_features", "execution_context_hash",
+        "global_beacon_pulse_hash"}, "block header")
+    require(integer(header["height"], 2, 2**64 - 1, "finality height") == result["finalized_height"],
+            "finality height substitution")
+    integer(header["creation_time_ms"], 0, 2**64 - 1, "block creation time")
+    integer(header["view_change_index"], 0, 2**64 - 1, "block view")
+    protocol_hash(header["prev_block_hash"], "previous block")
+    for name in ("merkle_root", "da_proof_policies_hash", "da_commitments_hash", "da_pin_intents_hash",
+                 "npos_effects_hash", "execution_context_hash", "global_beacon_pulse_hash"):
+        if header[name] is not None:
+            protocol_hash(header[name], name)
+    byte_vector(proof["block_wire"], "canonical SignedBlockWire", maximum=32 * 1024 * 1024)
+    require(isinstance(proof["committee"], list) and len(proof["committee"]) == 4,
+            "wrong global finality committee")
+    members = [fields(member, {"public_key", "proof_of_possession"}, "finality validator")
+               for member in proof["committee"]]
+    keys = [consensus_key(member["public_key"]) for member in members]
+    require(keys == sorted(set(keys))
+            and set(keys) == {consensus_key(peer) for peer in identities[:4]},
+            "finality substituted, reordered or duplicated a global validator")
+    for member in members:
+        byte_vector(member["proof_of_possession"], "validator PoP", minimum=96, maximum=96)
+    return canonical({"header": header, "committee": members})
+
+
+def validate_transport(record: Any, raw_log: bytes, proof_raw: bytes, proof: dict[str, Any],
+                       result: dict[str, Any], processes: list[Any], peer: int) -> bytes:
+    """Replay actual retained log bytes and bind one live process to its verified source.
+
+    The producer derives the source from CertifiedPrefix, not from these logs.
+    This validator establishes consistent source-bound observations, never remote
+    receipt attestation or an independent verification of the embedded Norito QC.
+    """
+    record = fields(record, {"peer_index", "peer", "pid", "run_id", "stdout_path", "log_artifact",
+        "log_sha256", "log_bytes", "network_id", "proof_sha256", "instance", "height", "block", "result",
+        "availability_digest", "payload_hash", "payload_bytes", "epoch", "context", "proposer",
+        "local_key", "peer_keys", "data_shards", "parity_shards", "stripes", "admitted_rows",
+        "local_author", "provenance", "audit_lines"}, "transport evidence")
+    process = processes[peer]
+    require(integer(record["peer_index"], 0, 15, "transport peer") == peer
+            and record["peer"] == process["peer_id"]
+            and integer(record["pid"], 1, 2**32 - 1, "transport PID") == process["pid"],
+            "transport substituted its process")
+    run_id = integer(record["run_id"], 1, 2**64 - 1, "transport run")
+    require(isinstance(record["stdout_path"], str)
+            and re.fullmatch(r"[a-z][a-z0-9_]*?/run-" + str(run_id) + r"-stdout\.log",
+                             record["stdout_path"]) is not None,
+            "transport stdout path/run mismatch")
+    require(record["log_artifact"] == f"finality-before-transport-{peer:02}.log"
+            and integer(record["log_bytes"], 1, MAX_TRANSPORT_LOG_BYTES, "transport log length") == len(raw_log)
+            and record["log_sha256"] == sha(raw_log), "transport retained log binding differs")
+    digest(record["log_sha256"], "transport log hash")
+    require(record["network_id"] == result["network_id"]
+            and record["proof_sha256"] == sha(proof_raw), "transport native proof/network binding differs")
+    digest(record["proof_sha256"], "transport proof hash")
+    require(record["provenance"] == TRANSPORT_PROVENANCE, "transport provenance claim differs")
+    require(integer(record["height"], 2, 2**64 - 1, "transport height") == result["finalized_height"],
+            "transport finality height differs")
+    for name in ("instance", "block", "result", "availability_digest", "payload_hash", "context"):
+        digest(record[name], f"transport {name}")
+    integer(record["epoch"], 0, 2**64 - 1, "transport epoch")
+    proposer = integer(record["proposer"], 0, 3, "transport proposer")
+    require(record["local_key"] == consensus_key(process["peer_id"])
+            and record["peer_keys"] == sorted(consensus_key(row["peer_id"]) for row in processes),
+            "transport consensus-key population differs")
+    author = proof["committee"][proposer]["public_key"] == process["peer_id"]
+    require(type(record["local_author"]) is bool and record["local_author"] == author,
+            "transport author does not match the certified proposer")
+    size = integer(record["payload_bytes"], 1, 16 * 1024 * 1024, "transport payload length")
+    require(type(record["data_shards"]) is int and record["data_shards"] == 4
+            and type(record["parity_shards"]) is int and record["parity_shards"] == 2,
+            "mandatory signed RS16 layout mismatch")
+    stripes = integer(record["stripes"], 1, 16, "transport stripes")
+    require(stripes == (size + 4 * 256 * 1024 - 1) // (4 * 256 * 1024),
+            "transport geometry differs from the payload")
+    accepted = integer(record["admitted_rows"], 0, stripes * 6, "transport admitted rows")
+    require(isinstance(record["audit_lines"], list) and 2 <= len(record["audit_lines"]) <= 65536,
+            "missing or excessive transport audit lines")
+    # Scan the complete retained prefix, rather than trusting a producer-selected
+    # subset. Matching observations cannot be omitted to hide a duplicate or PID.
+    observations = []
+    selected = []
+    offset = 0
+    require(raw_log.endswith(b"\n"), "transport log prefix contains an incomplete line")
+    try:
+        raw_log.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CampaignError("transport log is not UTF-8") from error
+    for content in raw_log.split(b"\n")[:-1]:
+        raw_line = content + b"\n"
+        if b"sumeragi payload" in raw_line or b"sumeragi block applied" in raw_line:
+            require(len(content) <= 1024 * 1024, "transport observation exceeds line bound")
+            line = raw_line.decode("utf-8")
+            value = release_runner.strict_json_loads(line, "transport audit log")
+            require(isinstance(value, dict) and isinstance(value.get("fields"), dict),
+                    "transport audit log lacks fields")
+            event = value["fields"]
+            require(isinstance(event.get("message"), str), "transport audit log lacks message")
+            if event["message"] in {"sumeragi payload row admitted", "sumeragi payload custody verified",
+                                    "sumeragi block applied"}:
+                require(isinstance(event.get("instance"), str) and isinstance(event.get("block"), str),
+                        "transport audit source is not text")
+                integer(event.get("height"), 0, 2**64 - 1, "audit height")
+            if (event.get("message") in {"sumeragi payload row admitted", "sumeragi payload custody verified",
+                                         "sumeragi block applied"}
+                    and event.get("instance") == record["instance"]
+                    and event.get("height") == record["height"] and event.get("block") == record["block"]):
+                selected.append({"offset": offset, "line": line})
+                observations.append(event)
+        offset += len(raw_line)
+    for item in record["audit_lines"]:
+        item = fields(item, {"offset", "line"}, "transport audit line")
+        integer(item["offset"], 0, MAX_TRANSPORT_LOG_BYTES - 1, "transport line offset")
+        require(isinstance(item["line"], str), "transport audit line is not text")
+    require(record["audit_lines"] == selected, "transport audit lines omit or substitute raw observations")
+    rows: dict[int, set[int]] = {}
+    custody = False
+    applied = 0
+    counted = 0
+    for event in observations:
+        require(integer(event.get("process_id"), 1, 2**32 - 1, "audit PID") == process["pid"],
+                "transport audit came from another process")
+        integer(event.get("height"), 2, 2**64 - 1, "audit height")
+        message = event["message"]
+        if message == "sumeragi block applied":
+            require(custody and event.get("result") == record["result"],
+                    "application differs from certified result or lacks transport custody")
+            applied += 1
+            continue
+        require(applied == 0, "transport custody appeared after application")
+        require(event.get("availability_digest") == record["availability_digest"], "transport table substituted")
+        acquisition = integer(event.get("acquisition"), 0, 2**64 - 1, "transport acquisition")
+        if message == "sumeragi payload row admitted":
+            require(acquisition != 0 and (acquisition in rows or len(rows) < 4096),
+                    "invalid or excessive transport acquisition identities")
+            index = integer(event.get("index"), 0, stripes * 6 - 1, "transport row index")
+            sender = event.get("from")
+            require(sender in record["peer_keys"] and sender != record["local_key"],
+                    "transport row sender is not a remote configured peer")
+            admitted = rows.setdefault(acquisition, set())
+            require(index not in admitted, "transport repeats an admitted row")
+            admitted.add(index)
+            continue
+        require(not custody, "duplicate transport custody completion")
+        for name, maximum in (("epoch", 2**64 - 1), ("proposer", 3), ("payload_bytes", 16 * 1024 * 1024)):
+            require(integer(event.get(name), 0, maximum, f"audit {name}") == record[name],
+                    "transport custody differs from certified original source")
+        require(event.get("context") == record["context"] and event.get("payload_hash") == record["payload_hash"],
+                "transport custody differs from certified original source")
+        count = integer(event.get("accepted_rows"), 0, stripes * 6, "audit accepted rows")
+        if event.get("origin") == "author":
+            require(author and acquisition == 0 and count == 0, "non-author substituted authored custody")
+        elif event.get("origin") == "network_rows":
+            admitted = rows.pop(acquisition, set())
+            require(acquisition != 0 and len(admitted) == count
+                    and all(sum(stripe * 6 <= row < (stripe + 1) * 6 for row in admitted) >= 4
+                            for stripe in range(stripes)), "network custody lacks actual distinct stripe rows")
+            counted = count
+        else:
+            raise CampaignError("storage or unknown custody cannot qualify network transport")
+        custody = True
+    require(custody and applied == 1 and counted == accepted,
+            "transport custody/application count differs")
+    return canonical({name: record[name] for name in ("network_id", "instance", "height", "block", "result",
+        "availability_digest", "payload_hash", "payload_bytes", "epoch", "context", "proposer",
+        "data_shards", "parity_shards", "stripes")})
 
 
 def validate_smoke_result_heights(result: dict[str, Any]) -> tuple[int, int, int]:
@@ -635,15 +766,18 @@ def validate_run(path: Path, request: dict[str, Any], validator_sha: str,
     inventory = result["artifacts"]
     require(isinstance(inventory, list) and len(inventory) == len(evidence_names), "incomplete artifact manifest")
     evidence = {}
+    evidence_raw = {}
     for item in inventory:
         entry = fields(item, {"name", "bytes", "sha256"}, "evidence entry")
         name = entry["name"]
         require(isinstance(name, str) and name in evidence_names and name not in evidence,
                 "duplicate or unsafe evidence entry")
-        raw = read_bytes(evidence_path / name)
-        require(integer(entry["bytes"], 1, MAX_JSON_BYTES, "evidence size") == len(raw)
+        limit = MAX_TRANSPORT_LOG_BYTES if name.endswith(".log") else MAX_JSON_BYTES
+        raw = read_bytes(evidence_path / name, limit=limit)
+        require(integer(entry["bytes"], 1, limit, "evidence size") == len(raw)
                 and entry["sha256"] == sha(raw), "evidence byte/digest mismatch")
-        evidence[name] = release_runner.strict_json_loads(raw.decode("utf-8"), name)
+        evidence_raw[name] = raw
+        evidence[name] = raw if name.endswith(".log") else release_runner.strict_json_loads(raw.decode("utf-8"), name)
     validate_request(evidence["request.json"], request["commit"], request["run"], kind=kind)
     require(evidence["request.json"] == request, "Rust evidence replays another request")
     identities = validate_inventory(evidence["processes-before.json"], evidence["processes-after.json"],
@@ -657,7 +791,14 @@ def validate_run(path: Path, request: dict[str, Any], validator_sha: str,
             "aggregate continuous coverage mismatch")
     anchors = {validate_finality(evidence[f"finality-{phase}-{peer:02}.json"], result, identities)
                for phase in (("before", "after") if kind == "smoke" else ("before",)) for peer in range(16)}
-    require(len(anchors) == 1, "peers/restarts disagree on finalized block or semantic height context")
+    require(len(anchors) == 1, "peers/restarts disagree on finalized block header or committee")
+    sources = {validate_transport(evidence[f"finality-before-transport-{peer:02}.json"],
+        evidence_raw[f"finality-before-transport-{peer:02}.log"],
+        evidence_raw[f"finality-before-{peer:02}.json"], evidence[f"finality-before-{peer:02}.json"],
+        result, evidence["processes-before.json"], peer) for peer in range(16)}
+    require(len(sources) == 1, "peers disagree on certified original transport source")
+    require(len({evidence[f"finality-before-transport-{peer:02}.json"]["stdout_path"]
+                 for peer in range(16)}) == 16, "transport process log paths overlap")
     return {"network_id": result["network_id"], "bundle_id": bundle.hex(),
             "validator_identities": identities, "finalized_height": height, "continuous_checks": checks,
             "result_sha256": sha(read_bytes(path / "rust-result.json"))}

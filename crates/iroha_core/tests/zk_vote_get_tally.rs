@@ -65,7 +65,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let mut host = CoreHost::new(owner.clone());
     {
         use std::collections::BTreeMap;
-        let mut esnap: BTreeMap<String, (u32, bool, Vec<u64>)> = BTreeMap::new();
+        let mut esnap: BTreeMap<String, (u32, bool, Vec<u128>)> = BTreeMap::new();
         let e = block.world.elections().get(&election_id).unwrap();
         esnap.insert(
             election_id.clone(),

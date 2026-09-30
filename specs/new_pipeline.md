@@ -1371,25 +1371,18 @@ Notes
 
 ---
 
-## Mandatory Revision-4 Data Availability
+## Data availability
 
-The active wire protocol has one source of DA truth. Each signed
-`HeightContext` fixes the mandatory RS16 layout, payload limits, complete frozen
-validator committee, quorum, and Set A/Set B chunk fanout. Proposal control and
-Prepare/Commit votes reach the full committee; initial chunks target Set A and
-retransmission expands to Set B.
-
-Every Prepare signer must reconstruct, authenticate, durably store, and
-deterministically validate the complete canonical body. Any validator may
-aggregate exactly `q = 2f + 1` equal Prepare votes; that PrepareQC certifies both
-validity and availability. Commit still requires the exact CommitQC and the
-locally authenticated canonical body.
+The Sumeragi core disseminates the complete canonical block body to the frozen
+committee. Every Prepare signer holds and deterministically validates that
+body, and commit requires the exact `n - f` CommitQC together with the locally
+authenticated canonical body (`sumeragi.md`).
 
 There are no optional `da_*` headers, protocol-version gate, variable local
 `N`/`k`, alternate Fountain/NMT scheme, sampling threshold, separate DA
-committee, ACK certificate, or DA enable switch. See
-[`sumeragi_v2.md`](./sumeragi_v2.md#payload-availability) for the source-coupled
-wire and recovery rules.
+committee, ACK certificate, or DA enable switch. Signed RS16 payload
+availability is a first-release requirement that the core's full-body transport
+does not integrate yet; see [`sumeragi_goals.md`](./sumeragi_goals.md).
 
 ---
 

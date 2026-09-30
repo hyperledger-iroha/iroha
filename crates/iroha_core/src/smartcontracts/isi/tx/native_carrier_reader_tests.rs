@@ -111,7 +111,7 @@ fn native_carrier_requires_actual_genesis_successor_and_configured_instance() {
     assert!(
         read_finalized_execution_carrier(
             chain.kura(),
-            &iroha_model_base::chain::ChainId::from("foreign instance"),
+            &iroha_model_base::chain::ChainId::from("foreign-instance"),
             *view.network_id(),
             view.block_hashes(),
             NonZeroUsize::new(2).unwrap(),

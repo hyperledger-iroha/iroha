@@ -6,11 +6,12 @@ use super::{
     byz::{Deliver, Late, NetRule, Strategy},
     driver::Clock,
     net::{Partition, Spike},
+    oracle::leader_turns_bound,
     rng::{Rng, seed_of},
     scenario::{Authority, Churn, CrashPoint, Fault, Perf, Profile, Scenario, Workload},
     world::preview,
 };
-use crate::types::Millis;
+use crate::{pacemaker::t_req_nominal, types::Millis};
 
 /// A scenario builder.
 pub type Builder = fn(u64) -> Scenario;
@@ -207,10 +208,16 @@ pub fn f04(seed: u64) -> Scenario {
                     ..Profile::default()
                 },
             ),
+            // A slow executor, not a silent leader: execution takes 1.5 s whatever the payload
+            // size and its builder does not price that slowness into payloads, as for F15's
+            // and F34's slow executors. Priced at its own 1.5 s base cost, above `exec_budget`
+            // (§9.1), it would never build work and would lead like a silent member
+            // (Appendix E, E63).
             2 => sc.set_profile(
                 m,
                 Profile {
                     exec_base: 1_500,
+                    exec_per_kib: 0,
                     ..Profile::default()
                 },
             ),
@@ -709,7 +716,15 @@ pub fn f17(seed: u64) -> Scenario {
     sc.prebuilt_holders = vec![0, 1, 2, 3];
     sc.byz = vec![(3, vec![Strategy::ForgeSync, Strategy::ForgeBodies])];
     sc.demotion_window = 16;
-    sc.duration = len * 12 + 60_000;
+    // Sync responses carry certified manifests; each body is then fetched as signed rows
+    // before sequential application (§6.9). Budget a metadata round trip and a body round
+    // trip per height, execution, body/block writes and application, plus a minute for
+    // source rotation and live work. The old 12 ms/height budget omitted the body network
+    // trip (up to 100 ms on the default links), so seed 0 ended at 2 919/10 000 heights.
+    let profile = Profile::default();
+    let replay_per_height =
+        4 * sc.net.delay_max + profile.exec_base + 2 * profile.write_max + profile.apply_ms;
+    sc.duration = len * replay_per_height + 60_000;
     sc.checks.progress = 3;
     sc
 }
@@ -1078,7 +1093,7 @@ pub fn f26(seed: u64) -> Scenario {
         .collect();
     let honest: Vec<usize> = (0..n).filter(|m| !byz.contains(m)).collect();
     let starved = *rng.pick(&honest).unwrap_or(&0);
-    sc.net_rules = vec![NetRule::StripProposalsTo(starved)];
+    sc.net_rules = vec![NetRule::DropRowsTo(starved)];
     let victim = *rng.pick(&honest).unwrap_or(&0);
     let at = rng.range(8_000, 20_000);
     sc.script.push((at, Fault::Crash(victim)));
@@ -1419,8 +1434,12 @@ pub fn f34(seed: u64) -> Scenario {
 }
 
 /// F35: local-queue asymmetry (§9.1; ML21): an idle chain whose transactions are submitted only
-/// to `f + 1` members, with and without one crashed member. Queued transactions eventually
-/// commit without manufacturing idle blocks; leaders without local work may time out.
+/// to `f + 1` random members (the holders), with and without one crashed non-holder. Queued
+/// transactions commit without manufacturing idle blocks; leaders without local work time out,
+/// so a height may take up to `2f` workless leader turns, each view's timer growing ×1.5 up to
+/// `T_max` (§8.1, §9.1). Every height and transaction is held to the leader-turn bound
+/// ([`Perf::LeaderTurns`], Appendix E, E62), and the run lasts until the first two heights are
+/// due by it.
 pub fn f35(seed: u64) -> Scenario {
     let n = pick(seed / 2, &[4, 7, 5, 22]);
     let mut sc = sized("F35", seed, n);
@@ -1430,22 +1449,57 @@ pub fn f35(seed: u64) -> Scenario {
     let mask = chosen[..=f].iter().fold(0u64, |acc, m| {
         acc | (1u64 << u32::try_from(*m).unwrap_or(0))
     });
-    sc.workload = Some(Workload {
+    let workload = Workload {
         every_min: 3_000,
         every_max: 9_000,
         targets: mask,
         ..Workload::default()
-    });
-    sc.duration = 120_000;
+    };
+    sc.workload = Some(workload);
     if seed % 2 == 1 {
         sc.script.push((0, Fault::Crash(chosen[f + 1])));
     }
-    // Sparse local work can require several leader turns. The one-failed-view P4 bound
-    // does not apply; O-LIVE and transaction progress remain required.
-    sc.checks.perf = Perf::None;
+    sc.checks.perf = Perf::LeaderTurns(mask);
     sc.checks.txp = true;
-    sc.checks.progress = 8;
+    let t_max = sc.local.t_max.max(t_req_nominal(&sc.local, &sc.params, n));
+    // The next transaction reaches every holder within `every_max` of the parent block's
+    // build, before view 1 of the next height ends (with a second for the commit itself): a
+    // holder leading any view `≥ 1` has work in time.
+    assert!(
+        workload.every_max + 1_000 <= leader_turns_bound(&sc.local, &sc.params, t_max, 0, 1, 0),
+        "F35: the workload interval must fit before the end of view 1"
+    );
+    // Heights 1 and 2 have no demotions (§2.1), so their first holder turns are known from the
+    // permutation; their start levels are 0 and at most 1 (§9.2). Two seconds per view cover
+    // `σ + Δ` of the lossless default network at every committee size.
+    let due: Millis = [(1, 0), (2, 1)]
+        .into_iter()
+        .map(|(height, start)| {
+            let turns = first_holder_view(&sc, height, mask);
+            leader_turns_bound(&sc.local, &sc.params, t_max, start, turns, 2_000)
+        })
+        .sum();
+    sc.duration = due.saturating_add(20_000).max(120_000);
+    sc.checks.progress = 2;
     sc
+}
+
+/// `v*(height)` without demotions: the first view `v ≥ 1` whose leader is in `holders`.
+fn first_holder_view(sc: &Scenario, height: u64, holders: u64) -> u64 {
+    let (topo, machine_of) = preview(sc, height);
+    let rotation = u64::try_from(topo.n()).unwrap_or(u64::MAX);
+    (1..=rotation)
+        .find(|view| {
+            let m = machine_of
+                .get(usize::try_from(topo.leader(*view)).unwrap_or(usize::MAX))
+                .copied()
+                .unwrap_or(usize::MAX);
+            u32::try_from(m)
+                .ok()
+                .and_then(|bit| 1u64.checked_shl(bit))
+                .is_some_and(|bit| holders & bit != 0)
+        })
+        .unwrap_or(rotation)
 }
 
 /// F36: late leaders (§9.2; ML29, ML30): up to `f` members deliver their view-0 proposals as

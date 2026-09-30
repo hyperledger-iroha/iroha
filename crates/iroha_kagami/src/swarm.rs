@@ -12,7 +12,7 @@ use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     block::{
         SignedBlock,
-        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
+        consensus::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
     },
     isi::SetParameter,
     parameter::{
@@ -44,7 +44,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 pub struct Args {
     /// Number of peer services in the configuration.
     ///
-    /// Must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
+    /// Must be an exact Sumeragi `3f + 1` committee in the range 4..=31.
     #[arg(long, short, value_name = "COUNT")]
     peers: std::num::NonZeroU16,
     /// Enable deterministic development mode with this UTF-8 validator seed.
@@ -746,10 +746,6 @@ fn collect_runtime_projection_entries(
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "directory capture keeps bounded traversal, content addressing, materialization, and exact inventory verification together"
-)]
 fn collect_runtime_directory(
     source: &Path,
     projection_root: &Path,
@@ -761,10 +757,6 @@ fn collect_runtime_directory(
     const MAX_ENTRIES: usize = 256;
     const MAX_DEPTH: usize = 8;
     const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
-    #[expect(
-        clippy::too_many_lines,
-        reason = "recursive capture applies every depth, custody, entry-count, byte-count, and identity check before returning"
-    )]
     fn collect_entries(
         directory: &Path,
         relative_prefix: &str,
@@ -1103,19 +1095,15 @@ fn validate_runtime_projection_policy(
         "container runtime projection changed deterministic execution policy"
     );
     let source_nexus =
-        actual::sumeragi_v2_nexus_amx_context_hash(&source.nexus, &source.pipeline, &[], &[]);
+        actual::sumeragi_nexus_amx_context_hash(&source.nexus, &source.pipeline, &[], &[]);
     let projected_nexus =
-        actual::sumeragi_v2_nexus_amx_context_hash(&projected.nexus, &projected.pipeline, &[], &[]);
+        actual::sumeragi_nexus_amx_context_hash(&projected.nexus, &projected.pipeline, &[], &[]);
     ensure!(
         source_nexus == projected_nexus,
         "container runtime projection changed Nexus/AMX consensus policy"
     );
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "directory admission and hardening deliberately retain their descriptor and path identity checks in one sequence"
-)]
 fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result<()> {
     match fs::symlink_metadata(directory) {
         Ok(metadata) => ensure!(
@@ -1554,10 +1542,6 @@ fn ensure_fresh_state_file(path: &Path, label: &str, config_path: &Path) -> colo
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "fresh-state admission enumerates every persisted subsystem path in one reviewable policy"
-)]
 fn ensure_fresh_prepared_state(
     config: &actual::Root,
     config_path: &Path,
@@ -1696,7 +1680,6 @@ type PreparedRuntimeProjection = (
 );
 #[expect(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
     reason = "runtime projection is one ordered security transformation from admitted host config to byte-exact container inputs"
 )]
 fn project_prepared_runtime_config(
@@ -2370,10 +2353,6 @@ fn project_prepared_runtime_config(
         projected_effective,
     ))
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "prepared-bundle admission keeps signed genesis, every validator config, projections, and committee equality in one fail-closed pass"
-)]
 fn load_prepared_bundle(
     config_dir: &Path,
     projection_root: &Path,
@@ -2619,7 +2598,7 @@ fn load_prepared_bundle(
         } else {
             shared_execution_projection = Some(execution_projection);
         }
-        let nexus_projection = actual::sumeragi_v2_nexus_amx_context_hash(
+        let nexus_projection = actual::sumeragi_nexus_amx_context_hash(
             &effective_config.nexus,
             &effective_config.pipeline,
             &[],
@@ -2648,7 +2627,7 @@ fn load_prepared_bundle(
         let (nexus_amx, execution_policy) = if let Some(context) = staged_context {
             context
         } else {
-            let context = crate::genesis::staged_signed_sumeragi_v2_context_hashes(
+            let context = crate::genesis::staged_signed_sumeragi_context_hashes(
                 manifest,
                 validated.block(),
                 &effective_config,
@@ -2662,13 +2641,15 @@ fn load_prepared_bundle(
         ensure!(
             nexus_amx
                 == iroha_crypto::Hash::prehashed(
-                    signed_metadata.sumeragi_v2.nexus_amx_context_hash
+                    signed_metadata.sumeragi_context.nexus_amx_context_hash
                 ),
             "prepared validator {index} effective Nexus/AMX context differs from signed genesis"
         );
         ensure!(
             execution_policy
-                == iroha_crypto::Hash::prehashed(signed_metadata.sumeragi_v2.execution_policy_hash),
+                == iroha_crypto::Hash::prehashed(
+                    signed_metadata.sumeragi_context.execution_policy_hash
+                ),
             "prepared validator {index} effective execution policy differs from signed genesis"
         );
         let peer = &runtime_peers[index];
@@ -2719,7 +2700,7 @@ impl<T: Write> RunArgs<T> for Args {
         let seed = args.seed.take().map(Zeroizing::new);
         ensure!(
             is_valid_committee_size(usize::from(args.peers.get())),
-            "`--peers` ({}) must form an exact Sumeragi v2 `3f + 1` validator committee \
+            "`--peers` ({}) must form an exact Sumeragi `3f + 1` validator committee \
              in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}",
             args.peers
         );
@@ -3265,10 +3246,6 @@ mod tests {
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the integration-style assertion audits every rendered runtime mount, secret, policy rewrite, and read-only marker"
-    )]
     fn prepared_bundle_renders_exact_read_only_runtime_inputs() {
         let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
         let config_dir = generate_prepared_bundle(temp_dir.path());
@@ -3518,7 +3495,8 @@ mod tests {
                     .permissions()
                     .mode()
                     & 0o777,
-                0o400
+                0o444,
+                "immutable bind-mounted configs must be readable by the container UID; owner-only projection parents above protect host confidentiality"
             );
         }
         for forbidden in [
@@ -3578,10 +3556,14 @@ mod tests {
     fn prepared_bundle_rejects_existing_default_projected_state() {
         let temp_dir = tempfile::tempdir().expect("prepared state temp dir");
         let config_dir = generate_prepared_bundle(temp_dir.path());
-        let revocations = config_dir
-            .join("storage")
-            .join("soranet")
-            .join("ticket_revocations.norito");
+        let peer0: toml::Value = toml::from_str(
+            &fs::read_to_string(config_dir.join("peer0.toml")).expect("read selected peer config"),
+        )
+        .expect("parse selected peer config");
+        let declared = peer0["network"]["soranet_handshake"]["pow"]["revocation_store_path"]
+            .as_str()
+            .expect("generated peer declares its exact revocation store");
+        let revocations = config_dir.join(declared);
         fs::create_dir_all(revocations.parent().expect("revocation-store parent"))
             .expect("create default revocation-store parent");
         fs::write(&revocations, b"existing state").expect("write existing revocation state");
@@ -3592,17 +3574,11 @@ mod tests {
         )
         .expect_err("prepared projection must reject source state it would replace");
         assert!(
-            error
-                .to_string()
-                .contains("SoraNet ticket-revocation store"),
+            format!("{error:#}").contains("SoraNet ticket-revocation store"),
             "unexpected state rejection: {error:#}"
         );
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the mutation test keeps signer, hash, roster, PoP, and runtime-policy mismatch cases beside one admitted baseline"
-    )]
     fn prepared_bundle_rejects_signer_hash_roster_and_pop_mismatches() {
         let temp_dir = tempfile::tempdir().expect("prepared mismatch temp dir");
         let config_dir = generate_prepared_bundle(temp_dir.path());
@@ -3657,7 +3633,7 @@ mod tests {
         let signer_error = load_test_prepared_bundle(&config_dir, &projection_root, count)
             .expect_err("mismatched prepared signer must fail");
         assert!(
-            signer_error.to_string().contains("signer"),
+            format!("{signer_error:#}").contains("signed genesis signer"),
             "unexpected signer mismatch: {signer_error:#}"
         );
         fs::write(&public_path, original_public).expect("restore public-key fixture");
@@ -3693,7 +3669,7 @@ mod tests {
         let hash_error = load_test_prepared_bundle(&config_dir, &projection_root, count)
             .expect_err("mismatched prepared hash must fail");
         assert!(
-            hash_error.to_string().contains("body hashes"),
+            format!("{hash_error:#}").contains("body hashes"),
             "unexpected hash mismatch: {hash_error:#}"
         );
         fs::write(&hash_path, original_hash).expect("restore hash fixture");
@@ -3723,14 +3699,40 @@ mod tests {
             "0"
         };
         invalid_peer0.replace_range(last..pop_end, replacement);
+        let peer0_table: toml::Value =
+            toml::from_str(&original_peer0).expect("parse original peer0");
+        let original_pop_hex = &original_peer0[pop_start..pop_end];
+        let pop_entry = peer0_table["trusted_peers_pop"]
+            .as_array()
+            .expect("trusted peer PoPs")
+            .iter()
+            .find(|entry| entry["pop_hex"].as_str() == Some(original_pop_hex))
+            .expect("mutated entry is an exact original trusted-peer PoP");
+        let pop_key = pop_entry["public_key"]
+            .as_str()
+            .expect("PoP public key")
+            .parse::<iroha_crypto::PublicKey>()
+            .expect("canonical BLS public key");
+        let original_pop = hex::decode(original_pop_hex).expect("original PoP hex");
+        iroha_crypto::bls_normal_pop_verify(&pop_key, &original_pop)
+            .expect("positive PoP control must verify");
+        let mutated_pop = hex::decode(&invalid_peer0[pop_start..pop_end]).expect("mutated PoP hex");
+        assert!(
+            iroha_crypto::bls_normal_pop_verify(&pop_key, &mutated_pop).is_err(),
+            "the exact changed PoP must fail cryptographic verification"
+        );
         fs::write(&peer0_path, invalid_peer0).expect("write mismatched PoP");
         let pop_error = load_test_prepared_bundle(&config_dir, &projection_root, count)
             .expect_err("mismatched prepared PoP must fail");
-        assert!(
-            format!("{pop_error:#}")
-                .to_ascii_lowercase()
-                .contains("pop"),
-            "unexpected PoP mismatch: {pop_error:#}"
+        // Sensitive TOML diagnostics deliberately hide private configuration values.
+        // The independent PoP controls above bind this refusal to the exact cryptographic mutation.
+        assert_eq!(
+            pop_error.to_string(),
+            format!(
+                "prepared validator config {} is invalid",
+                peer0_path.display()
+            ),
+            "prepared config rejection must retain its secret-redaction boundary"
         );
         fs::write(&peer0_path, &original_peer0).expect("restore peer0 fixture");
         let alternate_signed_path = config_dir.join("alternate-genesis.signed.nrt");
@@ -3820,7 +3822,7 @@ mod tests {
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_key = KeyPair::random();
-        let (manifest, signed) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
+        let (manifest, signed) = crate::genesis::bind_and_sign_staged_sumeragi_context(
             manifest,
             &genesis_key,
             None,
@@ -3847,7 +3849,9 @@ mod tests {
             format!("{}\n", NetworkId::from_genesis_hash(signed.hash())),
         )
         .expect("write resultless fixture hash");
-        let resultless = signed.canonical_resultless_proposal();
+        let resultless = signed
+            .canonical_resultless_proposal()
+            .expect("valid original proposal");
         assert_eq!(
             resultless.hash(),
             signed.hash(),
@@ -4041,7 +4045,7 @@ api_port = 9000
                 .run(&mut writer)
                 .expect_err("non-committee peer count must fail");
             assert!(
-                error.to_string().contains("exact Sumeragi v2 `3f + 1`"),
+                error.to_string().contains("exact Sumeragi `3f + 1`"),
                 "unexpected error for {count} peers: {error}"
             );
         }

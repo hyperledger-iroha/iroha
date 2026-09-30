@@ -100,10 +100,6 @@ fn write_source_failure_trailer(
         },
     );
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the authenticated source stream is one ordered transcript"
-)]
 fn serve_provider_ingest_source_fetch(
     mut stream: UnixStream,
     state: &BrokerServerStateV1,
@@ -299,7 +295,6 @@ fn serve_provider_ingest_source_fetch(
 }
 #[expect(
     clippy::needless_pass_by_value,
-    clippy::too_many_lines,
     reason = "each blocking session owns its shared permits and ordered transcript"
 )]
 fn serve_client(
@@ -584,10 +579,6 @@ fn finish_startup_failure<T>(
         Err(cleanup_error) => Err(cleanup_error),
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "socket creation and identity pinning form one audit sequence"
-)]
 fn bind_server_listener(
     policy: &EndpointPolicy,
 ) -> Result<(tokio::net::UnixListener, BoundSocketGuard), RuntimeProviderBrokerServerErrorV1> {
@@ -800,10 +791,6 @@ where
     )
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the serving lifecycle is one ordered shutdown protocol"
-)]
 fn serve_with_policy_and_fallible_readiness_and_peer_authorizer<R, A>(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
@@ -1493,10 +1480,6 @@ impl BrokerSession {
             BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?,
         )
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one request owns its full authenticated exchange"
-    )]
     fn exchange_before(
         &self,
         binding: &ProviderBindingWireV1,

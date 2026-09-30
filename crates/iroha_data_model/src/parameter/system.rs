@@ -98,8 +98,8 @@ impl JsonDeserialize for ConsensusFingerprint {
 /// Every committee member has one vote in both modes; the mode only selects the application
 /// policy that schedules committees: the genesis roster and permissioned changes, or `NPoS`
 /// elections.
-// TODO(WP9): merge with `SumeragiConsensusMode` once the Sumeragi v2 runtime is deleted; both
-// exist only because v2 signs this JSON-tagged form while genesis builders use the other.
+// TODO(WP9): merge with `SumeragiConsensusMode`; both exist only because the signed genesis
+// handshake metadata carries this JSON-tagged form while genesis builders use the other.
 #[derive(
     Clone,
     Copy,
@@ -151,7 +151,7 @@ impl From<ConsensusMode> for SumeragiConsensusMode {
         }
     }
 }
-/// Canonical signed Sumeragi v2 handshake metadata stored in genesis.
+/// Canonical signed Sumeragi handshake metadata stored in genesis.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parameter::system::ConsensusHandshakeMetadata")]
 #[derive(
@@ -180,8 +180,8 @@ pub struct ConsensusHandshakeMetadata {
     /// Core binds the final genesis-derived network identity to these
     /// templates before constructing the first height context.
     pub kagemusha_mint_finality: crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
-    /// Signed inputs for the first Sumeragi v2 height context.
-    pub sumeragi_v2: crate::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    /// Signed inputs for the first Sumeragi height context.
+    pub sumeragi_context: crate::block::consensus::SumeragiGenesisContextParameters,
 }
 impl ConsensusHandshakeMetadata {
     /// Validate the first-release signed handshake envelope.
@@ -189,7 +189,7 @@ impl ConsensusHandshakeMetadata {
     /// # Errors
     ///
     /// Returns an error when the wire version is not the first-release version
-    /// or the signed Sumeragi v2 context/KAGEMUSHA genesis authority is
+    /// or the signed Sumeragi context/KAGEMUSHA genesis authority is
     /// invalid.
     pub fn validate(&self) -> Result<(), String> {
         let expected_version = u32::from(crate::sumeragi::PROTOCOL_VERSION);
@@ -198,7 +198,7 @@ impl ConsensusHandshakeMetadata {
                 "wire_protocol_version must equal the first-release protocol version".to_owned(),
             );
         }
-        self.sumeragi_v2
+        self.sumeragi_context
             .validate()
             .map_err(|error| error.to_string())?;
         self.kagemusha_mint_finality
@@ -363,12 +363,12 @@ mod model {
         ///
         /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
-        /// Sumeragi v2 freezes this value at startup for both permissioned and
+        /// Sumeragi freezes this value at startup for both permissioned and
         /// `NPoS` operation; post-genesis updates are rejected.
         ///
         /// Under Sumeragi this is the target block time `ChainParams.block_time` (§9.3 of
         /// `specs/sumeragi.md`).
-        // TODO(WP8): once the v2 handshake no longer freezes the cadence, give it a mutable
+        // TODO(WP8): once the genesis handshake no longer freezes the cadence, give it a mutable
         // `SumeragiParameter` variant scheduled at `h + 2` like the other chain parameters.
         #[norito(default = "defaults::sumeragi::block_cadence_ms")]
         pub block_cadence_ms: NonZeroU64,
@@ -384,7 +384,7 @@ mod model {
         pub key_activation_lead_blocks: u64,
         /// Overlap/grace window (blocks) permitting dual-signing during rotation.
         // TODO(WP9): delete. Sumeragi rotates a key at a single height and a committee never holds
-        // two keys of one validator (§10.3 of `specs/sumeragi.md`); the v2 runtime still reads
+        // two keys of one validator (§10.3 of `specs/sumeragi.md`); block validation still reads
         // this window for consensus-key liveness.
         #[norito(default = "defaults::sumeragi::key_overlap_grace_blocks")]
         pub key_overlap_grace_blocks: u64,
@@ -551,7 +551,7 @@ mod model {
             }
             if usize::try_from(self.max_validators)
                 .ok()
-                .is_none_or(|count| !crate::block::consensus_v2::is_valid_committee_size(count))
+                .is_none_or(|count| !crate::block::consensus::is_valid_committee_size(count))
             {
                 return Err("max_validators must be a bounded 3f + 1 committee size (4..=31)");
             }
@@ -2783,7 +2783,8 @@ mod tests {
             epoch_length: params.epoch_length_blocks.get(),
         };
         assert_eq!(chain, iroha_sumeragi::types::ChainParams::default());
-        let transport = u64::from(params.max_block_bytes.get()) + 64 * 1024;
+        let transport = u64::from(params.max_block_bytes.get())
+            + u64::from(iroha_sumeragi::pacemaker::FRAME_OVERHEAD);
         iroha_sumeragi::pacemaker::validate_chain(&chain, transport)
             .expect("default chain parameters are valid");
         assert_eq!(
@@ -2956,9 +2957,9 @@ mod tests {
         }
         assert!(ConsensusMode::Permissioned.is_permissioned());
         assert!(!ConsensusMode::Npos.is_permissioned());
-        // The v2 path keeps resolving to the same type until WP9.
-        let v2: crate::block::consensus_v2::ConsensusMode = ConsensusMode::Npos;
-        assert_eq!(v2, ConsensusMode::Npos);
+        // The consensus-module path keeps resolving to the same type until WP9.
+        let consensus_mode: crate::block::consensus::ConsensusMode = ConsensusMode::Npos;
+        assert_eq!(consensus_mode, ConsensusMode::Npos);
     }
 
     #[test]
@@ -3199,9 +3200,9 @@ mod tests {
             wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
             kagemusha_mint_finality:
-                crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
-            sumeragi_v2:
-                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+                crate::block::consensus::test_kagemusha_mint_finality_genesis_parameters(),
+            sumeragi_context:
+                crate::block::consensus::SumeragiGenesisContextParameters::recommended(),
         }
     }
 
@@ -3242,7 +3243,7 @@ mod tests {
             );
         }
         let mut bad_context = baseline;
-        bad_context.sumeragi_v2.da_layout.parity_shards = 0;
+        bad_context.sumeragi_context.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
 
         let mut bad_kagemusha = handshake_metadata_fixture();

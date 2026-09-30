@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+import pytest
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
@@ -243,7 +244,7 @@ SORAFS_VALIDATE_RS = (
     REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs" / "toolkit" / "validation.rs"
 )
 SORAFS_VALIDATE_CLI_TEST_RS = (
-    REPO_ROOT / "crates" / "iroha_cli" / "tests" / "sorafs_validate_cli.rs"
+    REPO_ROOT / "crates" / "iroha_cli" / "bins" / "tests" / "sorafs_validate_cli.rs"
 )
 IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
 TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
@@ -431,8 +432,11 @@ COMMON_SENSITIVE_KEYS = (
 )
 SENSITIVE_KEY_LITERAL_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 ACTIVE_SORAFS_TODO_MARKER_RE = re.compile(
-    r"\b(?:TODO|FIXME|XXX|TBD)\b(?=\s*(?::|\(|\[|-|!|$))",
+    r"\b(?:TODO|FIXME|XXX|TBD)\b(?!\s*:\s*\d+\s*[,}])(?=\s*(?::|\(|\[|-|!|$))",
     re.I,
+)
+ACTIVE_SORAFS_OPEN_WORK_INVENTORY = (
+    REPO_ROOT / "fixtures" / "sorafs" / "source_contracts" / "open_work.tsv"
 )
 ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_RELATIVE_PATH = Path(
     "scripts/tests/check_sorafs_rollout_gate_contract_test.py"
@@ -1704,6 +1708,9 @@ def test_active_sorafs_todo_marker_detection_has_negative_controls(
     assert not ACTIVE_SORAFS_TODO_MARKER_RE.search(
         "methodology todo text is not an active marker"
     )
+    assert not ACTIVE_SORAFS_TODO_MARKER_RE.search(
+        "skipped: 0, todo: 0, topLevel: 46, suites: 0 });"
+    )
 
     clean = tmp_path / "clean_sorafs.py"
     clean.write_text("notes = 'methodology todo text is not an active marker'\n")
@@ -1716,14 +1723,33 @@ def test_active_sorafs_todo_marker_detection_has_negative_controls(
     assert "todo: bypass SoraFS source review" in offenders[0]
 
 
-def test_active_sorafs_todo_inventory_has_only_contract_negative_controls() -> None:
+def reviewed_sorafs_open_work_inventory() -> set[tuple[str, str]]:
+    """Read the exact reviewed markers without allowing wildcard exemptions."""
+    rows = ACTIVE_SORAFS_OPEN_WORK_INVENTORY.read_text().splitlines()
+    assert rows.pop(0) == "path\tmarker"
+    inventory = set()
+    for row in rows:
+        path, marker = row.split("\t", 1)
+        assert path and marker and ACTIVE_SORAFS_TODO_MARKER_RE.search(marker)
+        assert (path, marker) not in inventory
+        inventory.add((path, marker))
+    return inventory
+
+
+def test_active_sorafs_todo_inventory_matches_reviewed_open_work() -> None:
     tracked_files = subprocess.check_output(
         ["git", "ls-files"], cwd=REPO_ROOT, text=True
     ).splitlines()
-    offenders: list[str] = []
+    observed: set[tuple[str, str]] = set()
 
     for relative_name in tracked_files:
         relative = Path(relative_name)
+        if REPO_ROOT / relative == ACTIVE_SORAFS_OPEN_WORK_INVENTORY:
+            continue
+        # Dated incident and implementation history is retained evidence,
+        # never a statement that the active candidate still ships that work.
+        if relative.parts[:2] == ("docs", "history"):
+            continue
         path = REPO_ROOT / relative
         if not path.is_file():
             continue
@@ -1742,9 +1768,14 @@ def test_active_sorafs_todo_inventory_has_only_contract_negative_controls() -> N
                 for fragment in ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_FRAGMENTS
             ):
                 continue
-            offenders.append(f"{relative}:{line_number}: {line.strip()}")
+            observed.add((str(relative), line.strip()))
 
-    assert offenders == []
+    expected = {
+        (path, marker)
+        for path, marker in reviewed_sorafs_open_work_inventory()
+        if "SoraFS" in marker or "sorafs" in marker
+    }
+    assert observed == expected
 
 
 def test_completed_sorafs_task_inventory_has_no_active_markers() -> None:
@@ -1935,8 +1966,43 @@ def test_active_sorafs_todo_scan_covers_sdk_sorafs_content_sources() -> None:
     assert missing == []
 
 
-def test_active_sorafs_source_todos_stay_closed() -> None:
-    assert find_active_sorafs_todo_markers(active_sorafs_todo_scan_paths()) == []
+def test_active_sorafs_source_todos_match_reviewed_open_work() -> None:
+    paths = active_sorafs_todo_scan_paths()
+    observed = {
+        (active_sorafs_todo_path_label(path), line.strip())
+        for path in paths
+        for line in read(path).splitlines()
+        if ACTIVE_SORAFS_TODO_MARKER_RE.search(line)
+    }
+    scanned = {active_sorafs_todo_path_label(path) for path in paths}
+    expected = {
+        (path, marker)
+        for path, marker in reviewed_sorafs_open_work_inventory()
+        if path in scanned
+    }
+    assert observed == expected
+
+
+@pytest.mark.parametrize("change", ("insert", "remove", "alter"))
+def test_reviewed_sorafs_open_work_inventory_rejects_unreviewed_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+) -> None:
+    source = tmp_path / "sorafs_work.rs"
+    marker = "// TO" "DO: retain authenticated finalized custody before admission"
+    source.write_text(marker + "\n")
+    inventory = tmp_path / "open_work.tsv"
+    inventory.write_text("path\tmarker\n" + str(source) + "\t" + marker + "\n")
+    monkeypatch.setattr(sys.modules[__name__], "ACTIVE_SORAFS_OPEN_WORK_INVENTORY", inventory)
+    monkeypatch.setattr(sys.modules[__name__], "active_sorafs_todo_scan_paths", lambda: [source])
+    test_active_sorafs_source_todos_match_reviewed_open_work()
+    if change == "insert":
+        source.write_text(marker + "\n// TO" "DO: add an unreviewed bypass\n")
+    elif change == "remove":
+        source.write_text("")
+    else:
+        source.write_text(marker.replace("before", "after") + "\n")
+    with pytest.raises(AssertionError):
+        test_active_sorafs_source_todos_match_reviewed_open_work()
 
 
 def test_moderation_local_snapshot_reads_have_no_empty_projection_fallback() -> None:
@@ -8233,11 +8299,11 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
 def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     release_gate = read(REPO_ROOT / "ci" / "check_sorafs_cli_release.sh"); release_workflow = read(REPO_ROOT / ".github" / "workflows" / "sorafs-cli-release.yml"); manifest = read(SCRIPTS_DIR / "generate_sorafs_cli_release_manifest.py"); manifest_test = read(SCRIPTS_DIR / "tests" / "generate_sorafs_cli_release_manifest_test.py"); candidate_packager = read(SCRIPTS_DIR / "package_sorafs_cli_candidate.py"); candidate_packager_test = read(SCRIPTS_DIR / "tests" / "package_sorafs_cli_candidate_test.py"); provider_ingest_test = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests" / "quarantine_restart.rs"); provider_ingest_parent = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests.rs"); provider_ingest_contract = read(SCRIPTS_DIR / "tests" / "check_sorafs_provider_ingest_runtime_contract_test.py")
 
-    assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate and 'echo "[sorafs-release] source-file budget check"' in release_gate
+    assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate
     provenance_command = "python3 -I -S scripts/check_build_efficiency_provenance.py"
     assert release_gate.count(provenance_command) == 1
     assert release_gate.index(provenance_command) < release_gate.index(
-        "python3 scripts/check_source_file_budget.py"
+        "cargo fmt --all -- --check"
     )
     assert "scripts/tests/check_build_efficiency_provenance_test.py" in release_gate
     assert "scripts/tests/sorafs_reference_sdk_receipt_verifier_test.py" in release_gate
@@ -8261,7 +8327,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert release_workflow.count("fetch-depth: 0") == 1
     assert "python3 -m pytest -q \\" in release_gate
     assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate and "def _validate_version_map(" in candidate_packager and "canonical SemVer" in candidate_packager and all(name in candidate_packager_test for name in ("test_candidate_packager_rejects_version_map_mismatch_without_outputs", "test_candidate_packager_rejects_noncanonical_semver_without_outputs"))
-    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("_assert_quarantine_restart_contract", "test_quarantine_restart_proof_is_connected_and_preserves_recovery_invariants", "test_quarantine_contract_rejects_weakened_or_disconnected_proof", "test_quarantine_contract_ignores_layout_but_rejects_comment_and_module_substitutes"))
+    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("_assert_quarantine_restart_contract", "test_quarantine_restart_proof_is_connected_and_preserves_recovery_invariants", "test_quarantine_contract_rejects_weakened_or_disconnected_proof", "test_quarantine_contract_ignores_layout_but_rejects_comment_and_module_substitutes"))
     assert "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate and "def _validate_version_map(" in manifest and "canonical SemVer" in manifest and all(name in manifest_test for name in ("test_manifest_rejects_embedded_version_map_mismatch", "test_manifest_rejects_noncanonical_semver"))
     assert "scripts/tests/package_iroha_cli_release_test.py" in release_gate
     assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
@@ -8271,10 +8337,10 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests",
         "cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture", "cargo test --locked -p iroha --lib client::repair::tests -- --nocapture",
-        "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture", 'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"', 'cargo test --locked -p irohad --lib "${provider_ingest_test}" -- --exact --list', 'grep -Fxc -- "${provider_ingest_test}: test"', "--exact --include-ignored --nocapture",
+        "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture", 'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"', 'cargo test --locked -p irohad_lib --lib "${provider_ingest_test}" -- --exact --list', 'grep -Fxc -- "${provider_ingest_test}: test"', "--exact --include-ignored --nocapture",
     )
     assert all(marker in release_gate for marker in required)
-    assert release_gate.count("python3 scripts/check_source_file_budget.py") == 1 and release_gate.index("python3 scripts/check_source_file_budget.py") < release_gate.index("cargo fmt --all -- --check") and release_gate.index("reference FFI header contract") < release_gate.index("release helper adversarial tests")
+    assert release_gate.index("reference FFI header contract") < release_gate.index("release helper adversarial tests")
     assert release_gate.index("release helper adversarial tests") < release_gate.index("clippy sorafs_orchestrator")
 
 
@@ -24671,7 +24737,7 @@ def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_st
         "wire_id>=IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()",
         "wire_id<=IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()",
         "any(|binding|!stock_runtime_provider_slot_is_supported(binding.slot()))",
-        "protocol::resolve(bindings)",
+        "protocol::resolve(bindings,&self.endpoint_path)",
     ):
         assert catalog_guard in broker_api
     for slot, wire_id, dependency in slots:

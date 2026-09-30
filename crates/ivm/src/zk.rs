@@ -222,7 +222,7 @@ mod tests {
         trace.record(8, gpr, [false; 256]);
         let copied_trace = trace.try_clone_allocation().expect("bounded delta trace");
         assert_eq!(copied_trace.entries, trace.entries);
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024);
         let capture = |rows| {
             DiagnosticTraceSource {
                 registers: DiagnosticRegisterSource::Deltas(rows),
@@ -371,7 +371,7 @@ mod tests {
             register_events: &[],
             steps: &[],
         }
-        .try_snapshot(&mv::allocation::AllocationBudget::new(64 * 1024))
+        .try_snapshot(&iroha_allocation::AllocationBudget::new(64 * 1024))
         .expect("fund checker fixture")
     }
     #[test]

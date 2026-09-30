@@ -296,7 +296,7 @@ impl PeerSettings {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     }
     fn validate_committee_size(count: u16) -> Result<(), Error> {
-        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(usize::from(count)) {
+        if !iroha_data_model::block::consensus::is_valid_committee_size(usize::from(count)) {
             return Err(Error::InvalidPeerCount { actual: count });
         }
         Ok(())
@@ -392,6 +392,15 @@ impl PeerSettings {
                             "failed to generate SoraNet transport key pair for peer {name}: {error}"
                         ))
                     })?;
+                    let streaming_identity_key_pair = peer::generate_streaming_identity_key_pair(
+                        Some(seed),
+                        &extra_seed,
+                    )
+                    .map_err(|error| {
+                        Error::KeyGeneration(format!(
+                            "failed to generate streaming identity key pair for peer {name}: {error}"
+                        ))
+                    })?;
                     Ok((
                         nth,
                         peer::PeerInfo {
@@ -399,6 +408,7 @@ impl PeerSettings {
                             ports: [override_.p2p_port, override_.api_port],
                             key_pair,
                             soranet_transport_key_pair,
+                            streaming_identity_key_pair: Some(streaming_identity_key_pair),
                             pop,
                         },
                     ))
@@ -419,10 +429,6 @@ impl PeerSettings {
             prepared_runtime: None,
         })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "prepared-bundle validation is one ordered fail-closed admission transaction"
-    )]
     fn prepared(
         chain: iroha_model_base::chain::ChainId,
         validators: Vec<PreparedValidator>,
@@ -545,6 +551,8 @@ impl PeerSettings {
                     ports: [validator.p2p_port, validator.api_port],
                     key_pair: (public_key, None),
                     soranet_transport_key_pair: (validator.soranet_transport_public_key, None),
+                    // The admitted runtime config already binds the streaming identity.
+                    streaming_identity_key_pair: None,
                     pop: validator.pop,
                 },
             );
@@ -590,6 +598,10 @@ impl<'a, 'temp> ImageSettings<'a> {
 }
 impl<'a> Swarm<'a> {
     /// Creates a deterministic development-only Swarm generator.
+    ///
+    /// Every validator receives a BLS validator key and dedicated Ed25519 `SoraNet` transport and
+    /// streaming identities, all derived from `seed` and the validator index. The two Ed25519
+    /// identities use separate derivation domains, so no key serves two roles.
     ///
     /// The generated manifest requires the signed genesis body, verifier key, and exact hash
     /// through explicit host-file environment variables. Production callers should use
@@ -1158,6 +1170,81 @@ mod tests {
         }
     }
     #[test]
+    fn deterministic_development_streaming_identities_are_stable_unique_and_role_separated() {
+        let first = peer::network(7, Some(b"iroha-swarm-streaming-test"))
+            .expect("derive deterministic network");
+        let replay = peer::network(7, Some(b"iroha-swarm-streaming-test"))
+            .expect("rederive deterministic network");
+        let other_identities = first
+            .values()
+            .flat_map(|peer_info| {
+                [
+                    peer_info.key_pair.0.clone(),
+                    peer_info.soranet_transport_key_pair.0.clone(),
+                ]
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut streaming_keys = std::collections::BTreeSet::new();
+        for (index, peer_info) in &first {
+            let (public_key, private_key) = peer_info
+                .streaming_identity_key_pair
+                .as_ref()
+                .expect("development validators carry a streaming identity");
+            let streaming = iroha_crypto::KeyPair::new(
+                public_key.clone(),
+                private_key
+                    .as_ref()
+                    .expect("development streaming private key")
+                    .0
+                    .clone(),
+            )
+            .expect("streaming key pair must match");
+            assert_eq!(streaming.algorithm(), iroha_crypto::Algorithm::Ed25519);
+            assert!(
+                !other_identities.contains(public_key),
+                "peer {index} streaming identity reuses a validator or SoraNet transport key"
+            );
+            assert_eq!(
+                Some(public_key),
+                replay
+                    .get(index)
+                    .and_then(|peer_info| peer_info.streaming_identity_key_pair.as_ref())
+                    .map(|(public_key, _)| public_key),
+                "peer {index} streaming identity must be reproducible from the seed"
+            );
+            assert!(streaming_keys.insert(public_key.clone()));
+        }
+    }
+    #[test]
+    fn deterministic_development_compose_renders_one_streaming_identity_per_validator() {
+        let temp = TempDir::new("streaming_identity_overrides");
+        let target_path = temp.path().join("docker-compose.yml");
+        let default_output = build_as_string(nonzero_ext::nonzero!(7u16), false, None, false, None);
+        let override_output = build_with_paths(
+            nonzero_ext::nonzero!(4u16),
+            false,
+            None,
+            false,
+            None,
+            ComposePaths {
+                target_path: &target_path,
+                peer_overrides: Some(valid_peer_overrides()),
+            },
+        );
+        for (output, peer_count) in [(default_output, 7), (override_output, 4)] {
+            for key in [
+                "STREAMING_IDENTITY_PUBLIC_KEY: ",
+                "STREAMING_IDENTITY_PRIVATE_KEY: ",
+            ] {
+                assert_eq!(
+                    output.matches(key).count(),
+                    peer_count,
+                    "every development validator must render {key}: {output}"
+                );
+            }
+        }
+    }
+    #[test]
     fn prepared_mode_rejects_non_committee_validator_count() {
         let result = Swarm::from_prepared(
             peer::chain(),
@@ -1629,7 +1716,7 @@ mod tests {
     }
     #[test]
     fn prepared_mode_uses_concrete_read_only_genesis_artifacts() {
-        const AUTHORED_BODY_BYTES: usize = 555_555_555;
+        const AUTHORED_SYNC_MAX_BYTES: u32 = 555_555_555;
         let temp = TempDir::new("prepared_artifacts");
         let bundle = temp.path().join("bundle");
         let deployment = temp.path().join("deployment");
@@ -1653,10 +1740,8 @@ mod tests {
                     &runtime_config,
                     format!(
                         "chain = \"prepared\"\n# container projection for peer {index}\n\
-                         [sumeragi.queues]\n\
-                         authenticated_non_validator_sources = 5\n\
-                         body_source_bytes = 35651584\n\
-                         body_bytes = {AUTHORED_BODY_BYTES}\n"
+                         [sumeragi]\n\
+                         sync_max_bytes = {AUTHORED_SYNC_MAX_BYTES}\n"
                     ),
                 )
                 .expect("write projected runtime config fixture");
@@ -1725,14 +1810,14 @@ mod tests {
         assert!(!output.contains("environment:"));
         assert!(!output.contains("PRIVATE_KEY:"));
         assert!(
-            !output.contains("SUMERAGI_QUEUES_BODY_BYTES"),
-            "prepared runtime TOML must retain its admitted queue policy without a Compose environment rewrite"
+            !output.contains("STREAMING_IDENTITY_"),
+            "prepared validators keep their streaming identity in the admitted runtime config"
         );
         assert!(
             std::fs::read_to_string(bundle.join("peer0.runtime.toml"))
                 .expect("read authored runtime config")
-                .contains(&format!("body_bytes = {AUTHORED_BODY_BYTES}")),
-            "building Compose must not rewrite the authored prepared runtime capacity"
+                .contains(&format!("sync_max_bytes = {AUTHORED_SYNC_MAX_BYTES}")),
+            "building Compose must not rewrite the authored prepared runtime settings"
         );
         assert!(output.contains("../bundle/peer0.runtime.toml"));
         assert!(!output.contains("container projection for peer 0"));

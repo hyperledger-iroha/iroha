@@ -20,7 +20,7 @@
 
 use iroha_config_base::{ReadConfig, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::Hash;
-use iroha_data_model::block::consensus_v2::ConsensusMode;
+use iroha_data_model::block::consensus::ConsensusMode;
 use norito::codec::{Decode, Encode};
 use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
@@ -292,18 +292,6 @@ pub enum ProfileError {
         /// Why the roster is not admissible.
         reason: &'static str,
     },
-    /// The derived Sumeragi configuration is rejected by the node parser.
-    #[error(
-        "profile `{profile}` derives an inadmissible Sumeragi configuration for {validators} validators: {message}"
-    )]
-    Sumeragi {
-        /// Profile being derived.
-        profile: ProfileId,
-        /// Requested roster.
-        validators: usize,
-        /// Parser diagnostic.
-        message: String,
-    },
     /// A value has no canonical form.
     #[error("profile `{profile}`: {source}")]
     Canonical {
@@ -369,7 +357,8 @@ fn parse_consensus_mode(text: &str) -> Option<ConsensusMode> {
 /// Inputs of [`Profile::derive`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeriveInputs {
-    /// Authenticated non-validator ingress sources (arbitrary observers, first come).
+    /// Connections each validator admits for authenticated non-validator peers (arbitrary
+    /// observers, first come).
     pub authenticated_non_validator_sources: u32,
     /// On-chain budget of external committee peers; `committee_sources = n + this`.
     pub max_external_committee_peers: u32,
@@ -401,12 +390,12 @@ pub struct DerivedGeometryV1 {
     pub fault_tolerance: u32,
     /// Commit quorum `2f + 1`.
     pub commit_quorum: u32,
-    /// Committee ingress class capacity `n + max_external_committee_peers`.
+    /// Committee peer budget `n + max_external_committee_peers`.
     pub committee_sources: u32,
-    /// Authenticated non-validator ingress class capacity.
+    /// Connections reserved for authenticated non-validator peers.
     pub authenticated_non_validator_sources: u32,
     /// `network.max_total_connections`: every other validator, external committee peer and
-    /// authenticated source.
+    /// authenticated non-validator peer.
     pub max_total_connections: u64,
     /// Genesis `NPoS` `max_validators`.
     pub npos_max_validators: u32,
@@ -801,21 +790,24 @@ impl Profile {
 
     /// Admit a roster of `n` validators and compute its geometry.
     ///
-    /// The result is also checked with the node parser: the derived Sumeragi section must
-    /// parse and its v2 configuration must pass `validate_ingress_roster_capacity(n)`, which
-    /// irohad applies against the signed `NPoS` `max_validators`.
+    /// The roster must be an exact Sumeragi `3f + 1` committee. The geometry fixes `f`, the
+    /// `2f + 1` commit quorum, the committee peer budget `n + max_external_committee_peers`,
+    /// the genesis `NPoS` `max_validators = n`, and `network.max_total_connections`, which
+    /// admits every other validator, every external committee peer and the authenticated
+    /// non-validator allowance. Sumeragi takes no roster-dependent node configuration: its
+    /// committee comes from signed genesis and committed state.
     ///
     /// # Errors
     ///
-    /// [`ProfileError::Geometry`] for a roster that is not `3f + 1` or does not fit, and
-    /// [`ProfileError::Sumeragi`] when the node parser rejects the derived configuration.
+    /// [`ProfileError::Geometry`] for a roster that is not `3f + 1` or whose derived sizes
+    /// overflow the platform representation.
     pub fn derive(&self, validators: usize) -> Result<DerivedGeometryV1, ProfileError> {
         let reject = |reason| ProfileError::Geometry {
             profile: self.id,
             validators,
             reason,
         };
-        if !iroha_data_model::block::consensus_v2::is_valid_committee_size(validators) {
+        if !iroha_data_model::block::consensus::is_valid_committee_size(validators) {
             return Err(reject(
                 "the global committee must have exactly 3f + 1 validators with 1 <= f <= 10",
             ));

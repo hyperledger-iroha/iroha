@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::state::NativeExecutionProjectionV1;
+use iroha_allocation::AllocationRefusal;
 use iroha_crypto::Hash;
-use mv::allocation::AllocationRefusal;
 use std::fs;
 
 fn hash() -> HashOf<BlockHeader> {

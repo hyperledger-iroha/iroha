@@ -4,7 +4,6 @@ import groovy.json.JsonOutput
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 fun Provider<String>.escaped(defaultValue: String): String =
@@ -41,7 +40,7 @@ val defaultTelemetryExporter = "operator-console"
 
 android {
     namespace = "org.hyperledger.iroha.samples.operator"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.hyperledger.iroha.samples.operator"
@@ -149,22 +148,39 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        jvmToolchain(21)
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
+    sourceSets.getByName("main").kotlin.srcDir(rootProject.layout.projectDirectory.dir("shared/src/main/kotlin"))
+    packaging.resources {
+        // JAR lookup indexes are not used by Android; retain combined component and license metadata.
+        excludes.add("META-INF/INDEX.LIST")
+        merges.addAll(listOf(
+            "META-INF/io.netty.versions.properties", "META-INF/LICENSE", "META-INF/LICENSE.txt",
+            "META-INF/NOTICE", "META-INF/NOTICE.txt"
+        ))
     }
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation(libs.bundles.androidxUi)
-    implementation(project(":android-sdk"))
+    implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
 
     testImplementation(libs.junit)
+    testImplementation(kotlin("test-junit"))
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidxTestExtJunit)
     androidTestImplementation(libs.androidxTestEspressoCore)
 }
@@ -177,25 +193,25 @@ val gitCommitRef = providers.environmentVariable("GIT_COMMIT").orElse("UNKNOWN")
 val manifestOutput = layout.buildDirectory.file("sample-manifest/sample_manifest.json")
 
 tasks.register("generateSampleManifest") {
-    val sdkVersionProvider = providers.provider { project(":android-sdk").version.toString() }
+    val sdkVersionProvider = providers.gradleProperty("irohaSdkVersion").orElse("0.1.0")
     inputs.property("sdkVersion", sdkVersionProvider)
     inputs.property("toriiEndpoint", operatorToriiEndpoint)
     inputs.property("featureFlags", operatorFeatureFlags)
     inputs.property("configProfile", operatorConfigProfile)
-    inputs.property("toriiAccounts", envSampleToriiAccounts)
-    inputs.property("toriiLog", envSampleToriiLog)
-    inputs.property("toriiMetrics", envSampleToriiMetrics)
-    inputs.property("sorafsScoreboard", envSampleSorafsScoreboard)
-    inputs.property("sorafsScoreboardSha", envSampleSorafsScoreboardSha)
-    inputs.property("sorafsSummary", envSampleSorafsSummary)
-    inputs.property("sorafsSummarySha", envSampleSorafsSummarySha)
-    inputs.property("sorafsReceipts", envSampleSorafsReceipts)
-    inputs.property("telemetryLog", envSampleTelemetryLog)
-    inputs.property("telemetrySaltVersion", envSampleTelemetrySaltVersion)
-    inputs.property("telemetryRotationId", envSampleTelemetryRotationId)
-    inputs.property("telemetryExporter", envSampleTelemetryExporter)
-    inputs.property("handoffEndpoint", envSampleHandoffEndpoint)
-    inputs.property("handoffInbox", envSampleHandoffInbox)
+    inputs.property("toriiAccounts", envSampleToriiAccounts.orElse(""))
+    inputs.property("toriiLog", envSampleToriiLog.orElse(""))
+    inputs.property("toriiMetrics", envSampleToriiMetrics.orElse(""))
+    inputs.property("sorafsScoreboard", envSampleSorafsScoreboard.orElse(""))
+    inputs.property("sorafsScoreboardSha", envSampleSorafsScoreboardSha.orElse(""))
+    inputs.property("sorafsSummary", envSampleSorafsSummary.orElse(""))
+    inputs.property("sorafsSummarySha", envSampleSorafsSummarySha.orElse(""))
+    inputs.property("sorafsReceipts", envSampleSorafsReceipts.orElse(""))
+    inputs.property("telemetryLog", envSampleTelemetryLog.orElse(""))
+    inputs.property("telemetrySaltVersion", envSampleTelemetrySaltVersion.orElse(""))
+    inputs.property("telemetryRotationId", envSampleTelemetryRotationId.orElse(""))
+    inputs.property("telemetryExporter", envSampleTelemetryExporter.orElse(""))
+    inputs.property("handoffEndpoint", envSampleHandoffEndpoint.orElse(""))
+    inputs.property("handoffInbox", envSampleHandoffInbox.orElse(""))
     inputs.property("gitCommit", gitCommitRef)
     outputs.file(manifestOutput)
 

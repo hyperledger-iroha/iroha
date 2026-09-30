@@ -185,7 +185,7 @@ fn clone_observer<T: ?Sized>(
 }
 // Native V1 CPU proving also reports its resolved Poseidon execution policy.
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) fn notify_poseidon_pipeline_observer(
+pub fn notify_poseidon_pipeline_observer(
     policy: PoseidonPipelinePolicy,
     path: &'static str,
     backend: Option<backend::GpuBackend>,
@@ -220,7 +220,7 @@ pub(crate) fn notify_poseidon_pipeline_observer(
 /// complete six-lane primitive GPU measurements do not change that stage's
 /// execution policy or qualify a complete accelerated proof.
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
+pub fn notify_native_stark_cpu_hashing(policy: PoseidonPipelinePolicy) {
     let actual_policy = PoseidonPipelinePolicy {
         requested: policy.requested(),
         resolved: ExecutionMode::Cpu,
@@ -979,7 +979,7 @@ pub fn ensure_trace_schema_limit(batch: &TransitionBatch, max_air_row_values: us
 /// Returns [`Error::InvalidAssetKey`] when a numeric operation does not use the canonical
 /// `FastpqBalanceKeyV1` Norito frame.
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
+pub fn column_names_for_batch(batch: &TransitionBatch) -> Result<Vec<String>> {
     let widths = trace_schema_limb_widths(batch)?;
     let mut columns = [
         "s_active",
@@ -1187,7 +1187,7 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
 #[cfg(all(test, feature = "fastpq-gpu"))]
 /// Flattened Poseidon column payloads used by GPU hashing parity tests.
 #[derive(Debug)]
-pub(crate) struct PoseidonColumnBatch {
+pub struct PoseidonColumnBatch {
     payloads: Vec<u64>,
     offsets: Vec<PoseidonColumnSlice>,
     block_count: usize,
@@ -1197,7 +1197,7 @@ pub(crate) struct PoseidonColumnBatch {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Offset metadata describing where a column resides inside the flattened payload buffer.
-pub(crate) struct PoseidonColumnSlice {
+pub struct PoseidonColumnSlice {
     offset: u32,
     len: u32,
 }
@@ -1221,7 +1221,7 @@ impl PoseidonColumnSlice {
     }
 }
 #[cfg(all(test, feature = "fastpq-gpu"))]
-pub(crate) fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
+pub fn poseidon_limb_padded_len(limb_len: usize) -> Option<usize> {
     let payload = limb_len.checked_add(1)?;
     let remainder = payload % RATE;
     if remainder == 0 {
@@ -1475,7 +1475,7 @@ impl PoseidonColumnBatch {
 /// Returns `None` when no accelerator is available or the GPU path encounters
 /// an execution error, allowing callers to fall back to the CPU sponge.
 #[cfg(test)]
-pub(crate) fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
+pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
     let backend = backend::current_gpu_backend()?;
     if POSEIDON_COLUMN_GPU_DISABLED.load(Ordering::Acquire) {
         return None;
@@ -1643,10 +1643,7 @@ fn poseidon_column_gpu_self_test(backend: backend::GpuBackend) -> bool {
 /// Returns `None` when the domain and column shapes do not match, mirroring the
 /// validation performed by [`PoseidonColumnBatch::from_domains_and_columns`].
 #[cfg(test)]
-pub(crate) fn hash_columns_cpu_batch_inputs(
-    domains: &[&str],
-    columns: &[Vec<u64>],
-) -> Option<Vec<u64>> {
+pub fn hash_columns_cpu_batch_inputs(domains: &[&str], columns: &[Vec<u64>]) -> Option<Vec<u64>> {
     if domains.len() != columns.len() {
         return None;
     }
@@ -1708,11 +1705,7 @@ fn field_from_i128(value: i128) -> u64 {
     u64::try_from(reduced).expect("canonical reduction fits u64")
 }
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) fn trace_coefficients(
-    trace: &Trace,
-    planner: &Planner,
-    mode: ExecutionMode,
-) -> Vec<Vec<u64>> {
+pub fn trace_coefficients(trace: &Trace, planner: &Planner, mode: ExecutionMode) -> Vec<Vec<u64>> {
     let columns: Vec<Vec<u64>> = trace
         .columns
         .iter()
@@ -1745,7 +1738,7 @@ pub(crate) fn trace_coefficients(
     }
 }
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) struct TracePolynomialData {
+pub struct TracePolynomialData {
     pub coefficients: Vec<Vec<u64>>,
     lde_columns: Vec<Vec<u64>>,
     transfer_plan: transfer::TransferGadgetPlan,
@@ -1764,7 +1757,7 @@ impl TracePolynomialData {
     }
 }
 #[cfg(any(test, feature = "dev-tools"))]
-pub(crate) fn derive_polynomial_data(trace: &Trace, planner: &Planner) -> TracePolynomialData {
+pub fn derive_polynomial_data(trace: &Trace, planner: &Planner) -> TracePolynomialData {
     let coefficients = trace_coefficients(trace, planner, ExecutionMode::Cpu);
     let lde_columns = if coefficients.is_empty() {
         Vec::new()

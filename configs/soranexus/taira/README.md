@@ -637,8 +637,8 @@ must share the filesystem used for atomic rollback quarantine.
 
 The canonical plan starts all validators, runs native beacon bootstrap and
 canaries, then convergence and restart proofs before staging and activating the
-edge. The signed initial epoch must accommodate actual QueuePlan and execution
-carriers before exact-height threshold-key installation and signer activation.
+edge. The signed initial epoch must accommodate the actual execution blocks
+before exact-height threshold-key installation and signer activation.
 Native bootstrap records authenticated committed heights, including jumps
 between useful operations. It never advances phases with empty blocks.
 First edge activation

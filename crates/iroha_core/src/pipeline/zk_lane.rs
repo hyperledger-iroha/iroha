@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 /// All four overlay producers use this same original-pool ownership path.
 pub(crate) fn capture_and_submit(
     vm: &ivm::IVM,
-    budget: &mv::allocation::AllocationBudget,
+    budget: &iroha_allocation::AllocationBudget,
     tx_hash: Option<Hash>,
     program: ivm::cache_memory::SharedAllocation<u8>,
     header: Option<iroha_data_model::block::BlockHeader>,
@@ -1023,7 +1023,7 @@ mod tests {
                     .collect(),
             }
         }
-        fn snapshot(&self, budget: &mv::allocation::AllocationBudget) -> DiagnosticTraceSnapshot {
+        fn snapshot(&self, budget: &iroha_allocation::AllocationBudget) -> DiagnosticTraceSnapshot {
             ivm::zk::DiagnosticTraceSource {
                 registers: ivm::zk::DiagnosticRegisterSource::States(&self.trace),
                 constraints: &self.constraints,
@@ -1034,7 +1034,7 @@ mod tests {
             .try_snapshot(budget)
             .expect("fund lane trace fixture")
         }
-        fn task(&self, budget: &mv::allocation::AllocationBudget) -> ZkTask {
+        fn task(&self, budget: &iroha_allocation::AllocationBudget) -> ZkTask {
             ZkTask {
                 tx_hash: Some(Hash::prehashed([0xCD; 32])),
                 code_hash: [0xAB; 32],
@@ -1047,7 +1047,7 @@ mod tests {
         }
     }
     fn digest_task() -> ZkTask {
-        TraceFixture::new().task(&mv::allocation::AllocationBudget::new(64 * 1024))
+        TraceFixture::new().task(&iroha_allocation::AllocationBudget::new(64 * 1024))
     }
     fn empty_snapshot() -> DiagnosticTraceSnapshot {
         ivm::zk::DiagnosticTraceSource {
@@ -1057,7 +1057,7 @@ mod tests {
             register_events: &[],
             steps: &[],
         }
-        .try_snapshot(&mv::allocation::AllocationBudget::new(0))
+        .try_snapshot(&iroha_allocation::AllocationBudget::new(0))
         .expect("empty capture needs no payload credit")
     }
     #[test]
@@ -1072,7 +1072,7 @@ mod tests {
             changed.digest(),
             "the complete program must be bound"
         );
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024);
         let mut fixture = TraceFixture::new();
         fixture.trace[0].gpr[128] ^= 1;
         assert_ne!(
@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn digest_binds_access_logs_and_intermediate_steps() {
         let digest = digest_task().digest();
-        let budget = mv::allocation::AllocationBudget::new(64 * 1024);
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024);
         let mut fixture = TraceFixture::new();
         if let MemEvent::Load { value, .. } = &mut fixture.mem_log[0] {
             *value ^= 1;

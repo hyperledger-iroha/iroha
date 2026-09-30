@@ -10,7 +10,7 @@ use crate::{
     testing::FakeVerifier,
 };
 
-fn prop(h: &mut H, view: u64, block: &Block, justify: Option<TimeoutCert>) -> Vec<Action> {
+fn prop(h: &mut H, view: u64, block: &AvailableBody, justify: Option<TimeoutCert>) -> Vec<Action> {
     let p = h.proposal(view, block, justify);
     h.deliver(h.leader(view), WireMessage::Proposal(Box::new(p)))
 }
@@ -62,10 +62,7 @@ fn det_a1_flagged_block_commits_with_attestations() {
     let sent = proposals(&out);
     assert_eq!(sent.len(), 1, "the leader proposes");
     assert!(sent[0].header.attest, "the builder's flag is in the header");
-    let b = Block {
-        header: sent[0].header.clone(),
-        payload: b"mint".to_vec(),
-    };
+    let b = h.author(sent[0].header.clone(), b"mint");
     let out = h.exec_all();
     let prepare = votes_of(&out, VoteKind::Prepare);
     assert!(prepare.iter().all(|v| v.attest && v.attestation.is_none()));
@@ -83,7 +80,7 @@ fn det_a1_flagged_block_commits_with_attestations() {
 
     // (b) The proxy tail forms the flagged CommitQC from attested votes.
     let mut h = H::new(4, pick::proxy_tail(0));
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     prop(&mut h, 0, &b, None);
     h.exec_all();
     let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
@@ -119,7 +116,7 @@ fn det_a1_flagged_block_commits_with_attestations() {
 #[test]
 fn det_a2_unattested_commit_votes_not_counted() {
     let mut h = H::new(4, pick::proxy_tail(0));
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
     qc_msg(&mut h, pqc);
@@ -174,7 +171,7 @@ fn det_a2_unattested_commit_votes_not_counted() {
 #[test]
 fn det_a3_attestation_binds_result() {
     let mut h = H::new(4, pick::proxy_tail(0));
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let value = (h.bh(&b), result_of(&b));
     let other = (value.0, Hash32([0x5a; 32]));
@@ -196,7 +193,7 @@ fn det_a3_attestation_binds_result() {
 
     // A CommitQC for R whose attestations were made for R′ does not commit.
     let mut h = H::new(4, pick::set_b(0));
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let value = (h.bh(&b), result_of(&b));
     let signers = h.others(3, &[]);
@@ -223,7 +220,7 @@ fn det_a3_attestation_binds_result() {
 #[test]
 fn det_a4_commitqc_attestations_checked_core() {
     let mut h = H::new(4, pick::set_b(0));
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let genuine = h.qc_q(VoteKind::Commit, 0, &b);
     let other_height = {
@@ -287,23 +284,16 @@ fn det_a4_commitqc_attestations_checked_core() {
         );
         topo.leader(0)
     };
-    let child = Block {
-        header: BlockHeader {
+    let child = h.author(
+        BlockHeader {
             height: 2,
             parent_hash: h.bh(&b),
             parent_result: result_of(&b),
             proposer: next_leader,
-            ..h.block(0, b"child").header
+            ..h.block(0, b"child").header().clone()
         },
-        payload: b"child".to_vec(),
-    };
-    let child = Block {
-        header: BlockHeader {
-            payload_hash: preimage::payload_hash(&h.v.crypto, &child.payload),
-            ..child.header
-        },
-        ..child
-    };
+        b"child",
+    );
     let bh = h.bh(&child);
     let ad = preimage::att_digest(&h.v.crypto, None, bad.first());
     let msg = preimage::prop_preimage(&I, &crate::testing::TEST_EPOCH.id, 2, 0, &bh, &ad);
@@ -311,13 +301,18 @@ fn det_a4_commitqc_attestations_checked_core() {
         instance: I,
         height: 2,
         view: 0,
-        header: child.header.clone(),
+        header: child.header().clone(),
         justify: None,
         parent_qc: bad.first().cloned(),
-        payload: Some(child.payload.clone()),
         sig: h.signer_of(&h.key_at(next_leader)).sign(&msg),
     };
-    h.deliver(next_leader, WireMessage::Proposal(Box::new(p)));
+    h.deliver(
+        next_leader,
+        WireMessage::Proposal(Box::new(ProposalMessage {
+            proposal: p,
+            availability: child.availability().clone(),
+        })),
+    );
     assert_eq!(h.core.tip.height, 0, "committed through a parent_qc");
     let out = qc_msg(&mut h, genuine.clone());
     assert_eq!(h.core.tip.height, 1);
@@ -332,7 +327,7 @@ fn det_a5_no_authority_abstains_from_commit_only() {
     let mut h = H::new(4, pick::set_a(0));
     h.attestor = crate::testing::FakeAttestor::without_authority([h.key_at(h.me)]);
     h.restart();
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     prop(&mut h, 0, &b, None);
     let out = h.exec_all();
     assert_eq!(
@@ -363,7 +358,7 @@ fn det_a5_no_authority_abstains_from_commit_only() {
     let mut h = H::new(4, pick::proxy_tail(0));
     h.attestor = crate::testing::FakeAttestor::forging();
     h.restart();
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
     let out = qc_msg(&mut h, pqc);
@@ -404,7 +399,7 @@ fn det_a9_pending_attestor_commits_after_execution() {
         let executed = crate::testing::Executed::new();
         h.attestor = crate::testing::FakeAttestor::new().after_execution(executed.clone());
         h.restart();
-        let b = H::flagged(h.block(0, b"mint"));
+        let b = h.flagged(h.block(0, b"mint"));
         prop(&mut h, 0, &b, None);
         assert_eq!(h.pending_exec.len(), 1, "B is executing");
         let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
@@ -421,7 +416,7 @@ fn det_a9_pending_attestor_commits_after_execution() {
         } else {
             result_of(&b)
         };
-        executed.record(&I, &b.header.epoch, 1, &h.bh(&b), &result);
+        executed.record(&I, &b.header().epoch, 1, &h.bh(&b), &result);
         let out = h.exec(h.bh(&b), ExecOutcome::Valid(result));
         let commit = votes_of(&out, VoteKind::Commit);
         if divergent {
@@ -445,13 +440,21 @@ fn det_a9_pending_attestor_commits_after_execution() {
 #[test]
 fn det_a6_flag_is_signed() {
     let mut h = H::new(4, pick::set_b(0));
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     let genuine = h.qc_q(VoteKind::Commit, 0, &b);
+    // Well-formed as an unflagged certificate: without the witness too, only the signed flag
+    // can reject it (a kept witness is refused as `AttestationShape` before the signature).
     let stripped = Qc {
         attest: false,
         attestations: Vec::new(),
+        attestation_witness: None,
         ..genuine.clone()
     };
+    assert_eq!(
+        crate::crypto::verify_attestations(&FakeVerifier, &h.committee_at(1), &stripped),
+        Ok(()),
+        "the stripped certificate has the shape of an unflagged one"
+    );
     assert!(
         !h.core.blocks.contains_key(&h.bh(&b)),
         "the node lacks the header"
@@ -482,9 +485,15 @@ fn det_a7_empty_proposals_are_rejected_at_every_view() {
                 h.enter_view(next);
             }
             let justify = h.core.high_tc.clone();
-            let mut block = h.block(view, b"");
-            block.header.attest = attest;
-            let out = prop(&mut h, view, &block, justify);
+            let block = h.block(view, b"nonempty author source");
+            let mut p = h.proposal(view, &block, justify);
+            p.proposal.header.attest = attest;
+            p.proposal.header.payload_len = 0;
+            p.proposal.header.payload_hash = preimage::payload_hash(&h.v.crypto, b"");
+            p.proposal.sig = h
+                .signer_of(&h.key_at(h.leader(view)))
+                .sign(&p.proposal.signing_preimage(&h.v.crypto));
+            let out = h.deliver(h.leader(view), WireMessage::Proposal(Box::new(p)));
             assert!(matches!(
                 evidence(&out)[..],
                 [Evidence::InvalidProposal {
@@ -503,7 +512,7 @@ fn det_a7_empty_proposals_are_rejected_at_every_view() {
 #[test]
 fn det_a8_restart_resends_identical_attested_votes() {
     let mut h = H::new(4, pick::set_a(0));
-    let b = H::flagged(h.block(0, b"mint"));
+    let b = h.flagged(h.block(0, b"mint"));
     prop(&mut h, 0, &b, None);
     let out = h.exec_all();
     let prepare = votes_of(&out, VoteKind::Prepare)[0].clone();

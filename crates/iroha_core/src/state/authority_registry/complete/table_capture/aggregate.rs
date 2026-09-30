@@ -12,7 +12,7 @@ use super::{
     capture_membership_group_once, is_stable_state_view_generation, require_complete_inventory,
     require_exact_table_materializers,
 };
-use mv::allocation::{AllocationRefusal, ChargedBuffer, ChargedBufferError};
+use iroha_allocation::{AllocationRefusal, ChargedBuffer, ChargedBufferError};
 
 /// Why the declared State table set cannot be captured as one retained owner.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]

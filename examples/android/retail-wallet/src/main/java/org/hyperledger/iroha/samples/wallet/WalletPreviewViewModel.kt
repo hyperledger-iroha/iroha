@@ -14,26 +14,20 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import org.hyperledger.iroha.android.IrohaKeyManager
-import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference
-import org.hyperledger.iroha.android.KeyManagementException
-import org.hyperledger.iroha.android.SigningException
-import org.hyperledger.iroha.android.address.AccountAddress
-import org.hyperledger.iroha.android.address.AccountAddressException
-import org.hyperledger.iroha.android.norito.NoritoException
-import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter
-import org.hyperledger.iroha.android.model.TransactionPayload
-import org.hyperledger.iroha.android.tx.SignedTransactionHasher
-import org.hyperledger.iroha.android.tx.TransactionBuilder
+import org.hyperledger.iroha.sdk.IrohaKeyManager
+import org.hyperledger.iroha.sdk.crypto.keystore.KeySecurityPreference
+import org.hyperledger.iroha.sdk.crypto.KeyManagementException
+import org.hyperledger.iroha.sdk.crypto.SigningException
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AccountAddressException
+import org.hyperledger.iroha.sdk.tx.norito.NoritoException
+import org.hyperledger.iroha.samples.preview.PreviewTransactions
+import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 
 class WalletPreviewViewModel(application: Application) : AndroidViewModel(application) {
 
     private val keyManager = IrohaKeyManager.withDefaultProviders()
-    private val builder =
-        TransactionBuilder(
-            NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT),
-            keyManager,
-        )
+
     private val appContext = application.applicationContext
     private val policyOverrideStore = PolicyOverrideStore(appContext)
     @Volatile private var securityPolicy: SecurityPolicy =
@@ -141,15 +135,8 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
     private fun generatePreview(): EnvelopePreview {
         return try {
             val alias = "retail-wallet-demo"
-            val payload = TransactionPayload.builder()
-                .setAuthority("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-                .putMetadata("scenario", "preview")
-                .build()
-            val transaction = builder.encodeAndSign(
-                payload,
-                alias,
-                KeySecurityPreference.SOFTWARE_ONLY
-            )
+            val signer = keyManager.signerForAlias(alias, KeySecurityPreference.SOFTWARE_ONLY)
+            val transaction = PreviewTransactions.sign(signer, alias, "retail-wallet preview")
             val hash = SignedTransactionHasher.hashHex(transaction)
             EnvelopePreview(
                 signingAlias = alias,
@@ -173,7 +160,9 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
 
     private fun generateAddressDisplay(): AddressDisplay {
         return try {
-            val sampleKey = ByteArray(32) { index -> ((index * 13) and 0xFF).toByte() }
+            val sampleKey = byteArrayOf(
+                0xd7.toByte(), 0x5a.toByte(), 0x98.toByte(), 0x01.toByte(), 0x82.toByte(), 0xb1.toByte(), 0x0a.toByte(), 0xb7.toByte(), 0xd5.toByte(), 0x4b.toByte(), 0xfe.toByte(), 0xd3.toByte(), 0xc9.toByte(), 0x64.toByte(), 0x07.toByte(), 0x3a.toByte(), 0x0e.toByte(), 0xe1.toByte(), 0x72.toByte(), 0xf3.toByte(), 0xda.toByte(), 0xa6.toByte(), 0x23.toByte(), 0x25.toByte(), 0xaf.toByte(), 0x02.toByte(), 0x1a.toByte(), 0x68.toByte(), 0xf7.toByte(), 0x07.toByte(), 0x51.toByte(), 0x1a.toByte()
+            )
             val accountAddress = AccountAddress.fromAccount(
                 sampleKey,
                 "ed25519"
@@ -183,7 +172,7 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
             AddressDisplay(
                 i105 = formats.i105,
                 i105Warning = formats.i105Warning,
-                networkPrefix = formats.networkPrefix
+                networkPrefix = formats.discriminant
             )
         } catch (ex: AccountAddressException) {
             AddressDisplay(

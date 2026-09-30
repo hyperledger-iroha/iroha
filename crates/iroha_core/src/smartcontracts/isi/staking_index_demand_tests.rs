@@ -137,7 +137,7 @@ fn stake_index_demand_multisig_clones_retain_exact_nested_charges_until_keys_dro
     let held = full_budget.try_reserve_bytes(1).unwrap();
     assert!(matches!(
         full_budget.try_reserve_bytes(all_bytes),
-        Err(mv::allocation::AllocationRefusal::Capacity { requested_bytes, .. })
+        Err(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. })
             if requested_bytes == all_bytes
     ));
     drop(held);
@@ -431,7 +431,7 @@ fn stake_index_demand_rejects_reordered_or_duplicate_flat_groups() {
 
 #[test]
 fn stake_index_partial_second_backing_refusal_refunds_original_pool() {
-    use mv::allocation::ChargedBufferFromChargeError;
+    use iroha_allocation::ChargedBufferFromChargeError;
 
     let share_layout = Layout::array::<PublicLaneStakeShareKey>(1).expect("one share layout");
     let group_layout = Layout::array::<IndexedValidatorStake>(1).expect("one group layout");

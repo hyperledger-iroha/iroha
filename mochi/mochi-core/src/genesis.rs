@@ -67,7 +67,11 @@ pub(crate) fn dev_sandbox_kagemusha_mint_finality_parameters(
             let mut seed_material = b"iroha:mochi:dev-sandbox:kagemusha-mint-finality:v1"
                 .as_slice()
                 .to_vec();
-            for component in [chain_id.as_bytes(), generation_id.as_bytes(), validator_text.as_bytes()] {
+            for component in [
+                chain_id.as_bytes(),
+                generation_id.as_bytes(),
+                validator_text.as_bytes(),
+            ] {
                 seed_material.extend_from_slice(
                     &u64::try_from(component.len())
                         .expect("Mochi sandbox seed component length fits u64")
@@ -81,7 +85,7 @@ pub(crate) fn dev_sandbox_kagemusha_mint_finality_parameters(
                     .to_le_bytes(),
             );
             let seed = Hash::new(seed_material);
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 seed.as_ref(),
                 0,
                 validator,
@@ -247,7 +251,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        block::consensus::SumeragiGenesisContextParameters,
         isi::{GrantBox, MintBox, RegisterBox},
     };
     use iroha_genesis::GenesisBuilder;
@@ -314,7 +318,7 @@ mod tests {
         )
         .expect("derive test mint-finality parameters");
         let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .build_raw()
             .expect("build complete test genesis");

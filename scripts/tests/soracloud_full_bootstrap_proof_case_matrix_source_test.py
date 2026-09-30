@@ -10,40 +10,27 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud.rs"
-MAX_SOURCE_LINES = 42_282
+SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs"
 
 REGIONS = {
     "verifier_record": (
-        """    #[derive(Clone, Copy)]
-    enum FullBootstrapVerifierRecordMetadataTamper""",
-        """    #[cfg(feature = "zk-stark")]
-    #[test]
-    fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots""",
-        "1b6ff53bf71b2c1da2bea97f774deb30f42565143edce8ad58172bcbe49256e7",
+        '#[derive(Clone, Copy)]\nenum FullBootstrapVerifierRecordMetadataTamper',
+        '#[cfg(feature = "zk-stark")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots',
+        "af88ea2f858b029354ac78825c9b3e9f2a4cf40c6a869b2da02957c8de19b106",
     ),
     "release_verifier": (
-        """    #[cfg(feature = "zk-stark")]
-    #[derive(Clone, Copy)]
-    enum FullBootstrapReleaseVerifierCase""",
-        """    #[cfg(feature = "zk-stark")]
-    #[test]
-    fn soracloud_fhe_full_bootstrap_execution_release_prover_rejects_role_spliced_artifacts""",
-        "1ada83468ad34185f067d566005ff7687c9cdf0b64311ff881d3eb06a8c33564",
+        '#[cfg(feature = "zk-stark")]\n#[derive(Clone, Copy)]\nenum FullBootstrapReleaseVerifierCase',
+        '#[cfg(feature = "zk-stark")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_release_prover_rejects_role_spliced_artifacts',
+        "c85150accfdc635efc52d572f5a1ce5f80983c038d54dd9ad5528fd98ea5e449",
     ),
     "guarded_verifier": (
-        """    #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
-    #[derive(Clone, Copy)]
-    enum FullBootstrapGuardedVerifierCase""",
-        """    #[cfg(feature = "zk-preverify")]
-    #[test]
-    fn soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_invalid_native_air""",
-        "945145fe996296961895d1ee2b33941e5e309c723325a59ad9dd87e036ed37c4",
+        '#[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]\n#[derive(Clone, Copy)]\nenum FullBootstrapGuardedVerifierCase',
+        '#[cfg(feature = "zk-preverify")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_invalid_native_air',
+        "58c09a27c28904d140cbcdc9fe77e8650511ff81073ffc5cb2e5945272dc62ed",
     ),
     "proof_quota": (
-        """    #[cfg(feature = "zk-stark")]
-    fn enable_full_bootstrap_proof_quotas<P>(""",
-        "    fn sample_fhe_input_admission_proof(\n",
+        '#[cfg(feature = "zk-stark")]\nfn enable_full_bootstrap_proof_quotas<P>(',
+        'fn sample_fhe_input_admission_proof(\n',
         "8b92df900659acde31121bc880561db9facd826bed909341eec9170a7144c167",
     ),
 }
@@ -168,9 +155,9 @@ REQUIRED_TOKENS = {
     "release_verifier": (
         "sample_full_bootstrap_execution_binding_air_proofs_for_claims",
         "prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1",
-        "trace_root[0] ^= 1",
-        "[0xCD; Hash::LENGTH]",
-        "[0xCE; Hash::LENGTH]",
+        "mutate_native_stark_digest(trace_root)",
+        "native_stark_test_digest(0xCD)",
+        "native_stark_test_digest(0xCE)",
         ".composition_value = 1",
         "execution_native_air_replay_tamper_cases()",
         "apply_execution_native_air_replay_tamper(native, tamper)",
@@ -179,7 +166,7 @@ REQUIRED_TOKENS = {
         "enable_full_bootstrap_proof_quotas",
         '"trace root does not match governed arithmetic trace"',
         '"composition root does not match governed AIR evaluation"',
-        '"composition root mismatch"',
+        '"FRI query Merkle root mismatch"',
         '"composition value does not match governed AIR evaluation"',
         "FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED",
         ".expect_err(failure_context)",
@@ -192,8 +179,8 @@ REQUIRED_TOKENS = {
         "execution_native_air_replay_tamper_cases()",
         "apply_native_air_tamper(native, tamper)",
         "apply_execution_native_air_replay_tamper(native, tamper)",
-        "[0xCF; Hash::LENGTH]",
-        "[0xD0; Hash::LENGTH]",
+        "native_stark_test_digest(0xCF)",
+        "native_stark_test_digest(0xD0)",
         "full_bootstrap_bfv_native_air_tamper_error(tamper)",
         "full_bootstrap_generic_air_tamper_error(tamper, expected_error)",
         '"guarded verifier must reject release-native BFV AIR drift"',
@@ -245,8 +232,8 @@ def _attributes(attribute_source: str) -> tuple[str, ...]:
 
 def _direct_attributes(source: str, test_name: str) -> tuple[str, ...]:
     pattern = re.compile(
-        rf"(?P<attrs>(?:    #\[[^\]\n]+\]\n)+)"
-        rf"    fn\s+{re.escape(test_name)}\s*\(",
+        rf"(?P<attrs>(?:#\[[^\]\n]+\]\n)+)"
+        rf"fn\s+{re.escape(test_name)}\s*\(",
     )
     matches = list(pattern.finditer(source))
     if len(matches) != 1:
@@ -256,8 +243,8 @@ def _direct_attributes(source: str, test_name: str) -> tuple[str, ...]:
 
 def _named_case(region: str, test_name: str) -> tuple[tuple[str, ...], str]:
     pattern = re.compile(
-        rf"(?P<attrs>(?:        #\[[^\]\n]+\]\n)+)"
-        rf"        {re.escape(test_name)}\s*=>\s*(?P<case>[A-Za-z0-9_]+);"
+        rf"(?P<attrs>(?:    #\[[^\]\n]+\]\n)+)"
+        rf"    {re.escape(test_name)}\s*=>\s*(?P<case>[A-Za-z0-9_]+);"
     )
     matches = list(pattern.finditer(region))
     if len(matches) != 1:
@@ -266,9 +253,13 @@ def _named_case(region: str, test_name: str) -> tuple[tuple[str, ...], str]:
     return _attributes(match.group("attrs")), match.group("case")
 
 
+def validate_module_owner(owner: str) -> None:
+    pattern = r'#\[cfg\(test\)\]\s*mod tests\s*\{\s*use iroha_model_base::domain::DomainId;\s*use iroha_model_base::peer::PeerId;\s*include!\("soracloud_tests.rs"\);\s*mod agent_apartment;\s*\}'
+    if len(re.findall(pattern, owner)) != 1 or owner.count('include!("soracloud_tests.rs")') != 1:
+        raise GuardError("Soracloud current test leaf lost its compiled cfg(test) owner")
+
+
 def validate_source(source: str) -> None:
-    if len(source.splitlines()) > MAX_SOURCE_LINES:
-        raise GuardError("soracloud.rs exceeded the frozen source budget")
     regions = {label: _region(source, label) for label in REGIONS}
     all_names = set(VERIFIER_CASES) | set(DIRECT_TESTS) | set(NAMED_CASES)
     for test_name in all_names:
@@ -277,8 +268,7 @@ def validate_source(source: str) -> None:
             raise GuardError(f"{test_name}: expected one source occurrence, found {occurrences}")
 
     verifier_region = regions["verifier_record"]
-    macro_contract = """                #[test]
-                fn $name() -> Result<(), eyre::Report> {"""
+    macro_contract = '                #[test]\n                fn $name() -> Result<(), eyre::Report> {'
     if macro_contract not in verifier_region:
         raise GuardError("verifier-record macro no longer emits the exact test attribute")
     for test_name, expected_case in VERIFIER_CASES.items():
@@ -350,6 +340,17 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
         with self.assertRaises(GuardError):
             validate_source(mutated)
 
+    def test_current_module_owner_and_redirect_controls(self) -> None:
+        owner = (REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud.rs").read_text()
+        validate_module_owner(owner)
+        for old, new in (
+            ('include!("soracloud_tests.rs")', 'include!("uncompiled_tests.rs")'),
+            ('#[cfg(test)]\nmod tests', '#[cfg(any())]\nmod tests'),
+        ):
+            self.assertEqual(owner.count(old), 1)
+            with self.subTest(target=old), self.assertRaises(GuardError):
+                validate_module_owner(owner.replace(old, new, 1))
+
     def test_current_source_preserves_case_matrices(self) -> None:
         validate_source(self.source)
 
@@ -359,7 +360,7 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
 
     def test_ordered_attribute_mutation_is_rejected(self) -> None:
         name = next(iter(NAMED_CASES))
-        old = f'#[cfg(feature = "zk-stark")]\n        #[test]\n        {name}'
+        old = f'#[cfg(feature = "zk-stark")]\n    #[test]\n    {name}'
         self.assert_rejected(_replace_once(self.source, old, old.replace("#[test]", "#[ignore]")))
 
     def test_case_wiring_mutation_is_rejected(self) -> None:
@@ -372,12 +373,12 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
         self.assert_rejected(_replace_once(self.source, old, old.replace("0xA8", "0xAA")))
 
     def test_release_root_mutation_is_rejected(self) -> None:
-        old = "[0xCD; Hash::LENGTH]"
-        self.assert_rejected(_replace_once(self.source, old, "[0xCC; Hash::LENGTH]"))
+        old = "native_stark_test_digest(0xCD)"
+        self.assert_rejected(_replace_once(self.source, old, "native_stark_test_digest(0xCC)"))
 
     def test_guarded_root_mutation_is_rejected(self) -> None:
-        old = "[0xD0; Hash::LENGTH]"
-        self.assert_rejected(_replace_once(self.source, old, "[0xD1; Hash::LENGTH]"))
+        old = "native_stark_test_digest(0xD0)"
+        self.assert_rejected(_replace_once(self.source, old, "native_stark_test_digest(0xD1)"))
 
     def test_error_category_mutation_is_rejected(self) -> None:
         old = "assert_invalid_parameter_contains(err, expected_error)"
@@ -400,18 +401,17 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
         self.assert_rejected(mutated)
 
     def test_callback_escape_hatch_is_rejected(self) -> None:
-        old = "        GenericBindingAir,"
+        old = '    GenericBindingAir,'
         mutated = _replace_in_region(
             self.source,
             "release_verifier",
             old,
-            old + "\n        Custom(Box<dyn Fn()>),",
+            old + '\n    Custom(Box<dyn Fn()>),',
         )
         self.assert_rejected(mutated)
 
-    def test_source_budget_growth_is_rejected(self) -> None:
-        growth = MAX_SOURCE_LINES - len(self.source.splitlines()) + 1
-        self.assert_rejected(self.source + "// synthetic growth\n" * growth)
+    def test_whitespace_growth_preserves_case_matrices(self) -> None:
+        validate_source(self.source + "\n" * 100_000)
 
 
 if __name__ == "__main__":

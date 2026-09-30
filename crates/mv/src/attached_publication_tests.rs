@@ -6,7 +6,7 @@ use crate::{
     publication::NextPublication,
     storage::{self, Storage, StorageReadOnly},
 };
-use concread::release::{ReleaseFuture, ReleaseWait};
+use iroha_allocation::release::{ReleaseFuture, ReleaseWait};
 use std::{
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},

@@ -302,7 +302,7 @@ fn package_export_names(
     for name in exports {
         let name = name.as_ref();
         if !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name)
-            || ivm::kotodama::semantic::is_reserved_source_declaration(name, for_function)
+            || kotodama_surface::source_policy::is_reserved_source_declaration(name, for_function)
         {
             return Err(Diagnostic::new(
                 ErrorCode::Usage,

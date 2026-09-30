@@ -14,7 +14,7 @@ state, Torii app endpoints, and the CLI helpers for operators and SDK authors.
 3. **Contract/runtime usage** – Generic proof verification references VKs by `(backend, name)` through `vk_ref`. Specialized proof ISIs may carry proof-specific VK material only where their instruction binds it to a registered verifier commitment. Execution resolves VK commitments during proof verification.
 4. **Proof verification** – Clients submit a signed transaction containing
    `VerifyProof` (or the applicable proof-bearing instruction) through the
-   ordinary transaction pipeline. Verification runs inside `iroha_core::zk`
+   ordinary transaction pipeline. Verification runs inside `iroha_core_zk`
    during transaction execution. Successful verifications materialise
    `ProofRecord`s that can be queried via Torii (`/v1/zk/proofs*`).
 5. **Background reporting** – The optional Torii prover worker (`torii.zk_prover_enabled=true`) scans attachments, verifies `ProofAttachment` payloads, and exports telemetry describing proof sizes and processing latency. Reports are deleted automatically after the configured TTL.

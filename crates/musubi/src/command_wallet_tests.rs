@@ -158,6 +158,9 @@ fn wallet_setup_discovers_without_account_and_missing_policy_never_prepares_a_cl
                     Err(error) => panic!("wallet discovery request did not arrive: {error}"),
                 }
             };
+            // BSD-derived platforms (including macOS) let the accepted stream inherit the
+            // listener's non-blocking mode; the read timeout below only applies to blocking reads.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();

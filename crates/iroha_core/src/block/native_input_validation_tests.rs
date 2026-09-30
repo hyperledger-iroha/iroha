@@ -129,8 +129,8 @@ fn native_execution_rejects_forged_and_zero_advertised_fragment_counts() {
     let (_, overlay) = fixture.validate(proposal).unpack(|_| {}).unwrap();
     assert_eq!(overlay.committed_fragment_count(), 1);
     assert_eq!(
-        ValidBlock::validated_committed_fragment_count(&overlay, Some(1)),
-        Ok(1)
+        ValidBlock::validated_committed_fragment_count(&overlay, Some(1)).unwrap(),
+        1
     );
     for actual in [0, 99] {
         assert!(

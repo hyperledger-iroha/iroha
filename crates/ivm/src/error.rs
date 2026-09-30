@@ -6,7 +6,7 @@ pub use ivm_abi::error::*;
 /// The complete original error carries its finite pool/release observation.
 /// Converting it to malformed input would make transaction validity depend on
 /// local resource pressure. Semantic failures retain the caller's existing map.
-pub(crate) fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMError {
+pub fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMError {
     if error.execution_deferral().is_some() {
         error
     } else {
@@ -20,7 +20,7 @@ mod tests {
 
     #[test]
     fn decode_mapping_keeps_complete_operational_errors_and_existing_semantic_faults() {
-        let budget = mv::allocation::AllocationBudget::new(1);
+        let budget = iroha_allocation::AllocationBudget::new(1);
         let occupied = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         let error = VMError::AllocationDeferred(refusal);

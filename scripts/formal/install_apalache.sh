@@ -18,7 +18,7 @@ release_base="https://github.com/apalache-mc/apalache/releases/download/v${versi
 archive_url="${release_base}/${archive_name}"
 checksums_url="${release_base}/sha256sum.txt"
 
-source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+source "${REPO_ROOT}/scripts/sumeragi_release_process_policy.sh"
 require_external_private_directory \
   "$REPO_ROOT" "$INSTALL_ROOT" "Apalache install" || exit $?
 

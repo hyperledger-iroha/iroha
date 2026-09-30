@@ -79,6 +79,42 @@ class KagemushaOmapiDeviceLifecycleV1Test {
     }
 
     @Test
+    fun `platform access denial and IO retain original evidence without body rendering`() {
+        val denied = SecurityException("Access Control Enforcer denied the selected AID")
+        val io = java.io.IOException("OEM channel failure")
+        val first = KagemushaOmapiDeviceLifecycleV1.classifyFailure("eSE1", denied)
+        val second = KagemushaOmapiDeviceLifecycleV1.classifyFailure("eSE2", io)
+        assertEquals(KagemushaOmapiDeviceLifecycleV1.FailureReason.ACCESS_DENIED, first.reason)
+        assertTrue(first.cause === denied)
+        assertEquals(KagemushaOmapiDeviceLifecycleV1.FailureReason.PLATFORM_IO, second.reason)
+        assertTrue(second.cause === io)
+        assertFalse(first.toString().contains(denied.message!!))
+        assertEquals(KagemushaOmapiDeviceLifecycleV1.FailureReason.APPLET_NOT_FOUND,
+            KagemushaOmapiDeviceLifecycleV1.classifyFailure("eSE1", java.util.NoSuchElementException()).reason)
+        assertEquals(KagemushaOmapiDeviceLifecycleV1.FailureReason.NO_LOGICAL_CHANNEL,
+            KagemushaOmapiDeviceLifecycleV1.classifyFailure("eSE1", UnsupportedOperationException()).reason)
+    }
+
+    @Test
+    fun `diagnostic timeout remains unavailable and preserves earlier original failures`() {
+        val pending = CompletableFuture<KagemushaOmapiDeviceLifecycleV1.DiscoveryResult>()
+        var shutdowns = 0
+        assertTrue(KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(pending) { shutdowns++ })
+        assertEquals(KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.TIMED_OUT, pending.join().status)
+        assertEquals(KagemushaDeviceLifecycleBridgeV1.Availability.ONLINE_ONLY, pending.join().bridge.availability)
+        assertFalse(KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(pending) { shutdowns++ })
+        assertEquals(1, shutdowns)
+        val original = KagemushaOmapiDeviceLifecycleV1.classifyFailure("eSE1", SecurityException("denied"))
+        val complete = CompletableFuture.completedFuture(KagemushaOmapiDeviceLifecycleV1.DiscoveryResult(
+            KagemushaDeviceLifecycleBridgeV1.onlineOnly(), KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.UNAVAILABLE, listOf(original)))
+        assertFalse(KagemushaOmapiDeviceLifecycleV1.completeDiagnosticTimeoutUnlessResolved(complete) { shutdowns++ })
+        assertTrue(complete.join().failures.single() === original)
+        assertEquals(1, shutdowns)
+        assertFailsWith<IllegalArgumentException> { KagemushaOmapiDeviceLifecycleV1.DiscoveryResult(
+            KagemushaDeviceLifecycleBridgeV1.onlineOnly(), KagemushaOmapiDeviceLifecycleV1.DiscoveryStatus.AVAILABLE, emptyList()) }
+    }
+
+    @Test
     fun `service cleanup runs after late completion without a caller executor`() {
         val pending = CompletableFuture<Int>()
         var closed: Int? = null

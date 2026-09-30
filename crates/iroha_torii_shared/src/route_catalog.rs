@@ -743,10 +743,6 @@ pub enum CatalogValidationErrorKind {
 ///
 /// Returns every detected [`CatalogValidationError`] when any descriptor
 /// violates the catalog contract.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the single-pass closed-catalog validator keeps every route invariant and error ordering explicit"
-)]
 pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogValidationError>> {
     let mut errors = Vec::new();
     let mut ids = BTreeSet::new();
@@ -2646,11 +2642,8 @@ pub mod sumeragi {
     pub const STATUS_SSE: RouteDescriptor =
         telemetry_sse("sumeragi.status.stream_sse", "/v1/sumeragi/status/sse");
     /// Read the global chain's lanes and the node's lane instances as an authenticated operator.
-    // TODO(N12): project into OpenAPI and the SDKs once the signed OpenAPI release artifact can
-    // be regenerated (its generator currently fails on the finality validator schema).
     pub const LANES: RouteDescriptor =
-        telemetry_operator_get("sumeragi.lane.list", "/v1/sumeragi/lanes")
-            .with_projections(RouteProjections::NONE);
+        telemetry_operator_get("sumeragi.lane.list", "/v1/sumeragi/lanes");
     /// Read the consensus BLS key roster as an authenticated operator.
     pub const BLS_KEYS: RouteDescriptor =
         telemetry_operator_get("sumeragi.bls_key.list", "/v1/sumeragi/bls-keys");

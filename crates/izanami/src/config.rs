@@ -16,7 +16,7 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::nexus::LaneCatalog;
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
-    block::consensus_v2::{
+    block::consensus::{
         MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
     },
     nexus::DataSpaceCatalog,
@@ -645,10 +645,6 @@ fn resolve_embedded_asset_selector(
 }
 impl NexusProfile {
     /// Load the embedded Sora profile and expose both typed values and a TOML layer.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "profile projection verifies every operator-owned file source before substituting non-runtime identities"
-    )]
     pub fn sora_defaults() -> Result<Self> {
         const DEFAULT_CONFIG: &str = include_str!("../../../defaults/nexus/config.toml");
         let config_str = DEFAULT_CONFIG.replace("\\0", "");
@@ -657,7 +653,7 @@ impl NexusProfile {
         normalize_lane_metadata(&mut raw_table);
         // The embedded profile predates the first-release reducer and still carries a
         // node-local DA toggle. DA and mode now come exclusively from signed genesis,
-        // so discard the whole legacy Sumeragi table and let the strict v2 defaults
+        // so discard the whole embedded Sumeragi table and let the strict Sumeragi defaults
         // populate the node-local timeout, limits, key policy, and NPoS policy.
         raw_table.remove("sumeragi");
         // The checked-in profile deliberately keeps every private identity file-backed. Verify
@@ -1452,7 +1448,7 @@ mod tests {
         );
     }
     #[test]
-    fn nexus_profile_emits_only_node_local_sumeragi_v2_configuration() {
+    fn nexus_profile_emits_only_node_local_sumeragi_configuration() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
         assert!(
             !profile.config_layer.contains_key("genesis"),
@@ -1462,7 +1458,7 @@ mod tests {
             .config_layer
             .get("sumeragi")
             .and_then(Value::as_table)
-            .expect("strict Sumeragi v2 configuration");
+            .expect("strict Sumeragi configuration");
         assert!(!sumeragi.contains_key("round_timeout_ms"));
         assert_eq!(
             sumeragi.get("role").and_then(Value::as_str),
@@ -1473,8 +1469,8 @@ mod tests {
         assert!(!sumeragi.contains_key("da"));
         assert!(!sumeragi.contains_key("advanced"));
         assert!(!sumeragi.contains_key("recovery"));
-        assert!(sumeragi.contains_key("block"));
-        assert!(sumeragi.contains_key("queues"));
+        assert!(!sumeragi.contains_key("block"));
+        assert!(!sumeragi.contains_key("queues"));
         assert!(sumeragi.contains_key("keys"));
         assert!(!sumeragi.contains_key("npos"));
         let nexus = profile
@@ -1523,15 +1519,16 @@ mod tests {
                 .and_then(|entry| entry.get("manifest_hash"))
                 .and_then(Value::as_str)
         };
+        assert_eq!(dataspaces.len(), profile.dataspace_catalog.entries().len());
         assert_eq!(manifest_hash("universal"), None);
-        assert_eq!(
-            manifest_hash("governance"),
-            Some("0100000000000000000000000000000000000000000000000000000000000000")
-        );
-        assert_eq!(
-            manifest_hash("zk"),
-            Some("0200000000000000000000000000000000000000000000000000000000000000")
-        );
+        for entry in profile.dataspace_catalog.entries() {
+            let expected = (entry.id != DataSpaceId::UNIVERSAL)
+                .then(|| embedded_dataspace_manifest_hash(entry.id));
+            assert_eq!(manifest_hash(&entry.alias), expected.as_deref());
+        }
+        // Governance and proof ordering lanes share universal physical custody.
+        assert_eq!(manifest_hash("governance"), None);
+        assert_eq!(manifest_hash("zk"), None);
     }
     #[test]
     fn nexus_profile_preserves_effective_bootstrap_asset_ids() {

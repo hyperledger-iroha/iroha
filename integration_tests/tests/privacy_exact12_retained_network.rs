@@ -10,7 +10,7 @@ use iroha::{
     data_model::{
         account::Account,
         asset::AssetDefinition,
-        block::consensus_v2::BlockSubject,
+        block::consensus::BlockSubject,
         domain::Domain,
         isi::{
             Grant, InstructionBox, Mint, Register, SetParameter,
@@ -40,19 +40,17 @@ use iroha::{
         },
     },
 };
-use iroha_core::{
-    privacy_profiles::{
-        CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
-        compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
-    },
-    privacy_release_evidence::{
-        PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
-        build_privacy_release_bootle_lantern_network_action_v1,
-        build_privacy_release_fcmp_network_action_v1,
-        build_privacy_release_ivm_private_note_network_action_v1,
-        build_privacy_release_verange_network_action_v1,
-        build_privacy_release_zk_ace_network_action_v1,
-    },
+use iroha_core::privacy_release_evidence::{
+    PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
+    build_privacy_release_bootle_lantern_network_action_v1,
+    build_privacy_release_fcmp_network_action_v1,
+    build_privacy_release_ivm_private_note_network_action_v1,
+    build_privacy_release_verange_network_action_v1,
+    build_privacy_release_zk_ace_network_action_v1,
+};
+use iroha_core_privacy::privacy_profiles::{
+    CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
+    compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::domain::DomainId;
@@ -624,7 +622,7 @@ fn independently_resign_wrong_statement_digest(
         .wrap_err("wrong statement digest must preserve the generic envelope contract")?;
     resign_replaced_envelope(client, valid, envelope, "wrong statement-digest binding")
 }
-async fn wait_for_exact_v2_commit_subject(
+async fn wait_for_exact_commit_subject(
     clients: &[Client],
     expected_height: u64,
     expected_subject: BlockSubject,
@@ -663,7 +661,7 @@ async fn wait_for_exact_v2_commit_subject(
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "{context}: exact v2 DA/RBC block subject and CommitQC did not converge within \
+                "{context}: exact DA/RBC block subject and CommitQC did not converge within \
                  {PEER_CONVERGENCE_TIMEOUT:?}; {}",
                 last_observed.join("; ")
             ));
@@ -1530,7 +1528,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "exact {label} replay changed height from {canonical_height} to {observed_height}"
             );
         }
-        wait_for_exact_v2_commit_subject(
+        wait_for_exact_commit_subject(
             &healthy_clients,
             canonical_height,
             canonical_subject,
@@ -1557,7 +1555,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let restarted_client = bounded_client(restart_peer.client());
-        wait_for_exact_v2_commit_subject(
+        wait_for_exact_commit_subject(
             &recovered_clients,
             canonical_height,
             canonical_subject,
@@ -1710,7 +1708,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             final_height > canonical_height,
             "fresh state/policy rejections did not reach canonical finality"
         );
-        wait_for_exact_v2_commit_subject(
+        wait_for_exact_commit_subject(
             &recovered_clients,
             final_height,
             final_subject,

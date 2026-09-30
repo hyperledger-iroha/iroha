@@ -27,7 +27,7 @@ RUST_TERMINAL_FIELDS = frozenset({
 })
 SUCCESS_RESULT_FIELDS = frozenset({
     "version", "protocol", "request_id", "invocation_nonce", "request_sha256",
-    "commit", "participants", "mandatory_signed_rs16_da_rbc",
+    "commit", "participants", "mandatory_signed_rs16_da",
     "signed_rs16_da_observations", "authenticated_private_settlement_route_control",
     "process_inventory", "payload",
 })
@@ -67,7 +67,7 @@ def unsigned_milliseconds(value: Any, label: str, *, positive: bool = False) -> 
 
 
 # Registered-scope reduction consumes authenticated retained bytes. These names
-# describe the single first-release producer contract, not a legacy adapter.
+# describe the single first-release producer contract.
 SCOPE_FIELDS = frozenset({
     "version", "protocol", "scope_id", "previous_scope_sha256", "registered_ns",
     "stopping_policy", "deadline_policy", "campaigns",

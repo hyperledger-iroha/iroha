@@ -6,7 +6,7 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    block::consensus_v2::is_valid_committee_size,
+    block::consensus::is_valid_committee_size,
     isi::{SetParameter, kagemusha_v1::KagemushaMintFinalityGenesisParametersV1},
     parameter::{
         Parameter,
@@ -581,7 +581,7 @@ fn load_profile_kagemusha_mint_finality_parameters(
     }
     let bytes = fs::read(&path)?;
     let parameters: KagemushaMintFinalityGenesisParametersV1 = json::from_slice(&bytes)?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )?;
     let mut expected_validators = peers
@@ -879,9 +879,7 @@ fn portable_bound_profile_manifest(
         return Err("generated profile manifest must use the portable `ivm_dir` value `.`".into());
     }
     let expected_fingerprint = generated_manifest
-        .with_sumeragi_v2_context_parameters(
-            resolved_bound_manifest.sumeragi_v2_context_parameters(),
-        )
+        .with_sumeragi_context_parameters(resolved_bound_manifest.sumeragi_context_parameters())
         .with_consensus_meta()
         .consensus_fingerprint();
     if expected_fingerprint != resolved_bound_manifest.consensus_fingerprint() {
@@ -1388,7 +1386,7 @@ Files:
 fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
     if !is_valid_committee_size(spec.min_peers) {
         return Err(format!(
-            "profile {} peer count {} is not an exact revision-4 `3f + 1` committee",
+            "profile {} peer count {} is not an exact Sumeragi `3f + 1` committee",
             spec.slug, spec.min_peers
         )
         .into());
@@ -1589,7 +1587,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(index, validator)| {
-                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                         &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
                         0,
                         validator,
@@ -1597,8 +1595,8 @@ mod tests {
                     .expect("derive deterministic test mint-finality keys")
                 })
                 .collect();
-            self.with_sumeragi_v2_context_parameters(
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            self.with_sumeragi_context_parameters(
+                iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
             )
             .with_kagemusha_mint_finality_genesis_parameters(
                 iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
@@ -1780,7 +1778,7 @@ mod tests {
             };
             let error = build_peers(&spec).expect_err("non-committee profile must fail");
             assert!(
-                error.to_string().contains("exact revision-4 `3f + 1`"),
+                error.to_string().contains("exact Sumeragi `3f + 1`"),
                 "unexpected error for {count} peers: {error}"
             );
         }
@@ -2025,6 +2023,30 @@ mod tests {
         assert!(lanes.is_empty());
         assert!(dataspaces.is_empty());
         assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn checked_in_dev_profile_peer_configs_match_the_generator() {
+        let spec = &PROFILES[0];
+        assert_eq!(spec.slug, "iroha3-dev");
+        let peers = build_peers(spec).expect("build deterministic dev peers");
+        let genesis_key =
+            deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)
+                .expect("derive the dev profile genesis key");
+        for peer_index in 0..peers.len() {
+            let path = workspace_root()
+                .join("defaults/kagami")
+                .join(spec.slug)
+                .join(peer_config_file_name(peer_index));
+            let checked_in = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert_eq!(
+                checked_in,
+                render_peer_config(spec, &peers, peer_index, genesis_key.public_key()),
+                "{} must equal its `cargo xtask kagami-profiles` rendering",
+                path.display()
+            );
+        }
     }
 
     #[test]
@@ -2433,7 +2455,7 @@ mod tests {
         }
     }
     #[test]
-    fn all_profile_configs_use_only_current_sumeragi_node_parameters() {
+    fn all_profile_configs_render_only_node_local_sumeragi_settings() {
         for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
@@ -2447,9 +2469,9 @@ mod tests {
                 .as_table()
                 .expect("node-local Sumeragi config");
             assert_eq!(
-                sumeragi.len(),
-                1,
-                "profile {} adds unsigned protocol policy",
+                sumeragi.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["role"],
+                "profile {} must render only the node-local Sumeragi role; block limits come from chain parameters",
                 profile.slug
             );
             assert_eq!(sumeragi["role"].as_str(), Some("validator"));

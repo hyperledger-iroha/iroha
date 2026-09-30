@@ -109,10 +109,10 @@ cargo test -p iroha_data_model --test manual_frame_identity --features http --lo
 This is focused qualification after declaration and test relocation. The prior
 3,655-test result above belongs to its earlier source seal. At that checkpoint,
 query and generated declarations, active codec cutover, physical model extraction
-and complete workspace/release qualification remained open. The source budget still
-reports 236 paths and 173 unchanged exceptions; the KAGEMUSHA V1 module grows
-from 6,254 to 6,258 lines and still requires meaningful decomposition. No budget
-or dependency limit is widened.
+and complete workspace/release qualification remained open. The preceding
+source inventory recorded 236 paths and 173 exceptions, with KAGEMUSHA V1
+growing from 6,254 to 6,258 lines in that capture. These historical measurements
+impose no current code-size requirement. Dependency limits are unchanged.
 
 ## Query and time owners
 
@@ -155,8 +155,8 @@ sources, source seals and producer binaries. Their SHA-256 values are
 `fd224bb9248a7d1d9f8cd3a45ef706e5b3c3806afb53f092abfc90a4f294f3bc`
 and `c4e73559134736e2c72817ec1029e81c1a5fb41ba580bf4264696178956faa64`.
 The nine declared public tests pass on 19,317 unchanged inputs with no stack
-override. The same source passes 256 affected model tests, including all 32
-Native AMX cases, 28 public query integration tests and one allocation test,
+override. The same source passes 256 affected model tests, 28 public query
+integration tests and one allocation test,
 with zero failures or ignored cases across all four runs.
 The nine source/fixture paths are integrated from patch
 `651a055911da35e46c6339d3356c6b9db6e3a544972417a12b5ef3221c9f122b`.
@@ -197,14 +197,15 @@ The retained `time-event-frame-closure/` evidence binds both actual captures to
 their producer binary and 19,319 unchanged pre-declaration inputs. The final
 combined build and four runtime selections share 19,321 unchanged inputs and no
 stack override. All **301 focused tests pass**: 11 public frame tests, 256 model
-tests (including 21 time tests and all 32 Native AMX regressions), 28 query plus
+tests (including 21 time tests), 28 query plus
 five SM integration tests, and one allocation test. The unused SM framing-trait
 import is removed; the combined build reports no warnings.
 
 The eight source/fixture paths are integrated from patch
 `53638d8b1b2575240d98add873069a087a6ff6037abd3c80f41f6f40bd809bc5`.
-Codec and formatting guards pass. Source budgets retain exactly 236 findings,
-173 exceptions and their existing limits. Complete declaration coverage, atomic
+Codec and formatting guards passed. The preceding source inventory recorded
+236 findings and 173 exceptions under the now-retired size policy. Complete
+declaration coverage, atomic
 identity cutover, physical model extraction and workspace/release qualification
 remain open; no dependency, optimization or ABI change is introduced here.
 
@@ -241,21 +242,14 @@ complete valid payload. No public equality/debug traits or compatibility paths
 are added. The governance-disabled branch retains 98 applicable frames but has
 not been runtime-qualified in this stage.
 
-The Native AMX settlement tests now have one topic-owned module. All 104
-functions and 75 tests across the complete include closure are retained; moved
-bodies and signatures are unchanged. The former 3,083-line test root is 1,567
-lines and the new module is 1,719 lines. The maximum 4,096-source regression
-still constructs schemas, encodes, decodes, hashes and drops the finite
-participant control on the default stack. Its production record and HashOf
-schema implementation are unchanged by this stage.
-
 The final build, four runtime selections and codec guard share 19,341 unchanged
 inputs with no stack override. All **384 focused tests pass**, with no failures
 or ignored cases: 21 public tests preserving **525 immutable frames**, 329 model
-tests including all 32 Native AMX cases and 16 new identity suites, 33 query/SM
+tests including 16 new identity suites, 33 query/SM
 integration tests and one allocation test. Formatting and codec checks pass.
-The source budget removes exactly one finding, leaving 235 findings and 173
-unchanged exceptions under the existing 5,000/3,000-line limits.
+The preceding source inventory removed one finding, recording 235 findings
+and 173 unchanged exceptions at that checkpoint. Its 5,000/3,000-line
+requirements are now retired.
 
 The 40-path source patch is
 `f4a77b15755c25f43644b474852930a515ff4d322828053ad408981fbcc4ccd4`.

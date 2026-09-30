@@ -133,7 +133,7 @@ COMMON_RESPONSE_FIELDS = {
     "configuration_sha256",
     "participants",
     "passed",
-    "mandatory_signed_rs16_da_rbc",
+    "mandatory_signed_rs16_da",
     "signed_rs16_da_observations",
     "authenticated_private_settlement_route_control",
     "process_inventory",
@@ -644,13 +644,12 @@ def build_configuration(
             "quorum": QUORUM,
         },
         "consensus": {
-            "mandatory_signed_rs16_da_rbc": True,
+            "mandatory_signed_rs16_da": True,
             "minimum_signed_rs16_da_observations_per_run": (
                 minimum_signed_rs16_da_observations(participants)
             ),
             "authenticated_private_settlement_route_control": True,
             "maximum_simultaneously_unavailable_per_committee": 1,
-            "legacy_rbc_bypass_permitted": False,
         },
         "fault_matrix": {
             "seeds": list(normalized_seeds),
@@ -1108,7 +1107,7 @@ def create_plan(
                     "participants": participants,
                     "validators_per_dataspace": VALIDATORS_PER_DATASPACE,
                     "quorum": QUORUM,
-                    "mandatory_signed_rs16_da_rbc": True,
+                    "mandatory_signed_rs16_da": True,
                     **binding,
                 }
             )
@@ -1400,7 +1399,7 @@ def load_plan(path: Path) -> tuple[dict[str, Any], Path]:
                 "participants",
                 "validators_per_dataspace",
                 "quorum",
-                "mandatory_signed_rs16_da_rbc",
+                "mandatory_signed_rs16_da",
                 "path",
                 "sha256",
                 "bytes",
@@ -1411,7 +1410,7 @@ def load_plan(path: Path) -> tuple[dict[str, Any], Path]:
             record["participants"] not in PARTICIPANTS
             or record["validators_per_dataspace"] != VALIDATORS_PER_DATASPACE
             or record["quorum"] != QUORUM
-            or record["mandatory_signed_rs16_da_rbc"] is not True
+            or record["mandatory_signed_rs16_da"] is not True
         ):
             raise RunnerError(f"configuration[{index}] weakens the release topology")
         config_path = regular_file_under(
@@ -1568,8 +1567,8 @@ def validate_common_response(
         raise RunnerError("harness response does not bind the frozen request")
     require_true(record["passed"], "harness response.passed")
     require_true(
-        record["mandatory_signed_rs16_da_rbc"],
-        "harness response.mandatory_signed_rs16_da_rbc",
+        record["mandatory_signed_rs16_da"],
+        "harness response.mandatory_signed_rs16_da",
     )
     observations = bounded_integer(
         record["signed_rs16_da_observations"],
@@ -2273,7 +2272,7 @@ def validate_fault_trial_control_semantics(
             raise RunnerError(f"{label} does not prove an acknowledged Hold-to-Pass phase cut")
         return
 
-    raise RunnerError(f"{label} uses a retired in-node process-cut scenario")
+    raise RunnerError(f"{label} is outside the loss, phase-cut and restart fault matrix")
 
 
 def _validate_fault_state_response(
@@ -3273,7 +3272,7 @@ def materialize_fault_response(
     seed = job["seed"]
     run = job["run"]
     if payload["crash_recoveries"] != []:
-        raise RunnerError("fault payload cannot claim retired persistence-cut trials")
+        raise RunnerError("fault payload cannot claim persistence-cut trials outside the fault matrix")
     collections = ("loss_trials", "phase_cut_partitions")
     trial_fields = {
         "loss_trials": {
@@ -3429,7 +3428,7 @@ def materialize_fault_response(
         "run": run,
         "validators_per_dataspace": VALIDATORS_PER_DATASPACE,
         "quorum": QUORUM,
-        "mandatory_signed_rs16_da_rbc": True,
+        "mandatory_signed_rs16_da": True,
         "authenticated_private_settlement_route_control": True,
         "committee_validator_restarts": payload[
             "committee_validator_restarts"
@@ -5066,7 +5065,7 @@ def build_request(
         "validators_per_dataspace": VALIDATORS_PER_DATASPACE,
         "global_validators": GLOBAL_VALIDATORS,
         "quorum": QUORUM,
-        "mandatory_signed_rs16_da_rbc": True,
+        "mandatory_signed_rs16_da": True,
         "minimum_signed_rs16_da_observations": (
             minimum_signed_rs16_da_observations(job["participants"])
         ),
@@ -5905,7 +5904,8 @@ def close_benchmark_campaign(
     """Close exact retained session owners using canonical shared accounting.
 
 Source/native admission and campaign prefix authorization belong to the caller.
-The mandatory callback prevents a legacy one-process-per-attempt fallback.
+The mandatory callback keeps closure on retained session owners; there is no
+one-process-per-attempt path.
 The execution and exclusive unstarted owners supply the mandatory scope and
 independently admitted native sample replay callback.
     """

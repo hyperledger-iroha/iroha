@@ -35,243 +35,106 @@ External review and physical-device evidence cannot be self-issued.
 5. Qualify end-to-end SDK/native/network paths and independent cryptographic
    evidence. Close each goal only with its acceptance evidence.
 
-## Opening evidence
-
-- Vega private row commitments trim by secret value and use variable-time MSM;
-  the compiled Vega activation remains unavailable.
-- Optional second confidential inputs require zero-leaf membership even when
-  absent; a full 65,536-leaf tree has no such dummy leaf.
-- `ivm-execution-v1` is a public-value equality circuit. Core correctness relies
-  on unconditional deterministic execution replay.
-- Admitted FASTPQ verification reconstructs complete batch commitments. Offline
-  compact proofs are unmasked and cannot acquire production authority.
-- X509's current maximum encoding is 19,156,074 bytes against a 9,437,184-byte
-  ceiling. Even removing all P-256 trace-opening bytes leaves 10,452,074 bytes.
-- The reviewed FASTPQ DEEP plan needs 20,199,768,064 bytes for its retained LDE
-  alone; widened row openings occupy 616,448 bytes against a 524,288-byte target.
-- The critique's focused Python selection passed 8 checks and failed 3 current
-  source/inventory contracts. No Rust proof suite or timing attack was executed
-  during that review.
-
 ## Current implementation and evidence
 
-This section describes the September 29 source and scoped retained results.
-The [exact preceding ledger](../docs/history/2026-09-29/zk-goal-ledger-before-current-source-reconciliation.md)
-preserves the original observations and failures. Its earlier IVM proving routes,
-CLI commands and network fixtures are historical; they are retired on current
-main. No passing historical candidate qualifies the concurrently merged checkout.
+The following implementation boundaries require qualification against the final
+unchanged candidate. Earlier source revisions and test totals do not qualify the
+current checkout.
 
 ### ZK01 — secret arithmetic
 
-Vega private commitments use the fixed-window secret MSM, public dimensions and
-clearing scalar owners. Twenty-five native arithmetic, cleanup and worker controls
-pass. ZK-ACE borrowed private preimages and reachable hashing scratch also clear;
-seven prover controls, 23 model controls and 71 primitive controls pass on their
-recorded sources. Accelerator allocations clear after observed completion;
+Vega private commitments use fixed-window secret MSM, public dimensions and
+clearing scalar owners. ZK-ACE borrowed private preimages and reachable hashing
+scratch clear. Accelerator allocations clear only after observed completion;
 unknown completion quarantines their owners and blocks further private admission.
-The unused memory-limit API was removed. Software defect remediation is complete;
-compiler-created copies, device timing and independent review remain ZK06.
+Compiler-created copies, device timing and independent review remain ZK06.
 
 ### ZK02 — optional confidential inputs
 
-Absent inputs no longer require an empty-leaf path. One owned note can be fully
-redeemed at the 65,536-leaf maximum, or redeemed with private change. Ownership,
-range, conservation and nullifier constraints remain. Canonical replacement keys
-and pins reject superseded keys. Actual native full/change proofs, adversarial
-controls and Rust plus five supported SDK wallet workflows pass on retained
-candidates. SDK artifacts also pass the captured Core decoder and typed verifier.
-Same-candidate current network, distribution and device evidence remain open.
+Absent inputs require no empty-leaf path. One owned note can be fully redeemed at
+the 65,536-leaf maximum, or redeemed with private change. Ownership, range,
+conservation and nullifier constraints remain enforced. Canonical replacement
+keys reject superseded keys. Same-candidate network, distribution and device
+qualification remains open.
 
 ### ZK03 — complete proof semantics
 
 `zk::verify_for_relation` admits only an explicit semantic role supported by its
-compiled relation. Current main retires IVM replay-binding circuits, registry
-support, keygen, Torii derive/prove/jobs and associated SDK/CLI APIs. Reserved
-retired names reject. Production `IvmProved` admission stays closed until the
-complete native IVM transition relation and finalized State authority exist;
-its outstanding implementation is owned by G3 in the
-[Kotodama/IVM goals](kotodama_ivm_completion.md). This hard cut does not complete
-the execution algorithm.
+compiled relation. IVM replay-binding circuits, registry support, keygen,
+Torii derive/prove/jobs and associated SDK/CLI APIs are retired. Reserved names
+reject. Production `IvmProved` admission stays closed until the complete native
+transition relation and finalized State authority exist; G3 in the
+[Kotodama/IVM goals](kotodama_ivm_completion.md) owns this work.
 
-Historical Torii/CLI/network results do not qualify current relation admission.
-The shared integration proof fixtures and record/event/query callers now use the
-public wallet facade to construct actual one-note full-unshield proofs. The
-full-capacity wallet's wrong-role negative uses the retained confidential-transfer
-key and schema. Native corruption, framing, proof-record, event and query
-assertions remain; these migrated sources are formatted but not yet compiled.
-The old successful IvmProved network case now requires exact unavailable-relation
-rejection with unchanged state and independently applied progress. A current
-20,543-file candidate retained 23 unfinished Sumeragi compile errors. A later
-coherent Core/model/Torii build passes; two idle-smoke repairs await retry. The
-native-lane correction passes 28 controls; the signed fixture now exposes manifest authority drift;
-network qualification remains open ([record](../docs/history/2026-09-29/zk-current-network-qualification.md)).
+RAM-LFE registration, activation, restoration and receipts reject both signed and
+proof BFV modes: the exact-lift profile loses public-key noise modulo 257. Public
+evaluators refuse before private work. The execute API's false plaintext-opening
+claim is removed. Secure encryption replacement, the complete relation and
+integrated network qualification remain open.
 
-RAM-LFE registration, activation, restoration and receipts now reject both signed
-and proof BFV modes: the exact-lift profile loses its public-key noise modulo 257.
-Public evaluators refuse before private work; 68 normal frozen crypto controls pass.
-An unrelated generic proof cannot satisfy execution. Secure encryption replacement,
-complete relation and current Torii qualification remain open. The execute API's
-false plaintext opening is removed; [boundary evidence](../docs/history/2026-09-29/ram-lfe-production-boundary.md)
-records 63 schema controls, 45 Core and 35 Torii passes. Reused dependency provenance
-was not retained for the latter builds; isolated coherent reruns remain required.
-
-The retained diagnostic RAM-LFE stage implements one bounded BLAKE3 initializer, fixed-work
-modulo-257 reduction, distinct canonical policy/tape commitments and a mandatory
-`initializer_descriptor_hash`. Tracing observes the sole eleven-operation
-interpreter and owns clearing private cells; it is not a proof. The first normal
-Cargo run passed 49 controls and failed three invalid BFV trace fixtures. Its
-corrected normal rerun passes all 52 controls, with an independently reconstructed
-1,024-byte XOF and fixed known answers. A subsequent source stage introduces one
-validated shared clearing tape owner, bounded typed builder and sole private-frame
-decoder, and fixes borrowed frame identities. Its normal native run passes all
-61 controls and both API doctests with no source drift; the complete descriptor
-and full-tape digest match independent known answers. Five configuration caller
-controls also pass after correcting test access and diagnostic expectations.
-The complete BFV semantic circuit and remaining
-internal BFV scratch remain outstanding in the [execution contract](ram_lfe_execution_proof.md)
-and [initializer record](../docs/history/2026-09-29/ram-lfe-bounded-initializer.md).
-The proposed [semantic commitments](ram_lfe_semantic_commitments.md) replace private wire hashing;
-[replacement encryption](ram_lfe_encryption_replacement.md) and [scalar packing](ram_lfe_plaintext_packing.md)
-remain designs requiring a complete relation and qualification. The unused Pasta leaf passes
-[18 native controls](../docs/history/2026-09-29/ram-lfe-pasta-leaf.md); its [circuit](../docs/history/2026-09-29/ram-lfe-pasta-circuit.md) passes ten isolated controls at maximum k=16 but misses the 20 ms budget (238.840 ms).
-The distinct [BN254 naming cut](../docs/history/2026-09-29/bn254-poseidon-api.md) passes 19 native/four doc controls and actual GPU/AXT consumer compilation.
+The diagnostic interpreter owns clearing private tape cells and binds its
+bounded BLAKE3 initializer, fixed-work modulo-257 reduction, canonical policy/tape
+commitments and `initializer_descriptor_hash`. A trace is not a proof. The
+[execution contract](ram_lfe_execution_proof.md), proposed
+[semantic commitments](ram_lfe_semantic_commitments.md),
+[replacement encryption](ram_lfe_encryption_replacement.md) and
+[scalar packing](ram_lfe_plaintext_packing.md) own remaining construction and
+resource obligations. Test-only planners and leaf circuits qualify no production
+relation.
 
 ### ZK04 — FASTPQ
 
 The public Quantity facade uses the masked bounded DEEP producer and independent
-verifier. Transparent replay APIs require development/test features. Exact
-statement, context and source bindings remain mandatory; proof consistency alone
-does not authorize remote spending. Expected statements derive from the canonical
-statement rather than caller-selected transcript internals. RequiredMetal checks
-device readiness before private work and never silently falls back.
+verifier. Transparent replay APIs require development/test features. Expected
+statements derive from canonical authenticated context; proof consistency alone
+does not authorize remote spending. RequiredMetal checks readiness before private
+work and never silently falls back.
 
-The source-lifetime repair transfers the physical trace owner and releases its
-redundant 179,306,496-byte allocation. Complete shared Metal pool capacity is
-charged through its lifetime. The repaired retained optimized binary constructs
-and independently verifies both repeated-two-key, two-child fixtures:
-
-| Route | Proof bytes | Construction plus self-check | Measured peak RSS |
-| --- | ---: | ---: | ---: |
-| Ordinary | 971,675 | 4,438.147 s | 1,881,849,856 B |
-| AXT | 973,573 | 4,014.032 s | 1,875,820,544 B |
-
-Both measured processes fit 2 GiB without changing caps. The prior ordinary run
-exceeded that ceiling and remains in the historical record. Only `Cargo.lock`
-drifted after the repaired capture; this evidence does not qualify current main.
-Single-child CPU/Metal exact-byte parity and independent artifact verification
-also pass on retained sources. These are contended observations, not throughput
-measurements. Receipt:
-`dist/zk-remediation/2026-09-29/fastpq-source-owner-proof-run1/two-child/complete-receipt.json`.
-
-Maximum four-key ordinary and AXT proofs both pass unchanged limits: 973,336 and
-1,010,229 bytes; construction/self-check 3,668.791 and 4,233.689 seconds;
-peak RSS 1,856,045,056 and 1,875,656,704 bytes. Independent replay takes 7.70 and
-26.87 seconds; 16 API controls pass. All 38 local dependencies rebuilt from the
-frozen candidate. Exact receipts: `dist/zk-remediation/2026-09-29/fastpq-maximum-proof-run1`.
-Independent hiding/soundness review, finalized-source network behavior and current
-hardware qualification remain open in [FASTPQ readiness](fastpq_production_readiness.md).
+[FASTPQ readiness](fastpq_production_readiness.md) owns current relation and
+resource limits and links complete two-child and maximum-occupancy measurements.
+Independent hiding/soundness review, finalized-source network behavior, broader
+application shapes and hardware qualification remain open.
 
 ### ZK05 — ZK-X509
 
-The joined MAIN relation retains all 49 registrations and supported certificate,
-CRL, disclosure and ownership coverage. Paired FRI openings and the corrected
-RFC temporal relation derive a 9,420,938-byte maximum encoding against the
-unchanged 9,437,184-byte ceiling. The current RFC geometry is
-285 base / 280 auxiliary / 102 fixed columns, 1,681 constraints, degree four.
-It binds the authenticated 72-time census, 73 comparisons and nonwrapping 38-bit
-differences. Fixed matrices reuse bounded storage; private columns replay from
-immutable clearing owners instead of retaining all masked coefficients.
+The MAIN relation retains all 49 registrations and supported certificate, CRL,
+disclosure and ownership coverage. Paired FRI openings and RFC temporal geometry
+derive a 9,420,938-byte maximum encoding against the unchanged 9,437,184-byte
+ceiling. Geometry is 285 base / 280 auxiliary / 102 fixed columns, 1,681
+constraints and degree four. It binds 72 authenticated times, 73 comparisons
+and nonwrapping 38-bit differences. Private columns replay from clearing owners.
 
-Earlier retained controls and the failed `DerWitness` proof remain in dated records;
-they do not qualify the later optimized candidate.
-The corrected maximum temporal fixture and family-prefix storage pass 72 normal
-optimized native controls, including all 285 base and 280 auxiliary columns on
-ordinary and maximum witnesses. Maximum owned assembly is 200,816,874 bytes
-against the unchanged 596,974,144-byte allowance. Replaced/partial owners clear;
-nonzero omitted operands reject. Full-source and retained-binary guards pass.
-
-The subsequent actual maximum proof fails at `BoundSources` with
-`MainProofConstruction(TranscriptMismatch)` after DER/RFC binding completed.
-No proof was emitted. Producer time is 1,062.696 seconds; measured peak RSS is
-7,993,442,304 bytes. Metal executed 805 calls / 3,213 columns without fallback.
-Base source sampling took 442.963 seconds and commitment 567.292 seconds;
-no auxiliary masks, composition, DEEP or opening phases were reached.
-The corrected RFC/SHA mapping passes nine native controls and the maximum handoff;
-its first full BoundSources run overflows the normal stack. The heap-owner repair
-passes all 13 clean native controls, including maximum BoundSources on the normal
-stack and both independently verified component KATs. The fresh optimized run passes 109 controls;
-its full maximum proof is still running and exceeds 300 s; caps remain unchanged ([record](../docs/history/2026-09-29/zk-x509-rfc-temporal-repair.md)).
+The recorded optimized maximum proof fails `ConstraintOpening` during composition
+after 3,368.579 seconds. Peak RSS is 9,639,247,872 bytes, within 12 GiB; no proof
+is emitted. Complete successful proving and independent verification remain open;
+a size projection or isolated component test cannot close this goal.
 
 ### ZK07 — developer workflow
 
-The Rust wallet owns clearing private inputs, selects the correct circuit and
-canonical keys, and reports typed preflight/proving failures. Callers provide
-actual notes and paths, with no dummy inputs or transcript choices. Low-level
-caller-key builders are private; compile-fail controls enforce that boundary.
-`change.into_input(index)` retains its intended owner. JavaScript, Python, Swift,
-Kotlin/Java and C# use the shared native owner, with bounded inputs and accepted
-asynchronous job lifetime. Retained native proofs and runnable public examples
-pass; managed strings still cannot promise erasure, and signed multi-platform
-artifacts/current integrated source remain unqualified.
+The Rust wallet owns clearing private inputs, canonical keys and circuit selection,
+with typed preflight/proving errors. Callers supply actual notes and paths without
+dummy inputs or transcript choices. JavaScript, Python, Swift, Kotlin/Java and C#
+use the shared native owner with bounded inputs and asynchronous job custody.
+Managed strings cannot promise erasure. Signed multi-platform artifacts and
+current integrated qualification remain open.
 
-RAM-FHE metadata now requires the compiled initializer descriptor. JavaScript,
-Swift, Kotlin and C# use the exact seven-field profile, sole encrypted-envelope
-mode and bounded unsigned dimensions; no retired mode or JSON compatibility
-shim is retained. Kotlin passes 11 normal tests. Swift's normal five-slice artifact refresh and
-nine profile/endpoint controls pass. C# passes 154 profile/identifier and two
-endpoint controls under its pinned SDK; all 11 profile controls also pass without
-a native-loader override. JavaScript's normal native rebuild and all 42 scoped
-endpoint controls pass with no skips or source drift. Both JavaScript policy-list
-routes now use the bounded lossless integer decoder, preserve raw `u64` values,
-and reject duplicate fields and noncanonical profile numbers. Scoped lint and
-code review pass. An old negative fixture assigned the existing policy ID; it
-now uses a distinct valid ID and asserts that precondition. The original failed
-run and the provenance guard's refusal before rebuilding remain recorded.
-OpenAPI makes the descriptor mandatory; program associated data uses canonical
-Norito independently of ambient flags. Python has no equivalent existing profile
-endpoint, so no coverage is claimed for one.
-The subsequent BFV backend-name hard cut and canonical outer/PRF transcript repair
-pass 65 native controls and two doctests. Renamed tags pass 466 C# and two Python
-controls; Kotlin compiles but missing Sumeragi fixtures prevent its current test
-run. The preserved JavaScript candidate also passes its normal rebuild and 42
-tag controls; Swift's refresh and integrated Torii remain open. See the
-[transcript record](../docs/history/2026-09-29/ram-lfe-canonical-transcripts.md).
-BFV secret keys now own clearing private coefficients and redact diagnostics;
-confidential keysets now have an actual clearing destructor. Selected reachable
-BFV/RAM scratch also clears. Retained runs pass 273 BFV and 86 targeted repair
-controls (overlapping); a key-switch extension passes 49 focused controls.
-Primitive state and diagnostic exports remain outside
-this scoped [owner repair](../docs/history/2026-09-29/zk-key-owner-erasure.md).
+RAM-FHE metadata requires the compiled initializer descriptor, exact seven-field
+profile, sole encrypted-envelope mode and bounded unsigned dimensions. Associated
+data uses canonical Norito independently of ambient flags. BFV secret keys own
+clearing private coefficients and redact diagnostics. Public plaintext-encryption
+helpers refuse with a stable unavailable error; deterministic encryptors belong
+only to test fixtures. No retired mode, public seed overload or JSON compatibility
+shim is admitted. Remaining scratch, current native consumers and integrated
+SDK/Torii qualification must be verified on one candidate.
 
-Public Kotlin/Java, JavaScript and Swift plaintext-encryption helpers now refuse
-with a stable unavailable error. Deterministic encryptors move to explicit test
-fixtures and public seed overloads retire. Kotlin production/test compilation
-passes; its JAR excludes diagnostic encryptors. Both complete selected Java
-harnesses pass ([record](../docs/history/2026-09-29/java-canonical-bls-consumer.md)).
-Kotlin runtime needs two canonical Kagami fixtures; the compiled producer fails at
-block4's lane manifest authority check after the identity correction. No replacement bytes were invented.
-JavaScript passes 148 build-tool controls; test arithmetic is absent from its package.
-The repaired cold ABI-25 native build passes with all 69 local artifacts fresh;
-all 47 endpoint controls pass, with strict types and lint. The first fixture failure remains recorded.
-C# passes 269 managed controls plus four authenticated-native and three real wallet controls;
-a strict derivation-revision mismatch is repaired. Current Swift five-slice builds are running.
-Rust generic/specialized encryptors are private: 349 native and 37 API compile checks pass;
-Soracloud production refusal and cleanup reruns remain. Source-bound evidence is retained.
-See [SDK boundary evidence](../docs/history/2026-09-29/ram-lfe-sdk-encryption-retirement.md).
-
-Public guidance belongs in `iroha-docs`. FASTPQ plus 20 translations pass scoped
-checks and its Rust example compiles. The RAM-LFE and fee-sponsor pages plus 40
-translations state actual availability; content/i18n and RTL browser checks pass
-([record](../docs/history/2026-09-29/ram-lfe-public-guidance.md)). Retired IVM help
-requires normal pinned-source generation, never invented provenance.
+Public guidance belongs in `iroha-docs`; generated IVM help requires normal
+pinned-source generation and authentic provenance.
 
 ### ZK08 — current source contracts
 
-After the merge at `2478995058`, the token utility, two Halo2 source-inventory
-guards and note-STARK constraint guard pass all 13 focused Python checks. The
-separate X509 geometry selection passes nine checks. These validate the retained
-source assertions and byte accounting; they do not replace the pending normal
-native, integrated workspace or network runs.
+Preserve every substantive Halo2/note-STARK source assertion and X509 geometry
+check. Source assertions and byte accounting do not replace normal native,
+integrated workspace or four-validator network qualification.
 
 ## Remaining execution sequence
 

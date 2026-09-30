@@ -76,7 +76,6 @@ def _current_transaction_fields(
         b"\x01" + _field((100_000).to_bytes(8, "little")),
         b"\x00",
         (0).to_bytes(4, "little") + _field(authority_payment),
-        (0).to_bytes(4, "little"),
         (0).to_bytes(8, "little"),
         b"\x00",
     ]
@@ -242,6 +241,19 @@ def test_transaction_payload_layout_rejects_legacy_fee_without_gas_limit() -> No
     fields[6] = (0).to_bytes(4, "little") + _field(legacy_payment)
 
     with pytest.raises(ValueError, match="missing required field gas_limit"):
+        MODULE._transaction_payload_network_id(
+            _encode_transaction_fields(fields), "payload"
+        )
+
+
+@pytest.mark.parametrize("extra", [(0).to_bytes(4, "little"), b"unknown"])
+def test_transaction_payload_layout_rejects_inserted_retired_admission_field(
+    extra: bytes,
+) -> None:
+    fields = _current_transaction_fields()
+    fields.insert(7, extra)
+
+    with pytest.raises(ValueError, match="trailing or legacy fields"):
         MODULE._transaction_payload_network_id(
             _encode_transaction_fields(fields), "payload"
         )

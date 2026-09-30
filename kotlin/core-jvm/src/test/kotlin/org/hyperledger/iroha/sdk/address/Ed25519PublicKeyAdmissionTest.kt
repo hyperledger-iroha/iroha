@@ -269,7 +269,7 @@ class Ed25519PublicKeyAdmissionTest {
             active = true,
             normalization = IdentifierNormalization.EXACT,
             resolverPublicKey = publicKeyLiteral,
-            backend = "signed",
+            backend = "hkdf-sha3-512-prf-v1",
             inputEncryption = null,
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = null,
@@ -286,7 +286,7 @@ class Ed25519PublicKeyAdmissionTest {
             owner = "owner",
             active = true,
             resolverPublicKey = publicKeyLiteral,
-            backend = "signed",
+            backend = "hkdf-sha3-512-prf-v1",
             verificationMode = "signed",
             inputEncryption = null,
             inputEncryptionPublicParameters = null,
@@ -299,14 +299,14 @@ class Ed25519PublicKeyAdmissionTest {
         publicKeyLiteral: String,
         outputOpeningPublicKeyLiteral: String = publicKeyLiteral,
     ): ByteArray =
-        """{"items":[{"policy_id":"key-admission#fixture","program_id":"key-admission-fixture","owner":"owner","active":true,"normalization":"exact","resolver_public_key":"$publicKeyLiteral","output_opening_public_key":"$outputOpeningPublicKeyLiteral","backend":"signed"}]}"""
+        """{"items":[{"policy_id":"key-admission#fixture","program_id":"key-admission-fixture","owner":"owner","active":true,"normalization":"exact","resolver_public_key":"$publicKeyLiteral","output_opening_public_key":"$outputOpeningPublicKeyLiteral","backend":"hkdf-sha3-512-prf-v1"}]}"""
             .toByteArray(StandardCharsets.UTF_8)
 
     private fun ramLfePolicyJson(
         publicKeyLiteral: String,
         outputOpeningPublicKeyLiteral: String = publicKeyLiteral,
     ): ByteArray =
-        """{"items":[{"program_id":"key_admission_fixture","owner":"owner","active":true,"resolver_public_key":"$publicKeyLiteral","output_opening_public_key":"$outputOpeningPublicKeyLiteral","backend":"signed","verification_mode":"signed"}]}"""
+        """{"items":[{"program_id":"key_admission_fixture","owner":"owner","active":true,"resolver_public_key":"$publicKeyLiteral","output_opening_public_key":"$outputOpeningPublicKeyLiteral","backend":"hkdf-sha3-512-prf-v1","verification_mode":"signed"}]}"""
             .toByteArray(StandardCharsets.UTF_8)
 
     private fun replaceOutputOpeningValue(

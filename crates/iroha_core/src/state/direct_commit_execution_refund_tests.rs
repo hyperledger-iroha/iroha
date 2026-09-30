@@ -51,7 +51,7 @@ fn check_execution_refund_retirement(case: ExecutionRefundCase) {
         value.metadata_revision += 1;
         block.world.musubi_public_directory.insert(key, value);
     }
-    let mv::allocation::AllocationRefusal::Capacity { release, .. } =
+    let iroha_allocation::AllocationRefusal::Capacity { release, .. } =
         budget.try_reserve_bytes(budget.limit_bytes()).unwrap_err()
     else {
         panic!("original occupied pool has a capacity observer");

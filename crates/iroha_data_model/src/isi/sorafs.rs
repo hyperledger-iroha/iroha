@@ -3008,10 +3008,6 @@ mod tests {
         ));
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one linear registry scenario verifies every SoraFS instruction type name"
-    )]
     fn sorafs_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::registry::default();
         assert_registry_decodes(

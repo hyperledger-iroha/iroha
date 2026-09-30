@@ -119,6 +119,22 @@ STAGES = (
         "taira::tests::final_canary_predecessor_requires_its_independent_faucet_policy",
         "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
     )),
+    ("one-use native consensus first boot", (
+        "taira_public_reset::host::first_boot::tests::first_boot_never_rearms_after_a_prepared_or_partial_start",
+        "taira_public_reset::host::first_boot::tests::first_boot_attestation_requires_both_token_slots_consumed",
+        "taira_public_reset::host::first_boot::tests::first_boot_assertion_ends_at_every_prepared_successor_process",
+        "taira_public_reset::host::first_boot::tests::first_boot_runtime_closure_allows_only_inspected_native_entries",
+        "taira_public_reset::host::first_boot::tests::first_boot_history_absence_includes_body_store_and_dangling_paths",
+        "taira_public_reset::host::first_boot::tests::first_boot_runtime_artifacts_enforce_exact_types_modes_and_custody",
+        "taira_public_reset::host::tests::validator_argv_accepts_normal_restart_without_fresh_assertion",
+        "taira_public_reset::host::tests::validator_argv_rejects_duplicate_last_wins_flags",
+        "taira_public_reset::host::tests::fresh_state_retry_admits_only_one_first_boot_publication_slot",
+        "taira_public_reset::host::occupied::tests::occupied_runtime_accepts_only_the_exact_signed_first_boot_suffix",
+        "taira_public_reset::host::occupied::tests::occupied_runtime_binds_beacon_predecessor_config_to_exact_signed_argv",
+        "taira_public_reset::host::dispatcher_transition::prepare::capture::tests::installed_launcher_binds_native_beacon_config_and_selected_daemon",
+        "taira_public_reset::host::dispatcher_transition::prepare::capture::tests::installed_launcher_parses_exact_daemon_assignment",
+        "taira_public_reset::host::dispatcher_transition::admission::tests::dispatcher_transition_binds_beacon_config_to_exact_selected_release",
+    )),
     ("native public reset input preparation", (
         "taira_public_reset::public_inputs::tests::derives_native_genesis_identity_and_exact_canary_request",
         "taira_public_reset::public_inputs::tests::rejects_wrong_network_key_and_resultless_genesis",
@@ -571,7 +587,7 @@ DAEMON_STAGES = (("offline final genesis deployment authority", (
     "tests::manifest_crypto_checks::check_config_accepts_taira_without_offline_backend_settings",
     "tests::manifest_crypto_checks::check_config_qualifies_the_fixed_moderation_strict_ingress",
     "tests::manifest_crypto_checks::check_config_offline_rejects_genesis_instruction_failure",
-    "tests::manifest_crypto_checks::consensus_config_caps_use_canonical_v2_fields",
+    "tests::manifest_crypto_checks::consensus_config_caps_use_canonical_fields",
     "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_consensus_mode_mismatch",
     "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_fingerprint_mismatch",
     "tests::cli_args::inrou_deployment_authority_requires_offline_check_config",
@@ -725,10 +741,10 @@ CORE_ADMISSION_STARTUP_STAGES = ( ("fee sponsor activation and public fee admiss
     "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
     "block::tests::public_contract_creation_fees::public_contract_artifact_stages_pay_fees_without_management_grants",
 )),)
-CORE_ADMISSION_STARTUP_STAGES += (("autonomous lane gas selection and shared merge budget", (
+CORE_ADMISSION_STARTUP_STAGES += (("full-block gas call selection with an idle lane route", (
     "queue::tests::current_payload_selects_full_block_gas_call_with_idle_catalog_route",
 )),)
-CORE_ADMISSION_STARTUP_STAGES += (("current reducer mode and fresh queue pressure", (
+CORE_ADMISSION_STARTUP_STAGES += (("fresh queue pressure metrics", (
     "telemetry::tests::queue_backpressure_metrics_updated",
     "telemetry::tests::queue_age_pressure_is_not_capacity_backpressure",
     "telemetry::tests::fresh_queue_metrics_replace_stale_pressure_on_an_idle_node",
@@ -790,15 +806,6 @@ CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and r
     "queue::router::alias_registry_routing_tests::alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards",
     "queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap",
     "queue::router::tests::alias_registry_routing_is_unconditional_for_queue_and_replay",
-)), )
-
-CORE_ADMISSION_STARTUP_STAGES += (("bounded deterministic IPA startup parameters", (
-    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
-    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
-    'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
-    'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
-    'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
-    'zk::debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
 )), )
 
 CORE_NATIVE_ARCHIVE_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
@@ -898,8 +905,6 @@ CONFIG_UNIT_STAGES = (("explicit onboarding permission configuration", (
     "parameters::actual::tests::nexus_consensus_policy_digest_keeps_configured_dataspaces_during_runtime_addition",
     "parameters::actual::tests::nexus_consensus_policy_digest_changes_for_execution_and_da_policy_drift",
     "parameters::actual::tests::nexus_consensus_policy_digest_canonicalizes_dataspace_catalog_order",
-    "parameters::actual::tests::sumeragi_v2_default_nexus_amx_hash_is_stable",
-    "parameters::actual::tests::sumeragi_v2_nexus_amx_hash_binds_committed_catalog_policy",
 )),)
 
 DATA_MODEL_STAGES = (("bounded canonical additive catalog parameters", (
@@ -1025,7 +1030,7 @@ STAGES += (('native core scope and durable dataspace deployment', (
     'taira_dataspace_deploy::tests::journal_content_revalidation_preserves_offset_and_rejects_metadata_collisions',
     'taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied',
     'taira_dataspace_deploy::tests::init_builds_native_restricted_intent_from_policy_and_profile',
-    'taira_dataspace_deploy::tests::init_rejects_policy_drift_and_parses_explicit_caps',
+    'taira_dataspace_deploy::tests::definition_command_rejects_retired_inputs_and_policy_drift',
     'taira_dataspace_deploy::lane_manifest::tests::generates_typed_manifest_from_executed_signed_genesis',
     'taira_dataspace_deploy::lane_manifest::tests::rejects_genesis_without_explicit_bindings_or_with_malformed_wire',
     'taira_dataspace_deploy::lane_manifest::tests::requires_unique_complete_activated_genesis_bindings',
@@ -1061,7 +1066,7 @@ STAGES += (("bounded native deployment and concurrent validator completion", (
     "taira_dataspace_deploy::finality::tests::deployment_peer_progress_retries_only_pending_or_newer_carrier",
     "taira_dataspace_deploy::finality::tests::deployment_peer_progress_never_masks_fixed_worker_errors",
     "taira_dataspace_deploy::tests::saved_commands_require_positive_budget_and_default_to_three_minutes",
-    "taira_dataspace_deploy::tests::saved_zero_budget_stops_before_journal_or_client_access",
+    "taira_dataspace_deploy::tests::saved_engine_checks_deadline_and_selected_plan_before_client_access",
     "taira_dataspace_deploy::tests::expired_operation_never_observes_or_starts_completion",
     "taira_dataspace_deploy::tests::apply_observes_pending_until_applied_without_reentering_dispatch",
     "taira_dataspace_deploy::tests::status_observes_once_and_terminal_apply_does_not_retry",
@@ -1182,19 +1187,21 @@ TORII_UNIT_STAGES = (("released State snapshots and exact canonical outcome auth
 )), ) + TORII_UNIT_STAGES
 
 HARNESS_TARGETS = {
+    "allocation": ("native finite allocation custody", "iroha_allocation", "lib", ["-p", "iroha_allocation", "--lib"]),
     "mv": ("native MV ownership", "mv", "lib", ["-p", "mv", "--lib"]),
     "mv-ebr": ("native EBR allocation custody", "ebr_allocation_custody", "test", ["-p", "mv", "--test", "ebr_allocation_custody"]),
     "mv-map": ("native owned map generations", "map_owned_generations", "test", ["-p", "mv", "--test", "map_owned_generations"]),
     "mv-admitted-map": ("native admitted map custody", "admitted_map_custody", "test", ["-p", "mv", "--test", "admitted_map_custody"]),
     "concread": ("native admitted B+ tree ownership", "concread", "lib", ["-p", "concread", "--lib"]),
     "wallet": ("native wallet resource bounds", "iroha_wallet", "lib", ["-p", "iroha_wallet", "--lib"]),
-    "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
+    "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad_lib", "--lib"]),
     "config-fixtures": ("native configuration loading fixtures", "iroha_config_integration", "test", ["-p", "iroha_config", "--test", "iroha_config_integration"]),
     "genesis": ("native signed genesis contracts", "iroha_genesis", "lib", ["-p", "iroha_genesis", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
     "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
-    "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
+    "cli": ("native CLI", "iroha_cli", "lib", ["-p", "iroha_cli_lib", "--lib"]),
+    "cli-bin": ("native shipping CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
     "kagami": ("native Kagami", "kagami", "bin", ["-p", "iroha_kagami", "--bin", "kagami"]),
     "sorafs-bin": ("native SoraFS shipping target", "sorafs-node", "bin", ["-p", "sorafs_node", "--bin", "sorafs-node"]),
     "taira-launcher": ("native Taira shipping launcher", "iroha3d_taira", "bin", ["-p", "irohad", "--bin", "iroha3d_taira"]),
@@ -1207,6 +1214,7 @@ HARNESS_TARGETS = {
     "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
     "schema": ("native public schema closure", "iroha_schema_gen", "lib", ["-p", "iroha_schema_gen", "--lib"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
+    "core-zk": ("native Core ZK", "iroha_core_zk", "lib", ["-p", "iroha_core_zk", "--lib"]),
     "sumeragi": ("native current consensus", "iroha_sumeragi", "lib", ["-p", "iroha_sumeragi", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
     "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
@@ -1215,9 +1223,7 @@ HARNESS_TARGETS = {
 }
 
 
-KAGAMI_STAGES = (("canonical Kagami export projection", (
-    "kura::scaling_evidence::export::tests::unix::strict_projection_has_exact_types_order_and_signed_hash_identity",
-)), ("native Taira genesis and independent localnet profiles", (
+KAGAMI_STAGES = (("native Taira genesis and independent localnet profiles", (
     "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
     "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
@@ -1365,7 +1371,7 @@ DATA_MODEL_STAGES += (("portable current certificate cryptography and attestatio
     'block::proposal_wire_hash_tests::current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire',
     'sumeragi_finality::tests::current_proofs_roundtrip_and_verify_successful_exact_execution',
     'sumeragi_finality::tests::alternate_current_quorum_witnesses_have_one_authenticated_execution',
-    'sumeragi_finality::tests::current_proof_rejects_tampered_qc_result_committee_parent_and_wire',
+    'sumeragi_finality::tests::current_proof_rejects_tampered_qc_result_committee_parent_wire_and_availability',
     'sumeragi_finality::tests::current_attestation_roundtrip_binds_challenge_node_status_and_runtime_identity',
 )),)
 TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
@@ -1494,7 +1500,14 @@ def native_package_root(root: Path, package: str) -> Path:
     """Bind each maintained native package to its one captured source owner."""
     if package not in {target[3][1] for target in HARNESS_TARGETS.values()}:
         raise CheckError("native package lacks a maintained source owner")
-    return root / ("vendor" if package == "concread" else "crates") / package
+    owners = {
+        "irohad_lib": "crates/irohad",
+        "iroha_cli_lib": "crates/iroha_cli",
+        "irohad": "crates/irohad/bins",
+        "iroha_cli": "crates/iroha_cli/bins",
+        "concread": "vendor/concread",
+    }
+    return root / owners.get(package, "crates/" + package)
 
 
 def shipping_harnesses(root: Path) -> tuple[str, ...]:
@@ -1715,7 +1728,43 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_STATE_ACQUISITION_STAGES
 
 
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
-MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
+MV_OWNERSHIP_HARNESSES = ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
+
+ALLOCATION_OWNERSHIP_STAGES = (('finite resident allocation pool', (
+    'tests::charge_keeps_original_pool_alive_after_budget_handle_is_dropped',
+    'tests::concurrent_reservations_cannot_oversubscribe_the_same_finite_pool',
+    'tests::exact_pool_release_wakes_waiters_including_before_their_first_poll',
+    'tests::finite_limit_overflow_and_zero_never_change_credit_on_refusal',
+    'tests::splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges',
+    'tests::partition_retains_exact_original_pool_and_conserves_real_credits',
+)),
+    ('native physical release ownership', (
+        'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
+        'release::tests::first_registered_wake_can_reenter_both_initialized_notification_locks',
+        'release::tests::panicking_first_waker_still_notifies_the_remaining_original_cohort',
+        'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
+        'release::tests::replacing_a_waker_allows_its_destructor_to_observe_the_same_source',
+        'release::tests::ready_wait_releases_its_last_waker_outside_the_notification_lock',
+        'release::tests::release_racing_first_poll_cannot_be_lost',
+        'release::tests::ownership_phase_transfer_defers_original_release_until_final_owner_drops',
+        'release::tests::ownership_phase_transfer_unwind_releases_and_poisons_original_observation',
+        'release::tests::physical_release_disarms_only_later_retirement_poisoning',
+        'release::tests::paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind',
+        'release::tests::observed_release_reports_existing_physical_poison_and_excludes_later_wake_panic',
+        'release::tests::pair_construction_transfers_both_original_guards_without_early_release',
+        'release::tests::deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind',
+        'release::tests::fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup',
+        'release::tests::release_batch_empty_and_foreign_transfer_preserve_original_custody',
+        'release::tests::release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes',
+        'release::tests::release_batch_records_actual_physical_poison_without_later_cleanup_poison',
+        'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
+        'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
+        'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
+        'release::tests::charged_notification_retains_original_control_through_observers_and_deferred_releases',
+        'release::tests::deferred_notice_merge_retains_exact_source_and_never_wakes_early',
+        'release::tests::deferred_notice_merge_preserves_poison_after_rejected_transfer',
+    )),
+)
 
 MV_OWNERSHIP_STAGES = (
     ("caller-owned capture and original notification custody", (
@@ -1746,14 +1795,8 @@ MV_OWNERSHIP_STAGES = (
     ('funded publication identity release', (
         'publication::nonblocking_tests::funded_identity_refund_observes_unlocked_publication_even_on_release_unwind',
     )),
-    ('finite resident allocation pool', (
-        'allocation::tests::charge_keeps_original_pool_alive_after_budget_handle_is_dropped',
-        'allocation::tests::concurrent_reservations_cannot_oversubscribe_the_same_finite_pool',
-        'allocation::tests::exact_pool_release_wakes_waiters_including_before_their_first_poll',
-        'allocation::tests::finite_limit_overflow_and_zero_never_change_credit_on_refusal',
-        'allocation::tests::real_epoch_reclamation_returns_capacity_and_its_release_notification',
-        'allocation::tests::splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges',
-        'allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits',
+    ('actual epoch allocation reclamation', (
+        'allocation_runtime_tests::real_epoch_reclamation_returns_capacity_and_its_release_notification',
     )),
     ('actual writer release observations', (
         'release_tests::a_nonpoisoning_guard_unwind_does_not_poison_later_contention',
@@ -1951,19 +1994,25 @@ CORE_NATIVE_CONNECTION_STAGES = (
     ('native publication and original driver Apply settlement', (
     )),
 )
-CORE_KEY_ROLE_STAGES = (('authenticated indexed polynomial key ownership', (
-    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
-    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
-)),)
-
-CORE_STARTUP_STAGES += CORE_KEY_ROLE_STAGES
-CORE_ADMISSION_STARTUP_STAGES += CORE_KEY_ROLE_STAGES
-CORE_STAGES += CORE_KEY_ROLE_STAGES
-
-CORE_NATIVE_CONNECTION_STAGES += (('Native process publication and bootstrap isolation', (
-    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
-    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
-)), )
+# Proof-stack regressions run in the extracted `iroha_core_zk` library harness.
+CORE_ZK_STAGES = (
+    ("bounded deterministic IPA startup parameters", (
+        'zkparse::production_parameter_cache_tests::finite_production_cache_initializes_once_across_threads',
+        'zkparse::production_parameter_cache_tests::finite_production_cache_matches_native_parameter_bytes_and_fingerprint',
+        'zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
+        'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
+        'halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
+        'debug_backend_tests::preverify_rejects_retired_ivm_stark_relation_before_dedup',
+    )),
+    ('authenticated indexed polynomial key ownership', (
+        'kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
+        'kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
+    )),
+    ('Native process publication and bootstrap isolation', (
+        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
+        'kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
+    )),
+)
 
 CORE_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
@@ -2081,32 +2130,6 @@ CONCREAD_STAGES = (
     ('original map acquisition custody', (
         'bptree::acquisition_tests::acquired_map_validation_retains_stale_and_poisoned_physical_writers',
         'bptree::acquisition_tests::acquired_map_foreign_busy_success_and_unwind_preserve_original_custody',
-    )),
-    ('native physical release ownership', (
-        'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
-        'release::tests::first_registered_wake_can_reenter_both_initialized_notification_locks',
-        'release::tests::panicking_first_waker_still_notifies_the_remaining_original_cohort',
-        'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
-        'release::tests::replacing_a_waker_allows_its_destructor_to_observe_the_same_source',
-        'release::tests::ready_wait_releases_its_last_waker_outside_the_notification_lock',
-        'release::tests::release_racing_first_poll_cannot_be_lost',
-        'release::tests::ownership_phase_transfer_defers_original_release_until_final_owner_drops',
-        'release::tests::ownership_phase_transfer_unwind_releases_and_poisons_original_observation',
-        'release::tests::physical_release_disarms_only_later_retirement_poisoning',
-        'release::tests::paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind',
-        'release::tests::observed_release_reports_existing_physical_poison_and_excludes_later_wake_panic',
-        'release::tests::pair_construction_transfers_both_original_guards_without_early_release',
-        'release::tests::deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind',
-        'release::tests::fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup',
-        'release::tests::release_batch_empty_and_foreign_transfer_preserve_original_custody',
-        'release::tests::release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes',
-        'release::tests::release_batch_records_actual_physical_poison_without_later_cleanup_poison',
-        'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
-        'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
-        'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
-        'release::tests::charged_notification_retains_original_control_through_observers_and_deferred_releases',
-        'release::tests::deferred_notice_merge_retains_exact_source_and_never_wakes_early',
-        'release::tests::deferred_notice_merge_preserves_poison_after_rejected_transfer',
     )),
     ('failed native cursor retains cleanup after unlock', (
         'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
@@ -2297,12 +2320,13 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
     if qualification_scope not in QUALIFICATION_SCOPES:
         raise CheckError("native qualification scope must be basic or full")
     selected = {
+        "allocation": ALLOCATION_OWNERSHIP_STAGES,
         "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
         "mv-admitted-map": MV_ADMITTED_MAP_STAGES, "concread": CONCREAD_STAGES,
         "config": CONFIG_STAGES, "config-fixtures": CONFIG_FIXTURE_STAGES, "config-unit": CONFIG_UNIT_STAGES, "genesis": GENESIS_STAGES, "data-model": DATA_MODEL_STAGES,
         "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
-        "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
+        "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES, "core-zk": CORE_ZK_STAGES,
         "sumeragi": CURRENT_CONSENSUS_STAGES, "schema": SCHEMA_STAGES,
         "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES, "wallet": WALLET_STAGES,
         "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
@@ -2625,7 +2649,13 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
     if any(HARNESS_TARGETS[name][2] != "bin" for name in harnesses):
         raise CheckError("shipping metadata requires only authoritative binary targets")
     requested = {("bin", HARNESS_TARGETS[name][1]) for name in harnesses}
-    fixture_features = {"iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures"}
+    fixture_features = {
+        "iroha_core": "iroha-core-tests",
+        "iroha_core_zk": "test-utils",
+        "iroha_core_privacy": "test-utils",
+        "iroha_core_timed_ovn": "test-utils",
+        "iroha_torii": "test-fixtures",
+    }
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check", "--keep-going",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *selection, "--message-format=json-render-diagnostics"]
@@ -2673,12 +2703,14 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
 
 
 PRODUCTION_LIBRARY_FORBIDDEN_FEATURES = {
-    "iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures",
+    "iroha_core": "iroha-core-tests", "iroha_core_zk": "test-utils",
+    "iroha_core_privacy": "test-utils", "iroha_core_timed_ovn": "test-utils",
+    "iroha_torii": "test-fixtures",
 }
 
 
 def observe_shipping_production_library(event: dict, observed: set[str]) -> None:
-    """Audit Core/Torii features in the required default-feature build stream.
+    """Audit Core/proof/privacy/Torii features in the required default-feature build stream.
 
     Cargo reports fresh and rebuilt compiler artifacts alike. A missing library
     report is an evidence failure, even when every binary artifact is present.
@@ -3588,26 +3620,26 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
 
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
-                             *, message_control: bool = False,
+                             *, settlement_route_control: bool = False,
                              disposable_broker: bool = False,
                              focused_fixture: bool = False) -> NativeArtifactCopies:
     """Copy each build before a separate fixture feature graph can replace Cargo outputs."""
-    if (message_control and disposable_broker) or (focused_fixture and (message_control or disposable_broker)):
+    if (settlement_route_control and disposable_broker) or (focused_fixture and (settlement_route_control or disposable_broker)):
         raise CheckError("feature-isolated codegen cannot use another fixture graph")
-    if message_control:
+    if settlement_route_control:
         expected = {"iroha3d": ("iroha3d-private-settlement-routes", "irohad")}
     elif disposable_broker:
         expected = {"iroha_test_runtime_provider_broker": ("iroha_test_runtime_provider_broker", "irohad")}
     else:
         expected = {"iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
                     "iroha3d_taira": ("taira-launcher", "irohad")}
-    if not message_control and not disposable_broker:
+    if not settlement_route_control and not disposable_broker:
         # Audit the complete shipping table even in the mutable diagnostic.
         # Only its known four-peer inputs need production codegen there; the
         # immutable release and signed build retain every shipping binary.
         shipping = shipping_harnesses(root)
         if focused_fixture:
-            required = {"taira-launcher", "cli", "kagami"}
+            required = {"taira-launcher", "cli-bin", "kagami"}
             if not required.issubset(shipping):
                 raise CheckError("focused four-peer fixture lacks an audited shipping binary")
             shipping = tuple(selection for selection in shipping if selection in required)
@@ -3619,10 +3651,10 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
-               *(["--features", "irohad/test-network-private-settlement-route-control"] if message_control else []),
+               *(["--features", "irohad/test-network-private-settlement-route-control"] if settlement_route_control else []),
                *(["--features", "irohad/test-network-disposable-broker"] if disposable_broker else []),
                "--message-format=json-render-diagnostics"]
-    phase = ("private-settlement HTTP route fixture codegen" if message_control else
+    phase = ("private-settlement HTTP route fixture codegen" if settlement_route_control else
              "disposable broker fixture codegen" if disposable_broker else
              "focused four-peer fixture codegen" if focused_fixture else "shipping codegen")
     print(f"[taira-check] build native network binaries: {phase}", flush=True)
@@ -3632,7 +3664,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
     production_libraries: set[str] = set()
-    audit_production_graph = not message_control and not disposable_broker and not focused_fixture
+    audit_production_graph = not settlement_route_control and not disposable_broker and not focused_fixture
     stream_error: CheckError | None = None
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
@@ -3830,15 +3862,15 @@ def validate_cli_seating_test_registration(root: Path, selections, mask) -> None
         return
     _, target, kind, arguments = HARNESS_TARGETS["cli"]
     manifest = tomllib.loads((package.parent / "Cargo.toml").read_text())
-    binaries = [row for row in manifest.get("bin", []) if row.get("name") == "iroha"]
-    if (target != "iroha" or kind != "bin"
-            or arguments != ["-p", "iroha_cli", "--bin", "iroha"]
-            or manifest.get("package", {}).get("name") != "iroha_cli"
-            or len(binaries) != 1):
+    library = manifest.get("lib", {})
+    if (target != "iroha_cli" or kind != "lib"
+            or arguments != ["-p", "iroha_cli_lib", "--lib"]
+            or manifest.get("package", {}).get("name") != "iroha_cli_lib"):
         raise ValueError("CLI seating Cargo target registration differs")
-    path = binaries[0].get("path", "src/bin/iroha.rs")
-    if (not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts
-            or (package.parent / path).resolve() != (package / "bin/iroha.rs").resolve()):
+    path = library.get("path", "src/lib.rs")
+    if (library.get("name") != "iroha_cli" or not isinstance(path, str)
+            or Path(path).is_absolute() or ".." in Path(path).parts
+            or (package.parent / path).resolve() != (package / "main_shared.rs").resolve()):
         raise ValueError("CLI seating Cargo target source differs")
 
     def active_matches(relative, pattern):
@@ -3848,10 +3880,9 @@ def validate_cli_seating_test_registration(root: Path, selections, mask) -> None
                 if masked[match.start():match.start() + 2] == text[match.start():match.start() + 2]
                 and masked[:match.start()].count("{") == masked[:match.start()].count("}")]
 
-    includes = active_matches("bin/iroha.rs", r'^include!\("\.\./main_shared\.rs"\);$')
     parent = mask((package / "main_shared.rs").read_text())
     parents = list(re.finditer(r'^mod (taira);$', parent, re.MULTILINE))
-    if len(includes) != 1 or len(parents) != 1:
+    if len(parents) != 1:
         raise ValueError("CLI seating entrypoint module route differs")
     before = parent[:parents[0].start()]
     boundary = max(before.rfind(";"), before.rfind("}")) + 1
@@ -3888,8 +3919,6 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
             raise CheckError(f"selected source inventory has unknown harness: {harness}")
         package = HARNESS_TARGETS[harness][3][1]
         names = [name for _, tests in stages for name in tests]
-        if any(name.startswith(("sumeragi::v2", "block::consensus_v2::finality::")) for name in names):
-            raise CheckError(f"retired protocol owner selected in {harness}")
         if len(names) != len(set(names)):
             raise CheckError(f"selected source inventory repeats a test in {harness}")
         selected_by_package.setdefault(package, []).extend((harness, name) for name in names)
@@ -3961,7 +3990,7 @@ def validate_mv_test_registration(root: Path) -> None:
     """
     owners = (
         ("publication::nonblocking_tests::", "publication.rs", "publication_nonblocking_tests.rs", "nonblocking_tests"),
-        ("allocation::tests::", "allocation.rs", "allocation_tests.rs", "tests"),
+        ("allocation_runtime_tests::", "lib.rs", "allocation_runtime_tests.rs", "allocation_runtime_tests"),
         ("release_tests::", "lib.rs", "release_tests.rs", "release_tests"),
         ("capture_tests::", "lib.rs", "capture_tests.rs", "capture_tests"),
         ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
@@ -4020,6 +4049,25 @@ def validate_mv_test_registration(root: Path) -> None:
         missing = [name for name in selected if available.count(name) != 1]
         if len(selected) != len(set(selected)) or missing:
             raise ValueError("registered MV test lacks one actual source definition: " + ", ".join(missing))
+        # Generic allocation custody belongs below MV and its epoch/storage
+        # dependencies. Its original selected leaves retain their actual owner.
+        package = root / "crates/iroha_allocation/src"
+        sources.clear()
+        edge("lib.rs", "allocation_tests.rs", "tests")
+        if len(re.findall(r'^pub mod release;$', source("lib.rs")[1], re.MULTILINE)) != 1:
+            raise ValueError("registered allocation crate module differs: release")
+        edge("release.rs", "release_tests.rs", "tests")
+        available = []
+        for prefix, child in (("tests::", "allocation_tests.rs"),
+                              ("release::tests::", "release_tests.rs")):
+            masked = source(child)[1]
+            available.extend(prefix + match.group(1) for match in re.finditer(
+                r'^#\[test\]\s*\nfn (\w+)\s*\(', masked, re.MULTILINE
+            ) if masked[:match.start()].count("{") == masked[:match.start()].count("}"))
+        selected = [name for _, names in ALLOCATION_OWNERSHIP_STAGES for name in names]
+        missing = [name for name in selected if available.count(name) != 1]
+        if len(selected) != len(set(selected)) or missing:
+            raise ValueError("registered allocation test lacks one actual source definition: " + ", ".join(missing))
     except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
         raise CheckError("MV test source registration failed: " + str(error)) from error
 
@@ -4404,8 +4452,8 @@ def pre_network_partition(independent_stages, *, priority_cli, deferred_cli,
     pre-network prefix; every other selected test is deferred until after the
     network fixture. Each test belongs to exactly one side.
     """
-    startup = {"core": CORE_STARTUP_STAGES + native_archive, "daemon": DAEMON_STARTUP_STAGES,
-               "torii-unit": TORII_STARTUP_STAGES}
+    startup = {"core": CORE_STARTUP_STAGES + native_archive, "core-zk": CORE_ZK_STAGES,
+               "daemon": DAEMON_STARTUP_STAGES, "torii-unit": TORII_STARTUP_STAGES}
     if any(stage in startup["torii-unit"] for stage in priority_torii):
         raise CheckError("priority Torii stage overlaps mandatory startup checks")
     prefix, deferred = [], {}

@@ -1,8 +1,8 @@
 //! Original finite custody for both initial EBR values and their shared controls.
 
 use super::*;
-use crate::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use concread::ebrcell::ReservedEbrCell;
+use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
 use std::fmt;
 
 /// A local capacity or physical-allocation refusal before initial payload movement.

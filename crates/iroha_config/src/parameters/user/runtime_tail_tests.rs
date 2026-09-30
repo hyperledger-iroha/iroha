@@ -250,7 +250,7 @@ fn tiered_state_parse_accepts_da_store_root() {
     );
 }
 #[test]
-fn sumeragi_v2_rejects_retired_v1_tables() {
+fn sumeragi_rejects_retired_v1_tables() {
     for retired_table in [
         "collectors",
         "advanced",
@@ -542,34 +542,4 @@ fn network_parse_applies_preauth_per_ip_connection_cap() {
 
     let actual = load_root(table);
     assert_eq!(actual.network.preauth_max_connections_per_ip.get(), 3);
-}
-
-#[test]
-fn sumeragi_v2_exact_output_geometry_rejects_unreservable_network_sources() {
-    let mut table = base_table();
-    let network = table
-        .get_mut("network")
-        .and_then(Value::as_table_mut)
-        .expect("network table");
-    network.insert("max_total_connections".into(), Value::Integer(93));
-    let sumeragi = table
-        .entry("sumeragi")
-        .or_insert_with(|| Value::Table(Table::new()))
-        .as_table_mut()
-        .expect("sumeragi table");
-    let queues = sumeragi
-        .entry("queues")
-        .or_insert_with(|| Value::Table(Table::new()))
-        .as_table_mut()
-        .expect("sumeragi.queues table");
-    queues.insert("bodies".into(), Value::Integer(14));
-    let error = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("one maximum reply-source fanout must fit exact output");
-    let report = format!("{error:?}");
-    assert!(
-        report.contains(
-            "Sumeragi v2 outbound shared ownership capacity 278 is below one maximum fanout 279; configured network reply-source capacity is 93"
-        ),
-        "{report}",
-    );
 }

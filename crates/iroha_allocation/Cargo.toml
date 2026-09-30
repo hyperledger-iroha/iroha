@@ -1,0 +1,19 @@
+[package]
+name = "iroha_allocation"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license = "Apache-2.0 AND MPL-2.0"
+description = "Finite original allocation custody and release-driven retry"
+autotests = false
+
+[lints]
+workspace = true
+
+[[test]]
+name = "charged_buffer_custody"
+path = "tests/charged_buffer_custody.rs"
+
+[[test]]
+name = "charged_shared_custody"
+path = "tests/charged_shared_custody.rs"

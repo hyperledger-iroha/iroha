@@ -7,7 +7,7 @@ use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetId},
-    block::{BlockHeader, consensus_v2::ValidatorPower},
+    block::{BlockHeader, consensus::ValidatorPower},
     consensus::{ConsensusKeyId, ConsensusKeyStatus},
     isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     nexus::{PublicLaneStakeShare, PublicLaneValidatorStatus},
@@ -272,6 +272,7 @@ fn pulse_fixture() -> (World, ValidatorEpochContextV1, Vec<HashOf<BlockHeader>>)
         crate::kagemusha_v1_test_fixtures::mint_finality_authority(network(), 0, &roster);
     let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10).unwrap();
     let current = ValidatorEpochContextV1 {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
         version: 1,
         network_id: network(),
         mode: ConsensusMode::Npos,

@@ -634,12 +634,45 @@ def test_provider_ingest_uses_one_canonical_owned_completion_codec() -> None:
         "TotalAllocationExceeded",
         "store_completion_transaction",
         "ProviderIngestOutbox::open",
-        "validate_header_flags",
         "norito::schema::identity::frame_hash::<Box<StoredCompletionDeliveryV1>>()",
     ):
         assert contract in tests, f"missing canonical completion contract: {contract}"
+    # The checkpoint uses the shared canonical decoder, which owns advertised-layout validation.
+    # Completion regression tests exercise the owned Box envelope rather than a retired bespoke codec.
+    assert "crate::decode_local_checkpoint_canonical(bytes, policy.checkpoint_max_bytes, element_limit)" in outbox
+    checkpoint_decoder = node_lib.split("pub(crate) fn decode_local_checkpoint_canonical<T>(", 1)[1].split(
+        "fn local_checkpoint_decode_limits(", 1
+    )[0]
+    assert "norito::decode_canonical_with_limits(bytes, limits)" in checkpoint_decoder
+    norito_source = _read(REPO_ROOT / "crates/norito/src/lib.rs")
+    canonical_decoder = norito_source.split("pub fn decode_canonical_with_limits<T>(", 1)[1].split(
+        'include!("canonical_codec_tests.rs");', 1
+    )[0]
+    assert "core::validate_header_flags(header.flags).is_err()" in canonical_decoder
+    assert "core::write_canonical_to_writer(&value, &mut exact)" in canonical_decoder
+    assert "!exact.is_complete()" in canonical_decoder
     assert "pub type FinalizedProviderIngestRuntimeResultV1<" in node_lib
     assert ") -> FinalizedProviderIngestRuntimeResultV1<" in node_lib
+
+
+@pytest.mark.parametrize("contract", (
+    "core::validate_header_flags(header.flags).is_err()",
+    "core::write_canonical_to_writer(&value, &mut exact)",
+    "!exact.is_complete()",
+))
+def test_completion_guard_rejects_shared_canonical_decoder_bypasses(
+    monkeypatch: pytest.MonkeyPatch, contract: str,
+) -> None:
+    test_provider_ingest_uses_one_canonical_owned_completion_codec()
+    path = REPO_ROOT / "crates/norito/src/lib.rs"
+    original_read = _read
+    source = original_read(path)
+    start = source.index("pub fn decode_canonical_with_limits<T>(")
+    mutated = source[:start] + source[start:].replace(contract, "REMOVED_CANONICAL_CONTRACT", 1)
+    assert mutated != source
+    monkeypatch.setitem(globals(), "_read", lambda value: mutated if value == path else original_read(value))
+    with pytest.raises(AssertionError):
+        test_provider_ingest_uses_one_canonical_owned_completion_codec()
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,7 @@
 //! before enforcing the active pool over the complete nested execution path.
 
 use super::{CoreHostImpl, QueryStateAccess};
+use iroha_allocation::AllocationBudget;
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::entrypoint::{
     ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1, MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
@@ -18,7 +19,6 @@ use ivm::{
     IVM, PointerType, VMError,
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
 };
-use mv::allocation::AllocationBudget;
 
 fn envelope_bytes(payload_bytes: usize) -> Result<usize, VMError> {
     u32::try_from(payload_bytes).map_err(|_| VMError::NoritoInvalid)?;

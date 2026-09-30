@@ -280,7 +280,7 @@ Once a bank (dataspace 11) and retail dApp (dataspace 12) are both whitelisted i
 1. Retail dApp requests an asset handle bound to its UAID + AXT digest. The CBDC lane verifies the handle via `AssetPermissionManifest::evaluate` (deny wins, allowances enforced).
 2. Both DS declare the same composability group so routing collapses them into the CBDC lane for atomic inclusion (`LaneRoutingPolicy` uses `group_id` when mutually whitelisted).
 3. The intended signed anchored-spend path binds the CBDC DS's AML/KYC proof and exact successful transfer occurrence before the dApp DS can update local business state. Production remote-spend admission is still closed pending complete finalized-state and execution-proof ownership.
-4. Proof material (FASTPQ + DA commitments) stays confined to the CBDC lane; merge-ledger entries keep the global state deterministic without leaking private data.
+4. Proof material (FASTPQ + DA commitments) stays confined to the CBDC lane.
 
 The programmable-money replay archive should include:
 

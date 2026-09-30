@@ -18,7 +18,7 @@ use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 #[path = "proofs/full_tree_wallet.rs"]
 mod full_tree_wallet;
 fn compute_proof_hash(backend: &str, bytes: &[u8]) -> [u8; 32] {
-    iroha_core::zk::hash_proof(&ProofBox::new(backend.into(), bytes.to_vec()))
+    iroha_core_zk::hash_proof(&ProofBox::new(backend.into(), bytes.to_vec()))
 }
 fn parse_hex32(input: &str) -> Option<[u8; 32]> {
     let hex = input.strip_prefix("0x").unwrap_or(input);

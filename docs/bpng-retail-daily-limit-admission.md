@@ -51,27 +51,55 @@ protocol-4 or physical-device acceptance follows from this source slice.
 
 ## Finalized activation evidence boundary
 
-`verify_finalized_retail_activation_v1` verifies a Sumeragi-v2 `CommitQC`
-against an independently pinned target-height context, then binds the exact
-executed block wire, one direct owner-signed activation instruction, and its
-successful typed Network output. Callers must supply the owner-approved full
-policy, definition, domain, dataspace and entry hash independently. The
-verifier compares the complete policy, including the cap, reserve, monetary
-issuer, identity issuer and key. It derives the canonical policy digest and
-following UTC-day activation marker from the finalized block timestamp.
-The existing full executed-block wire route requires a canonical signed read
-and `CanReadAllLedgerData`; that broad grant cannot be inferred for BPNG Core.
-An authorized owner custody path or a separately reviewed selective carrier
-must supply the block without weakening the ledger privacy boundary.
+`verify_finalized_retail_activation_v1` accepts only a `VerifiedSumeragiBlock`.
+The portable `SumeragiFinalityVerifier` constructs one after admitting the
+contiguous `SumeragiFinalityProof` prefix from an independently selected
+signed genesis or trusted checkpoint. Each proof, as served by
+`GET /v1/bridge/finality/{height}`, is the Kura-certified frame of its height:
+the result-bearing block with its exact-quorum `CommitQC` over the core header
+and certified result `R` (`specs/sumeragi.md` §12.7). The node builds it from
+its own certified read; the client re-verifies every certificate, parent link
+and epoch authority itself. The activation verifier then binds that frame's
+exact executed block wire, one direct owner-signed activation instruction,
+and its successful typed Network output. Callers must supply the
+owner-approved full policy, definition, domain, dataspace and entry hash
+independently. The verifier compares the complete policy, including the cap,
+reserve, monetary issuer, identity issuer and key. It derives the canonical
+policy digest and following UTC-day activation marker from the finalized
+block timestamp.
+
+The activation executes in the `bpng` physical dataspace lane and is merged
+into the global block that the proof certifies. Retail instructions carry no
+concrete dataspace routing target, so the governed lane policy needs an
+explicit `SumeragiLaneRoute` for `ActivateRetailDailyLimitV1` to that fixed
+lane; without it the activation routes to the universal lane and fails closed.
+The `iroha_core` test module `smartcontracts::isi::retail_daily_limit::finality_tests`
+executes this path on the certified test chain: a real lane block with an
+exact-quorum lane certificate, the global merge, contiguous portable
+verification from the signed genesis, an activation marker equal to the one
+native execution stored, and the same entry anchor from the node's certified
+read. Substituted coordinates, entries and carriers are refused.
+
+The portable proof embeds the complete executed block wire, so the verifier
+needs no separate block read. `GET /v1/ledger/block/{height}` requires a
+canonical signed read and `CanReadAllLedgerData`, but the `/v1/bridge/finality`
+proof, bundle and attestation routes currently serve the same complete wire,
+including merged restricted-dataspace entries, without that grant.
+TODO(retail-finality-disclosure): reconcile the finality routes with the
+ledger privacy boundary (enforce the full-ledger grant or serve a reviewed
+selective carrier) before BPNG Core relies on them for restricted activation
+blocks.
 
 This is evidence of the historical activation event at that height. It does
 not authenticate a later read of the `retail_day_policy_v1` and
 `retail_day_activation_v1` state-map entries. `ContractStateMapV1` has a
 Core-local cold-capture path, but Core does not maintain and publish its
 accumulated root in a finalized consensus field, and Torii has no corresponding
-value-inclusion proof route. The Sumeragi-v2
-`post_state_root` is a block execution-witness root, not that accumulated
-map root. The existing ledger `state_proof` route returns a finalized block
+value-inclusion proof route. The certified execution result `R` commits the
+complete World state only as a homomorphic multiset root without per-entry
+membership proofs, and a block's own writes through its ordinary-write root
+(`specs/sumeragi.md` Appendix E, E51); neither authenticates a later value of
+that accumulated map. The existing ledger `state_proof` route returns a finalized block
 envelope without membership proofs for those entries. Production admission
 therefore remains closed until the current-state binding or an independently
 reviewed immutable-state theorem and proof chain is implemented and qualified.
@@ -81,7 +109,8 @@ constructors with native execution. Its
 `verify_retail_policy_activation_against_supplied_root_v1` checks both canonical
 values, their digest/next-day relation, exact physical keys and two Merkle map
 inclusions against **one caller-supplied accumulated root**. The API names the
-root as supplied because no current finalized accumulated root is published.
+root as supplied because no finalized root of that map with membership proofs
+is published.
 Core can now cold-capture every current physical contract-state key/value from
 one generation-bound `StateView`, associate that local map with the same view's
 committed height and block hash, and generate only the exact retail policy and
@@ -91,8 +120,9 @@ explicitly a **local, unauthenticated root**; there is no Torii proof route and
 no restricted-dataspace disclosure on this source path.
 This check cannot authorize activation from its own output, from Torii's
 per-block execution-witness `post_state_root`, or from an operator-selected
-root. A qualified release still needs a consensus-committed accumulated root,
-an independently verified quorum attestation over the exact root and current
+root. A qualified release still needs a consensus-committed root with
+membership proofs for these entries, an independently verified quorum
+attestation over the exact root and current
 finalized height, or the separately reviewed immutable-state proof path below.
 The future selective proof route must authenticate
 the exact caller and `CanReadRestrictedDataspace` for the installed physical
@@ -153,42 +183,34 @@ The existing snapshot/checkpoint machinery has these distinct guarantees:
 
 | Source path | Guarantee and remaining dependency |
 | --- | --- |
-| `snapshot.rs::try_read_snapshot_bundle` | The ordinary signed-bundle path verifies the configured snapshot signing key, exact payload digest, Merkle bytes, canonical WSV hash and signed fast manifest, with exact network and snapshot binding. This authenticates local snapshot custody under that separately trusted key; explicit audited-import authority is a separate path. |
-| `snapshot.rs::validate_snapshot_wsv_checkpoint` | Compares the canonical WSV hash to an available local checkpoint at the exact matching Kura tip. No checkpoint comparison is possible when that local checkpoint is absent; separately admitted snapshot-ahead/import paths have their own authority. |
-| `kura/prune_commit_merge_support.rs::CommitManifest::binds_authenticated_v2_commit_authority` | Checks the exact block, execution-witness roots, QC digest and artifact authority digest. The manifest also stores a WSV checkpoint hash, but that hash is not part of the quorum-signed execution commitment or the artifact authority seal. A locally coherent checkpoint and manifest do not add quorum authentication of accumulated WSV contents. |
-| `sumeragi/v2_recovery.rs::V2StartupReplayPlan::replay_complete_prefix` | Authenticated full-body replay starts after the restored state's committed height. It does not independently re-execute the snapshot's preceding activation history. |
-| `sumeragi/v2_recovery.rs::authenticate_v2_snapshot_replay_boundary` | Verifies the separately authenticated hash-only bootstrap lineage when one exists. The ordinary full-body path has no such bootstrap prefix; this function does not mint a retail snapshot proof for it. |
-| `kura/bound_progress_and_retained_support.rs::KuraRetainedBlockRecord` | Retains the block header, proposal and executed-wire hashes and merge reference after body eviction. It does not retain the original retail activation input/output needed to verify the activation independently. |
+| `snapshot.rs::try_read_snapshot_bundle` | The ordinary signed-bundle path verifies the configured snapshot signing key, exact payload digest, Merkle bytes, canonical WSV hash and signed fast manifest, with exact network and snapshot binding. The local snapshot signature authenticates cache bytes under that separately trusted key, not execution of the snapshot's World. |
+| `snapshot.rs::verify_snapshot_restore_preflight` | Refuses to restore any snapshot above height zero (`NativeExecutionReplayRequired`), as does the emergency Fast manifest path. Strict startup then re-executes the signed genesis and every certified Kura block and requires the World state accumulator to equal a cold capture (`specs/sumeragi.md` Appendix E, E56); emergency Fast startup cannot opt into that replay. Accelerated recovery against the certified parent World state root is `TODO(S9)` in that function. |
 
 The execution-policy digest in
 `state.rs::execution_policy_digest_with_runtime_policies_v1` binds configured
-runtime policies; it does not hash retail state-map entries. The retained AMX
-context calculation in
-`sumeragi/v2_recovery.rs::nexus_amx_context_hash_with_runtime_policy` binds lane
-and validator/runtime authority, without independently binding this retail
-policy pair. Neither context check supplies the missing accumulated-state
-commitment.
+runtime policies; it does not hash retail state-map entries and is not a
+membership-provable commitment to them.
 
 Complete deterministic replay from an independently trusted origin, with the
 original result-bearing activation block and every required successor body,
-can reconstruct the pair and check admitted execution commitments. A current
-restored snapshot skips that historical reconstruction. Retained header and
-hash lineage alone therefore cannot upgrade the historical activation receipt
-to an independently authenticated current policy after restart. An immutable
-proof path must additionally authenticate the exact restored pair and the
+can reconstruct the pair and check admitted execution commitments. Strict
+restart performs that replay from the signed genesis over the node's own
+certified Kura blocks, so a restarted node holds the pair only through
+re-executed certified history. That is local evidence: retained header and
+hash lineage alone cannot upgrade the historical activation receipt to an
+independently authenticated current policy for a remote reader. An immutable
+proof path must additionally authenticate the exact current pair and the
 qualified implementation's continuity over the activation-to-checkpoint
-interval; a local WSV root, local signing key or caller-supplied expectation
+interval; a local World root, local signing key or caller-supplied expectation
 does not establish those premises by itself.
 
 TODO: qualify the invariant against the exact immutable node release and bind a
 fresh finalized checkpoint to the verified activation's chain. Admission must
-authenticate release/runtime continuity over that interval and predecessor
-restoration; it cannot infer either from a finality certificate or from the
-local snapshot validator. A substituted snapshot could contain a different
-internally consistent policy pair, so snapshot validation alone does not close
-the proof. The current historical activation result stays historical and the
-local map root stays unauthenticated until that complete proof path is reviewed,
-implemented and independently admitted. No Core readiness gate opens here.
+authenticate release/runtime continuity over that interval; it cannot infer it
+from a finality certificate or from local snapshot custody. The current
+historical activation result stays historical and the local map root stays
+unauthenticated until that complete proof path is reviewed, implemented and
+independently admitted. No Core readiness gate opens here.
 
 The new first-release wire IDs are
 `iroha.asset.retail_day.activate.v1`,

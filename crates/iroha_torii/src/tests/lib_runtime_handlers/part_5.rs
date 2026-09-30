@@ -3282,12 +3282,14 @@ fn tamper_native_ledger_certificate(
     let certificate = block.commit_certificate().unwrap();
     let header = certificate.consensus_header().to_vec();
     let result = certificate.result_preimage().to_vec();
+    let availability = certificate.availability().to_vec();
     let mut qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     mutate(&mut qc);
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
         header,
         norito::encode_canonical(&qc).unwrap(),
         result,
+        availability,
     )));
     let changed = block.encode_wire().unwrap();
     assert_eq!(
@@ -3777,7 +3779,9 @@ fn executed_block_wire_handler_fails_closed_on_hash_and_execution_shape_drift() 
         );
         let resultless = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
-        let block = block.canonical_resultless_proposal();
+        let block = block
+            .canonical_resultless_proposal()
+            .expect("valid original proposal");
         let header = block.header();
         let block_hash = store_block(&resultless, block);
         record_committed_block_hash_for_test(&resultless, header, block_hash);

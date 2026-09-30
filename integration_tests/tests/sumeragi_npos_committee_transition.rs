@@ -882,16 +882,11 @@ async fn execute_rotation_preparation(
     let network_id = network.network_id();
     let target_epoch = preparation.target_epoch;
     let transition_id = Hash::prehashed(preparation.transition_id().map_err(|error| eyre!(error))?);
-    let status = spawn_blocking({
-        let admin = admin.clone();
-        move || {
-            admin
-                .client()
-                .get_validator_committee_status(Some(target_epoch))
-        }
-    })
-    .await
-    .wrap_err("rotation selection status worker panicked")??;
+    let status = admin
+        .client()
+        .nexus()
+        .validator_committee(Some(target_epoch))
+        .await?;
     let observed = status
         .latest_finality
         .decode_block(finality_limits())
@@ -1017,16 +1012,11 @@ async fn execute_rotation_preparation(
     })
     .await
     .wrap_err("rotation finalization worker panicked")??;
-    let finalized_status = spawn_blocking({
-        let admin = admin.clone();
-        move || {
-            admin
-                .client()
-                .get_validator_committee_status(Some(target_epoch))
-        }
-    })
-    .await
-    .wrap_err("rotation finalized status worker panicked")??;
+    let finalized_status = admin
+        .client()
+        .nexus()
+        .validator_committee(Some(target_epoch))
+        .await?;
     let session = finalized_status
         .pending_beacon_session
         .as_ref()
@@ -1078,16 +1068,11 @@ async fn execute_rotation_preparation(
     })
     .await
     .wrap_err("rotation credential preparation worker panicked")??;
-    let prepared_status = spawn_blocking({
-        let admin = admin.clone();
-        move || {
-            admin
-                .client()
-                .get_validator_committee_status(Some(target_epoch))
-        }
-    })
-    .await
-    .wrap_err("rotation prepared status worker panicked")??;
+    let prepared_status = admin
+        .client()
+        .nexus()
+        .validator_committee(Some(target_epoch))
+        .await?;
     let prepared_transition = prepared_status
         .selected
         .as_ref()
@@ -1194,16 +1179,11 @@ async fn execute_rotation_preparation(
         .await
         .wrap_err("target seat readiness admission worker panicked")??;
     }
-    let readiness = spawn_blocking({
-        let admin = admin.clone();
-        move || {
-            admin
-                .client()
-                .get_validator_committee_status(Some(target_epoch))
-        }
-    })
-    .await
-    .wrap_err("target readiness status worker panicked")??;
+    let readiness = admin
+        .client()
+        .nexus()
+        .validator_committee(Some(target_epoch))
+        .await?;
     ensure!(
         readiness.selected.as_ref().is_some_and(|selected| {
             selected.transition.readiness.len()
@@ -1352,12 +1332,7 @@ async fn run_custody_or_activation_scenario(
                     == genesis_voters.iter().collect::<BTreeSet<_>>(),
             "one genuinely absent target custodian must force certified four-seat retention"
         );
-        let progress = spawn_blocking({
-            let admin = admin.clone();
-            move || admin.client().get_validator_committee_status(Some(2))
-        })
-        .await
-        .wrap_err("missing-custody terminal status worker panicked")??;
+        let progress = admin.client().nexus().validator_committee(Some(2)).await?;
         let transition = &progress
             .selected
             .as_ref()
@@ -1407,12 +1382,7 @@ async fn run_custody_or_activation_scenario(
         seven.commitment().schedule.current.authority.generation == 1,
         "seven-seat activation did not publish the new Pasta generation"
     );
-    let status = spawn_blocking({
-        let admin = admin.clone();
-        move || admin.client().get_validator_committee_status(Some(3))
-    })
-    .await
-    .wrap_err("return selection status worker panicked")??;
+    let status = admin.client().nexus().validator_committee(Some(3)).await?;
     let return_preparation = status
         .selected
         .as_ref()
@@ -1757,12 +1727,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         ensure!(initial_height < SELECTION, "candidate pool did not enter the selecting prestate");
         let initial_roster = network.validators().iter().map(|peer| peer.id()).collect::<Vec<_>>();
         advance_to_height(&network, &initial_roster, SELECTION).await?;
-        let before = spawn_blocking({
-            let admin = admin.clone();
-            move || admin.client().get_validator_committee_status(Some(2))
-        })
-        .await
-        .wrap_err("selection status worker panicked")??;
+        let before = admin.client().nexus().validator_committee(Some(2)).await?;
         let selected = before.selected.as_ref().ok_or_else(|| eyre!("boundary did not freeze E+2"))?;
         let preparation = selected.transition.preparation.clone();
         preparation.validate().map_err(|error| eyre!(error))?;
@@ -1832,12 +1797,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         })
         .await
         .wrap_err("candidate key publication worker panicked")??;
-        let progress = spawn_blocking({
-            let admin = admin.clone();
-            move || admin.client().get_validator_committee_status(Some(2))
-        })
-        .await
-        .wrap_err("preparation status worker panicked")??;
+        let progress = admin.client().nexus().validator_committee(Some(2)).await?;
         ensure!(
             progress.candidate_keys.len() == seats - usize::from(withheld.is_some())
                 && progress.selected.as_ref().is_some_and(|row| row.transition.preparation == preparation),
@@ -1912,12 +1872,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                     != preparation.beacon_session_id().map_err(|error| eyre!(error))?,
             "cancelled preparation cannot be shrunk or reused as the next attempt"
         );
-        let terminal = spawn_blocking({
-            let admin = admin.clone();
-            move || admin.client().get_validator_committee_status(Some(2))
-        })
-        .await
-        .wrap_err("terminal committee status worker panicked")??;
+        let terminal = admin.client().nexus().validator_committee(Some(2)).await?;
         ensure!(
             terminal.selected.as_ref().is_some_and(|row| {
                 row.transition.preparation == preparation

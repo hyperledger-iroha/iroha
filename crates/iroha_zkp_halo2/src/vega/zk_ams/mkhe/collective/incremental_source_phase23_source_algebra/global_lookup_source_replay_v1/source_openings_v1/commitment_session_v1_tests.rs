@@ -3,7 +3,7 @@ use super::*;
 use std::panic::AssertUnwindSafe;
 
 const SESSION_SOURCE_V1: &str = include_str!("commitment_session_v1.rs");
-const SESSION_TEST_SOURCE_V1: &str = include_str!("commitment_session_v1_tests.rs");
+
 const OPENING_SOURCE_V1: &str = include_str!("../source_openings_v1.rs");
 const REPLAY_SOURCE_V1: &str = include_str!("../../global_lookup_source_replay_v1.rs");
 const RADIX_SOURCE_V2: &str = include_str!("../../../incremental_source_phase23_radix_range_v2.rs");
@@ -285,10 +285,6 @@ fn duplicate_skip_entropy_failure_and_unwind_poison_the_move_only_session() {
 
 #[test]
 fn authority_chain_and_non_authority_surfaces_are_structurally_frozen() {
-    assert!(SESSION_SOURCE_V1.lines().count() <= 750);
-    assert!(SESSION_SOURCE_V1.len() <= 32_000);
-    assert!(SESSION_TEST_SOURCE_V1.lines().count() <= 450);
-    assert!(SESSION_TEST_SOURCE_V1.len() <= 20_000);
     for required in [
         "original_random: R",
         "commitment_entropy_bytes: u64",

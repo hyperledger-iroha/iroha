@@ -1478,6 +1478,25 @@ fn parsed_pacs009_distinct_identity_fields_remain_mutable() {
     );
 }
 #[test]
+fn pacs009_aliases_keep_application_and_payment_identity_fields_distinct() {
+    assert_eq!(
+        canonical_field_name("pacs.009.001.10", "AppHdr/CreDt"),
+        "AppHdr/CreDt"
+    );
+    assert_eq!(
+        canonical_field_name("pacs.009.001.10", "Document/FICdtTrf/GrpHdr/CreDtTm"),
+        "CreDtTm"
+    );
+    assert_eq!(
+        canonical_field_name("pacs.009.001.10", "AppHdr/BizMsgIdr"),
+        "BizMsgIdr"
+    );
+    assert_eq!(
+        canonical_field_name("pacs.009.001.10", "Document/FICdtTrf/GrpHdr/MsgId"),
+        "MsgId"
+    );
+}
+#[test]
 fn parse_sample_pacs002_auth_allows_missing_txsts() {
     assert_validated("pacs.002.001.10", SAMPLE_PACS002_AUTH_XML);
     assert_eq!(

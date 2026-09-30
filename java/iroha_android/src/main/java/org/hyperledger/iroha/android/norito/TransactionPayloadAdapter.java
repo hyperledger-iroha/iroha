@@ -26,7 +26,6 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.instructions.LanePrivacyMerkleWitness;
 import org.hyperledger.iroha.android.model.instructions.LanePrivacyProof;
 import org.hyperledger.iroha.android.model.instructions.LanePrivacyWitness;
@@ -118,8 +117,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final long EXECUTABLE_INSTRUCTIONS_TAG = 0L;
   private static final long TRANSACTION_DOMAIN_NETWORK_TAG = 0L;
   private static final long TRANSACTION_DOMAIN_GENESIS_TAG = 1L;
-  private static final long TRANSACTION_ADMISSION_ORDINARY_TAG = 0L;
-  private static final long TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1L;
   private static final long EXECUTABLE_CONTRACT_CALL_TAG = 1L;
   private static final long EXECUTABLE_IVM_TAG = 2L;
   private static final long EXECUTABLE_IVM_PROVED_TAG = 3L;
@@ -152,8 +149,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       new SponsorFeePaymentAdapter();
   private static final TypeAdapter<FeePaymentIntent> FEE_PAYMENT_ADAPTER =
       new FeePaymentIntentAdapter();
-  private static final TypeAdapter<TransactionAdmissionIntent> ADMISSION_INTENT_ADAPTER =
-      new TransactionAdmissionIntentAdapter();
   private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
   private static final TypeAdapter<Map<String, JsonValue>> METADATA_ADAPTER = new MetadataAdapter();
   private static final TypeAdapter<ProofBoxValue> PROOF_BOX_ADAPTER = new ProofBoxAdapter();
@@ -218,7 +213,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           encodeSizedField(encoder, TTL_ADAPTER, value.timeToLiveMs());
           encodeSizedField(encoder, NONCE_ADAPTER, value.nonce());
           encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
-          encodeSizedField(encoder, ADMISSION_INTENT_ADAPTER, value.admissionIntent());
           encodeSizedField(encoder, METADATA_ADAPTER, value.metadata());
           encodeSizedField(encoder, ATTACHMENTS_OPTION_ADAPTER, value.attachments());
           return null;
@@ -241,8 +235,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           }
           final Optional<Long> nonceRaw = decodeSizedField(decoder, NONCE_ADAPTER);
           final FeePaymentIntent feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER);
-          final TransactionAdmissionIntent admissionIntent =
-              decodeSizedField(decoder, ADMISSION_INTENT_ADAPTER);
           final Map<String, JsonValue> metadata =
               new LinkedHashMap<>(decodeSizedField(decoder, METADATA_ADAPTER));
           final Optional<List<ProofAttachment>> attachments =
@@ -255,7 +247,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
                   .setCreationTimeMs(creationTimeMs)
                   .setExecutable(executable)
                   .setFeePayment(feePayment)
-                  .setAdmissionIntent(admissionIntent)
                   .setMetadata(metadata)
                   .setAttachments(attachments.orElse(null));
           builder.setTimeToLiveMs(ttl.get());
@@ -1723,37 +1714,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         throw new IllegalArgumentException("Unknown TransactionDomain discriminant: " + tag);
       }
       return NetworkId.fromBytes(decodeSizedField(decoder, FIXED_HASH_ADAPTER));
-    }
-  }
-
-  private static final class TransactionAdmissionIntentAdapter
-      implements TypeAdapter<TransactionAdmissionIntent> {
-    @Override
-    public void encode(
-        final NoritoEncoder encoder, final TransactionAdmissionIntent value) {
-      switch (value) {
-        case ORDINARY:
-          ENUM_TAG_ADAPTER.encode(encoder, TRANSACTION_ADMISSION_ORDINARY_TAG);
-          return;
-        case QUEUE_PLAN_SYNCED:
-          ENUM_TAG_ADAPTER.encode(encoder, TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG);
-          return;
-        default:
-          throw new IllegalArgumentException("Unknown TransactionAdmissionIntent: " + value);
-      }
-    }
-
-    @Override
-    public TransactionAdmissionIntent decode(final NoritoDecoder decoder) {
-      final long tag = ENUM_TAG_ADAPTER.decode(decoder);
-      if (tag == TRANSACTION_ADMISSION_ORDINARY_TAG) {
-        return TransactionAdmissionIntent.ORDINARY;
-      }
-      if (tag == TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG) {
-        return TransactionAdmissionIntent.QUEUE_PLAN_SYNCED;
-      }
-      throw new IllegalArgumentException(
-          "Unknown TransactionAdmissionIntent discriminant: " + tag);
     }
   }
 

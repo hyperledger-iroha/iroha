@@ -4,7 +4,7 @@ use super::*;
 use iroha_data_model::sumeragi_finality::{
     LANE_CONSENSUS_CONTEXTS_WITNESS_KEY, NativeContextsProof,
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer};
+use iroha_allocation::{AllocationBudget, ChargedBuffer};
 
 fn witness() -> (NetworkId, ExecWitness) {
     let network = crate::unit_test_support::synthetic_network_id("native model proof cross-check");

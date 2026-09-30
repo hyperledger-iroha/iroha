@@ -2,10 +2,8 @@
 use std::any::Any;
 
 use iroha_primitives::bigint::BigInt;
-use ivm::{
-    CoreHost, IVM, IVMHost, PointerType, VMError, kotodama::compiler::Compiler as KotodamaCompiler,
-    numeric_tlv, syscalls,
-};
+use ivm::{CoreHost, IVM, IVMHost, PointerType, VMError, numeric_tlv, syscalls};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 
 mod common;
 

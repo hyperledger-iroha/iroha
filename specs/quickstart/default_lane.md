@@ -138,7 +138,7 @@ bundles always capture the signed artefact path:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --lifecycle-url https://torii.example.org/v1/nexus/lifecycle \
+  --lifecycle-file artifacts/nexus/lanes/nexus_lifecycle.json \
   --metrics-url https://torii.example.org/metrics \
   --lane-alias core \
   --expected-lane-count 3 \
@@ -152,7 +152,8 @@ Set `--max-headroom-events 0` to ensure the scheduler’s headroom telemetry has
 load-shedding events, and use `--max-slot-p95/--max-slot-p99` (plus `--min-slot-samples`) to keep
 the NX-18 slot-duration SLO enforced before you expose the default lane to production traffic.
 
-For air-gapped rehearsals you can pass `--lifecycle-file` / `--metrics-file` and
+The lane catalog always comes from a recorded `LaneLifecycleStatusV1` document
+(`--lifecycle-file`); for air-gapped rehearsals also pass `--metrics-file` and
 reuse the recorded fixtures in `fixtures/nexus/lanes/`. The helper exits
 non-zero when the scheduler gauges or lane governance snapshots don’t line up
 with the catalog, making it ideal for gating CI.

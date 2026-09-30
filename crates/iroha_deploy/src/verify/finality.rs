@@ -8,6 +8,21 @@
 //!
 //! Height-one outputs have no QC. They require a certified successor or independent committee
 //! attestations; merely constructing a verifier does not authenticate genesis execution.
+//!
+//! Certificates, committees and epoch handoffs are checked by the data model's contiguous
+//! [`SumeragiFinalityVerifier`]: each successor must carry an exact `2f + 1` commit certificate
+//! of the committee that its authenticated predecessor scheduled, and an epoch boundary's
+//! certified result is the only source of the next committee. Work is proportional to new
+//! blocks rather than new epochs: parent-result, schedule and beacon-seed bindings are checked
+//! between adjacent certified blocks, and the canonical checkpoint retains the exact decisions
+//! of the tip's two predecessors.
+//!
+//! An observation verifies one contiguous prefix, each height at most once, and places every
+//! member's claimed tip on it. A claim that fails verification or exceeds the budget is reported
+//! for that member alone, so a Byzantine member cannot abort the observation or spend the budget
+//! that honest tips need. A checkpoint lagging by more than one observation budget is caught up
+//! across observations ([`FinalityError::CatchingUp`]) or explicitly in pages
+//! ([`FinalityVerifier::catch_up`]).
 // TODO(P2): provide the native HTTP transport and concurrent bounded peer reads.
 
 use iroha_crypto::HashOf;
@@ -17,7 +32,7 @@ use iroha_data_model::{
     sumeragi_finality::{
         FinalityError as NativeFinalityError, FinalityValidator, ScheduledSlot,
         SumeragiFinalityAttestation, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
-        SumeragiFinalityVerifier,
+        SumeragiFinalityVerifier, VerifiedSumeragiBlock,
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -229,6 +244,16 @@ pub enum FinalityError {
     /// Too few distinct current members supplied valid fresh statements.
     #[error("{} of {} required committee members attested", .0.verified(), .0.required)]
     InsufficientAttestations(Box<AttestationQuorum>),
+    /// Members claim tips beyond what one observation budget verified. The next observation
+    /// continues from the verified successors; the checkpoint is unchanged until a fresh quorum
+    /// confirms a tip.
+    #[error("verified through height {verified}, members claim up to {claimed}; observe again")]
+    CatchingUp {
+        /// Last height this observation verified.
+        verified: u64,
+        /// Highest tip a member claimed beyond the budget.
+        claimed: u64,
+    },
     /// The requested work exceeds a finite observation budget.
     #[error("finality observation exceeds its {0} budget")]
     ResourceLimit(&'static str),
@@ -254,15 +279,22 @@ impl Budget {
             bytes: MAX_ADVANCE_BYTES,
         }
     }
+    /// Why this budget cannot cover `proof`, without spending anything.
+    fn refuses(&self, proof: &SumeragiFinalityProof) -> Option<&'static str> {
+        if self.proofs == 0 {
+            Some("proof count")
+        } else if proof.block_wire.len() > self.bytes {
+            Some("proof bytes")
+        } else {
+            None
+        }
+    }
     fn charge(&mut self, proof: &SumeragiFinalityProof) -> Result<(), FinalityError> {
-        self.proofs = self
-            .proofs
-            .checked_sub(1)
-            .ok_or(FinalityError::ResourceLimit("proof count"))?;
-        self.bytes = self
-            .bytes
-            .checked_sub(proof.block_wire.len())
-            .ok_or(FinalityError::ResourceLimit("proof bytes"))?;
+        if let Some(reason) = self.refuses(proof) {
+            return Err(FinalityError::ResourceLimit(reason));
+        }
+        self.proofs -= 1;
+        self.bytes -= proof.block_wire.len();
         Ok(())
     }
 }
@@ -271,6 +303,9 @@ impl Budget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalityVerifier {
     checkpoint: SumeragiFinalityCheckpoint,
+    /// Successors an observation verified before its budget ran out, awaiting a fresh quorum.
+    /// The next observation continues from here; they never become the checkpoint without one.
+    pending: Option<SumeragiFinalityCheckpoint>,
 }
 
 impl FinalityVerifier {
@@ -308,6 +343,7 @@ impl FinalityVerifier {
         verifier.verify(genesis)?;
         Ok(Self {
             checkpoint: verifier.export_checkpoint(genesis)?,
+            pending: None,
         })
     }
 
@@ -326,7 +362,10 @@ impl FinalityVerifier {
             expected_chain,
         )?;
         CommitteeSize::new(checkpoint.tip().committee.len())?;
-        Ok(Self { checkpoint })
+        Ok(Self {
+            checkpoint,
+            pending: None,
+        })
     }
 
     /// Complete native checkpoint to persist for independently authenticated restart.
@@ -345,12 +384,7 @@ impl FinalityVerifier {
         )?)
     }
     fn members(&self) -> Vec<PeerId> {
-        self.checkpoint
-            .tip()
-            .committee
-            .iter()
-            .map(|v| PeerId::new(v.public_key.clone()))
-            .collect()
+        committee_peers(self.checkpoint.tip())
     }
 
     /// Verify every successor through `tip`, atomically replacing the checkpoint.
@@ -371,15 +405,6 @@ impl FinalityVerifier {
         tip: &SumeragiFinalityProof,
         budget: &mut Budget,
     ) -> Result<usize, FinalityError> {
-        self.advance_recording(source, tip, budget, &mut |_, _| {})
-    }
-    fn advance_recording<S: FinalitySource + ?Sized>(
-        &mut self,
-        source: &S,
-        tip: &SumeragiFinalityProof,
-        budget: &mut Budget,
-        on_verified: &mut impl FnMut(&SumeragiFinalityVerifier, u64),
-    ) -> Result<usize, FinalityError> {
         let current = self.checkpoint.height();
         let height = tip.height();
         if height < current {
@@ -390,9 +415,8 @@ impl FinalityVerifier {
         }
         if height == current {
             budget.charge(tip)?;
-            let native = self.native()?;
-            native.verify_same_decision(self.checkpoint.tip(), tip)?;
-            on_verified(&native, height);
+            self.native()?
+                .verify_same_decision(self.checkpoint.tip(), tip)?;
             return Ok(0);
         }
         if height - current > budget.proofs as u64 {
@@ -413,16 +437,55 @@ impl FinalityVerifier {
             budget.charge(&proof)?;
             CommitteeSize::new(proof.committee.len())?;
             native.verify(&proof)?;
-            on_verified(&native, expected);
             fetched += 1;
         }
         budget.charge(tip)?;
         CommitteeSize::new(tip.committee.len())?;
         native.verify(tip)?;
-        on_verified(&native, height);
-        let checkpoint = native.export_checkpoint(tip)?;
-        self.checkpoint = checkpoint;
+        self.checkpoint = native.export_checkpoint(tip)?;
+        self.pending = None;
         Ok(fetched)
+    }
+
+    /// Verify one bounded page of contiguous successors toward `target` and publish its last
+    /// verified successor as the new checkpoint; returns the resulting checkpoint height.
+    ///
+    /// Unlike [`Self::observe`], this publishes certificate-verified successors without a fresh
+    /// committee quorum, for callers that choose to persist that progress. A page ends at
+    /// `target`, after [`MAX_ADVANCE_PROOFS`] successors, or before the successor that would
+    /// exceed [`MAX_ADVANCE_BYTES`]. Every successor is verified as in [`Self::advance`];
+    /// `target` only bounds the work and never selects trust. A target at or below the
+    /// checkpoint fetches nothing.
+    ///
+    /// # Errors
+    /// A transport failure, a wrong height, an invalid successor, or a first successor that
+    /// alone exceeds the byte budget. The checkpoint is unchanged on error.
+    pub fn catch_up<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        target: NonZeroU64,
+    ) -> Result<u64, FinalityError> {
+        self.catch_up_with_budget(source, target, &mut Budget::new())
+    }
+    fn catch_up_with_budget<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        target: NonZeroU64,
+        budget: &mut Budget,
+    ) -> Result<u64, FinalityError> {
+        let current = self.checkpoint.height();
+        if target.get() <= current {
+            return Ok(current);
+        }
+        let mut prefix = Prefix::new(&self.checkpoint)?;
+        match prefix.fetch_through(source, target.get(), budget) {
+            Ok(()) => {}
+            Err(FinalityError::ResourceLimit(_)) if prefix.height() > current => {}
+            Err(error) => return Err(error),
+        }
+        self.checkpoint = prefix.checkpoint()?;
+        self.pending = None;
+        Ok(self.checkpoint.height())
     }
 
     /// Verify a current member's fresh attestation against the exact retained native prefix.
@@ -435,7 +498,7 @@ impl FinalityVerifier {
         challenge: &[u8; 32],
         attestation: &SumeragiFinalityAttestation,
     ) -> Result<AttestedTip, FinalityError> {
-        self.verify_attestation_identity(challenge, attestation)?;
+        verify_identity(self.checkpoint.network_id(), challenge, attestation)?;
         if !self.members().contains(&attestation.body.node_id) {
             return Err(FinalityError::NotInCommittee {
                 peer: Box::new(attestation.body.node_id.clone()),
@@ -485,159 +548,6 @@ impl FinalityVerifier {
                     .map_or_else(AttestationOutcome::Rejected, AttestationOutcome::Verified);
             }
         }
-        self.quorum(peers)
-    }
-
-    /// Query current and authenticated next-committee members, follow contiguous proof chains,
-    /// and publish the new checkpoint only when a fresh quorum of its committee attests.
-    /// Responses observed before an advance remain eligible when their exact original native
-    /// decisions were authenticated during that advance, including across committee boundaries.
-    /// This bounded observation-local custody is separate from the compact restart window.
-    ///
-    /// # Errors
-    /// Zero challenge, peer/proof budget exhaustion, or insufficient valid attestations.
-    pub fn observe<S: FinalitySource + ?Sized>(
-        &mut self,
-        source: &S,
-        challenge: &[u8; 32],
-    ) -> Result<AttestationQuorum, FinalityError> {
-        require_challenge(challenge)?;
-        let mut trial = self.clone();
-        let mut reads = BTreeMap::new();
-        // Each entry certifies one immutable challenged response in `reads`, while its exact
-        // original decision and parent are retained by contiguous native verification. At most
-        // MAX_OBSERVATION_PEERS entries live here; no unbounded history is retained on restart.
-        let mut observed_prefix = BTreeMap::new();
-        let mut budget = Budget::new();
-        loop {
-            let count = reads.len();
-            trial.read_members(source, challenge, &mut reads)?;
-            if reads.len() == count {
-                break;
-            }
-            let candidates = reads
-                .iter()
-                .filter_map(|(peer, read)| {
-                    let attestation = read.as_ref().ok()?;
-                    (attestation.body.node_id == *peer
-                        && trial
-                            .verify_attestation_identity(challenge, attestation)
-                            .is_ok())
-                    .then_some((peer, attestation))
-                })
-                .collect::<Vec<_>>();
-            let native = trial.native()?;
-            record_observed_prefix(
-                &native,
-                trial.checkpoint.height(),
-                &candidates,
-                &mut observed_prefix,
-            );
-            if trial.checkpoint.height() > 1 {
-                record_observed_prefix(
-                    &native,
-                    trial.checkpoint.height() - 1,
-                    &candidates,
-                    &mut observed_prefix,
-                );
-            }
-            let mut tips = candidates
-                .iter()
-                .map(|(_, a)| &a.body.finality_proof)
-                .filter(|tip| tip.height() > trial.checkpoint.height())
-                .collect::<Vec<_>>();
-            tips.sort_by_key(|tip| Reverse(tip.height()));
-            tips.dedup();
-            for tip in tips {
-                // An implausibly distant peer claim spends no budget and must not prevent
-                // another current member's bounded tip from forming a live quorum.
-                if tip.height() - trial.checkpoint.height() > budget.proofs as u64 {
-                    continue;
-                }
-                let mut candidate_prefix = observed_prefix.clone();
-                let mut capture = |native: &SumeragiFinalityVerifier, height| {
-                    record_observed_prefix(native, height, &candidates, &mut candidate_prefix);
-                };
-                match trial.advance_recording(source, tip, &mut budget, &mut capture) {
-                    Ok(_) => {
-                        observed_prefix = candidate_prefix;
-                        break;
-                    }
-                    Err(error @ FinalityError::ResourceLimit(_)) => return Err(error),
-                    Err(_) => {}
-                }
-            }
-        }
-        let current_epoch = trial
-            .native()?
-            .verify_retained_decision(trial.checkpoint.tip())?
-            .commitment()
-            .schedule
-            .current
-            .authorization
-            .epoch;
-        let peers = trial
-            .members()
-            .into_iter()
-            .map(|peer| {
-                let outcome = match reads.get(&peer) {
-                    None => AttestationOutcome::Missing,
-                    Some(Err(error)) => AttestationOutcome::Unreachable(error.clone()),
-                    Some(Ok(a)) if a.body.node_id != peer => {
-                        AttestationOutcome::Rejected(FinalityError::UnexpectedPeer {
-                            expected: Box::new(peer.clone()),
-                            actual: Box::new(a.body.node_id.clone()),
-                        })
-                    }
-                    Some(Ok(_))
-                        if observed_prefix.get(&peer).is_some_and(|observed| {
-                            observed.epoch >= current_epoch.saturating_sub(1)
-                        }) =>
-                    {
-                        AttestationOutcome::Verified(observed_prefix[&peer].tip)
-                    }
-                    Some(Ok(a)) => trial
-                        .verify_attestation(challenge, a)
-                        .map_or_else(AttestationOutcome::Rejected, AttestationOutcome::Verified),
-                };
-                (peer, outcome)
-            })
-            .collect();
-        let quorum = trial.quorum(peers)?;
-        *self = trial;
-        Ok(quorum)
-    }
-    fn read_members<S: FinalitySource + ?Sized>(
-        &self,
-        source: &S,
-        challenge: &[u8; 32],
-        reads: &mut BTreeMap<PeerId, Result<SumeragiFinalityAttestation, String>>,
-    ) -> Result<(), FinalityError> {
-        let mut members = self.members();
-        let verified = self
-            .native()?
-            .verify_retained_decision(self.checkpoint.tip())?;
-        if let ScheduledSlot::Ready(next) = &verified.commitment().schedule.next {
-            CommitteeSize::new(next.epoch.committee.len())?;
-            members.extend(next.epoch.committee.iter().map(|v| v.validator.clone()));
-        }
-        for peer in members {
-            if !reads.contains_key(&peer) {
-                if reads.len() == MAX_OBSERVATION_PEERS {
-                    return Err(FinalityError::ResourceLimit("peer count"));
-                }
-                let outcome = source
-                    .latest_attestation(&peer, challenge)
-                    .map_err(|e| e.to_string());
-                reads.insert(peer, outcome);
-            }
-        }
-        Ok(())
-    }
-    fn quorum(
-        &self,
-        peers: Vec<(PeerId, AttestationOutcome)>,
-    ) -> Result<AttestationQuorum, FinalityError> {
         let quorum = AttestationQuorum {
             height: self.checkpoint.tip().block_header.height(),
             block_hash: self.checkpoint.block_hash(),
@@ -650,62 +560,393 @@ impl FinalityVerifier {
             Err(FinalityError::InsufficientAttestations(Box::new(quorum)))
         }
     }
-    fn verify_attestation_identity(
-        &self,
+
+    /// Query current and authenticated next-committee members, verify the certified chain toward
+    /// their claimed tips, and publish the new checkpoint only when a fresh quorum of its
+    /// committee attests tips on that chain.
+    ///
+    /// One contiguous prefix is verified per observation, each height at most once. Claims are
+    /// taken highest first: the source supplies the blocks below a claim and the member's own
+    /// proof only its claimed tip. A claim whose proof fails verification or exceeds the budget
+    /// is reported for that member alone; it never aborts the observation and never spends the
+    /// budget that other claims need. Members whose exact tips were verified anywhere in the
+    /// prefix count, across committee boundaries, but at most one scheduling epoch back.
+    ///
+    /// When members claim tips beyond one observation budget, the observation returns
+    /// [`FinalityError::CatchingUp`] and keeps the successors it verified for the next
+    /// observation, which continues from them. Nothing is published without a fresh quorum.
+    ///
+    /// # Errors
+    /// Zero challenge, peer budget exhaustion, [`FinalityError::CatchingUp`], or insufficient
+    /// valid attestations.
+    pub fn observe<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
         challenge: &[u8; 32],
-        attestation: &SumeragiFinalityAttestation,
-    ) -> Result<(), FinalityError> {
-        require_challenge(challenge)?;
-        if attestation.body.challenge != *challenge {
-            return Err(FinalityError::StaleChallenge);
-        }
-        if attestation.body.network_id != self.checkpoint.network_id() {
-            return Err(FinalityError::WrongNetwork {
-                expected: self.checkpoint.network_id(),
-                actual: attestation.body.network_id,
-            });
-        }
-        attestation.verify()?;
-        // validate_consistency binds the complete decoded genesis frame to this independently
-        // selected network hash. Its result-only execution is not authority for the current tip.
-        // The tip is checked separately against exact retained decisions or contiguous successors.
-        Ok(())
+    ) -> Result<AttestationQuorum, FinalityError> {
+        self.observe_with_budget(source, challenge, &mut Budget::new())
     }
-}
-
-/// Record only an unchanged challenged response whose complete decision has just been
-/// independently authenticated. Source reads are immutable throughout the observation, and
-/// committee membership is checked by constructing the final report from the final roster.
-#[derive(Clone, Copy)]
-struct ObservedDecision {
-    tip: AttestedTip,
-    epoch: u64,
-}
-
-fn record_observed_prefix(
-    native: &SumeragiFinalityVerifier,
-    height: u64,
-    candidates: &[(&PeerId, &SumeragiFinalityAttestation)],
-    observed: &mut BTreeMap<PeerId, ObservedDecision>,
-) {
-    for (peer, attestation) in candidates {
-        let proof = &attestation.body.finality_proof;
-        if proof.height() != height {
-            continue;
-        }
-        if let Ok(verified) = native.verify_retained_decision(proof) {
-            observed.insert(
-                (*peer).clone(),
-                ObservedDecision {
-                    tip: AttestedTip {
-                        height: proof.block_header.height(),
-                        block_hash: proof.block_header.hash(),
-                    },
-                    epoch: verified.commitment().schedule.current.authorization.epoch,
-                },
+    fn observe_with_budget<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        challenge: &[u8; 32],
+        budget: &mut Budget,
+    ) -> Result<AttestationQuorum, FinalityError> {
+        require_challenge(challenge)?;
+        let network = self.checkpoint.network_id();
+        let mut prefix = Prefix::new(self.pending.as_ref().unwrap_or(&self.checkpoint))?;
+        let mut reads = BTreeMap::new();
+        // Why a member's own proof could not extend the prefix: invalid or over budget.
+        let mut unverified = BTreeMap::new();
+        let mut source_failed_at = None;
+        loop {
+            let count = reads.len();
+            read_members(&prefix, source, challenge, network, &mut reads)?;
+            if reads.len() == count {
+                break;
+            }
+            let mut claims = reads
+                .iter()
+                .filter_map(|(peer, read)| match read {
+                    Read::Claim(attestation) => Some((peer, &attestation.body.finality_proof)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            claims.sort_by_key(|(_, proof)| Reverse(proof.height()));
+            prefix.extend(
+                source,
+                &claims,
+                budget,
+                &mut source_failed_at,
+                &mut unverified,
             );
         }
+        let claimed = unverified
+            .iter()
+            .filter(|(_, error)| matches!(error, FinalityError::ResourceLimit(_)))
+            .filter_map(|(peer, _)| match reads.get(peer) {
+                Some(Read::Claim(attestation)) => Some(attestation.body.finality_proof.height()),
+                _ => None,
+            })
+            .max();
+        let verified = prefix.height();
+        let report = prefix.report(&mut reads, &mut unverified)?;
+        if report.verified() >= report.required {
+            self.checkpoint = prefix.checkpoint()?;
+            self.pending = None;
+            return Ok(report);
+        }
+        match claimed {
+            Some(claimed) if verified > prefix.start => {
+                self.pending = Some(prefix.checkpoint()?);
+                Err(FinalityError::CatchingUp { verified, claimed })
+            }
+            _ => {
+                self.pending = None;
+                Err(FinalityError::InsufficientAttestations(Box::new(report)))
+            }
+        }
     }
+}
+
+fn committee_peers(proof: &SumeragiFinalityProof) -> Vec<PeerId> {
+    proof
+        .committee
+        .iter()
+        .map(|validator| PeerId::new(validator.public_key.clone()))
+        .collect()
+}
+
+/// One committee member's response to an observation's challenge.
+enum Read {
+    /// The source could not fetch a statement.
+    Unreachable(String),
+    /// Another node's statement came back.
+    Substituted(Box<PeerId>),
+    /// The statement failed its challenge, network, signature or consistency check.
+    Invalid(Box<FinalityError>),
+    /// A valid challenge-bound statement whose tip is still to be placed on the verified chain.
+    Claim(Box<SumeragiFinalityAttestation>),
+}
+
+impl Read {
+    fn new(
+        response: Result<SumeragiFinalityAttestation, String>,
+        peer: &PeerId,
+        challenge: &[u8; 32],
+        network: NetworkId,
+    ) -> Self {
+        match response {
+            Err(error) => Self::Unreachable(error),
+            Ok(attestation) if attestation.body.node_id != *peer => {
+                Self::Substituted(Box::new(attestation.body.node_id))
+            }
+            Ok(attestation) => match verify_identity(network, challenge, &attestation) {
+                Ok(()) => Self::Claim(Box::new(attestation)),
+                Err(error) => Self::Invalid(Box::new(error)),
+            },
+        }
+    }
+}
+
+/// Read each current and scheduled next committee member of the prefix tip, once per observation.
+fn read_members<S: FinalitySource + ?Sized>(
+    prefix: &Prefix,
+    source: &S,
+    challenge: &[u8; 32],
+    network: NetworkId,
+    reads: &mut BTreeMap<PeerId, Read>,
+) -> Result<(), FinalityError> {
+    for peer in prefix.members()? {
+        if !reads.contains_key(&peer) {
+            if reads.len() == MAX_OBSERVATION_PEERS {
+                return Err(FinalityError::ResourceLimit("peer count"));
+            }
+            let response = source
+                .latest_attestation(&peer, challenge)
+                .map_err(|e| e.to_string());
+            let read = Read::new(response, &peer, challenge, network);
+            reads.insert(peer, read);
+        }
+    }
+    Ok(())
+}
+
+/// A contiguous prefix verified from one starting checkpoint. It retains every decision it
+/// verified, so a member's tip anywhere in it is checked against the exact certified decision at
+/// that height.
+struct Prefix {
+    native: SumeragiFinalityVerifier,
+    tip: SumeragiFinalityProof,
+    verified: VerifiedSumeragiBlock,
+    start: u64,
+}
+
+impl Prefix {
+    fn new(checkpoint: &SumeragiFinalityCheckpoint) -> Result<Self, FinalityError> {
+        let native = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            checkpoint,
+            &checkpoint.network_id(),
+            checkpoint.chain_id(),
+        )?;
+        let verified = native.verify_retained_decision(checkpoint.tip())?;
+        Ok(Self {
+            native,
+            tip: checkpoint.tip().clone(),
+            verified,
+            start: checkpoint.height(),
+        })
+    }
+    fn height(&self) -> u64 {
+        self.tip.height()
+    }
+    fn checkpoint(&self) -> Result<SumeragiFinalityCheckpoint, FinalityError> {
+        Ok(self.native.export_checkpoint(&self.tip)?)
+    }
+    /// The tip's committee and the committee its certified result schedules next.
+    fn members(&self) -> Result<Vec<PeerId>, FinalityError> {
+        let mut members = committee_peers(&self.tip);
+        if let ScheduledSlot::Ready(next) = &self.verified.commitment().schedule.next {
+            CommitteeSize::new(next.epoch.committee.len())?;
+            members.extend(
+                next.epoch
+                    .committee
+                    .iter()
+                    .map(|member| member.validator.clone()),
+            );
+        }
+        Ok(members)
+    }
+    /// Admit `proof` as the next block; nothing changes on failure.
+    fn push(&mut self, proof: &SumeragiFinalityProof) -> Result<(), FinalityError> {
+        CommitteeSize::new(proof.committee.len())?;
+        self.verified = self.native.verify(proof)?;
+        self.tip = proof.clone();
+        Ok(())
+    }
+    /// Verify the source's successors through `height`, keeping the verified progress when the
+    /// budget ([`FinalityError::ResourceLimit`]) or the source (any other error) stops it first.
+    fn fetch_through<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        height: u64,
+        budget: &mut Budget,
+    ) -> Result<(), FinalityError> {
+        while self.height() < height {
+            let expected = self.height() + 1;
+            if budget.proofs == 0 {
+                return Err(FinalityError::ResourceLimit("proof count"));
+            }
+            let proof = source
+                .finality_proof(NonZeroU64::new(expected).expect("successor is positive"))
+                .map_err(FinalityError::transport)?;
+            if proof.height() != expected {
+                return Err(FinalityError::UnexpectedHeight {
+                    expected,
+                    actual: proof.height(),
+                });
+            }
+            budget.charge(&proof)?;
+            self.push(&proof)?;
+        }
+        Ok(())
+    }
+    /// Extend toward members' claims, highest first, until a pass adds nothing. The source
+    /// supplies every block it can below a claim, and a member's own proof extends the prefix
+    /// only at that member's claimed height, so a lower member's proof never displaces a source
+    /// block. A failed claim is recorded for its member alone and is not retried.
+    fn extend<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        claims: &[(&PeerId, &SumeragiFinalityProof)],
+        budget: &mut Budget,
+        source_failed_at: &mut Option<u64>,
+        unverified: &mut BTreeMap<PeerId, FinalityError>,
+    ) {
+        loop {
+            let before = self.height();
+            for (peer, proof) in claims {
+                if proof.height() <= self.height() || unverified.contains_key(*peer) {
+                    continue;
+                }
+                if let Err(Some(error)) = self.reach(source, proof, budget, source_failed_at) {
+                    unverified.insert((*peer).clone(), error);
+                }
+            }
+            if self.height() == before {
+                break;
+            }
+        }
+    }
+    /// Extend through one claimed tip. `Err(None)` means the source cannot supply a block below
+    /// it yet; a later pass retries once other claims have extended the prefix.
+    fn reach<S: FinalitySource + ?Sized>(
+        &mut self,
+        source: &S,
+        proof: &SumeragiFinalityProof,
+        budget: &mut Budget,
+        source_failed_at: &mut Option<u64>,
+    ) -> Result<(), Option<FinalityError>> {
+        let parent = proof.height() - 1;
+        // The source is not asked again at or above a height it already failed to supply.
+        let limit = source_failed_at.map_or(parent, |failed| parent.min(failed.saturating_sub(1)));
+        match self.fetch_through(source, limit, budget) {
+            Ok(()) => {}
+            Err(error @ FinalityError::ResourceLimit(_)) => return Err(Some(error)),
+            Err(_) => {
+                *source_failed_at = Some(self.height() + 1);
+                return Err(None);
+            }
+        }
+        if self.height() < parent {
+            return Err(None);
+        }
+        // A member's own proof spends budget only once it verifies, so invalid claims cannot
+        // starve the others.
+        if let Some(reason) = budget.refuses(proof) {
+            return Err(Some(FinalityError::ResourceLimit(reason)));
+        }
+        self.push(proof).map_err(Some)?;
+        budget.charge(proof).map_err(Some)
+    }
+    /// Report every member of the tip's committee against this prefix.
+    fn report(
+        &self,
+        reads: &mut BTreeMap<PeerId, Read>,
+        unverified: &mut BTreeMap<PeerId, FinalityError>,
+    ) -> Result<AttestationQuorum, FinalityError> {
+        let epoch = self
+            .verified
+            .commitment()
+            .schedule
+            .current
+            .authorization
+            .epoch;
+        let peers = committee_peers(&self.tip)
+            .into_iter()
+            .map(|peer| {
+                let outcome = match reads.remove(&peer) {
+                    None => AttestationOutcome::Missing,
+                    Some(Read::Unreachable(error)) => AttestationOutcome::Unreachable(error),
+                    Some(Read::Substituted(actual)) => {
+                        AttestationOutcome::Rejected(FinalityError::UnexpectedPeer {
+                            expected: Box::new(peer.clone()),
+                            actual,
+                        })
+                    }
+                    Some(Read::Invalid(error)) => AttestationOutcome::Rejected(*error),
+                    Some(Read::Claim(attestation)) => self
+                        .place(
+                            &attestation.body.finality_proof,
+                            epoch,
+                            unverified.remove(&peer),
+                        )
+                        .map_or_else(AttestationOutcome::Rejected, AttestationOutcome::Verified),
+                };
+                (peer, outcome)
+            })
+            .collect();
+        Ok(AttestationQuorum {
+            height: self.tip.block_header.height(),
+            block_hash: self.tip.block_header.hash(),
+            required: CommitteeSize::new(self.tip.committee.len())?.quorum(),
+            peers,
+        })
+    }
+    /// Place a member's claimed tip on this prefix. `unverified` says why the member's own proof
+    /// could not extend the prefix, if it tried.
+    fn place(
+        &self,
+        proof: &SumeragiFinalityProof,
+        epoch: u64,
+        unverified: Option<FinalityError>,
+    ) -> Result<AttestedTip, FinalityError> {
+        let checkpoint = self.height();
+        let height = proof.height();
+        match unverified {
+            Some(error) if !matches!(error, FinalityError::ResourceLimit(_)) => return Err(error),
+            budget if height > checkpoint => {
+                return Err(
+                    budget.unwrap_or(FinalityError::AheadOfCheckpoint { checkpoint, height })
+                );
+            }
+            _ => {}
+        }
+        // The starting checkpoint retains its tip's parent, but not that parent's parent.
+        if height + 1 < self.start {
+            return Err(FinalityError::OutsideRetainedPrefix { checkpoint, height });
+        }
+        let verified = self.native.verify_retained_decision(proof)?;
+        if verified.commitment().schedule.current.authorization.epoch < epoch.saturating_sub(1) {
+            return Err(FinalityError::OutsideRetainedPrefix { checkpoint, height });
+        }
+        Ok(AttestedTip {
+            height: proof.block_header.height(),
+            block_hash: proof.block_header.hash(),
+        })
+    }
+}
+
+fn verify_identity(
+    network: NetworkId,
+    challenge: &[u8; 32],
+    attestation: &SumeragiFinalityAttestation,
+) -> Result<(), FinalityError> {
+    require_challenge(challenge)?;
+    if attestation.body.challenge != *challenge {
+        return Err(FinalityError::StaleChallenge);
+    }
+    if attestation.body.network_id != network {
+        return Err(FinalityError::WrongNetwork {
+            expected: network,
+            actual: attestation.body.network_id,
+        });
+    }
+    attestation.verify()?;
+    // validate_consistency binds the complete decoded genesis frame to this independently
+    // selected network hash. Its result-only execution is not authority for the current tip.
+    // The tip is checked separately against exact retained decisions or contiguous successors.
+    Ok(())
 }
 
 fn require_challenge(challenge: &[u8; 32]) -> Result<(), FinalityError> {

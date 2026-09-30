@@ -14,6 +14,17 @@ const UNIT_FORWARD_INTENT: &str = "validator-unit-forward.intent.json";
 const UNIT_ROLLBACK_INTENT: &str = "validator-unit-rollback.intent.json";
 const UNIT_BACKUP: &str = "validator-unit.before";
 
+/// The two configurations produced by the native initial/beacon lifecycle.
+pub(super) fn validator_config_name(path: &Path) -> Result<&'static str> {
+    match path.file_name().and_then(OsStr::to_str) {
+        Some("config.toml") => Ok("config.toml"),
+        Some("beacon.toml") => Ok("beacon.toml"),
+        _ => Err(eyre!(
+            "validator configuration is outside the native lifecycle"
+        )),
+    }
+}
+
 pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Result<()> {
     validate_prior_binding(
         validator.admitted_release()?,
@@ -90,7 +101,8 @@ pub(super) fn validate_prior_binding(
                 }
             }
             "config" => {
-                if entry.path != format!("{}/config/config.toml", prior.release_root)
+                let config_name = validator_config_name(Path::new(&entry.path))?;
+                if entry.path != format!("{}/config/{config_name}", prior.release_root)
                     || entry.source_commit != prior.commit
                 {
                     return Err(eyre!(
@@ -128,10 +140,13 @@ pub(super) fn validate_prior_binding(
     let stable = format!("{}/current/bin/iroha3d_taira", service_root);
     let stable_resolves_to_daemon =
         daemon.path == format!("{}/bin/iroha3d_taira", prior.release_root);
-    if prior.argv.len() != 4
+    let has_fresh_assertion =
+        prior.argv.len() == 5 && prior.argv[4] == first_boot::ASSERT_FRESH_KEY;
+    let config_name = validator_config_name(Path::new(&prior.artifact("config")?.path))?;
+    if !(prior.argv.len() == 4 || has_fresh_assertion)
         || !(prior.argv[0] == daemon.path || (prior.argv[0] == stable && stable_resolves_to_daemon))
         || prior.argv[1] != "--config"
-        || prior.argv[2] != format!("{}/current/config/config.toml", service_root)
+        || prior.argv[2] != format!("{}/current/config/{config_name}", service_root)
         || prior.argv[3] != "--sora"
     {
         return Err(eyre!(
@@ -912,6 +927,100 @@ mod tests {
                 "missing {field}"
             );
         }
+    }
+
+    #[test]
+    fn occupied_runtime_binds_beacon_predecessor_config_to_exact_signed_argv() {
+        let mut validator = split_validator();
+        let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
+            unreachable!()
+        };
+        prior.argv[2] = format!("{}/current/config/beacon.toml", validator.service_root);
+        let config = prior
+            .artifacts
+            .iter_mut()
+            .find(|entry| entry.role == "config")
+            .unwrap();
+        config.path = format!("{}/config/beacon.toml", prior.release_root);
+        let bytes = b"exact signed active beacon configuration";
+        config.sha256 = sha256_hex(bytes);
+        config.size = bytes.len() as u64;
+        validate_occupied_binding(&validator).unwrap();
+        let admitted = super::super::tests::progress_admission();
+        let binding = process_binding(&admitted, &validator, false).unwrap();
+        assert_eq!(
+            binding.config,
+            PathBuf::from(
+                &validator
+                    .admitted_release()
+                    .unwrap()
+                    .artifact("config")
+                    .unwrap()
+                    .path
+            )
+        );
+        assert_eq!(
+            binding.argv[2],
+            format!("{}/current/config/beacon.toml", validator.service_root)
+        );
+        let directory = super::super::super::private_custody_test_dir("occupied-beacon-config-");
+        let path = directory.path().join("beacon.toml");
+        fs::write(&path, bytes).unwrap();
+        verify_regular_hash(&path, &binding.config_sha256).unwrap();
+        fs::write(&path, b"changed beacon provider").unwrap();
+        assert!(verify_regular_hash(&path, &binding.config_sha256).is_err());
+        for case in 0..5 {
+            let mut wrong = validator.clone();
+            let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut wrong.initial_state else {
+                unreachable!()
+            };
+            let config = prior
+                .artifacts
+                .iter_mut()
+                .find(|entry| entry.role == "config")
+                .unwrap();
+            match case {
+                0 => {
+                    prior.argv[2] = format!("{}/current/config/config.toml", validator.service_root)
+                }
+                1 => config.path = format!("{}/config/config.toml", prior.release_root),
+                2 => {
+                    config.path =
+                        "/srv/taira/taira-validator-2/releases/foreign/config/beacon.toml".into()
+                }
+                3 => {
+                    config.path = format!("{}/config/foreign.toml", prior.release_root);
+                    prior.argv[2] =
+                        format!("{}/current/config/foreign.toml", validator.service_root);
+                }
+                _ => config.source_commit = "7".repeat(40),
+            }
+            assert!(validate_occupied_binding(&wrong).is_err(), "case {case}");
+        }
+    }
+
+    #[test]
+    fn occupied_runtime_accepts_only_the_exact_signed_first_boot_suffix() {
+        let mut validator = split_validator();
+        let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
+            unreachable!()
+        };
+        prior.argv.push(first_boot::ASSERT_FRESH_KEY.to_owned());
+        validate_occupied_binding(&validator).unwrap();
+        let admitted = super::super::tests::progress_admission();
+        let binding = process_binding(&admitted, &validator, false).unwrap();
+        assert_eq!(binding.argv, validator.admitted_release().unwrap().argv);
+        let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
+            unreachable!()
+        };
+        prior.argv.push(first_boot::ASSERT_FRESH_KEY.to_owned());
+        assert!(validate_occupied_binding(&validator).is_err());
+        let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
+            unreachable!()
+        };
+        prior.argv.pop();
+        prior.argv[4] = "--sumeragi-assert-fresh-key=true".to_owned();
+        assert!(validate_occupied_binding(&validator).is_err());
     }
 
     #[test]

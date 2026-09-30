@@ -118,7 +118,7 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
     /// Recover a successful exact signed pin transaction and its current authoritative record.
     ///
     /// The source archive, pin output, and pin record are checked in one State query view. Both
-    /// named blocks must have exact Kura V2 finality artifacts and result-bearing executed-block
+    /// named blocks must have exact Kura Sumeragi finality proofs and result-bearing executed-block
     /// commitments. A failed transaction, alternate signature wire, retired pin, or changed
     /// current record is never treated as completion. State-root publication is a separate gate.
     ///

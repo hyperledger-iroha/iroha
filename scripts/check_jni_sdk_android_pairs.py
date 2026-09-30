@@ -16,8 +16,8 @@ SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
 MACRO_NAME = "jni_sdk_android_pairs"
 EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
-EXPECTED_ABI_DIGEST = "36617136d19caf55a1691b0941d1866cdc55c71f784f1236a6892da27ed4f035"
-EXPECTED_ATTRIBUTE_DIGEST = "6aa31e82aa04e1a9c12492b349e81606dedd52bcf7f91415c57faafb144e3fae"
+EXPECTED_ABI_DIGEST = "406c64c8e153cc2c31bc96d344c3aeba6960ec722b0cbf75e04e85aa3cd64a85"
+EXPECTED_ATTRIBUTE_DIGEST = "111f39db22a786680e2d3762f4c62cd61da771641edfca73ce47ea8f5cf29720"
 
 EXPECTED_METHODS = {
     "crypto_NativeSignerBridge": (
@@ -27,6 +27,8 @@ EXPECTED_METHODS = {
         "nativeKeypairFromSeed",
         "nativeSignDetached",
         "nativeVerifyDetached",
+        "nativeAccountReadPermissionMultisigPayloadHash",
+        "nativeFinalizeAccountReadPermissionMultisig",
         "nativeEncodeRegisterZkAssetSignedTransaction",
     ),
     "privacy_PrivacyNativeBridge": (

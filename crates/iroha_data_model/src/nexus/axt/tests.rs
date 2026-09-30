@@ -1283,10 +1283,6 @@ fn handle_replay_key_scopes_identical_ticket_by_dataspace_and_asset_incarnation(
     assert_eq!(decoded.asset_dsid, DataSpaceId::new(8));
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the commitment audit mutates every authenticated remote-spend runtime field in one table"
-)]
 fn remote_spend_intent_commitment_binds_every_runtime_field() {
     let dsid = DataSpaceId::new(7);
     let incarnation = test_asset_incarnation(b"remote-spend-current");
@@ -1473,10 +1469,6 @@ fn remote_spend_claim_roundtrips_and_matches_component_commitment() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the incarnation audit keeps its canonical vector, identity mutations, and zero rejection together"
-)]
 fn asset_incarnation_is_nonzero_canonical_and_binds_registration_identity() {
     let golden_network = NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
@@ -1589,10 +1581,6 @@ fn asset_incarnation_is_nonzero_canonical_and_binds_registration_identity() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the signature audit mutates every policy field and network binding in one fixture"
-)]
 fn asset_handle_issuer_signature_binds_every_policy_field_and_network() {
     let issuer = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
     let impostor = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
@@ -1790,10 +1778,6 @@ fn handle_budget_key_omits_only_counter_and_signature() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the budget audit keeps atomic limit transitions and canonical roundtrip checks together"
-)]
 fn handle_budget_record_enforces_limits_atomically_and_roundtrips() {
     let mut handle = sample_asset_handle();
     handle.budget.remaining = Quantity::from(50_u64);
@@ -1914,10 +1898,6 @@ fn handle_budget_record_enforces_limits_atomically_and_roundtrips() {
         .expect("restored cumulative usage must retain the signed remaining budget");
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the permanent counter audit keeps boundary, overflow, generation, and canonical checks together"
-)]
 fn handle_counter_record_is_permanent_exact_and_checked() {
     let mut record = AxtHandleCounterRecord::initial(4);
     assert_eq!(record.next(), 1);
@@ -2130,10 +2110,6 @@ fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the V1 binary audit enumerates every retired layout that previously defaulted a required field"
-)]
 fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
     #[derive(Encode, norito::NoritoSchema)]
     #[norito_schema(
@@ -2476,10 +2452,6 @@ fn axt_v1_json_requires_handle_and_envelope_collections() {
     }
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the V1 JSON audit checks every nested mandatory nullable slot in one schema contract"
-)]
 fn axt_v1_json_requires_every_nested_nullable_slot() {
     macro_rules! assert_required_json_fields {
             ($value:expr, $ty:ty, [$($field:literal),+ $(,)?]) => {{
@@ -2853,10 +2825,6 @@ fn replay_record_expires_strictly_after_effective_deadline() {
     assert!(record.is_expired(26, 15));
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the replay audit keeps authoritative-key, canonical-storage, expiry, and conflict checks together"
-)]
 fn replay_record_validation_uses_authoritative_key_and_canonical_storage_key() {
     let key = AxtHandleReplayKey::from_parts(
         DataSpaceId::new(7),
@@ -3041,10 +3009,6 @@ fn axt_reject_reason_roundtrips_label() {
     assert_eq!(AxtRejectReason::from_label("unknown"), None);
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one canonical envelope fixture verifies the full nested wire shape and required commit height"
-)]
 fn envelope_roundtrips_through_norito() {
     #[derive(Encode, norito::NoritoSchema)]
     #[norito_schema(
@@ -3116,10 +3080,6 @@ fn envelope_roundtrips_through_norito() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one policy-snapshot matrix covers canonical order, required fields, duplicates, and version binding"
-)]
 fn policy_snapshot_validation_rejects_order_duplicates_and_stale_versions() {
     #[derive(Encode, norito::NoritoSchema)]
     #[norito_schema(

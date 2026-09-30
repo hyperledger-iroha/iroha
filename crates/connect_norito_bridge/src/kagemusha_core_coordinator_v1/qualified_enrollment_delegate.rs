@@ -72,11 +72,127 @@ impl KagemushaKernelEnrollmentDelegateV1 {
 }
 
 impl KagemushaQualifiedEnrollmentDelegateV1 for KagemushaKernelEnrollmentDelegateV1 {
+    fn verify_app_preparation(
+        &self,
+        handle: u64,
+        live_selection: KagemushaEnrollmentLiveSelectionV1,
+        signed_preparation: &[u8],
+    ) -> Result<[u8; 32], KagemushaCoreCoordinatorBackendErrorV1> {
+        let selected = live_selection
+            .require_live()
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        let context = self
+            .context_provider
+            .context_for_selection(handle, &live_selection)?;
+        let pins = live_selection.pins();
+        let enabled = context
+            .release
+            .enabled_profile(pins.hardware_profile_id)
+            .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        if handle == 0
+            || context.release.purpose()
+                != iroha_data_model::kagemusha::KagemushaReleasePurposeV1::Production
+            || selected.account_i105
+                != context
+                    .owner
+                    .account_id
+                    .canonical_i105()
+                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?
+            || selected.lane_id != context.owner.lane_id
+            || selected.release_id != context.release.release_id()
+            || context.owner.runtime != context.policy.runtime
+            || context.release.network_id() != context.owner.runtime.network_id
+            || pins.issuer_policy_id != context.policy.issuer_policy_id
+            || pins.app_policy_digest
+                != context
+                    .app_policy
+                    .canonical_digest()
+                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?
+            || context.app_policy.platform_class != enabled.hardware_profile.platform_class
+        {
+            return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+        }
+        let verified = super::verify_signed_app_preparation_v1(
+            signed_preparation,
+            super::SignedAppPreparationPinsV1 {
+                policy: &context.policy,
+                account_id: &context.owner.account_id,
+                platform_class: enabled.hardware_profile.platform_class,
+                selected_attested_key_id: context.selected_attested_key_id,
+                client_nonce: selected.client_nonce,
+                release_id: selected.release_id,
+                profile_id: selected.hardware_profile_id,
+                lane_id: selected.lane_id,
+                trusted_now_ms: context.trusted_now_ms,
+            },
+        )
+        .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        live_selection
+            .require_live()
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        Ok(verified.server_nonce)
+    }
+
+    fn pre_enrollment_qualification(
+        &self,
+        handle: u64,
+        live_selection: KagemushaEnrollmentLiveSelectionV1,
+    ) -> Result<
+        super::KagemushaPreEnrollmentQualificationOwnerV1,
+        KagemushaCoreCoordinatorBackendErrorV1,
+    > {
+        let selected = live_selection
+            .require_live()
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        let context = self
+            .context_provider
+            .context_for_selection(handle, &live_selection)?;
+        let pins = live_selection.pins();
+        let app_digest = context
+            .app_policy
+            .canonical_digest()
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        if handle == 0
+            || selected.account_i105
+                != context
+                    .owner
+                    .account_id
+                    .canonical_i105()
+                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?
+            || selected.lane_id != context.owner.lane_id
+            || selected.release_id != context.release.release_id()
+            || pins.issuer_policy_id != context.policy.issuer_policy_id
+            || pins.app_policy_digest != app_digest
+            || context.owner.runtime != context.policy.runtime
+            || context
+                .release
+                .enabled_profile(pins.hardware_profile_id)
+                .is_none()
+        {
+            return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+        }
+        let enrollment = iroha_core_zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1 {
+            enrollment_id: context
+                .owner
+                .enrollment_id()
+                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?,
+            owner: context.owner,
+        };
+        let observer = super::startup_qualification::NativeStartupQualificationOwnerV1::from_pre_enrollment_context(
+            &context.release, enrollment, &context.native_authorization_public_key,
+            pins.hardware_profile_id,
+        ).map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        Ok(super::KagemushaPreEnrollmentQualificationOwnerV1::new(
+            observer,
+        ))
+    }
+
     fn accept_challenge(
         &self,
         handle: u64,
         live_selection: KagemushaEnrollmentLiveSelectionV1,
         request_frame: &[u8],
+        qualification: Option<&super::KagemushaVerifiedPreEnrollmentQualificationV1>,
     ) -> Result<AcceptedIssuerChallengeV1, KagemushaCoreCoordinatorBackendErrorV1> {
         if handle == 0 {
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
@@ -97,6 +213,9 @@ impl KagemushaQualifiedEnrollmentDelegateV1 for KagemushaKernelEnrollmentDelegat
         {
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
         }
+        qualification
+            .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)?
+            .require_original(&fields[4])?;
         let context = self
             .context_provider
             .context_for_selection(handle, &live_selection)?;

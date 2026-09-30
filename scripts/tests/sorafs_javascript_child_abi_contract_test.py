@@ -10,6 +10,17 @@ ROOT = Path(__file__).resolve().parents[2]
 SESSION = ROOT / "scripts/sorafs_javascript_child_session.mjs"
 OWNER = ROOT / "scripts/check_native_sdk_artifact.py"
 
+def bridge_abi_version() -> int:
+    """Read the required ABI from the sole native artifact policy owner."""
+    source = ast.parse(OWNER.read_text())
+    values = [ast.literal_eval(node.value) for node in source.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name)
+                      and target.id == "REQUIRED_BRIDGE_ABI_VERSION"
+                      for target in node.targets)]
+    assert len(values) == 1 and type(values[0]) is int
+    return values[0]
+
 def node_policy(name: str):
     """Read only the exact Node literal of the source-owned Python policy AST."""
     source = ast.parse(OWNER.read_text())
@@ -38,7 +49,7 @@ def check_abi_projection(source: str) -> None:
     assert prefix in OWNER.read_text()
     assert prefix in source
     assert '!name.startsWith(retiredPrefix)' in source
-    assert 'version === 23 && Number.isSafeInteger(version)' in source
+    assert f'version === {bridge_abi_version()} && Number.isSafeInteger(version)' in source
 
 def test_native_abi_projection_uses_original_policy() -> None:
     check_abi_projection(SESSION.read_text())
@@ -49,7 +60,7 @@ def test_native_abi_projection_uses_original_policy() -> None:
     ('name !== "privateSettlementVerifyAuditorCapsuleResponseV1"', 'true'),
     ('!name.startsWith(retiredPrefix)', 'true'),
     ('["cash", "offline"].reverse().join("_")', '["cash", "offline"].join("_")'),
-    ('version === 23', 'version === 22'),
+    (f'version === {bridge_abi_version()}', f'version === {bridge_abi_version() - 1}'),
 ])
 def test_native_policy_mutation_is_rejected(old: str, new: str) -> None:
     source = SESSION.read_text()

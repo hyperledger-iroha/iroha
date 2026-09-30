@@ -891,6 +891,68 @@ mod tests {
         );
     }
 
+    fn client_selection(
+        config: Option<PathBuf>,
+        wallet: Option<&str>,
+        wallet_dir: Option<PathBuf>,
+    ) -> ConfigureArgs {
+        ConfigureArgs {
+            selection: SelectionArgs::default(),
+            name: "taira".to_owned(),
+            config,
+            wallet: wallet.map(str::to_owned),
+            wallet_dir,
+            fee_payer: None,
+            fee_program: None,
+            fee_program_revision: None,
+            contract: None,
+            alias: None,
+        }
+    }
+
+    #[test]
+    fn configure_prefers_explicit_client_then_retained_binding_then_wallet() {
+        let project = tempfile::tempdir().expect("project");
+        let wallets = tempfile::tempdir().expect("wallet store outside the project");
+        let retained = "[networks.taira]\nconfig = \"runtime/client.toml\"\n"
+            .parse::<toml::Table>()
+            .expect("retained binding");
+        let explicit = PathBuf::from("/runtime/explicit/client.toml");
+        assert_eq!(
+            configured_client_path(
+                project.path(),
+                &client_selection(Some(explicit.clone()), None, None),
+                &retained,
+            )
+            .expect("explicit client"),
+            explicit
+        );
+        assert_eq!(
+            configured_client_path(
+                project.path(),
+                &client_selection(None, None, None),
+                &retained
+            )
+            .expect("retained client"),
+            project.path().join("runtime/client.toml")
+        );
+        let absolute = "[networks.taira]\nconfig = \"/runtime/retained/client.toml\"\n"
+            .parse::<toml::Table>()
+            .expect("absolute retained binding");
+        assert_eq!(
+            configured_client_path(
+                project.path(),
+                &client_selection(None, None, None),
+                &absolute
+            )
+            .expect("absolute retained client"),
+            PathBuf::from("/runtime/retained/client.toml")
+        );
+        // Selecting a wallet bypasses the retained binding and requires that wallet's client.
+        let wallet = client_selection(None, Some("missing"), Some(wallets.path().join("store")));
+        assert!(configured_client_path(project.path(), &wallet, &retained).is_err());
+    }
+
     #[test]
     fn local_default_is_visible_taira_without_files_or_signer() {
         let dir = tempfile::tempdir().expect("workspace");

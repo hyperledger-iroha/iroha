@@ -43,6 +43,6 @@ def test_runtime_stub_is_absent_and_readiness_asserts_the_hard_cut() -> None:
     assert not STUB_RUNTIME_SOURCE.exists()
     assert "soracloud_runtime_stub" not in main
     assert "soracloud_runtime_stub" not in manifest
-    assert "cargo test -p irohad --bin iroha3d stub_runtime_" not in readiness
+    assert "cargo test -p irohad_lib --lib stub_runtime_" not in readiness
     assert "test ! -e crates/irohad/src/soracloud_runtime_stub.rs" in readiness
     assert "! rg -n 'soracloud_runtime_stub|stub_runtime_'" in readiness

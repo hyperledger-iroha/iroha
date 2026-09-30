@@ -107,7 +107,7 @@ fn native_finality_schemas_are_exact_closed_and_bounded() {
     assert_exact_closed_required_schema_fields(&schemas, "BlockHeader", &contract_strings("block.header.required"));
     for field in contract_strings("block.header.nullable") { let _ = nullable_property_ref(&schemas, "BlockHeader", field); }
     let committee = contract_property(&schemas, "SumeragiFinalityProof", "committee");
-    assert_array_bounds(committee, 4, iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT as u64, Some(true));
+    assert_array_bounds(committee, 4, iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT as u64, Some(true));
     assert_item_ref(committee, "#/components/schemas/FinalityValidator");
     let wire = contract_property(&schemas, "SumeragiFinalityProof", "block_wire");
     assert_array_bounds(wire, 1, iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64, None);
@@ -185,12 +185,16 @@ fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_field
     assert_eq!(verified.execution().executed_block_wire_len, wire.len() as u64);
     assert_eq!(verified.execution().executed_block_wire_hash, iroha_crypto::Hash::new(&wire));
     let mut missing_result = proof.clone(); let mut block = decode_versioned_signed_block(&missing_result.block_wire).unwrap();
-    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), Vec::new())));
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), Vec::new(), certificate.availability().to_vec())));
     missing_result.block_wire = block.encode_wire().unwrap();
     assert!(verifier.verify_retained_decision(&missing_result).is_err(), "missing canonical execution preimage");
+    let mut missing_availability = proof.clone(); let mut block = decode_versioned_signed_block(&missing_availability.block_wire).unwrap();
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), certificate.result_preimage().to_vec(), Vec::new())));
+    missing_availability.block_wire = block.encode_wire().unwrap();
+    assert!(verifier.verify_retained_decision(&missing_availability).is_err(), "missing signed payload availability");
     let mut forged_qc = proof.clone(); let mut block = decode_versioned_signed_block(&forged_qc.block_wire).unwrap();
     let mut qc = qc; qc.agg_sig.0[0] ^= 0x80;
-    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), norito::encode_canonical(&qc).unwrap(), certificate.result_preimage().to_vec())));
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), norito::encode_canonical(&qc).unwrap(), certificate.result_preimage().to_vec(), certificate.availability().to_vec())));
     forged_qc.block_wire = block.encode_wire().unwrap(); assert!(verifier.verify_retained_decision(&forged_qc).is_err(), "forged exact native QC");
     let mut retired_header = header.clone(); retired_header.insert("result_merkle_root".to_owned(), Value::Null);
     assert!(norito::json::from_value::<iroha_data_model::block::BlockHeader>(Value::Object(retired_header)).is_err());
@@ -309,7 +313,7 @@ fn current_finality_schemas_match_portable_wire_bounds() {
     scalar_contracts! { proof.get("additionalProperties") => Flag(false); }
     assert_eq!(schema_string_field_set(proof, "required", "proof"), contract_words("block_header block_wire committee").into_iter().collect());
     scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "block_wire").get("maxItems") => Unsigned(iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64); }
-    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT as u64); }
+    scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT as u64); }
     let body = contract_schema(&schemas, "SumeragiFinalityAttestationBody");
     assert_eq!(schema_string_field_set(body, "required", "attestation body"), contract_words("challenge network_id node_id node_fingerprint build_fingerprint config_fingerprint genesis_block_hash genesis_finality_proof status finality_proof").into_iter().collect());
     property_refs!(&schemas;
@@ -378,7 +382,6 @@ fn generated_spec_documents_exact_current_sumeragi_status() {
 
 }
 #[test]
-#[expect(clippy::too_many_lines, reason = "one cohesive exact Soracloud priority-contract inventory")]
 fn generated_spec_documents_exact_soracloud_priority_contracts() {
     let document = canonical_document();
     let paths = contract_object(document.get("paths"), "paths");

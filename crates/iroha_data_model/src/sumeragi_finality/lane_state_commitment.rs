@@ -9,7 +9,17 @@ use norito::{Decode, Encode};
 const DOMAIN: &[u8] = b"iroha:sumeragi:lane-state-value:v1\0";
 
 /// Complete canonical lane state at one exact global execution height.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::SumeragiLaneStateCommitment")]
 pub struct SumeragiLaneStateCommitment {
     network_id: NetworkId,
@@ -183,6 +193,7 @@ mod tests {
         SumeragiLaneState {
             lanes: (1..=count)
                 .map(|lane| SumeragiLaneRecord {
+                    da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
                     lane: LaneId::new(lane),
                     dataspace: DataSpaceId::new(1),
                     incarnation: [lane as u8; 32],

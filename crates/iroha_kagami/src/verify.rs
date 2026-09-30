@@ -12,7 +12,7 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
-    block::consensus_v2::is_valid_committee_size,
+    block::consensus::is_valid_committee_size,
     isi::{Register, asset_alias::SetAssetDefinitionAlias},
     parameter::{
         custom::CustomParameterId,
@@ -527,8 +527,19 @@ mod tests {
                 GenesisProfile::Iroha3Dev,
                 SumeragiConsensusMode::Npos,
                 seed,
-                &peers[..count],
-            );
+                &peers[..4],
+            )
+            .into_builder()
+            .set_topology(
+                peers[..count]
+                    .iter()
+                    .map(|(key, pop)| {
+                        GenesisTopologyEntry::new(PeerId::new(key.clone()), pop.clone())
+                    })
+                    .collect(),
+            )
+            .build_raw()
+            .expect("preserve the original valid authority while substituting invalid topology");
             let error = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None)
                 .expect_err("non-committee topology must fail profile verification");
             assert!(
@@ -692,8 +703,19 @@ mod tests {
             .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
             .expect_err("synthetic public XOR binding should fail");
+        let malformed_npos = manifest
+            .effective_parameters()
+            .unwrap()
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter);
         assert!(
-            err.to_string().contains("synthetic"),
+            malformed_npos.is_none(),
+            "synthetic currency must fail the typed NPoS parameter decoder"
+        );
+        assert!(
+            err.to_string()
+                .contains("malformed `sumeragi_npos_parameters`"),
             "unexpected error: {err}"
         );
     }
@@ -719,6 +741,10 @@ mod tests {
             DomainId::parse_fully_qualified("universal.universal").expect("valid domain"),
             "xor".parse().expect("valid asset name"),
         );
+        assert_eq!(
+            domain_derived_xor.to_string(),
+            TAIRA_XOR_ASSET_DEFINITION_ID
+        );
         let manifest = append_public_xor_binding_for_test(manifest, domain_derived_xor)
             .into_builder()
             .next_transaction()
@@ -737,7 +763,8 @@ mod tests {
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
             .expect_err("domain-derived public XOR binding should fail");
         assert!(
-            err.to_string().contains("canonical Base58"),
+            err.to_string()
+                .contains("Nexus requires its operator-provisioned mainnet XOR definition"),
             "unexpected error: {err}"
         );
     }

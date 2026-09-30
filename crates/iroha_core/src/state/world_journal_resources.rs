@@ -14,8 +14,8 @@
 //! No encoded-size estimate or inline `size_of` inference funds those owners.
 
 use super::*;
-use concread::shared::Shared;
-use mv::allocation::{
+use iroha_allocation::shared::Shared;
+use iroha_allocation::{
     AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
 };
 use std::alloc::Layout;
@@ -221,7 +221,7 @@ impl WorldJournalShellReservation {
     pub(in crate::state) fn take_reserved(
         demand: WorldJournalShellDemand,
         aggregate: &mut AllocationReservation,
-    ) -> Result<Self, mv::allocation::InsufficientReservation> {
+    ) -> Result<Self, iroha_allocation::InsufficientReservation> {
         let mut reservation = aggregate.try_partition_bytes(demand.total_bytes())?;
         let control = reservation
             .try_split(ShellCapacity::layout())

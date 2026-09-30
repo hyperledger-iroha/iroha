@@ -39,3 +39,4 @@ path = "tests/vectors.rs"
 [[test]]
 name = "one_gib"
 path = "tests/one_gib.rs"
+required-features = ["dev-tools"]

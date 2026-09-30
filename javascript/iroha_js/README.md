@@ -2096,6 +2096,9 @@ qualification remain open.
 
 ## Advanced Sumeragi Observability
 
+`getSumeragiLanes()` requires every current record field, including the committed
+`da_layout` RS16 encoding and resource bounds. Lane observations do not confer finality.
+
 Torii exposes additional consensus observability endpoints. The JS SDK mirrors
 them so operators can inspect key observations and on-chain parameters without
 bespoke fetch plumbing:
@@ -2104,11 +2107,13 @@ bespoke fetch plumbing:
 const blsKeys = await torii.getSumeragiBlsKeys();
 console.log(`BLS-capable peers=${Object.values(blsKeys).filter(Boolean).length}`);
 
-const leader = await torii.getSumeragiLeader();
-console.log(`leader index=${leader.leader_index} epoch seed=${leader.prf.epoch_seed ?? "unset"}`);
+const lanes = await torii.getSumeragiLanes();
+for (const { record, instance } of lanes) {
+  console.log(`lane ${record.lane} merged=${record.merged.height} running=${instance !== null}`);
+}
 
 const params = await torii.getSumeragiParams();
-console.log(`block time=${params.block_time_ms}ms next mode=${params.next_mode ?? "current"}`);
+console.log(`block cadence=${params.block_cadence_ms}ms drift=${params.max_clock_drift_ms}ms height=${params.chain_height}`);
 ```
 
 All advanced helpers validate the Torii payloads and coerce numeric string
@@ -2157,11 +2162,9 @@ if (snapshot.status.governance) {
 
 ## Sumeragi Evidence
 
-Reliable broadcast remains an internal Sumeragi v2 protocol mechanism. Torii
-does not expose global RBC backlog, per-session sampling, collector-plan, or
-evidence-mutation routes. Use the authenticated native Sumeragi status
-reads and Prometheus transport metrics for operations. Consensus evidence is
-available through the supported read-only endpoints:
+Torii exposes no evidence-mutation routes. Use the authenticated native
+Sumeragi status reads and Prometheus transport metrics for operations.
+Consensus evidence is available through the supported read-only endpoints:
 
 ```js
 const evidence = await torii.listSumeragiEvidence({
@@ -3965,10 +3968,19 @@ for (const sample of status.samples) {
 console.log("histogram", status.rtt.buckets);
 ```
 
-`getPipelinePreflight()` exposes both `ivm_max_cycles_upper_bound` and
+`getPipelinePreflight()` parses exactly the fields Torii serves and rejects any
+other field. It exposes both `ivm_max_cycles_upper_bound` and
 `ivm_admission_cycle_limit`. Its fee-account fields contain exact canonical I105
 account ids; alias-shaped `name@domain` values are rejected as protocol drift.
-```
+The `sumeragi` section carries only `block_cadence_ms`, the signed-genesis
+target block time. Torii serves no stall threshold, so the result's
+`stallThresholdMs` is derived as 20 × `block_cadence_ms`, and
+`isStatusStalled(status)` reports a stall only when `status.queue_size > 0` and
+the time since the last non-empty block (or since the last block, before the
+first non-empty one) exceeds it. Twenty cadences cover one crashed leader's view
+change at the Sumeragi default timings; pass a deployment-specific threshold to
+`isStatusQueueStalled(status, thresholdMs)` instead when the local consensus
+timers are known.
 
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
@@ -3999,7 +4011,7 @@ console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the zero-skip hermetic profile. Release CI separately provisions and runs the 1 GiB and live qualification profiles.
 - Test the declared minimum Node 20.19.0 and the existing Node 20, 22 and 24 CI lines alongside the `rust-toolchain.toml` version. These selectors do not establish release qualification; retain the exact runtime version and matching-candidate results.
-- Use `node scripts/run-test-profile.mjs unit` for quick hermetic runs when native artifacts are already built. Raw `node --test` intentionally selects the fail-closed live and 1 GiB lanes as well.
+- Use `node scripts/run-test-profile.mjs unit` for quick hermetic runs when native artifacts are already built. The profile refreshes `dist` from the current source before testing packaged browser exports. Raw `node --test` intentionally selects the fail-closed live and 1 GiB lanes as well.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `specs/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
 

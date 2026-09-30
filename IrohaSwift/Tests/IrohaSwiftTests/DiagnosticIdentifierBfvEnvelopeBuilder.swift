@@ -622,4 +622,3 @@ private struct DiagnosticIdentifierBfvChaCha20Rng {
         (value << amount) | (value >> (32 - amount))
     }
 }
-

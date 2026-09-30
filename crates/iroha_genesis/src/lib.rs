@@ -2,6 +2,8 @@
 //! [`RawGenesisTransaction`] and the [`GenesisBuilder`] structures.
 //! Every genesis batch signs expiry height two and its one-based sequence so the
 //! genesis parameter snapshot may require either ingress rule from height one.
+//! Normalization preserves authored source boundaries and refuses inputs above
+//! the fixed FASTPQ bootstrap budget; draft generators partition physical routes explicitly.
 #![allow(unexpected_cfgs)]
 #![allow(
     clippy::let_and_return,
@@ -67,8 +69,8 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams},
-        consensus_v2::{
-            MAX_VALIDATORS_PER_HEIGHT, SumeragiV2GenesisContextParameters, is_valid_committee_size,
+        consensus::{
+            MAX_VALIDATORS_PER_HEIGHT, SumeragiGenesisContextParameters, is_valid_committee_size,
         },
     },
     confidential::{
@@ -350,7 +352,7 @@ pub fn validate_prepared_genesis_bundle(
 /// # Errors
 ///
 /// Returns an error for duplicate validators, an invalid BLS proof of possession,
-/// or a committee outside the supported exact Sumeragi v2 geometry.
+/// or a committee outside the supported exact Sumeragi geometry.
 pub fn signed_genesis_validator_pops(block: &SignedBlock) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
     let mut validator_pops = BTreeMap::new();
     for transaction in block.external_transactions() {
@@ -382,7 +384,7 @@ pub fn signed_genesis_validator_pops(block: &SignedBlock) -> Result<BTreeMap<Pub
     }
     if !is_valid_committee_size(validator_pops.len()) {
         return Err(eyre!(
-            "signed genesis validator roster must be an exact Sumeragi v2 `3f + 1` committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} (saw {})",
+            "signed genesis validator roster must be an exact Sumeragi `3f + 1` committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} (saw {})",
             validator_pops.len()
         ));
     }
@@ -426,9 +428,9 @@ fn validate_signed_manifest_binding(
             "genesis manifest consensus fingerprint differs from signed body"
         ));
     }
-    if manifest.sumeragi_v2_context_parameters() != signed_metadata.sumeragi_v2 {
+    if manifest.sumeragi_context_parameters() != signed_metadata.sumeragi_context {
         return Err(eyre!(
-            "genesis manifest Sumeragi v2 context differs from signed body"
+            "genesis manifest Sumeragi context differs from signed body"
         ));
     }
     if manifest.kagemusha_mint_finality_genesis_parameters()
@@ -562,7 +564,7 @@ pub struct RawGenesisTransaction {
     /// instructions, update topology, or configure triggers.
     #[norito(default)]
     transactions: Vec<RawGenesisTx>,
-    /// Consensus mode selected and signed by genesis. Fresh Sumeragi v2 startup consumes the
+    /// Consensus mode selected and signed by genesis. Fresh Sumeragi startup consumes the
     /// corresponding signed handshake metadata and freezes this mode into the height-one context.
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     /// First-release consensus wire protocol version.
@@ -570,11 +572,11 @@ pub struct RawGenesisTransaction {
     /// Optional typed deterministic fingerprint of consensus parameters.
     #[norito(default)]
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    /// Genesis-selected Sumeragi v2 context parameters.
+    /// Genesis-selected Sumeragi context parameters.
     ///
     /// JSON manifests must provide this explicitly. Programmatic builders put their selected
     /// profile here before signing; live nodes never infer it from local configuration.
-    sumeragi_v2: SumeragiV2GenesisContextParameters,
+    sumeragi_context: SumeragiGenesisContextParameters,
     /// Separately provisioned networkless Pasta rosters authenticated by signed genesis.
     ///
     /// Core binds these templates to the final genesis-derived [`NetworkId`]
@@ -1131,8 +1133,8 @@ pub struct NormalizedGenesis {
     pub wire_protocol_version: u32,
     /// Deterministic fingerprint of consensus parameters.
     pub consensus_fingerprint: ConsensusFingerprint,
-    /// Signed Sumeragi v2 height-context transport parameters.
-    pub sumeragi_v2: SumeragiV2GenesisContextParameters,
+    /// Signed Sumeragi height-context transport parameters.
+    pub sumeragi_context: SumeragiGenesisContextParameters,
     /// Signed networkless KAGEMUSHA mint-finality roster templates.
     pub kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1,
     /// Cryptography snapshot advertised alongside genesis.
@@ -1182,9 +1184,9 @@ impl NormalizedGenesis {
                 .expect("serialize consensus fingerprint"),
         );
         map.insert(
-            "sumeragi_v2".to_string(),
-            norito::json::value::to_value(&self.sumeragi_v2)
-                .expect("serialize Sumeragi v2 context parameters"),
+            "sumeragi_context".to_string(),
+            norito::json::value::to_value(&self.sumeragi_context)
+                .expect("serialize Sumeragi context parameters"),
         );
         map.insert(
             "kagemusha_mint_finality".to_string(),
@@ -1289,10 +1291,10 @@ fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> 
             )
         })
 }
-fn compute_consensus_parameters_fingerprint_v2(
+fn compute_consensus_parameters_fingerprint(
     params: &iroha_data_model::block::consensus::ConsensusGenesisParams,
 ) -> Result<[u8; 32]> {
-    iroha_data_model::block::consensus_v2::fingerprint::compute(params)
+    iroha_data_model::block::consensus::fingerprint::compute(params)
         .map_err(|error| eyre!("invalid signed consensus parameters: {error}"))
 }
 /// Incomplete genesis source JSON that intentionally omits operator-owned mint-finality authority.
@@ -1639,9 +1641,9 @@ impl RawGenesisTransaction {
             Self::take_required_field::<u32>(&mut map, "wire_protocol_version")?;
         let consensus_fingerprint =
             Self::take_optional_field::<ConsensusFingerprint>(&mut map, "consensus_fingerprint")?;
-        let sumeragi_v2 = Self::take_required_field::<SumeragiV2GenesisContextParameters>(
+        let sumeragi_context = Self::take_required_field::<SumeragiGenesisContextParameters>(
             &mut map,
-            "sumeragi_v2",
+            "sumeragi_context",
         )?;
         let kagemusha_mint_finality = Self::take_required_field::<
             KagemushaMintFinalityGenesisParametersV1,
@@ -1663,7 +1665,7 @@ impl RawGenesisTransaction {
             consensus_mode,
             wire_protocol_version,
             consensus_fingerprint,
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
             crypto,
         })
@@ -1691,7 +1693,7 @@ impl RawGenesisTransaction {
         }
         Ok(aggregated)
     }
-    /// Populate consensus metadata fields with defaults and a computed v2 fingerprint.
+    /// Populate consensus metadata fields with defaults and a computed consensus fingerprint.
     ///
     /// This helper is best-effort and does not alter existing transactions. It derives
     /// parameters from data-model defaults to produce a stable fingerprint for basic networks.
@@ -1744,9 +1746,9 @@ impl RawGenesisTransaction {
             block_max_transactions,
             mode,
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-            v2_context: self.sumeragi_v2.clone(),
+            sumeragi_context: self.sumeragi_context.clone(),
         };
-        let Ok(fp) = compute_consensus_parameters_fingerprint_v2(&dm_params) else {
+        let Ok(fp) = compute_consensus_parameters_fingerprint(&dm_params) else {
             self.consensus_fingerprint = None;
             return self;
         };
@@ -1779,10 +1781,10 @@ impl RawGenesisTransaction {
                 "consensus_fingerprint missing after normalization; call with_consensus_meta first"
             )
         })?;
-        let sumeragi_v2 = manifest.sumeragi_v2.clone();
-        sumeragi_v2
+        let sumeragi_context = manifest.sumeragi_context.clone();
+        sumeragi_context
             .validate()
-            .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
+            .map_err(|error| eyre!("invalid signed Sumeragi context parameters: {error}"))?;
         let kagemusha_mint_finality = manifest.kagemusha_mint_finality.clone();
         kagemusha_mint_finality.validate().map_err(|error| {
             eyre!("invalid signed KAGEMUSHA mint-finality genesis parameters: {error}")
@@ -1802,7 +1804,7 @@ impl RawGenesisTransaction {
             consensus_mode,
             wire_protocol_version,
             consensus_fingerprint,
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
             crypto,
             transactions,
@@ -1855,7 +1857,7 @@ impl RawGenesisTransaction {
             .collect::<Vec<_>>();
         if !is_valid_committee_size(topology.len()) {
             return Err(eyre!(
-                "genesis signing requires an exact Sumeragi v2 `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the KAGEMUSHA mint-finality authority can be bound (saw {})",
+                "genesis signing requires an exact Sumeragi `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the KAGEMUSHA mint-finality authority can be bound (saw {})",
                 topology.len()
             ));
         }
@@ -1947,6 +1949,57 @@ impl RawGenesisTransaction {
         self.transactions.splice(index..=index, replacements);
         Ok(())
     }
+    /// Partition one explicitly selected instruction-only draft batch at authored boundaries.
+    ///
+    /// Every nonzero length describes one contiguous output batch. Their sum must
+    /// equal the original instruction count, so values and order cannot change.
+    /// All unselected transactions retain their exact boundaries. Apply this
+    /// transformation before preparing or signing a generated manifest.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an invalid index, zero or incomplete partitions, structured parameters,
+    /// topology, IVM triggers, or noncanonical explicit `SetParameter` instructions.
+    pub fn partition_instruction_only_transaction(
+        mut self,
+        index: usize,
+        lengths: &[usize],
+    ) -> Result<Self> {
+        Self::reject_set_parameter_instructions(&self.transactions)?;
+        let transaction = self.transactions.get(index).ok_or_else(|| {
+            eyre!(
+                "raw genesis transaction index {index} is out of bounds for {} transactions",
+                self.transactions.len()
+            )
+        })?;
+        if transaction.parameters.is_some()
+            || !transaction.topology.is_empty()
+            || !transaction.ivm_triggers.is_empty()
+        {
+            return Err(eyre!(
+                "raw genesis transaction {index} is not instruction-only; refusing to partition parameters, IVM triggers, or topology"
+            ));
+        }
+        let total = lengths
+            .iter()
+            .try_fold(0_usize, |total, length| total.checked_add(*length));
+        if lengths.is_empty()
+            || lengths.contains(&0)
+            || total != Some(transaction.instructions.len())
+        {
+            return Err(eyre!(
+                "raw genesis transaction {index} partition must preserve its exact {} instructions in nonempty batches",
+                transaction.instructions.len()
+            ));
+        }
+        let mut instructions = self.transactions.remove(index).instructions.into_iter();
+        let replacements = lengths.iter().map(|length| RawGenesisTx {
+            instructions: instructions.by_ref().take(*length).collect(),
+            ..RawGenesisTx::default()
+        });
+        self.transactions.splice(index..index, replacements);
+        Ok(self)
+    }
     /// Remove topology entries from all transactions.
     #[must_use]
     pub fn clear_topology(mut self) -> Self {
@@ -2035,19 +2088,19 @@ impl RawGenesisTransaction {
             .iter()
             .flat_map(|tx| tx.instructions.iter())
     }
-    /// Return the exact Sumeragi v2 context parameters selected by this manifest.
+    /// Return the exact Sumeragi context parameters selected by this manifest.
     #[must_use]
-    pub fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
-        self.sumeragi_v2.clone()
+    pub fn sumeragi_context_parameters(&self) -> SumeragiGenesisContextParameters {
+        self.sumeragi_context.clone()
     }
-    /// Replace the Sumeragi v2 context parameters that will be fingerprinted
+    /// Replace the Sumeragi context parameters that will be fingerprinted
     /// and signed with this manifest.
     #[must_use]
-    pub fn with_sumeragi_v2_context_parameters(
+    pub fn with_sumeragi_context_parameters(
         mut self,
-        parameters: SumeragiV2GenesisContextParameters,
+        parameters: SumeragiGenesisContextParameters,
     ) -> Self {
-        self.sumeragi_v2 = parameters;
+        self.sumeragi_context = parameters;
         self
     }
     /// Return the exact networkless KAGEMUSHA mint-finality templates
@@ -2121,7 +2174,7 @@ impl RawGenesisTransaction {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2: Some(self.sumeragi_v2),
+            sumeragi_context: Some(self.sumeragi_context),
             kagemusha_mint_finality: Some(self.kagemusha_mint_finality),
         }
     }
@@ -2282,7 +2335,7 @@ impl RawGenesisTransaction {
     #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
         self.validate_mode_specific_consensus_parameters()?;
-        // Always recompute generated fields for the live Sumeragi v2 protocol,
+        // Always recompute generated fields for the live Sumeragi protocol,
         // so stale or externally injected handshake metadata cannot survive
         // into the signed genesis block.
         let manifest = self.with_consensus_meta();
@@ -2300,7 +2353,7 @@ impl RawGenesisTransaction {
             consensus_mode,
             wire_protocol_version,
             consensus_fingerprint,
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
             crypto: _,
         } = manifest;
@@ -2326,7 +2379,7 @@ impl RawGenesisTransaction {
             block_cadence_ms,
             wire_protocol_version,
             consensus_fingerprint,
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
         )?;
         let mut pending_meta = if meta_vec.is_empty() {
@@ -2389,17 +2442,31 @@ impl RawGenesisTransaction {
         {
             instructions_list.push(meta);
         }
+        let generated_tail = instructions_list.len();
         Self::inject_crypto_manifest_param(&mut instructions_list, &manifest.crypto)?;
         let registry = GenesisVkRegistry::build(instructions_list.iter().flatten())?;
         Self::inject_confidential_registry_param(&mut instructions_list, registry.vk_set_hash());
-        Ok(pack_genesis_batches(
-            instructions_list,
+        // These two generated global parameters share one canonical metadata owner.
+        // Authored instruction, trigger, and topology batches are never repacked.
+        if instructions_list.len() == generated_tail + 2 {
+            let confidential = instructions_list
+                .pop()
+                .expect("generated confidential metadata");
+            instructions_list
+                .last_mut()
+                .expect("generated crypto metadata")
+                .extend(confidential);
+        }
+        validate_genesis_batch_limit(
+            &instructions_list,
             usize::try_from(
                 iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
             )
             .expect("the bootstrap input count fits usize"),
-        ))
+        )?;
+        Ok(instructions_list)
     }
+
     fn inject_confidential_registry_param(
         instructions_list: &mut Vec<Vec<InstructionBox>>,
         vk_set_hash: Option<[u8; 32]>,
@@ -2505,7 +2572,7 @@ impl RawGenesisTransaction {
         block_cadence_ms: NonZeroU64,
         wire_protocol_version: u32,
         consensus_fingerprint: Option<ConsensusFingerprint>,
-        sumeragi_v2: SumeragiV2GenesisContextParameters,
+        sumeragi_context: SumeragiGenesisContextParameters,
         kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1,
     ) -> Result<Vec<InstructionBox>> {
         let mut instructions = Vec::new();
@@ -2519,7 +2586,7 @@ impl RawGenesisTransaction {
             block_cadence_ms,
             wire_protocol_version,
             consensus_fingerprint: fingerprint,
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
         };
         metadata
@@ -2559,7 +2626,7 @@ pub struct GenesisBuilder {
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+    sumeragi_context: Option<SumeragiGenesisContextParameters>,
     kagemusha_mint_finality: Option<KagemushaMintFinalityGenesisParametersV1>,
 }
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
@@ -2576,7 +2643,7 @@ pub struct GenesisDomainBuilder {
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+    sumeragi_context: Option<SumeragiGenesisContextParameters>,
     kagemusha_mint_finality: Option<KagemushaMintFinalityGenesisParametersV1>,
 }
 #[derive(Default)]
@@ -2604,7 +2671,7 @@ impl GenesisBuilder {
             consensus_mode: SumeragiConsensusMode::Permissioned,
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: None,
+            sumeragi_context: None,
             kagemusha_mint_finality: None,
         }
     }
@@ -2625,7 +2692,7 @@ impl GenesisBuilder {
             consensus_mode: SumeragiConsensusMode::Permissioned,
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: None,
+            sumeragi_context: None,
             kagemusha_mint_finality: None,
         }
     }
@@ -2639,14 +2706,14 @@ impl GenesisBuilder {
         self.da_proof_policies = Some(policies);
         self
     }
-    /// Select the exact Sumeragi v2 context parameters which will be embedded
+    /// Select the exact Sumeragi context parameters which will be embedded
     /// in and signed by genesis.
     #[must_use]
-    pub fn with_sumeragi_v2_context_parameters(
+    pub fn with_sumeragi_context_parameters(
         mut self,
-        parameters: SumeragiV2GenesisContextParameters,
+        parameters: SumeragiGenesisContextParameters,
     ) -> Self {
-        self.sumeragi_v2 = Some(parameters);
+        self.sumeragi_context = Some(parameters);
         self
     }
     /// Select the separately provisioned networkless Pasta roster templates
@@ -2696,7 +2763,7 @@ impl GenesisBuilder {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2: self.sumeragi_v2,
+            sumeragi_context: self.sumeragi_context,
             kagemusha_mint_finality: self.kagemusha_mint_finality,
         }
     }
@@ -2804,7 +2871,7 @@ impl GenesisBuilder {
     ///
     /// # Errors
     ///
-    /// Fails unless the signed Sumeragi v2 context parameters and separately
+    /// Fails unless the signed Sumeragi context parameters and separately
     /// provisioned KAGEMUSHA V1 Pasta roster have both been supplied.
     pub fn build_raw(self) -> Result<RawGenesisTransaction> {
         let mut parameter_snapshot = Parameters::default();
@@ -2828,8 +2895,8 @@ impl GenesisBuilder {
             .first_mut()
             .expect("genesis builder always contains at least one transaction");
         first.parameters = Some(parameter_snapshot);
-        let sumeragi_v2 = self.sumeragi_v2.ok_or_else(|| {
-            eyre!("genesis builder requires explicit signed Sumeragi v2 context parameters")
+        let sumeragi_context = self.sumeragi_context.ok_or_else(|| {
+            eyre!("genesis builder requires explicit signed Sumeragi context parameters")
         })?;
         let kagemusha_mint_finality = self.kagemusha_mint_finality.ok_or_else(|| {
             eyre!(
@@ -2846,7 +2913,7 @@ impl GenesisBuilder {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
             crypto: self.crypto,
         })
@@ -2866,7 +2933,7 @@ impl GenesisDomainBuilder {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2: self.sumeragi_v2,
+            sumeragi_context: self.sumeragi_context,
             kagemusha_mint_finality: self.kagemusha_mint_finality,
         }
     }
@@ -3094,12 +3161,10 @@ mod tests {
             } else {
                 deterministic_test_kagemusha_mint_finality_genesis_parameters()
             };
-            self.with_sumeragi_v2_context_parameters(
-                SumeragiV2GenesisContextParameters::recommended(),
-            )
-            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
-            .build_raw()
-            .expect("complete deterministic test genesis builder")
+            self.with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+                .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
+                .build_raw()
+                .expect("complete deterministic test genesis builder")
         }
     }
     fn with_test_signing_topology(mut manifest: RawGenesisTransaction) -> RawGenesisTransaction {
@@ -3274,7 +3339,7 @@ mod tests {
         let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
         let ivm_dir = tmp_dir.path().join("ivm/");
         let builder = GenesisBuilder::new(chain, executor_path, ivm_dir)
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(
                 deterministic_test_kagemusha_mint_finality_genesis_parameters(),
             );
@@ -3286,17 +3351,17 @@ mod tests {
         let dummy_bytecode = IvmBytecode::from_compiled(vec![1, 2, 3]);
         let executor_path = tmp_dir.path().join("executor.to");
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
-        let sumeragi_v2 =
-            norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
+        let sumeragi_context =
+            norito::json::to_json(&SumeragiGenesisContextParameters::recommended())?;
         let kagemusha_mint_finality = norito::json::to_json(
             &deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )?;
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_v2":{},"kagemusha_mint_finality":{},"transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_context":{},"kagemusha_mint_finality":{},"transactions":[{{}}]}}"#,
             iroha_data_model::account::address::chain_discriminant(),
             executor_path.file_name().unwrap().to_str().unwrap(),
             iroha_data_model::sumeragi::PROTOCOL_VERSION,
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
@@ -3342,8 +3407,8 @@ mod tests {
     fn parse_genesis_rejects_raw_public_key_account_literals() -> Result<()> {
         init_instruction_registry();
         let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
-        let sumeragi_v2 =
-            norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
+        let sumeragi_context =
+            norito::json::to_json(&SumeragiGenesisContextParameters::recommended())?;
         let kagemusha_mint_finality = norito::json::to_json(
             &deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )?;
@@ -3354,14 +3419,14 @@ mod tests {
                 "executor":null,
                 "ivm_dir":".",
                 "consensus_mode":"Permissioned",
-                "sumeragi_v2":{},
+                "sumeragi_context":{},
                 "kagemusha_mint_finality":{},
                 "transactions":[{{
                     "instructions":[{{"Register":{{"Account":{{"id":"{public_key_literal}","metadata":{{}},"label":null,"uaid":null}}}}}}]
                 }}]
             }}"#,
             iroha_data_model::account::address::chain_discriminant(),
-            sumeragi_v2,
+            sumeragi_context,
             kagemusha_mint_finality,
         );
         let error = norito::json::from_str::<RawGenesisTransaction>(&genesis)
@@ -4263,37 +4328,19 @@ mod tests {
     include!("genesis_tail_tests.rs");
 }
 
-/// Pack genesis instruction batches into at most `limit` transactions.
-///
-/// Genesis executes under the pre-genesis FASTPQ source policy, which bounds the Network inputs
-/// of every block, genesis included (`specs/fastpq_source_statements.md`, activation
-/// requirements). While there are more batches than `limit`, the smallest adjacent pair is
-/// merged (the earlier one on ties). Instruction order is preserved; a leading executor upgrade
-/// stays a transaction of its own, since it changes the executor for the instructions after it.
-fn pack_genesis_batches(
-    mut batches: Vec<Vec<InstructionBox>>,
-    limit: usize,
-) -> Vec<Vec<InstructionBox>> {
-    let pinned = usize::from(batches.first().is_some_and(|first| {
-        first
-            .iter()
-            .any(|instruction| instruction.as_any().is::<Upgrade>())
-    }));
-    let limit = limit.max(pinned.saturating_add(1));
-    while batches.len() > limit {
-        let Some(at) = (pinned..batches.len().saturating_sub(1))
-            .min_by_key(|&index| batches[index].len() + batches[index + 1].len())
-        else {
-            break;
-        };
-        let next = batches.remove(at + 1);
-        batches[at].extend(next);
+/// Bound the exact authored genesis inputs without changing source boundaries.
+fn validate_genesis_batch_limit(batches: &[Vec<InstructionBox>], limit: usize) -> Result<()> {
+    if batches.len() > limit {
+        return Err(eyre!(
+            "genesis has {} network inputs, exceeding the FASTPQ bootstrap limit {limit}; author compatible draft batches explicitly before signing",
+            batches.len()
+        ));
     }
-    batches
+    Ok(())
 }
 
 #[cfg(test)]
-mod pack_genesis_batches_tests {
+mod genesis_batch_limit_tests {
     use iroha_data_model::{
         Level,
         isi::{InstructionBox, Log},
@@ -4301,7 +4348,7 @@ mod pack_genesis_batches_tests {
         transaction::IvmBytecode,
     };
 
-    use super::pack_genesis_batches;
+    use super::validate_genesis_batch_limit;
 
     fn log(message: &str) -> InstructionBox {
         Log::new(Level::INFO, message.to_owned()).into()
@@ -4320,13 +4367,21 @@ mod pack_genesis_batches_tests {
     }
 
     #[test]
-    fn packs_to_the_limit_preserving_order() {
+    fn refuses_overbudget_inputs_without_changing_authored_order() {
         let batches: Vec<Vec<InstructionBox>> =
             (0..15).map(|i| vec![log(&i.to_string())]).collect();
         let flat = messages(&batches).concat();
-        let packed = pack_genesis_batches(batches, 11);
-        assert_eq!(packed.len(), 11);
-        assert_eq!(messages(&packed).concat(), flat, "order is preserved");
+        assert!(
+            validate_genesis_batch_limit(&batches, 11)
+                .unwrap_err()
+                .to_string()
+                .contains("15 network inputs")
+        );
+        assert_eq!(
+            messages(&batches).concat(),
+            flat,
+            "original order is retained"
+        );
     }
 
     #[test]
@@ -4335,16 +4390,18 @@ mod pack_genesis_batches_tests {
             IvmBytecode::from_compiled(vec![1, 2, 3]),
         )))]];
         batches.extend((0..5).map(|i| vec![log(&i.to_string())]));
-        let packed = pack_genesis_batches(batches, 2);
-        assert_eq!(packed.len(), 2);
-        assert_eq!(packed[0].len(), 1, "the executor upgrade stays alone");
-        assert_eq!(packed[1].len(), 5);
+        let original = messages(&batches);
+        assert!(validate_genesis_batch_limit(&batches, 2).is_err());
+        assert_eq!(messages(&batches), original);
+        assert_eq!(batches[0].len(), 1, "the executor upgrade stays alone");
+        assert!(batches[1..].iter().all(|batch| batch.len() == 1));
     }
 
     #[test]
     fn leaves_small_genesis_unchanged() {
         let batches: Vec<Vec<InstructionBox>> = (0..3).map(|i| vec![log(&i.to_string())]).collect();
         let before = messages(&batches);
-        assert_eq!(messages(&pack_genesis_batches(batches, 11)), before);
+        validate_genesis_batch_limit(&batches, 11).unwrap();
+        assert_eq!(messages(&batches), before);
     }
 }

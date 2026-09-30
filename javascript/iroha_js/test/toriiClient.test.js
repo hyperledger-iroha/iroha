@@ -9907,154 +9907,6 @@ test("getPipelineRecoveryTyped rejects malformed payloads", async () => {
   );
 });
 
-function pipelinePreflightPayload() {
-  return {
-    schema_version: 1,
-    chain_height: 42,
-    sumeragi: {
-      block_time_ms: 1_000,
-      commit_time_ms: 2_000,
-      stall_threshold_ms: 6_000,
-    },
-    admission: {
-      max_signatures: 32,
-      max_instructions: 4096,
-      max_tx_bytes: 1_048_576,
-      max_decompressed_bytes: 1_048_576,
-      max_metadata_depth: 16,
-    },
-    block: { max_transactions: 512 },
-    pipeline: {
-      signature_batch_max_ed25519: 64,
-      signature_batch_max_secp256k1: 16,
-      signature_batch_max_pqc: 8,
-      signature_batch_max_bls: 16,
-      overlay_max_instructions: 0,
-      ivm_max_cycles_upper_bound: 2_000_000,
-      ivm_admission_cycle_limit: 1_000_000,
-      ivm_max_decoded_instructions: 1_048_576,
-    },
-    queue: { size: 2, queued: 1, inflight: 1 },
-    fees: {
-      fee_asset_id: "xor#sora",
-      fee_sink_account_id: SAMPLE_ACCOUNT_ID,
-      base_fee: "0",
-      per_byte_fee: "0",
-      per_instruction_fee: "0",
-      per_gas_unit_fee: "0",
-      sponsor_vault_custody_account_id: SAMPLE_ACCOUNT_ID,
-      settlement_mode: "direct",
-      successful_claim_fee_exempt_authorities: [SAMPLE_ACCOUNT_ID],
-    },
-  };
-}
-
-test("getPipelinePreflight fetches diagnostics and classifies queue stalls", async () => {
-  const payload = pipelinePreflightPayload();
-  let capturedUrl;
-  const fetchImpl = async (url, init) => {
-    capturedUrl = url;
-    assert.equal(init?.method, "GET");
-    assert.equal(init?.headers?.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getPipelinePreflight();
-  const status = {
-    queue_size: 2,
-    time_since_last_block_ms: 100,
-    time_since_last_non_empty_block_ms: 6_001,
-  };
-
-  assert.equal(capturedUrl, `${BASE_URL}/v1/pipeline/preflight`);
-  assert.equal(result.schema_version, 1);
-  assert.equal(result.sumeragi.stall_threshold_ms, 6_000);
-  assert.equal(result.admission.max_tx_bytes, 1_048_576);
-  assert.equal(result.pipeline.signature_batch_max_ed25519, 64);
-  assert.equal(result.pipeline.ivm_max_cycles_upper_bound, 2_000_000);
-  assert.equal(result.pipeline.ivm_admission_cycle_limit, 1_000_000);
-  assert.equal(result.queue.queued, 1);
-  assert.equal(result.fees.base_fee, "0");
-  assert.equal(result.fees.sponsor_vault_custody_account_id, SAMPLE_ACCOUNT_ID);
-  assert.deepEqual(result.fees.successful_claim_fee_exempt_authorities, [SAMPLE_ACCOUNT_ID]);
-  assert.equal(result.isStatusStalled(status), true);
-});
-
-test("getPipelinePreflight rejects alias-shaped fee account ids", async () => {
-  const cases = [
-    ["fee_sink_account_id", "fees@system"],
-    ["sponsor_vault_custody_account_id", "vault@system"],
-    ["successful_claim_fee_exempt_authorities", ["authority@system"]],
-  ];
-
-  for (const [field, value] of cases) {
-    const payload = pipelinePreflightPayload();
-    payload.fees[field] = value;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () =>
-        createResponse({
-          status: 200,
-          jsonData: payload,
-          headers: { "content-type": "application/json" },
-        }),
-    });
-    await assert.rejects(
-      () => client.getPipelinePreflight(),
-      /must not include '@domain'|canonical I105 account id/u,
-    );
-  }
-});
-
-test("getPipelinePreflight requires both positive current IVM cycle limits", async () => {
-  for (const [field, value] of [
-    ["ivm_max_cycles_upper_bound", undefined],
-    ["ivm_admission_cycle_limit", 0],
-  ]) {
-    const payload = pipelinePreflightPayload();
-    if (value === undefined) {
-      delete payload.pipeline[field];
-    } else {
-      payload.pipeline[field] = value;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () =>
-        createResponse({
-          status: 200,
-          jsonData: payload,
-          headers: { "content-type": "application/json" },
-        }),
-    });
-    await assert.rejects(
-      () => client.getPipelinePreflight(),
-      /is required|must be positive/u,
-    );
-  }
-});
-
-test("getPipelinePreflight rejects the retired aggregate signature batch field", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        sumeragi: {},
-        admission: {},
-        block: {},
-        pipeline: { signature_batch_max: 0 },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  await assert.rejects(
-    () => client.getPipelinePreflight(),
-    /pipeline contains unknown field signature_batch_max/,
-  );
-});
-
 test("getPipelineRecoveryFastpqProofs fetches committed proof batches", async () => {
   const fixture = createPipelineRecoveryFastpqProofsPayload({ height: 7 });
   const controller = new AbortController();
@@ -10945,35 +10797,25 @@ test("autonomous diagnostics declarations expose provisional and optional identi
 
 
 
-test("Sumeragi execution commitment declarations expose current mandatory fields", () => {
+test("Sumeragi lane declarations expose the served record and nullable instance", () => {
   const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
-  const match = declarations.match(
-    /export interface ToriiSumeragiV2ExecutionCommitment \{([\s\S]*?)\n\}/,
-  );
-  assert.ok(match, "missing ToriiSumeragiV2ExecutionCommitment declaration");
+  const status = declarations.match(/export interface ToriiSumeragiLaneStatus \{([\s\S]*?)\n\}/u);
+  assert.ok(status, "missing ToriiSumeragiLaneStatus declaration");
+  assert.ok(status[1].includes("record: ToriiSumeragiLaneRecord;"));
+  assert.ok(status[1].includes("instance: ToriiSumeragiStatus | null;"));
+  const record = declarations.match(/export interface ToriiSumeragiLaneRecord \{([\s\S]*?)\n\}/u);
+  assert.ok(record, "missing ToriiSumeragiLaneRecord declaration");
   for (const field of [
-    "native_amx_application_manifest_version: number;",
-    "native_amx_application_manifest_root: string;",
-    "native_amx_application_manifest_count: number;",
-    "lane_finality_manifest: ToriiSumeragiV2LaneFinalityManifestCommitment | null;",
-    "merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;",
-    "executed_block_wire_len: ToriiU64;",
-    "transaction_input_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;",
-    "transaction_output_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;",
+    "lane: number;",
+    "incarnation: string;",
+    "params: ToriiSumeragiParameters;",
+    "committee: ReadonlyArray<ToriiSumeragiLaneMember>;",
+    "closing: ToriiU64 | null;",
+    "merged: ToriiSumeragiLaneFrontier;",
   ]) {
-    assert.ok(match[1].includes(field), `missing declaration: ${field}`);
+    assert.ok(record[1].includes(field), `missing declaration: ${field}`);
   }
-  const carrierMatch = declarations.match(
-    /export interface ToriiSumeragiV2MergeCarrierCommitment \{([\s\S]*?)\n\}/,
-  );
-  assert.ok(carrierMatch, "missing ToriiSumeragiV2MergeCarrierCommitment declaration");
-  assert.match(carrierMatch[1], /version: 1;/u);
-  assert.match(
-    declarations,
-    /export interface ToriiSumeragiV2TransactionTreeCommitment \{ root: string; leaf_count: ToriiU64; \}/u,
-  );
-  assert.match(carrierMatch[1], /entry_hash: string;/u);
-  assert.match(declarations, /ToriiSumeragiV2LaneFinalityManifestCommitment \{[^}]*root: string;[^}]*leaf_count: number;/u);
+  assert.doesNotMatch(declarations, /ToriiSumeragiV2/u);
 });
 
 
@@ -11087,50 +10929,35 @@ test("getSumeragiBlsKeys rejects malformed payloads", async () => {
   await assert.rejects(() => client.getSumeragiBlsKeys(), /sumeragi BLS key/);
 });
 
-test("getSumeragiLeader fetches leader and PRF context", async () => {
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/leader`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        leader_index: "3",
-        prf: { height: "10", view: "2", epoch_seed: "seed" },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const leader = await client.getSumeragiLeader();
-  assert.equal(leader.leader_index, 3);
-  assert.equal(leader.prf.epoch_seed, "seed");
-});
-
 test("getSumeragiParams fetches on-chain parameters", async () => {
+  let served = { block_cadence_ms: 1000, max_clock_drift_ms: 50, chain_height: 4200 };
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sumeragi/params`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
-      jsonData: {
-        block_time_ms: "1000",
-        commit_time_ms: "400",
-        max_clock_drift_ms: "50",
-        collectors_k: "3",
-        redundant_send_r: "1",
-        da_enabled: "false",
-        next_mode: "Npos",
-        mode_activation_height: "5000",
-        chain_height: "4200",
-      },
+      jsonData: served,
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const params = await client.getSumeragiParams();
-  assert.equal(params.block_time_ms, 1000);
-  assert.equal(params.next_mode, "Npos");
-  assert.equal(params.da_enabled, false);
+  assert.deepEqual(await client.getSumeragiParams(), {
+    block_cadence_ms: 1000,
+    max_clock_drift_ms: 50,
+    chain_height: 4200,
+  });
+
+  const current = served;
+  for (const [label, payload, pattern] of [
+    ["retired field", { ...current, collectors_k: 3 }, /unsupported fields: collectors_k/],
+    ["retired name", { ...current, block_cadence_ms: undefined, block_time_ms: 1000 }, /unsupported fields: block_time_ms/],
+    ["missing field", { block_cadence_ms: 1000, max_clock_drift_ms: 50 }, /chain_height/],
+    ["zero cadence", { ...current, block_cadence_ms: 0 }, /must be nonzero/],
+    ["negative height", { ...current, chain_height: -1 }, /must be >= 0/],
+  ]) {
+    served = JSON.parse(JSON.stringify(payload));
+    await assert.rejects(() => client.getSumeragiParams(), pattern, label);
+  }
 });
 
 test("Sumeragi params reject unsupported options", async () => {

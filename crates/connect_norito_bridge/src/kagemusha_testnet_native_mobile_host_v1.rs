@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use iroha_core::zk::{
+use iroha_core_zk::{
     kagemusha_v1_recursion::KagemushaTestnetMintLedgerCreditV1,
     kagemusha_v1_state::MintInboxReservationV1,
 };

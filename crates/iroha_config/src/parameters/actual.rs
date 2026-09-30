@@ -26,7 +26,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::AccountId,
     asset::prelude::AssetDefinitionId,
-    block::{BlockHeader, consensus_v2::GenesisActiveNexusLaneRecord},
+    block::{BlockHeader, consensus::GenesisActiveNexusLaneRecord},
     compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputeGovernanceError, ComputePriceAmplifiers,
         ComputePriceDeltaBounds, ComputePriceRiskClass, ComputePriceWeights, ComputeResourceBudget,
@@ -5455,15 +5455,15 @@ impl_default!(Pipeline => {
             amx_per_syscall_ns: defaults::pipeline::AMX_PER_SYSCALL_NS,
         }
 });
-/// One retained lane-incarnation lineage binding committed into a Sumeragi v2 height context.
+/// One retained lane-incarnation lineage binding committed into a Sumeragi height context.
 ///
 /// The complete projection contains every active or retired lane identifier ever
 /// observed by the state. Retired entries remain consensus-relevant because a
 /// later recreation derives its next incarnation from this retained generation.
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry")]
+#[norito_schema(name = "iroha_config::parameters::actual::SumeragiLaneLifecycleEntry")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
-pub struct SumeragiV2LaneLifecycleEntry {
+pub struct SumeragiLaneLifecycleEntry {
     /// Canonical lane identifier.
     pub lane_id: LaneId,
     /// Monotonic incarnation generation retained for this lane identifier.
@@ -5473,7 +5473,7 @@ pub struct SumeragiV2LaneLifecycleEntry {
     /// Global carrier height that activated this incarnation.
     pub activation_height: u64,
 }
-/// Compute the canonical Sumeragi v2 commitment to the Nexus and AMX inputs
+/// Compute the canonical Sumeragi commitment to the Nexus and AMX inputs
 /// that can change proposal assembly or deterministic validation.
 ///
 /// The commitment deliberately excludes local storage paths, worker pool
@@ -5486,13 +5486,13 @@ pub struct SumeragiV2LaneLifecycleEntry {
 /// later derive the same recreated lane differently. Active validator records
 /// and retained lineage entries are sorted canonically before encoding.
 #[must_use]
-pub fn sumeragi_v2_nexus_amx_context_hash(
+pub fn sumeragi_nexus_amx_context_hash(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
-    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
+    retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
 ) -> Hash {
-    sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+    sumeragi_nexus_amx_context_hash_with_catalog_policy(
         nexus,
         pipeline,
         active_validators,
@@ -5506,11 +5506,11 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
 /// derive it from validated committed state, never from a local configuration overlay. Before
 /// any catalog-policy transaction exists, `None` retains the original projection byte for byte.
 #[must_use]
-pub fn sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+pub fn sumeragi_nexus_amx_context_hash_with_catalog_policy(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
-    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
+    retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
     committed_catalog_policy_root: Option<Hash>,
 ) -> Hash {
     const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
@@ -5523,7 +5523,7 @@ pub fn sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
         out.extend_from_slice(&bytes_len.to_le_bytes());
         out.extend_from_slice(&bytes);
     }
-    let mut preimage = b"sumeragi-v2:nexus-amx-context\0v2".to_vec();
+    let mut preimage = b"sumeragi:nexus-amx-context\0v1".to_vec();
     append(
         &mut preimage,
         "nexus.lane_catalog.lane_count",
@@ -6801,7 +6801,7 @@ pub struct BlockSync {
 pub struct DataspaceGossip {
     /// Drop gossip for unknown dataspaces instead of falling back to restricted routing.
     pub drop_unknown_dataspace: bool,
-    /// Optional cap on the number of peers targeted for restricted gossip (None = commit topology).
+    /// Optional cap on restricted gossip targets (None = all authorized native lane validators).
     pub restricted_target_cap: Option<NonZeroUsize>,
     /// Optional cap on the number of peers targeted for public gossip (None = broadcast).
     pub public_target_cap: Option<NonZeroUsize>,
@@ -6809,39 +6809,7 @@ pub struct DataspaceGossip {
     pub public_target_reshuffle: Duration,
     /// Interval between reshuffles of restricted gossip target selection.
     pub restricted_target_reshuffle: Duration,
-    /// Fallback policy when restricted targets are unavailable.
-    pub restricted_fallback: DataspaceGossipFallback,
-    /// Policy for restricted payloads when only the public overlay is available.
-    pub restricted_public_payload: RestrictedPublicPayload,
 }
-/// Fallback behaviour when restricted routing cannot determine targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DataspaceGossipFallback {
-    /// Drop the batch and retry later.
-    Drop,
-    /// Use the public overlay targets when commit topology is unavailable.
-    UsePublicOverlay,
-}
-impl_default!(DataspaceGossipFallback => {
-        match defaults::network::TX_GOSSIP_RESTRICTED_FALLBACK {
-            "public_overlay" => Self::UsePublicOverlay,
-            _ => Self::Drop,
-        }
-});
-/// Action to take when restricted gossip can only target the public overlay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RestrictedPublicPayload {
-    /// Refuse to leak the payload onto the public overlay.
-    Refuse,
-    /// Forward to the public overlay (assumes operators provision their own payload protection).
-    Forward,
-}
-impl_default!(RestrictedPublicPayload => {
-        match defaults::network::TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD {
-            "forward" => Self::Forward,
-            _ => Self::Refuse,
-        }
-});
 impl_default!(DataspaceGossip => {
         Self {
             drop_unknown_dataspace: defaults::network::TX_GOSSIP_DROP_UNKNOWN_DATASPACE,
@@ -6849,8 +6817,6 @@ impl_default!(DataspaceGossip => {
             public_target_cap: defaults::network::TX_GOSSIP_PUBLIC_TARGET_CAP,
             public_target_reshuffle: defaults::network::TX_GOSSIP_PUBLIC_TARGET_RESHUFFLE,
             restricted_target_reshuffle: defaults::network::TX_GOSSIP_RESTRICTED_TARGET_RESHUFFLE,
-            restricted_fallback: DataspaceGossipFallback::default(),
-            restricted_public_payload: RestrictedPublicPayload::default(),
         }
 });
 /// Transaction gossiping parameters.

@@ -176,6 +176,8 @@ object KagemushaCoreCoordinatorFrameV1 {
                 }
                 4, 6 -> { count(fields, 2); ticket(fields, 1) }
                 5 -> { count(fields, 3); ticket(fields, 1); bounded(fields, 2, 16 * 1024) }
+                8 -> { count(fields, 3); ticket(fields, 1)
+                    require(field(fields, 2).size == 273) { "invalid signed app preparation" } }
                 else -> throw IllegalArgumentException("unknown enrollment phase")
             }
             KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST -> {
@@ -246,6 +248,10 @@ object KagemushaCoreCoordinatorFrameV1 {
                 }
                 5 -> { count(response, 2); equal(response, 0, request, 1); digest(response, 1) }
                 6 -> count(response, 0)
+                8 -> { count(response, 1); digest(response, 0)
+                    require(field(response, 0).contentEquals(field(request, 2).copyOfRange(49, 81))) {
+                        "native preparation verifier substituted issuer nonce"
+                    } }
                 else -> throw IllegalArgumentException("unknown enrollment phase")
             }
             KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST -> {

@@ -9,6 +9,7 @@ use crate::{
     kura::Kura,
     state::{NativeExecutionProjectionV1, StateBlock, StateReadOnly, WorldReadOnly},
 };
+use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{
@@ -18,7 +19,6 @@ use iroha_data_model::{
     sumeragi_finality::ExecutionResultCommitment,
     sumeragi_lanes::SumeragiLaneState,
 };
-use mv::allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, RetainedPayload};
 use std::{
     fs::File,
     io::{self, Read, Seek, Write},
@@ -58,7 +58,7 @@ impl NativeContextArchiveError {
         matches!(
             self,
             Self::Allocation(
-                ChargedBufferError::Admission(mv::allocation::AllocationRefusal::Capacity { .. })
+                ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { .. })
                     | ChargedBufferError::Allocator { .. }
             )
         )

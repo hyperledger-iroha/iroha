@@ -367,16 +367,16 @@ async fn genesis_public_key_is_checked() {
         &genesis_correct_account_id,
         &time_source,
         &state,
-        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        iroha_data_model::block::consensus::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
     .err()
     .expect("genesis with an unexpected authority must fail validation");
     // The first transaction should be rejected
-    assert_eq!(
+    assert!(matches!(
         error.as_ref(),
-        &BlockValidationError::InvalidGenesis(InvalidGenesisError::UnexpectedAuthority)
-    );
+        BlockValidationError::InvalidGenesis(InvalidGenesisError::UnexpectedAuthority)
+    ));
 }
 #[tokio::test]
 async fn genesis_asset_definition_registration_is_not_domain_gated() {

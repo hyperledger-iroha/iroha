@@ -2064,7 +2064,7 @@ mod tests {
             format!("({})", vec!["()"; words].join(", "))
         };
         let source = format!("seiyaku ReturnTable {{ view fn main() -> {value} {{ {value} }} }}");
-        ivm::KotodamaCompiler::new()
+        kotodama_lang::compiler::Compiler::new()
             .compile_source(&source)
             .expect("compile authenticated Unit result table")
     }

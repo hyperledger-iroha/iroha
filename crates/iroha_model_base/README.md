@@ -26,7 +26,7 @@ Domain entities, registration and `IdBox` composition remain in the aggregate.
 
 Topology identities own their numeric validation, JSON and binary codecs, schema
 identities and applicable storage keys. Lane and dataspace catalogs, lifecycle
-policy, ledger traits and `IdBox` composition remain in the aggregate.
+policy, the `sumeragi_lane_policy`, ledger traits and `IdBox` composition remain in the aggregate.
 
 Peer identity owns the public-key wrapper, canonical binary/JSON decoding and
 JSON object keys. Supported cryptographic algorithms remain owned by

@@ -464,7 +464,7 @@ mod tests {
         assert!(matches!(
             read_authenticated_execution(
                 chain.kura(),
-                &ChainId::from("foreign chain"),
+                &ChainId::from("foreign-chain"),
                 *view.network_id(),
                 view.block_hashes(),
                 2,

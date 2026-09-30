@@ -118,6 +118,8 @@ fn discover() {
 
 #[cfg(all(test, feature = "metal-hardware-tests"))]
 fn qualify(record: &DeviceLease<MetalState>, device: &ProtocolObject<dyn MTLDevice>) {
+    use objc2::Message;
+
     if record.value().is_some() || !record.health().usable() || !record_allowed(record) {
         return;
     }
@@ -190,7 +192,7 @@ fn select(
         let index = (0..count).find(|&index| {
             DEVICES
                 .record(index, physical_limit())
-                .is_some_and(|other| mv::allocation::ChargedShared::ptr_eq(&lease, &other))
+                .is_some_and(|other| iroha_allocation::ChargedShared::ptr_eq(&lease, &other))
         })?;
         cost(state, &mut || {
             pass.as_mut()?.begin_attempt(index, Instant::now())

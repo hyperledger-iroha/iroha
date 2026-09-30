@@ -10,16 +10,13 @@
 //! Mutable payload access still requires a closed admission policy.
 
 use super::*;
-use crate::{
-    ReleaseWait,
-    allocation::{
-        AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
-        AllocationScope,
-    },
-};
+use crate::ReleaseWait;
 use concread::bptree::{
     AllocationDemand, ClonePlanning, MapAdmissionError, NodeFunding, PairInsertError,
     PairRemoveError, PlanningError, Prepaid,
+};
+use iroha_allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, AllocationScope,
 };
 
 #[path = "restore_admitted.rs"]
@@ -701,7 +698,7 @@ enum PublicationScope<'scope> {
         _scope: &'scope AllocationScope<'scope>,
     },
     Owned {
-        _scope: crate::allocation::OwnedAllocationScope,
+        _scope: iroha_allocation::OwnedAllocationScope,
     },
 }
 
@@ -714,7 +711,8 @@ enum PublicationScope<'scope> {
 /// Detached custody can leave the scope after abort:
 /// ```
 /// use concread::bptree::{ClonePlanning, Prepaid};
-/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy, Detached, Storage}};
+/// use iroha_allocation::{AllocationBudget};
+/// use mv::{storage::{AdmittedStoragePolicy, Detached, Storage}};
 /// fn release<P>(budget: &AllocationBudget, target: &Storage<u64, u64, Prepaid<P>>,
 ///     journal: Detached<u64, u64, (), Prepaid<P>>) -> Detached<u64, u64, (), Prepaid<P>>
 /// where P: AdmittedStoragePolicy + ClonePlanning<u64, u64> + ClonePlanning<u64, Option<u64>> {
@@ -729,7 +727,8 @@ enum PublicationScope<'scope> {
 /// A physical preparation cannot leave that same scope:
 /// ```compile_fail
 /// use concread::bptree::{ClonePlanning, Prepaid};
-/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+/// use iroha_allocation::{AllocationBudget};
+/// use mv::{storage::{AdmittedStoragePolicy,
 ///     AdmittedPreparedPublication, Detached, Storage}};
 /// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
 ///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedPreparedPublication<'a, 'a, u64, u64, (), P>
@@ -756,7 +755,8 @@ where
 /// The notification owner cannot escape the pool scope after publication:
 /// ```compile_fail
 /// use concread::bptree::{ClonePlanning, Prepaid};
-/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+/// use iroha_allocation::{AllocationBudget};
+/// use mv::{storage::{AdmittedStoragePolicy,
 ///     AdmittedPublishedPublication, Detached, Storage}};
 /// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
 ///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedPublishedPublication<'a, u64, u64, (), P>
@@ -791,7 +791,8 @@ where
 /// The detached journal can leave the scope; this cleanup cannot.
 /// ```compile_fail
 /// use concread::bptree::{ClonePlanning, Prepaid};
-/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+/// use iroha_allocation::{AllocationBudget};
+/// use mv::{storage::{AdmittedStoragePolicy,
 ///     AdmittedAbortedPublication, Detached, Storage}};
 /// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
 ///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedAbortedPublication<'a>
@@ -807,7 +808,8 @@ where
 /// Refusal cleanup has the same scope constraint as explicit abort:
 /// ```compile_fail
 /// use concread::bptree::{ClonePlanning, Prepaid};
-/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+/// use iroha_allocation::{AllocationBudget};
+/// use mv::{storage::{AdmittedStoragePolicy,
 ///     AdmittedAbortedPublication, Detached, Storage}};
 /// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64, u64, Prepaid<P>>,
 ///     journal: Detached<u64, u64, (), Prepaid<P>>) -> AdmittedAbortedPublication<'a>
@@ -865,7 +867,8 @@ where
 /// The slot cannot escape its original allocation scope:
 /// ```compile_fail
 /// use concread::bptree::{ClonePlanning, Prepaid};
-/// use mv::{allocation::AllocationBudget, storage::{AdmittedStoragePolicy,
+/// use iroha_allocation::{AllocationBudget};
+/// use mv::{storage::{AdmittedStoragePolicy,
 ///     AdmittedDetachedPublicationSlot, Detached, Storage}};
 /// fn escape<'a, P>(budget: &'a AllocationBudget, target: &'a Storage<u64,u64,Prepaid<P>>,
 ///     original: Detached<u64,u64,(),Prepaid<P>>) -> AdmittedDetachedPublicationSlot<'a,'a,u64,u64,(),P>
@@ -976,7 +979,7 @@ where
     )]
     pub fn try_publication_slot_owned<'target>(
         self,
-        scope: &crate::allocation::OwnedAllocationScope,
+        scope: &iroha_allocation::OwnedAllocationScope,
         target: &'target Storage<K, V, Prepaid<P>>,
     ) -> Result<
         AdmittedDetachedPublicationSlot<'target, 'target, K, V, Admission, P>,

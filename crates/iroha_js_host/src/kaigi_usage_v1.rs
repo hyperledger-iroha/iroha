@@ -311,7 +311,7 @@ mod tests {
             norito::decode_canonical(artifacts.proof.as_ref()).unwrap();
         assert_eq!(envelope.circuit_id, KAIGI_USAGE_CIRCUIT_ID_V1);
         assert_eq!(envelope.public_inputs, KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1);
-        assert_eq!(envelope.vk_hash, iroha_core::zk::hash_vk(&key));
+        assert_eq!(envelope.vk_hash, iroha_core_zk::hash_vk(&key));
         assert!(envelope.aux.is_empty());
         let offset = envelope.proof_bytes.len() - 25 * 32;
         for row in 0..25 {
@@ -327,7 +327,7 @@ mod tests {
                 norito::encode_canonical(&changed).unwrap(),
             );
             assert!(
-                !iroha_core::zk::verify_backend(VK_BACKEND, &proof, Some(&key)),
+                !iroha_core_zk::verify_backend(VK_BACKEND, &proof, Some(&key)),
                 "modified row {row}"
             );
         }

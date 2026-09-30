@@ -5,12 +5,12 @@
 
 use super::*;
 use crate::{
-    message::{BlockResponse, Defect, Echo, Status, SyncEntry, SyncResponse},
+    message::{Defect, Echo, Status, SyncEntry, SyncResponse},
     preimage::{KIND_COMMIT, KIND_PREPARE, KIND_PROPOSAL, KIND_TIMEOUT},
     types::{AggregateSignature, SIGNATURE_LEN},
 };
 
-fn prop(h: &mut H, view: u64, block: &Block, justify: Option<TimeoutCert>) -> Vec<Action> {
+fn prop(h: &mut H, view: u64, block: &AvailableBody, justify: Option<TimeoutCert>) -> Vec<Action> {
     let p = h.proposal(view, block, justify);
     h.deliver(h.leader(view), WireMessage::Proposal(Box::new(p)))
 }
@@ -40,11 +40,13 @@ fn released_without_durability(actions: &[Action]) -> Vec<Action> {
         .filter(|a| match a {
             Action::Send { msg, .. } | Action::Broadcast { msg, .. } => !matches!(
                 msg,
-                WireMessage::Status(_) | WireMessage::SyncRequest(_) | WireMessage::BlockRequest(_)
+                WireMessage::Status(_)
+                    | WireMessage::SyncRequest(_)
+                    | WireMessage::PayloadRequest(_)
             ),
             Action::CommitBlock { .. }
             | Action::ServeBlocks { .. }
-            | Action::ServeBody { .. }
+            | Action::ServePayload { .. }
             | Action::ReportEvidence(_) => true,
             _ => false,
         })
@@ -76,7 +78,12 @@ fn det_s1_leader_restart_no_second_proposal() {
     let resent = proposals(&out);
     assert_eq!(resent.len(), 1, "the recorded proposal is re-sent");
     assert_eq!(resent[0].block_hash(&h.v.crypto), bh_b);
-    assert_eq!(resent[0].payload.as_deref(), Some(&b"B"[..]));
+    assert_eq!(
+        h.bodies[&resent[0].block_hash(&h.v.crypto)]
+            .payload()
+            .as_slice(),
+        &b"B"[..]
+    );
     // The builder now returns C: nothing else is ever proposed at (1, 0).
     for _ in 0..100 {
         let out = h.tick(100);
@@ -520,7 +527,8 @@ fn det_s10a_tc_rule_forces_reproposal() {
         assert_eq!(sent.len(), 1, "body in memory: {body_in_memory}");
         assert_eq!(sent[0].view, 1);
         assert_eq!(
-            sent[0].header, b.header,
+            sent[0].header,
+            b.header().clone(),
             "the block is re-proposed unchanged"
         );
         assert_eq!(
@@ -778,9 +786,11 @@ fn det_s19_wrong_parent_rejected() {
     h.commit_heights(1);
     assert_eq!(h.height(), 2);
     assert!(h.round(0).in_set_a(h.my_idx()));
-    let mut stale = h.block(0, b"B");
-    stale.header.parent_hash = G_HASH;
-    stale.header.parent_result = G_RESULT;
+    let stale = h.block(0, b"B");
+    let mut header = stale.header().clone();
+    header.parent_hash = G_HASH;
+    header.parent_result = G_RESULT;
+    let stale = h.author(header, stale.payload().as_slice());
     let out = prop(&mut h, 0, &stale, None);
     assert!(matches!(
         &evidence(&out)[..],
@@ -797,11 +807,11 @@ fn det_s19_wrong_parent_rejected() {
     let b = h.block(0, b"B");
     let mut p = h.proposal(0, &b, None);
     let fake_parent = h.block_at(1, (G_HASH, G_RESULT), 0, b"other");
-    p.parent_qc = Some(h.cqc_for(&fake_parent, 0));
+    p.proposal.parent_qc = Some(h.cqc_for(&fake_parent, 0));
     let leader = h.leader(0);
     let bh = h.bh(&b);
-    let ad = preimage::att_digest(&h.v.crypto, None, p.parent_qc.as_ref());
-    p.sig = h
+    let ad = preimage::att_digest(&h.v.crypto, None, p.proposal.parent_qc.as_ref());
+    p.proposal.sig = h
         .signer_of(&h.key_at(leader))
         .sign(&preimage::prop_preimage(
             &I,
@@ -831,39 +841,24 @@ fn det_s20_forged_body_under_real_header() {
     let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
     let o = h.others(3, &[]);
     let tc = h.tc(0, &[(o[0], Some(pqc.clone())), (o[1], None), (o[2], None)]);
-    let mut p = h.proposal(1, &b, Some(tc));
-    p.payload = None;
+    let p = h.proposal(1, &b, Some(tc));
+    h.withheld_rows.insert(h.bh(&b));
     let out = h.deliver(h.leader(1), WireMessage::Proposal(Box::new(p)));
-    assert!(
-        out.iter()
-            .any(|a| matches!(a, Action::FetchBody { block_hash, .. } if *block_hash == h.bh(&b)))
-    );
-    let forged = Block {
-        header: b.header.clone(),
-        payload: b"forged".to_vec(),
-    };
+    assert!(out.iter().any(
+        |a| matches!(a, Action::FetchPayload { source, .. } if source.block_hash() == h.bh(&b))
+    ));
+    let mut forged = h.chunks(&b)[0].clone();
+    let mut bytes = forged.bytes.as_slice().to_vec();
+    bytes[0] ^= 1;
+    forged.bytes = RowBytes::from_untrusted(bytes).unwrap();
     let w = o[2];
-    let out = h.deliver(
-        w,
-        WireMessage::BlockResponse(BlockResponse {
-            instance: I,
-            block: forged.clone(),
-        }),
-    );
-    assert!(out.is_empty(), "{out:#?}");
-    let out = h.fire(Event::BodyAvailable { block: forged });
-    assert!(out.is_empty());
+    let out = h.deliver(w, WireMessage::PayloadChunk(forged));
+    assert!(evidence(&out).is_empty() && timeouts(&out).is_empty());
     assert!(
         h.pending_exec.is_empty(),
-        "no execution verdict for a forged body"
+        "forged relay rows cannot construct an AvailableBody"
     );
-    let out = h.deliver(
-        o[1],
-        WireMessage::BlockResponse(BlockResponse {
-            instance: I,
-            block: b.clone(),
-        }),
-    );
+    let out = h.deliver_rows(o[1], &b);
     assert!(out.iter().any(|a| matches!(a, Action::StoreBody { .. })));
     assert_eq!(h.pending_exec.len(), 1);
     let out = h.exec_all();
@@ -880,11 +875,14 @@ fn det_s35_relay_tamper_no_evidence() {
     let genuine = h.proposal(0, &b, None);
     let leader = h.leader(0);
     let mut tampered = genuine.clone();
-    tampered.payload = Some(b"tampered".to_vec());
+    let mut bytes = tampered.availability.as_slice().to_vec();
+    *bytes.last_mut().unwrap() ^= 1;
+    tampered.availability = crate::availability::AvailabilityFrame::from_untrusted(bytes).unwrap();
     let mut stripped = genuine.clone();
-    stripped.payload = None;
+    stripped.availability =
+        crate::availability::AvailabilityFrame::from_untrusted(Vec::new()).unwrap();
     let mut bad_attach = genuine.clone();
-    bad_attach.justify = Some(h.tc_q(0));
+    bad_attach.proposal.justify = Some(h.tc_q(0));
     for p in [tampered.clone(), bad_attach.clone()] {
         h.deliver(leader, WireMessage::Proposal(Box::new(p)));
     }
@@ -938,24 +936,26 @@ fn det_s21_forged_commitqc_via_parent_qc() {
     let make = |h: &H, parent_qc: Qc| {
         let bh = h.bh(&b2);
         let ad = preimage::att_digest(&h.v.crypto, None, Some(&parent_qc));
-        Proposal {
-            instance: I,
-            height: 2,
-            view: 0,
-            header: b2.header.clone(),
-            justify: None,
-            parent_qc: Some(parent_qc),
-            payload: Some(b2.payload.clone()),
-            sig: h
-                .signer_of(&h.key_at(leader2))
-                .sign(&preimage::prop_preimage(
-                    &I,
-                    &crate::testing::TEST_EPOCH.id,
-                    2,
-                    0,
-                    &bh,
-                    &ad,
-                )),
+        ProposalMessage {
+            availability: b2.availability().clone(),
+            proposal: Proposal {
+                instance: I,
+                height: 2,
+                view: 0,
+                header: b2.header().clone(),
+                justify: None,
+                parent_qc: Some(parent_qc),
+                sig: h
+                    .signer_of(&h.key_at(leader2))
+                    .sign(&preimage::prop_preimage(
+                        &I,
+                        &crate::testing::TEST_EPOCH.id,
+                        2,
+                        0,
+                        &bh,
+                        &ad,
+                    )),
+            },
         }
     };
     let bad = make(&h, forged(h.qc_q(VoteKind::Commit, 0, &b1)));
@@ -994,6 +994,15 @@ fn det_s22_sync_forged_block() {
             .any(|(_, m)| matches!(m, WireMessage::SyncRequest(r) if r.from_height == 1))
     );
     let respond = |h: &mut H, blocks: Vec<SyncEntry>| {
+        // Rejected availability completes asynchronously. A request for a later height may
+        // already be in flight; let its bounded retry request the missing prefix again.
+        let out = h.run_until(h.now + h.local.sync_retry);
+        assert!(
+            sent(&out).iter().any(|(_, message)| {
+                matches!(message, WireMessage::SyncRequest(request) if request.from_height == 1)
+            }),
+            "each response answers a new request for the missing prefix"
+        );
         h.deliver(
             peer,
             WireMessage::SyncResponse(SyncResponse {
@@ -1002,16 +1011,19 @@ fn det_s22_sync_forged_block() {
             }),
         )
     };
-    // A forged payload under the genuine header, and a header that does not match its QC.
-    let mut forged_body = b1.clone();
-    forged_body.payload = b"forged".to_vec();
-    let mut wrong_header = b1.clone();
+    // A forged original authorization table and a header that does not match its QC.
+    let mut forged_manifest = manifest(&b1);
+    let mut bytes = forged_manifest.availability.as_slice().to_vec();
+    *bytes.last_mut().unwrap() ^= 1;
+    forged_manifest.availability =
+        crate::availability::AvailabilityFrame::from_untrusted(bytes).unwrap();
+    let mut wrong_header = manifest(&b1);
     wrong_header.header.origin_view = 5;
-    for bad in [forged_body, wrong_header] {
+    for bad in [forged_manifest, wrong_header] {
         respond(
             &mut h,
             vec![SyncEntry {
-                block: bad,
+                manifest: bad,
                 commit_qc: c1.clone(),
             }],
         );
@@ -1023,7 +1035,7 @@ fn det_s22_sync_forged_block() {
     respond(
         &mut h,
         vec![SyncEntry {
-            block: stray,
+            manifest: manifest(&stray),
             commit_qc: stray_qc,
         }],
     );
@@ -1033,11 +1045,11 @@ fn det_s22_sync_forged_block() {
         &mut h,
         vec![
             SyncEntry {
-                block: b1,
+                manifest: manifest(&b1),
                 commit_qc: c1,
             },
             SyncEntry {
-                block: b2,
+                manifest: manifest(&b2),
                 commit_qc: c2,
             },
         ],
@@ -1247,7 +1259,7 @@ fn det_s31b_record_and_store_lost() {
     let entries: Vec<SyncEntry> = full[6..9]
         .iter()
         .map(|(block, qc)| SyncEntry {
-            block: block.clone(),
+            manifest: manifest(&block),
             commit_qc: qc.clone(),
         })
         .collect();
@@ -1407,7 +1419,7 @@ fn det_s31e_echo_signature() {
         [usize::try_from(t).unwrap()..usize::try_from(t + 2).unwrap()]
         .iter()
         .map(|(block, qc)| SyncEntry {
-            block: block.clone(),
+            manifest: manifest(&block),
             commit_qc: qc.clone(),
         })
         .collect();
@@ -1511,7 +1523,7 @@ fn det_s32b_store_behind_record() {
     let entries = full[2..6]
         .iter()
         .map(|(block, qc)| SyncEntry {
-            block: block.clone(),
+            manifest: manifest(&block),
             commit_qc: qc.clone(),
         })
         .collect();
@@ -1641,7 +1653,7 @@ fn det_s33_key_rotation_restart() {
         .all
         .iter()
         .filter_map(|a| match a {
-            Action::CommitBlock { block, .. } => Some(block.header.height),
+            Action::CommitBlock { block, .. } => Some(block.header().height),
             _ => None,
         })
         .collect();
@@ -1878,13 +1890,13 @@ fn det_s37_conflicting_commitqc_halts() {
     let o = h.others(1, &[])[0];
     let out = h.deliver(
         o,
-        WireMessage::BlockRequest(crate::message::BlockRequest {
+        WireMessage::PayloadRequest(crate::message::PayloadRequest {
             instance: I,
             height: 1,
             block_hash: Hash32([1; 32]),
         }),
     );
-    assert!(matches!(out[..], [Action::ServeBody { .. }]));
+    assert!(matches!(out[..], [Action::ServePayload { .. }]));
     // An equal CommitQC of a committed height is ignored.
     let mut h = H::new(4, pick::set_a(0));
     let b = h.commit_with(0, b"B");

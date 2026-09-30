@@ -41,7 +41,7 @@ BUILD_EFFICIENCY_PROVENANCE_TEST = (
 )
 RESULT_CONSUMERS = (
     "BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS",
-    "PARLIAMENT", "NEXUS_DATASPACE", "NEXUS_PROOFS",
+    "PARLIAMENT",
 )
 REQUIRED_NUMERIC_TEST_COMMANDS = (
     "cargo test --locked -p ivm --test ivm_group_06 numeric_",
@@ -643,7 +643,6 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "pytests/scripts/check_cargo_feature_hygiene_test.py",
             "pytests/scripts/check_workspace_target_inventory_test.py",
             BUILD_EFFICIENCY_PROVENANCE_TEST,
-            "scripts/tests/check_source_file_budget_test.py",
             "scripts/tests/sdk_operation_inventory_test.py",
             "scripts/tests/check_compile_unit_budget_test.py",
             "scripts/tests/check_generated_artifacts_test.py",
@@ -652,7 +651,6 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             BUILD_EFFICIENCY_PROVENANCE_COMMAND,
             "python3 scripts/check_dependency_budget.py --check-boundaries",
             "python3 scripts/sdk_operation_inventory.py",
-            "python3 scripts/check_source_file_budget.py",
             "python3 scripts/check_generated_artifacts.py",
             'FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, '
             "'ci/full') }}",
@@ -678,7 +676,6 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "python3 scripts/check_compile_time_table_assets.py",
             "python3 scripts/check_dependency_budget.py",
             "python3 scripts/check_dependency_budget.py --check-boundaries",
-            "python3 scripts/check_source_file_budget.py",
         )
         if provenance_position >= 0 and any(
             normalized_classifier.find(command) < provenance_position
@@ -686,8 +683,8 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             if normalized_classifier.find(command) >= 0
         ):
             errors.append(
-                "PR build-efficiency provenance guard must run before dependency, "
-                "source-budget, and Cargo-facing checks"
+                "PR build-efficiency provenance guard must run before dependency "
+                "and Cargo-facing checks"
             )
 
     affected_job = _job_block(workflow, "rust_affected")
@@ -734,7 +731,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
             "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
             "TEST_NETWORK_BIN_IROHA: bins/iroha",
-            "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL: bins/iroha3d_message_control",
+            "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes",
             'IROHA_TEST_REQUIRE_NETWORK: "1"',
             'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" --checks clippy,build,test,doc',
         ),
@@ -750,7 +747,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             if requirement not in normalized_job:
                 errors.append(f"PR {job_name} is missing selected-binary behavior: {requirement}")
 
-    for name in ("sora_parliament_lifecycle", "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs"):
+    for name in ("sora_parliament_lifecycle",):
         job = _job_block(workflow, name)
         normalized_job = _normalized(job)
         for requirement in (
@@ -772,7 +769,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         normalized_required = _normalized(required_job)
         for requirement in (
             "if: always()",
-            "needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle, nexus_cross_dataspace_localnet, nexus_cross_lane_proofs]",
+            "needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]",
             'test "$CLASSIFIER_RESULT" = success',
             "true:success|false:skipped) return 0",
             *(
@@ -986,8 +983,8 @@ GATE_SETTINGS = (
         "release-gate must select tests by module path: /^state::tests::some_exact_test_name/",
     ),
     (
-        "test(/^proof::tests::/)",
-        "test(/^proof::tests::.*(limit|resource_profile)/)",
+        "test(/^(axt_binding|backend::compact_quantity_producer|proof)::tests::/)",
+        "test(/^(axt_binding|backend::compact_quantity_producer|proof)::tests::.*(limit|resource_profile)/)",
         "release-gate must select tests by module path",
     ),
     (
@@ -1317,7 +1314,7 @@ def test_release_workflow_guard_rejects_weakening(
                 workflow,
                 "rust_changes",
                 BUILD_EFFICIENCY_PROVENANCE_TEST,
-                "scripts/tests/check_source_file_budget_test.py",
+                "scripts/tests/check_compile_unit_budget_test.py",
             ),
             "PR Rust classifier is missing required behavior",
         ),

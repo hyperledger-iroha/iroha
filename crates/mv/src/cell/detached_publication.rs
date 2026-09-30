@@ -1,6 +1,7 @@
 //! Caller-owned reacquisition of the exact retained EBR pair.
 use super::*;
-use concread::{ebrcell::EbrCellWriterAcquisition, release::DeferredReleaseBatch};
+use concread::ebrcell::EbrCellWriterAcquisition;
+use iroha_allocation::release::DeferredReleaseBatch;
 
 enum Role<'a, V: Value, C: Send + Sync + 'static> {
     Owned(EbrCellOwned<V, C>),

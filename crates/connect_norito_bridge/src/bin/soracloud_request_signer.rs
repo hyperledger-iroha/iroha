@@ -138,7 +138,10 @@ struct MutationSigner {
     public_key: PublicKey,
 }
 /// Canonical V1 preimage for uploaded-model bundle roots.
-#[derive(norito::Encode)]
+#[derive(norito::Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::soracloud_request_signer::UploadedModelBundleRootPreimageV1"
+)]
 struct UploadedModelBundleRootPreimageV1 {
     service_name: String,
     model_id: String,

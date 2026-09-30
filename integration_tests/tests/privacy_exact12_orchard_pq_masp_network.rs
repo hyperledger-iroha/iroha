@@ -36,14 +36,12 @@ use iroha::{
         },
     },
 };
-use iroha_core::{
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
-    privacy_release_evidence::{
-        PrivacyReleaseOrchardNetworkActionV1, PrivacyReleasePqMaspNetworkActionsV1,
-        PrivacyReleaseTransactionContextV1, build_privacy_release_orchard_network_action_v1,
-        build_privacy_release_pq_masp_network_actions_v1,
-    },
+use iroha_core::privacy_release_evidence::{
+    PrivacyReleaseOrchardNetworkActionV1, PrivacyReleasePqMaspNetworkActionsV1,
+    PrivacyReleaseTransactionContextV1, build_privacy_release_orchard_network_action_v1,
+    build_privacy_release_pq_masp_network_actions_v1,
 };
+use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -439,7 +437,7 @@ fn independently_resign_corrupted_proof(
     );
     Ok(corrupted)
 }
-async fn wait_for_common_v2_subject(
+async fn wait_for_common_commit_subject(
     clients: &[Client],
     minimum_height: u64,
     context: &str,
@@ -479,7 +477,7 @@ async fn wait_for_common_v2_subject(
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "{context}: v2 DA/RBC committed subject did not converge within \
+                "{context}: DA/RBC committed subject did not converge within \
                  {PEER_CONVERGENCE_TIMEOUT:?}; {}",
                 last_observed.join("; ")
             ));
@@ -1007,7 +1005,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
                  height {finalized_height}"
             );
         }
-        wait_for_common_v2_subject(
+        wait_for_common_commit_subject(
             &healthy_clients,
             finalized_height,
             "healthy-peer retained-native DA/RBC subject",
@@ -1089,7 +1087,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "post-restart authoritative Orchard state",
         )
         .await?;
-        wait_for_common_v2_subject(
+        wait_for_common_commit_subject(
             &recovered_clients,
             post_restart_replay_height,
             "post-restart retained-native DA/RBC subject",

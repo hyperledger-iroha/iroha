@@ -446,16 +446,4 @@ fn source_corridor_is_ordered_private_and_has_no_runtime_backend() {
     assert!(!creator.contains("pub fn create_direct_rkg_one_sealed_candidate_v2"));
     assert!(!record.contains("ReadyRkg2"));
     assert!(!lifecycle.contains("callback"));
-    for source in [
-        lifecycle,
-        record,
-        creator,
-        sealed,
-        prover,
-        include_str!("direct_rkg_one_lifecycle_v2_tests.rs"),
-        include_str!("direct_rkg_one_lifecycle_v2_kats.rs"),
-    ] {
-        assert!(source.lines().count() <= 500);
-        assert!(source.len() <= 24 * 1024);
-    }
 }

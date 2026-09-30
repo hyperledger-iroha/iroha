@@ -509,7 +509,7 @@ fn compiler_embeds_exact_nested_return_schema_in_cntr_and_manifest() {
             }
         }
     "#;
-    let (artifact, manifest) = ivm::KotodamaCompiler::new()
+    let (artifact, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(source)
         .expect("compile nested return schema");
     let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse compiled artifact");
@@ -604,7 +604,7 @@ fn compiler_emits_self_describing_contract_artifact() {
             }
         }
     "#;
-    let (bytes, manifest) = ivm::KotodamaCompiler::new()
+    let (bytes, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile contract");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse artifact");
@@ -668,7 +668,7 @@ fn contract_code_hash_binds_every_byte_of_compiled_deployable_image() {
             }
         }
     "#;
-    let bytes = ivm::KotodamaCompiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile contract with CNTR, indexed literal, and code");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse compiled artifact");
@@ -698,7 +698,7 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     let source = include_str!("../../iroha/tests/fixtures/contract_code_readback/code_readback.ko");
     let artifact =
         include_bytes!("../../iroha/tests/fixtures/contract_code_readback/code_readback.to");
-    let rebuilt = ivm::KotodamaCompiler::new()
+    let rebuilt = kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("reproduce the checked-in SDK contract artifact");
     assert_eq!(rebuilt.as_slice(), artifact);
@@ -817,7 +817,7 @@ fn public_entrypoint_descriptor_targets_authenticated_callable() {
             }
         }
     "#;
-    let bytes = ivm::KotodamaCompiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile contract");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse artifact");
@@ -849,7 +849,7 @@ seiyaku ContractArtifactFixture {
 
 }
 "#;
-    let bytes = ivm::KotodamaCompiler::new()
+    let bytes = kotodama_lang::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile artifact");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse artifact");
@@ -1262,7 +1262,7 @@ fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
 }
 #[test]
 fn strict_return_integrity_allows_nested_direct_calls_for_raw_and_prepared_loads() {
-    let bytes = ivm::KotodamaCompiler::new().compile_source(
+    let bytes = kotodama_lang::compiler::Compiler::new().compile_source(
         "seiyaku Calls { fn leaf() -> bool { true } fn middle() -> bool { leaf() } view fn main() -> bool { middle() } }"
     ).expect("compile nested table calls");
     let prepared =
@@ -1571,7 +1571,7 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         ))
         .unwrap_or_else(|error| panic!("valid ordinary identifier `{name}` was rejected: {error}"));
     }
-    for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
+    for name in kotodama_surface::source_policy::V1_RETIRED_NUMERIC_TYPE_NAMES {
         if !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name) {
             continue;
         }
@@ -1603,7 +1603,7 @@ fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
             "unexpected error for `{name}`: {error}"
         );
     }
-    for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
+    for name in kotodama_surface::source_policy::V1_RETIRED_NUMERIC_TYPE_NAMES {
         let artifact = contract_artifact_with_seiyaku_name(name);
         let error = ivm::verify_contract_artifact(&artifact)
             .expect_err("every retired numeric type name must remain reserved for source units");

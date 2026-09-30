@@ -13,7 +13,7 @@ pub fn limits() -> ExecutionOutputLimits {
         max_outputs: 1024,
         max_output_bytes: 16 * 1024 * 1024,
         max_total_output_bytes: 128 * 1024 * 1024,
-        max_executed_wire_bytes: super::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
+        max_executed_wire_bytes: super::consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES,
     }
 }
 pub fn network(index: u32, result: impl Into<TransactionResult>) -> ExecutionOutputV1 {

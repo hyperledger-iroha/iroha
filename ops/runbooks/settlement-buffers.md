@@ -15,7 +15,7 @@ summary: Response plan for the unified settlement router buffer thresholds and c
 |-------|--------|-------|
 | Telemetry metrics | Grafana `nexus_lanes` board (`dashboards/grafana/nexus_lanes.json`) + Prometheus (`iroha_settlement_buffer_*`, `iroha_oracle_*`, `iroha_settlement_pnl_xor`, `iroha_settlement_swapline_utilisation`, `iroha_settlement_schedule_lag_ms`). | Panels `Settlement Buffer Headroom`, `Oracle/Price`, `Swap-line Utilisation`, and `TWAMM Schedule Lag` back the SLOs. |
 | Alerting | Alertmanager template `AddressInvalidRatioSlo` (reuse channels) + forthcoming settlement router rules (track `NX-3` ticket). | Page on buffer status ≥2 or `CIRCUIT_BREAKER_ACTIVE`. |
-| Torii status snapshots | `iroha_cli sumeragi status --format json` or `/v1/sumeragi/status`. | Provides `lane_governance[].settlement.buffer` and `lane_settlement_commitments`. |
+| Lane records | `ops sumeragi diagnostics` (`lane_governance[]`) and `GET /v1/sumeragi/lanes`, both operator-signed. | Identify the lane and its governance readiness. Buffer state comes from the `iroha_settlement_buffer_*` metrics; lanes carry no settlement receipts (`specs/sumeragi_lanes.md` §7). |
 | Router spec | `docs/settlement-router.md`. | Authoritative description of buffer states, error codes, and telemetry. |
 | Automation | `iroha tools address normalize`, `iroha_cli transaction submit` (or equivalent SDK automation), swap-line tooling owned by Treasury. | Required when moving XOR into reserve accounts. |
 | Evidence log | `ops/drill-log.md`. | Record every alert, refill, or circuit-breaker action. |
@@ -51,9 +51,10 @@ summary: Response plan for the unified settlement router buffer thresholds and c
      'iroha_settlement_buffer_status{lane="lane-A"}'
    ```
 2. Export the Grafana panel (image/JSON) from `nexus_lanes` for the affected lane.
-3. Run `iroha_cli sumeragi status --format json > status.json` and isolate the lane metadata:
+3. Capture the lane's governance entry:
    ```bash
-   jq '.lane_governance[] | select(.lane_id=="lane-A") | .settlement' status.json
+   iroha --operator-private-key-file /absolute/runtime/operator.key --output-format json ops sumeragi diagnostics > diagnostics.json
+   jq '.lane_governance[] | select(.alias=="lane-A")' diagnostics.json
    ```
 
 ### Step 2 — Choose Remediation Path
@@ -84,7 +85,7 @@ If sponsor balances are insufficient or AMM depth is degraded:
 
 1. Confirm breaker reason from router logs (`CIRCUIT_BREAKER_ACTIVE`, `AMM_DEPTH_DEGRADED`, etc.).
 2. Ensure XOR-only mode is active while breaker is engaged.
-3. Work with DEX governance to restore liquidity; capture `lane_settlement_commitments` snapshots before and after the breaker clears.
+3. Work with DEX governance to restore liquidity; capture `iroha_settlement_buffer_*` metric snapshots before and after the breaker clears.
 4. Once two consecutive TWAMM slices execute with canonical-I105 receipts and lag <500 ms, clear the incident and document approvals.
 
 ### Step 6 — Logging & Evidence
@@ -93,7 +94,7 @@ If sponsor balances are insufficient or AMM depth is degraded:
 - Attach:
   - Grafana panel export.
   - Prometheus query output.
-  - `sumeragi status` excerpt (`lane_governance` + `lane_settlement_commitments`).
+  - `ops sumeragi diagnostics` excerpt (`lane_governance`).
   - Transfer hash or governance proposal ID.
   - Alertmanager notification ID.
 

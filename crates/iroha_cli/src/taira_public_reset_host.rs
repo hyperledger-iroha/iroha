@@ -6,6 +6,8 @@ pub(super) mod beacon;
 pub(super) mod deployment_lifecycle;
 #[path = "taira_public_reset_dispatcher_transition.rs"]
 pub(super) mod dispatcher_transition;
+#[path = "taira_public_reset_first_boot.rs"]
+mod first_boot;
 
 #[path = "taira_stopped_owner_maintenance.rs"]
 pub(crate) mod maintenance;
@@ -5982,6 +5984,7 @@ fn execute_host_action(
                     verify_preseed_barrier_for_start(admitted)?;
                 }
             }
+            first_boot::verify_start(admitted, validator)?;
             start_unit(admitted, "start", &validator.systemd_unit)?;
             let release = Path::new(&validator.service_root)
                 .join("releases")
@@ -7280,12 +7283,14 @@ fn reconcile_fresh_state(state: &Path, admitted: &HostAdmission) -> Result<()> {
         let path = state.join(name);
         ensure_generated_directory(&path, admitted, "fresh_state_entry", 0o700)?;
     }
-    Ok(())
+    first_boot::arm_fresh_state(state, admitted)
 }
 
 fn require_reconcilable_fresh_state_entries(state: &Path) -> Result<()> {
     let mut marker_present = false;
     let mut marker_staging_present = false;
+    let mut token_present = false;
+    let mut token_staging_present = false;
     for entry in fs::read_dir(state)? {
         let name = entry?.file_name();
         if name == OsStr::new(".public-reset-generated-v1.json") {
@@ -7295,6 +7300,12 @@ fn require_reconcilable_fresh_state_entries(state: &Path) -> Result<()> {
             // exact private staging slot must reach the existing publisher,
             // which enforces custody, byte equality and no-replace recovery.
             marker_staging_present = true;
+        } else if name == OsStr::new(first_boot::TOKEN) {
+            // Only the empty private token publisher may reconcile these slots.
+            // Arming still requires this reset's marker and no prepared start.
+            token_present = true;
+        } else if name == OsStr::new(first_boot::TOKEN_STAGING) {
+            token_staging_present = true;
         } else if !RESET_GENERATED_ENTRIES
             .iter()
             .any(|expected| name == OsStr::new(expected))
@@ -7309,6 +7320,11 @@ fn require_reconcilable_fresh_state_entries(state: &Path) -> Result<()> {
             "fresh state contains both published and unpublished root markers"
         ));
     }
+    if token_present && token_staging_present {
+        return Err(eyre!(
+            "fresh state contains both published and unpublished first-boot tokens"
+        ));
+    }
     Ok(())
 }
 
@@ -7318,6 +7334,7 @@ fn verify_fresh_state(admitted: &HostAdmission) -> Result<()> {
     verify_generated_marker(state, admitted, "fresh_state")?;
     let expected = BTreeSet::from_iter(
         std::iter::once(OsString::from(".public-reset-generated-v1.json"))
+            .chain(std::iter::once(OsString::from(first_boot::TOKEN)))
             .chain(RESET_GENERATED_ENTRIES.into_iter().map(OsString::from)),
     );
     let actual = fs::read_dir(state)?
@@ -7328,6 +7345,7 @@ fn verify_fresh_state(admitted: &HostAdmission) -> Result<()> {
             "fresh validator state differs from its exact reset closure"
         ));
     }
+    first_boot::verify_token(state)?;
     for name in RESET_GENERATED_ENTRIES {
         let path = state.join(name);
         require_root_directory(&path, true, "fresh validator state entry")?;
@@ -7351,9 +7369,10 @@ fn verify_populated_fresh_state_for_quarantine(
         std::iter::once(OsString::from(".public-reset-generated-v1.json"))
             .chain(RESET_GENERATED_ENTRIES.into_iter().map(OsString::from)),
     );
-    let actual = fs::read_dir(state)?
+    let mut actual = fs::read_dir(state)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<BTreeSet<_>>>()?;
+    first_boot::validate_runtime_entries(state, &mut actual)?;
     if actual != expected {
         return Err(eyre!(
             "populated fresh state differs from its exact top-level reset closure"
@@ -8936,8 +8955,43 @@ fn observe_validator_process(
     let expected_genesis = binding.genesis.clone();
     let config_hash = &binding.config_sha256;
     let genesis_hash = &binding.genesis_sha256;
-    let expected_arguments = binding.argv.iter().map(PathBuf::from).collect::<Vec<_>>();
-    validate_validator_argv(&arguments, &expected_arguments[0], &expected_arguments[2])?;
+    let mut expected_arguments = binding.argv.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let asserts_fresh = arguments
+        .last()
+        .is_some_and(|value| value == Path::new(first_boot::ASSERT_FRESH_KEY));
+    validate_validator_argv(
+        &arguments,
+        &expected_arguments[0],
+        &expected_arguments[2],
+        asserts_fresh,
+    )?;
+    if fresh_state {
+        first_boot::verify_consumed(admitted, validator)?;
+        if asserts_fresh {
+            first_boot::require_initial_process(admitted)?;
+        }
+    } else {
+        if !asserts_fresh
+            && expected_arguments
+                .last()
+                .is_some_and(|value| value == Path::new(first_boot::ASSERT_FRESH_KEY))
+        {
+            // The signed predecessor may still have been its original bootstrap
+            // process. Restoring its consumed state starts without another assertion.
+            require_session_manager_operation_applied(
+                admitted,
+                "rollback-start",
+                "start",
+                &validator.systemd_unit,
+            )?;
+            expected_arguments.pop();
+        }
+        if arguments != expected_arguments {
+            return Err(eyre!(
+                "validator predecessor argv differs from its exact signed phase binding"
+            ));
+        }
+    }
     verify_regular_hash(&expected_config, config_hash)?;
     let (file, snapshot) = open_pinned_regular(&expected_config, "attested validator config")?;
     let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
@@ -9033,13 +9087,21 @@ fn validate_validator_launcher_argv(cmdline: &[u8], unit: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn validate_validator_argv(arguments: &[PathBuf], executable: &Path, config: &Path) -> Result<()> {
-    let expected = [
+fn validate_validator_argv(
+    arguments: &[PathBuf],
+    executable: &Path,
+    config: &Path,
+    asserts_fresh: bool,
+) -> Result<()> {
+    let mut expected = vec![
         executable.to_path_buf(),
         PathBuf::from("--config"),
         config.to_path_buf(),
         PathBuf::from("--sora"),
     ];
+    if asserts_fresh {
+        expected.push(PathBuf::from(first_boot::ASSERT_FRESH_KEY));
+    }
     if arguments != expected {
         return Err(eyre!(
             "validator MainPID cmdline is not the exact signed V1 argv grammar"
@@ -22003,6 +22065,23 @@ time.sleep(30)
     }
 
     #[test]
+    fn validator_argv_accepts_normal_restart_without_fresh_assertion() {
+        let executable = Path::new("/service/current/bin/iroha3d_taira");
+        let config = Path::new("/service/current/config/config.toml");
+        let normal = vec![
+            executable.to_path_buf(),
+            PathBuf::from("--config"),
+            config.to_path_buf(),
+            PathBuf::from("--sora"),
+        ];
+        let mut initial = normal.clone();
+        initial.push(PathBuf::from(first_boot::ASSERT_FRESH_KEY));
+        validate_validator_argv(&initial, executable, config, true).unwrap();
+        validate_validator_argv(&normal, executable, config, false).unwrap();
+        assert!(validate_validator_argv(&initial, executable, config, false).is_err());
+    }
+
+    #[test]
     fn validator_argv_rejects_duplicate_last_wins_flags() {
         let executable = PathBuf::from("/srv/taira/taira-validator-1/current/bin/iroha3d_taira");
         let config = PathBuf::from("/srv/taira/taira-validator-1/current/config/config.toml");
@@ -22012,7 +22091,15 @@ time.sleep(30)
             config.clone(),
             PathBuf::from("--sora"),
         ];
-        validate_validator_argv(&exact, &executable, &config).expect("exact validator argv");
+        validate_validator_argv(&exact, &executable, &config, false).expect("exact validator argv");
+        assert!(validate_validator_argv(&exact, &executable, &config, true).is_err());
+        let mut first_boot = exact.clone();
+        first_boot.push(PathBuf::from(first_boot::ASSERT_FRESH_KEY));
+        validate_validator_argv(&first_boot, &executable, &config, true)
+            .expect("exact first-boot argv");
+        assert!(validate_validator_argv(&first_boot, &executable, &config, false).is_err());
+        first_boot.push(PathBuf::from(first_boot::ASSERT_FRESH_KEY));
+        assert!(validate_validator_argv(&first_boot, &executable, &config, true).is_err());
         let mut old_manifest = exact.clone();
         old_manifest.splice(
             3..3,
@@ -22021,13 +22108,13 @@ time.sleep(30)
                 PathBuf::from("/srv/taira/taira-validator-1/current/genesis/genesis.json"),
             ],
         );
-        assert!(validate_validator_argv(&old_manifest, &executable, &config).is_err());
+        assert!(validate_validator_argv(&old_manifest, &executable, &config, false).is_err());
         let mut duplicate = exact;
         duplicate.extend([
             PathBuf::from("--config"),
             PathBuf::from("/tmp/attacker.toml"),
         ]);
-        let _ = validate_validator_argv(&duplicate, &executable, &config)
+        let _ = validate_validator_argv(&duplicate, &executable, &config, false)
             .expect_err("duplicate last-wins config flag must fail");
     }
 
@@ -24637,6 +24724,7 @@ time.sleep(30)
                         &arguments,
                         Path::new("/service/current/bin/iroha3d_taira"),
                         Path::new("/service/current/config/config.toml"),
+                        false,
                     )?;
                     complete_attestations += 1;
                     Ok(ValidatorProcessReadiness::Attested)
@@ -25765,6 +25853,24 @@ time.sleep(30)
             assert_eq!(fs::read(&source).unwrap(), b"unexpected new occupant");
             assert_eq!(fs::symlink_metadata(&destination).unwrap().ino(), inode);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_state_retry_admits_only_one_first_boot_publication_slot() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in [first_boot::TOKEN, first_boot::TOKEN_STAGING] {
+            let path = directory.path().join(name);
+            fs::write(&path, b"").unwrap();
+            require_reconcilable_fresh_state_entries(directory.path()).unwrap();
+            fs::remove_file(path).unwrap();
+        }
+        fs::write(directory.path().join(first_boot::TOKEN), b"").unwrap();
+        fs::write(directory.path().join(first_boot::TOKEN_STAGING), b"").unwrap();
+        assert!(require_reconcilable_fresh_state_entries(directory.path()).is_err());
+        fs::remove_file(directory.path().join(first_boot::TOKEN_STAGING)).unwrap();
+        fs::create_dir(directory.path().join("sumeragi-records")).unwrap();
+        assert!(require_reconcilable_fresh_state_entries(directory.path()).is_err());
     }
 
     #[cfg(unix)]

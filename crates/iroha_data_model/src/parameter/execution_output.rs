@@ -5,7 +5,7 @@
 //! execution metadata and host allocations fit the complete carrier.
 
 use crate::block::{
-    consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
+    consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES,
     output_budget::{ExecutionOutputLimits, ExecutionOutputTerminalCeilings},
 };
 

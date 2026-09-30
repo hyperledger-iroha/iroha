@@ -77,7 +77,9 @@ is never persisted as authority.
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
 schema-2 transport. It checks the complete ABI-25 inventory and correlates method
 responses with the caller's request. It fails closed when the native coordinator
-is unavailable. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
+is unavailable. Every failure after dispatch revokes the local handle before
+native teardown; uncertain monetary state remains owned by the qualified backend.
+`KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
 implements the wallet coordinator interface over that transport and the exact
 `KagemushaCoreCoordinatorArchiveV1` codecs. It binds preparations to the caller,
 original public inputs, and qualification; candidates retain that exact preparation.
@@ -1702,6 +1704,16 @@ let clock = try await operatorTorii.getTimeStatus()
 accounts must be exact canonical I105 ids; alias-shaped `name@domain` values
 fail decoding.
 
+`preflight.sumeragi` carries only `blockCadenceMs`, the signed-genesis target
+block time. Torii serves no stall threshold, so `preflight.stallThresholdMs` is
+derived as `ToriiPipelinePreflight.stallBlockCadences` (20) × `blockCadenceMs`,
+and `preflight.isStatusStalled(status)` reports a stall only when
+`status.queueSize > 0` and the time since the last non-empty block (or since
+the last block, before the first non-empty one) exceeds it. Twenty cadences
+cover one crashed leader's view change at the Sumeragi default timings; call
+`status.isQueueStalled(stallThresholdMs:)` directly when the deployment's local
+consensus timers are known.
+
 These helpers sign the exact `GET`, substituted path, query, and empty body,
 then dispatch once without redirects or retries. They reject bearer/API-token
 fallback and caller-supplied operator headers. Swift has no peer, policy, or
@@ -1925,11 +1937,10 @@ complete canonical uncompressed Norito frame; bare payloads and retired status
 layouts are rejected. JSON and wire parity share the Rust-generated corpus at
 `fixtures/sumeragi/native_status_v1.tsv`.
 
-The obsolete global revision-4 wire codec and inactive grouped AMX diagnostics
-surface are removed. Native operator preparation/readiness models remain open
-until their schema is wired to the actual committee and published lane-state
-owners. Cross-dataspace settlement remains a separate qualification requirement;
-see `docs/source/native_protocol_retirement.md`.
+`getSumeragiLanes()` parses the operator route `GET /v1/sumeragi/lanes`
+(`specs/sumeragi_lanes.md` §8) into `ToriiSumeragiLaneStatus`. Each record requires
+its committed `daLayout` RS16 geometry, including the encoding and resource bounds.
+Lane observations do not confer finality.
 
 The Rust xtask is the sole owner of the shared Norito RPC fixtures in
 `fixtures/norito_rpc`. For that shared corpus, `IrohaSwift/Fixtures` is a generated

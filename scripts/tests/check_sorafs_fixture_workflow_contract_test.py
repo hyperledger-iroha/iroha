@@ -1039,8 +1039,8 @@ def test_child_source_controls_follow_locked_npm_before_native_build(mutation):
     "scripts/tests/sorafs_javascript_input_files_test.py",
     "scripts/tests/sorafs_javascript_parent_input_test.py",
     "scripts/tests/sorafs_javascript_runtime_inputs_test.py",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
 ))
 def test_child_abi_controls_are_in_the_installed_pytest_batch(mutation, test):
     """The Python-only source guard uses the existing scripts requirement owner."""
@@ -1057,8 +1057,8 @@ def test_child_abi_controls_are_in_the_installed_pytest_batch(mutation, test):
 
 
 @pytest.mark.parametrize("selector", (
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
-    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "scripts/tests/macho_decoder_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
 ))
 def test_runtime_parser_registration_cannot_expand_to_framework_execution(selector):
     """The exact pure selectors cannot become the unrelated native module run."""

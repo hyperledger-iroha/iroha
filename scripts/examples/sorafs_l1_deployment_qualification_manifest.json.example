@@ -11,26 +11,22 @@
     {
       "validator_id": "taira-validator-1",
       "voting": true,
-      "da_enabled": true,
-      "rbc_enabled": true
+      "da_enabled": true
     },
     {
       "validator_id": "taira-validator-2",
       "voting": true,
-      "da_enabled": true,
-      "rbc_enabled": true
+      "da_enabled": true
     },
     {
       "validator_id": "taira-validator-3",
       "voting": true,
-      "da_enabled": true,
-      "rbc_enabled": true
+      "da_enabled": true
     },
     {
       "validator_id": "taira-validator-4",
       "voting": true,
-      "da_enabled": true,
-      "rbc_enabled": true
+      "da_enabled": true
     }
   ],
   "storage_providers": [

@@ -19,7 +19,7 @@ The model covers:
 - four-validator availability, Prepare, and Commit certification in
   `crates/iroha_core/src/private_settlement/{availability,phase,protocol}.rs`;
 - proof verification and fixed-shape note transitions in
-  `crates/iroha_core/src/privacy_engines/atomic_private_settlement/`;
+  `crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/`;
 - the atomic carrier and WSV transition in
   `crates/iroha_core/src/private_settlement/{carrier,global_state}.rs` and
   `crates/iroha_core/src/state.rs`.

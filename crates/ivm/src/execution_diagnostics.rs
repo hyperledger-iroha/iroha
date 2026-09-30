@@ -5,7 +5,7 @@
 //! ordinary VM, host scratch, or the access recorder's small shared control
 //! allocation, and it is not a production private-witness custody boundary.
 
-use mv::allocation::AllocationBudget;
+use iroha_allocation::AllocationBudget;
 
 use crate::{
     VMError,

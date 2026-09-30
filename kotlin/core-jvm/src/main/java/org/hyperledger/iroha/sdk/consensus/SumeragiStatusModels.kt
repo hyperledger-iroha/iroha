@@ -119,7 +119,7 @@ class SumeragiStatus internal constructor(
     }
 }
 
-private object NativeStatusParser {
+internal object NativeStatusParser {
     private val fields = setOf("protocol_version","config_fingerprint","beacon_horizon","instance","height","view","stage","leader","proxy_tail","high_qc_view","level","start_level","t_retx_ms","committed_height","applied_height","awaiting","signer","unanchored","abstaining","halted","footprint")
     private val footprintFields = setOf("votes","timeouts","blocks","exec_entries","wants","pending_apply","sync_entries","sync_bytes","peers","recent_headers","configs","cert_cache","evidence_keys","probe")
     private fun key(value: Any?, name: String): String? {
@@ -154,8 +154,12 @@ private object NativeStatusParser {
         require(!ready || session != null) { "provider readiness requires an installed session" }
         return SumeragiBeaconHorizon(SumeragiJsonPrimitives.u64(r["epoch_length_blocks"], "epoch_length_blocks"), next, session, covers, ready)
     }
-    fun parse(payload: String): SumeragiStatus {
-        val r = SumeragiJsonPrimitives.exactObject(SumeragiJsonPrimitives.parseObject(payload, "native status"), fields, "native status")
+    fun parse(payload: String): SumeragiStatus =
+        parseValue(SumeragiJsonPrimitives.parseObject(payload, "native status"))
+
+    /** Validates one already-parsed status object, such as a lane instance's status. */
+    fun parseValue(value: Any?): SumeragiStatus {
+        val r = SumeragiJsonPrimitives.exactObject(value, fields, "native status")
         fun u64(n: String) = SumeragiJsonPrimitives.u64(r[n], n)
         fun u32(n: String) = SumeragiJsonPrimitives.u32(r[n], n)
         fun bool(n: String) = SumeragiJsonPrimitives.boolean(r[n], n)
@@ -197,14 +201,17 @@ internal object SumeragiJsonPrimitives {
         }
     }
 
-    fun parseObject(payload: String, context: String): Map<String, Any?> {
+    fun parseObject(payload: String, context: String): Map<String, Any?> =
+        objectValue(parseValue(payload, context), context)
+
+    /** Strict JSON with unique keys and no negative-zero tokens; the root may be any value. */
+    fun parseValue(payload: String, context: String): Any? {
         rejectNegativeZeroTokens(payload, context)
-        val parsed = try {
+        return try {
             JsonParser.parse(payload)
         } catch (error: IllegalStateException) {
             throw IllegalArgumentException("$context must be valid JSON with unique keys", error)
         }
-        return objectValue(parsed, context)
     }
 
     @Suppress("UNCHECKED_CAST")

@@ -457,7 +457,10 @@ impl PreparedContract {
     pub(crate) fn code_region(&self) -> &[u8] {
         &self.inner.artifact[self.inner.header_len..]
     }
-    pub(crate) fn instruction_entry_pc(&self) -> u64 {
+    /// Return the absolute PC of the first executable instruction in IVM code memory.
+    #[inline]
+    #[must_use]
+    pub fn instruction_entry_pc(&self) -> u64 {
         self.inner.instruction_entry_pc
     }
     pub(crate) fn literal_table(&self) -> &DecodedLiteralTable {

@@ -28,8 +28,8 @@ on-chain state and calls the corresponding cryptographic verifier.
 - Reject degenerate or sparse authentication paths at the verification
   boundary, including witnesses constructed directly from decoded wire data.
 
-DA fan-out, relay messaging, and settlement routing are separate layers. See
-`nexus_cross_lane.md` for those topics.
+Lane dissemination and merging are separate layers. See `sumeragi_lanes.md`
+for those topics.
 
 ## Lane commitment model
 

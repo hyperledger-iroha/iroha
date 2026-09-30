@@ -1325,7 +1325,11 @@ def test_measurement_binds_profiler_outside_frozen_source(
     monkeypatch.setattr(MODULE, "__file__", str(entrypoint))
     state = MODULE.create_private_state(tmp_path / "profile.state")
     try:
-        identity = MODULE.prepare_compiler_measurement(state, "/private/rustc", {})
+        environment = {"RUSTC_WRAPPER": "/ambient/cache", "RUSTC_WORKSPACE_WRAPPER": "/ambient/workspace-cache"}
+        identity = MODULE.prepare_compiler_measurement(state, "/private/rustc", environment)
+        assert environment["RUSTC_WRAPPER"] == ""
+        assert environment["RUSTC_WORKSPACE_WRAPPER"] == ""
+        assert environment["RUSTC"] == str(state.tools / "rustc")
         assert identity["profiler"] == MODULE.RUSTC_PROFILE.stable_file_identity(entrypoint)
         assert MODULE.verify_compiler_measurement(state, identity, "/private/rustc") == identity
         entrypoint.write_text("# changed profiler\n", encoding="utf-8")

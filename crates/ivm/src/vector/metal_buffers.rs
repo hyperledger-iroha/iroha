@@ -32,8 +32,9 @@ impl MetalBuffer {
     pub(super) fn usable(&self) -> bool {
         self.health.usable()
             && super::metal_runtime_allowed()
-            && super::metal_runtime::current_health()
-                .is_some_and(|health| mv::allocation::ChargedShared::ptr_eq(&health, &self.health))
+            && super::metal_runtime::current_health().is_some_and(|health| {
+                iroha_allocation::ChargedShared::ptr_eq(&health, &self.health)
+            })
     }
     pub(super) fn allocate(device: &ProtocolObject<dyn MTLDevice>, len: usize) -> Option<Self> {
         if len == 0 || !physical_usable() {
@@ -168,8 +169,9 @@ impl<'a, 'b> Command<'a, 'b> {
     pub(super) fn usable(&self) -> bool {
         self.health.usable()
             && physical_usable()
-            && super::metal_runtime::current_health()
-                .is_some_and(|health| mv::allocation::ChargedShared::ptr_eq(&health, &self.health))
+            && super::metal_runtime::current_health().is_some_and(|health| {
+                iroha_allocation::ChargedShared::ptr_eq(&health, &self.health)
+            })
     }
     pub(super) fn quarantine(&self) {
         self.health.quarantine(false);
@@ -185,7 +187,7 @@ impl<'a, 'b> Command<'a, 'b> {
         if health.identity() != queue.device().registryID()
             || buffers
                 .iter()
-                .any(|buffer| !mv::allocation::ChargedShared::ptr_eq(&health, &buffer.health))
+                .any(|buffer| !iroha_allocation::ChargedShared::ptr_eq(&health, &buffer.health))
         {
             return None;
         }

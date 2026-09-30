@@ -6,10 +6,10 @@
 //! [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before private-witness
 //! hashing, entropy or proof work.
 use core::{num::NonZeroU32, time::Duration};
-pub use iroha_core::privacy_engines::zk_ace::{
+pub use iroha_core_privacy::privacy_engines::zk_ace::{
     ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,
 };
-use iroha_core::{
+use iroha_core_privacy::{
     privacy_engines::zk_ace::{
         ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZkAceNativeErrorV1, ZkAceTryCryptoRngV1,
         prove_zk_ace_privacy_v1, prove_zk_ace_privacy_v1_with_rng,
@@ -546,7 +546,6 @@ fn placeholder_envelope_v1(
         proof: PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(Vec::new())),
     }
 }
-#[expect(clippy::too_many_lines, reason = "ordered fail-closed proof assembly")]
 fn prepare_zk_ace_privacy_transfer_with_prover_v1<F>(
     context: &ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -844,7 +843,7 @@ pub fn build_signed_zk_ace_privacy_transfer_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_core::privacy_engines::zk_ace::ZkAceTryRngCoreV1;
+    use iroha_core_privacy::privacy_engines::zk_ace::ZkAceTryRngCoreV1;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::privacy::{
         PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyDigestV1,
@@ -1118,7 +1117,7 @@ mod tests {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         assert!(matches!(
             compiled_privacy_profile_v1(protocol_id),
-            Err(iroha_core::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+            Err(iroha_core_privacy::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
                 protocol_id: rejected,
             }) if rejected == protocol_id
         ));

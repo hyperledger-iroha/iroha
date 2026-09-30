@@ -38,7 +38,7 @@ artefact formats or scripts change.
 2. **Lane manifest changes**
    - Governance publishes signed manifest bundles via the Space Directory.
    - Operators verify signatures, update catalog entries, and archive the
-     manifests in `specs/project_tracker/nexus_config_deltas/`.
+     manifests with the change ticket.
 3. **Configuration deltas**
    - All changes to `config/config.toml` require a ticket referencing the lane ID
      and dataspace alias.
@@ -46,8 +46,7 @@ artefact formats or scripts change.
      joins or upgrades.
 4. **Rollback drills**
    - Perform quarterly rollback rehearsals (stop node, restore previous bundle,
-     replay config, re-run smoke). Record outcomes under
-     `specs/project_tracker/nexus_config_deltas/<date>-rollback.md`.
+     replay config, re-run smoke). Record outcomes in the change ticket.
 5. **Compliance approvals**
    - Private/CBDC lanes must obtain compliance sign-off before changing DA
      policy or telemetry redaction knobs. Reference
@@ -55,85 +54,36 @@ artefact formats or scripts change.
 
 ## 3. Telemetry & SLO Coverage
 
-Dashboards and alert rules are versioned under `dashboards/` and documented in
-`specs/nexus_telemetry_remediation_plan.md`. Operators MUST:
+Dashboards and alert rules are versioned under `dashboards/`. Consensus status
+comes from `/v1/sumeragi/status` and lane status from `/v1/sumeragi/lanes`
+(`specs/telemetry.md`, `specs/sumeragi_lanes.md` §8). Operators MUST:
 
 - Subscribe PagerDuty/on-call targets to `dashboards/alerts/nexus_audit_rules.yml`
   and the lane health rules under `dashboards/alerts/torii_norito_rpc_rules.yml`
   (covering Torii/Norito transport).
 - Publish the following Grafana boards to the operations portal:
-  - `nexus_lanes.json` (lane height, backlog, DA parity).
-  - `nexus_settlement.json` (settlement latency, treasury deltas).
-  - `android_operator_console.json` / SDK dashboards when the lane depends on
-    mobile telemetry.
+  - `nexus_lanes.json` (lane finality, oracle and buffer panels).
+  - `settlement_router_overview.json` (settlement router buffers).
+  - The Android SDK dashboards when the lane depends on mobile telemetry.
 - Keep OTEL exporters aligned with `specs/torii/norito_rpc_telemetry.md`
   whenever Torii binary transport is enabled.
-- Run the telemetry remediation checklist at least quarterly (Section 5 in
-  `specs/nexus_telemetry_remediation_plan.md`) and attach the filled form
-  to the ops review minutes.
 
 ### Key Metrics
 
 | Metric | Description | Alert threshold |
 |--------|-------------|-----------------|
-| `nexus_lane_height{lane_id}` | Head height per lane; detects stalled validators. | Alert if no increase for 3 consecutive slots. |
-| `nexus_da_backlog_chunks{lane_id}` | Unprocessed DA chunks per lane. | Alert above configured limit (default: 64 for public, 8 for private). |
-| `nexus_settlement_latency_seconds{lane_id}` | Time between lane commit and global settlement. | Alert >900 ms P99 (public) or >1200 ms (private). |
 | `torii_request_failures_total{scheme="norito_rpc"}` | Norito RPC error count. | Alert if 5-minute error ratio >2 %. |
 
-### Multilane lifecycle and application evidence
+### Lane status
 
-- Treat `/v1/sumeragi/status` as the authoritative consensus status only.
-  Inspect operational lane evidence through `/v1/sumeragi/diagnostics`.
-  `native_amx_participant_applications` is ordered by route/incarnation and
-  reports `certified_pending_carrier`, `committed_evidence_pending`,
-  `durably_applied`, or `conflict`. A `conflict` row is a Sev 1 condition; do
-  not select either same-height identity manually.
-- Before approving drain or scale-in, require the diagnostics frontier to show
-  no ordinary queue work, live reservation, certified-unmerged autonomous
-  bundle, delayed work, pending merge entry, or unapplied/unverifiable Native
-  control. Native participant controls are routing/settlement evidence only;
-  economic effects become final once through the canonical global carrier.
-- Do not remove lane directories, reservation journals, Native receipts,
-  manifests, latest-index files, or autonomous sidecars by hand. Restart repair
-  reconstructs bounded indexes and missing sidecars from authenticated finality
-  evidence. Malformed, oversized, temporary, unexpected, or symlinked
-  artefacts must remain fail-closed for incident capture.
-- A recreated lane ID must have a new incarnation. After recreation, verify
-  that diagnostics and archive paths contain no active reservation, QC,
-  signing claim, marker, sidecar, or merge row from the retired incarnation
-  before admitting traffic.
-- Production transaction admission requires a signature-bound
-  `QueuePlanSynced` intent and an exact `f + 1` QueuePlan certificate. Public
-  `202 Accepted` means that certificate is durable on the ingress node; a later
-  proposal-native carrier still has to apply its immutable WSV binding. If
-  Torii reports `queue_plan_journal_outcome_unknown`, reconcile the exact
-  transaction hash before retrying; a blind resubmission can obscure which
-  authority owns the durable admission. A journal durability fault blocks
-  drain until restart repair either restores the record or leaves the lane
-  explicitly fail-closed. An authority may admit an exact historical request
-  after a height-only race only when the canonical predecessor remains retained
-  and every route incarnation and validator roster resolves identically at the
-  request's source proposal height and the authority's current proposal height.
-  Existing exact durable ownership remains idempotently reusable. A quorum
-  certificate assembled from current or accepted historical requests remains
-  usable when its canonical predecessor, active incarnation, and exact current
-  authority source pass certificate validation. This relies on the static
-  at-most-`f` Byzantine-key model and does not establish continuous source
-  equality under mobile key compromise. `queue_plan_admission_context_future` is retryable and
-  must not create queue ownership. A future quorum certificate may be parked
-  durably only when its roster and incarnation equal the local current
-  authority source, and is reclassified automatically after catch-up; source
-  drift makes it stale and releases its slot. Treat
-  `queue_plan_admission_context_mismatch` as a fail-closed history, roster,
-  incarnation, or routing-policy mismatch rather than retrying it blindly.
-- Treat the proposal-native QueuePlan certificate as control-only. The
-  `QueuePlanSynced` transaction's physical FIFO position or live-reservation
-  ordinal must remain a fence until its autonomous outcome is terminal, and it
-  executes only through a certified merge. Any ordinary external block
-  entrypoint with that intent is invalid; locked-body recovery must reject it
-  before changing pending payload, reservation, FIFO, session, or retirement
-  state.
+- `/v1/sumeragi/status` is the authoritative status of the global consensus
+  instance. `/v1/sumeragi/lanes` lists the committed lane records and this
+  node's lane instances (`specs/sumeragi_lanes.md` §8). A lane that holds work
+  but stops advancing its merged frontier is a Sev 2 condition.
+- Lanes are opened, closed and scaled by the governed `sumeragi_lane_policy`
+  and deterministic autoscale in the global chain (`specs/sumeragi_lanes.md`
+  §2, §6). A recreated lane is a new incarnation; never remove lane storage by
+  hand.
 
 ## 4. Incident Response
 
@@ -161,19 +111,17 @@ Incident tickets must include:
   in the onboarding or incident ticket.
 - **Telemetry exports:** Weekly snapshots of Prometheus TSDB chunks related to
   the lane, attached to the audit share for 12 months minimum.
-- **Runbook versioning:** Every significant change to this file must include a
-  changelog entry in `specs/project_tracker/nexus_config_deltas/README.md`
-  so auditors can track when requirements changed.
+- **Runbook versioning:** Record every significant change to this file in the
+  change ticket so auditors can track when requirements changed.
 
 ## 6. Related Resources
 
 - `specs/nexus_overview.md` — architecture/high-level summary.
 - `specs/nexus.md` — full technical specification.
-- `specs/nexus_lanes.md` — lane geometry.
-- `specs/nexus_transition_notes.md` — migration roadmap.
+- `specs/nexus_lanes.md` — lane catalog geometry and storage.
+- `specs/sumeragi_lanes.md` — lane instances, merge and autoscale.
 - `specs/cbdc_lane_playbook.md` — CBDC-specific policies.
 - `specs/sora_nexus_operator_onboarding.md` — release/onboarding flow.
-- `specs/nexus_telemetry_remediation_plan.md` — telemetry guardrails.
 
 Keep these references up to date whenever roadmap item NX-14 advances or when
 new lane classes, telemetry rules, or governance hooks are introduced.

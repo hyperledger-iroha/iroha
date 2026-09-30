@@ -234,7 +234,7 @@ def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
     assert client_module._KOTODAMA_RESERVED_IDENTIFIERS - expected == {"Amount"}
     assert expected.isdisjoint({"contract", "entry", "init", "upgrade"})
 
-    semantic = (root / "crates" / "kotodama_lang" / "src" / "semantic.rs").read_text(
+    semantic = (root / "crates" / "kotodama_surface" / "src" / "source_policy.rs").read_text(
         encoding="utf-8"
     )
     type_table = re.search(

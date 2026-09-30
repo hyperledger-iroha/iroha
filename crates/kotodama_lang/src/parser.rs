@@ -568,7 +568,8 @@ fn append_forbidden_source_identifier_errors(
         let TokenKind::Ident(name) = &token.kind else {
             continue;
         };
-        if !crate::semantic::V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&name.as_str())
+        if !kotodama_surface::source_policy::V1_FORBIDDEN_SOURCE_IDENTIFIERS
+            .contains(&name.as_str())
             || retired_type_ranges.contains(&token.range)
         {
             continue;
@@ -5015,7 +5016,7 @@ mod tests {
     }
     #[test]
     fn retired_numeric_type_spellings_are_rejected_with_replacements() {
-        for legacy in crate::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
+        for legacy in kotodama_surface::source_policy::V1_RETIRED_NUMERIC_TYPE_NAMES {
             let source = format!("module Types {{ fn use_type({legacy} value) {{}} }}");
             let error = parse(&source).expect_err("retired numeric type must fail closed");
             assert!(

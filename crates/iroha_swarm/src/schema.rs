@@ -32,6 +32,18 @@ fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
             json::to_value(private_key).expect("serialize SoraNet transport private key"),
         );
     }
+    if let Some(public_key) = env.streaming_identity_public_key {
+        map.insert(
+            "STREAMING_IDENTITY_PUBLIC_KEY".into(),
+            json::to_value(public_key).expect("serialize streaming identity public key"),
+        );
+    }
+    if let Some(private_key) = env.streaming_identity_private_key {
+        map.insert(
+            "STREAMING_IDENTITY_PRIVATE_KEY".into(),
+            json::to_value(private_key).expect("serialize streaming identity private key"),
+        );
+    }
     map.insert(
         "P2P_PUBLIC_ADDRESS".into(),
         Value::String(env.p2p_public_address.to_string()),
@@ -93,6 +105,7 @@ mod json_value_tests {
     type SampleTopology = (
         peer::ExposedKeyPair,
         peer::ExposedKeyPair,
+        peer::ExposedKeyPair,
         [u16; 2],
         iroha_model_base::chain::ChainId,
         std::collections::BTreeSet<iroha_data_model::prelude::Peer>,
@@ -109,6 +122,9 @@ mod json_value_tests {
         let transport_pair =
             peer::generate_soranet_transport_key_pair(Some(b"swarm-json-primary"), b"node-0")
                 .expect("seeded primary transport key generation should succeed");
+        let streaming_pair =
+            peer::generate_streaming_identity_key_pair(Some(b"swarm-json-primary"), b"node-0")
+                .expect("seeded primary streaming identity generation should succeed");
         let ports = [crate::BASE_PORT_P2P, crate::BASE_PORT_API];
         let other_ports = [crate::BASE_PORT_P2P + 1, crate::BASE_PORT_API + 1];
         let mut topology = std::collections::BTreeSet::new();
@@ -124,6 +140,7 @@ mod json_value_tests {
         (
             primary_pair,
             transport_pair,
+            streaming_pair,
             ports,
             chain,
             topology,
@@ -132,11 +149,12 @@ mod json_value_tests {
     }
     #[test]
     fn peer_env_to_value_matches_expected_fields() {
-        let (primary_pair, transport_pair, ports, chain, topology, trusted_pops) =
+        let (primary_pair, transport_pair, streaming_pair, ports, chain, topology, trusted_pops) =
             sample_topology();
         let env = PeerEnv::new(
             &primary_pair,
             &transport_pair,
+            Some(&streaming_pair),
             ports,
             &chain,
             &topology,
@@ -159,6 +177,20 @@ mod json_value_tests {
                 json::to_value(private_key).unwrap(),
             );
         }
+        expected.insert(
+            "STREAMING_IDENTITY_PUBLIC_KEY".into(),
+            json::to_value(&streaming_pair.0).unwrap(),
+        );
+        expected.insert(
+            "STREAMING_IDENTITY_PRIVATE_KEY".into(),
+            json::to_value(
+                streaming_pair
+                    .1
+                    .as_ref()
+                    .expect("development streaming private key"),
+            )
+            .unwrap(),
+        );
         expected.insert(
             "P2P_PUBLIC_ADDRESS".into(),
             Value::String(env.p2p_public_address.to_string()),
@@ -200,6 +232,33 @@ mod json_value_tests {
             assert!(matches!(parsed, Value::Array(_)));
         }
         assert_eq!(actual, Value::Object(expected));
+    }
+    #[test]
+    fn peer_env_without_streaming_identity_renders_no_streaming_keys() {
+        let (primary_pair, transport_pair, _, ports, chain, topology, trusted_pops) =
+            sample_topology();
+        let env = PeerEnv::new(
+            &primary_pair,
+            &transport_pair,
+            None,
+            ports,
+            &chain,
+            &topology,
+            trusted_pops,
+        );
+        let Value::Object(map) = peer_env_to_value(&env) else {
+            panic!("peer environment is an object");
+        };
+        for key in [
+            "STREAMING_IDENTITY_PUBLIC_KEY",
+            "STREAMING_IDENTITY_PRIVATE_KEY",
+        ] {
+            assert!(
+                !map.contains_key(key),
+                "an environment without a streaming identity must not render {key}"
+            );
+        }
+        assert!(map.contains_key("P2P_SORANET_TRANSPORT_PUBLIC_KEY"));
     }
 }
 trait ComposeImageFields {
@@ -375,6 +434,8 @@ struct PeerEnv<'a> {
     private_key: Option<&'a iroha_crypto::ExposedPrivateKey>,
     soranet_transport_public_key: &'a iroha_crypto::PublicKey,
     soranet_transport_private_key: Option<&'a iroha_crypto::ExposedPrivateKey>,
+    streaming_identity_public_key: Option<&'a iroha_crypto::PublicKey>,
+    streaming_identity_private_key: Option<&'a iroha_crypto::ExposedPrivateKey>,
     p2p_public_address: iroha_primitives::addr::SocketAddr,
     p2p_address: iroha_primitives::addr::SocketAddr,
     api_address: iroha_primitives::addr::SocketAddr,
@@ -385,6 +446,7 @@ impl<'a> PeerEnv<'a> {
     fn new(
         (public_key, private_key): &'a peer::ExposedKeyPair,
         (soranet_transport_public_key, soranet_transport_private_key): &'a peer::ExposedKeyPair,
+        streaming_identity: Option<&'a peer::ExposedKeyPair>,
         [port_p2p, port_api]: [u16; 2],
         chain: &'a iroha_model_base::chain::ChainId,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
@@ -402,6 +464,9 @@ impl<'a> PeerEnv<'a> {
             private_key: private_key.as_ref(),
             soranet_transport_public_key,
             soranet_transport_private_key: soranet_transport_private_key.as_ref(),
+            streaming_identity_public_key: streaming_identity.map(|(public_key, _)| public_key),
+            streaming_identity_private_key: streaming_identity
+                .and_then(|(_, private_key)| private_key.as_ref()),
             p2p_public_address,
             p2p_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_p2p),
             api_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_api),
@@ -938,6 +1003,7 @@ impl<'a> BuildOrPull<'a> {
             PeerEnv::new(
                 &peer_info.key_pair,
                 &peer_info.soranet_transport_key_pair,
+                peer_info.streaming_identity_key_pair.as_ref(),
                 peer_info.ports,
                 chain,
                 topology,
@@ -1153,6 +1219,27 @@ mod tests {
                     .clone(),
             )
             .expect("transport key pair must match");
+            let streaming_identity = local
+                .streaming_identity_key_pair
+                .as_ref()
+                .expect("development validators render a streaming identity");
+            assert_eq!(
+                streaming_identity.0.algorithm(),
+                iroha_crypto::Algorithm::Ed25519,
+                "streaming admission requires an Ed25519 identity"
+            );
+            assert_ne!(streaming_identity.0, local.key_pair.0);
+            assert_ne!(streaming_identity.0, local.soranet_transport_key_pair.0);
+            iroha_crypto::KeyPair::new(
+                streaming_identity.0.clone(),
+                streaming_identity
+                    .1
+                    .as_ref()
+                    .expect("streaming private key")
+                    .0
+                    .clone(),
+            )
+            .expect("streaming key pair must match");
             let trusted_pops = network
                 .values()
                 .map(|peer| (peer.key_pair.0.clone(), peer.pop.clone()))
@@ -1160,6 +1247,7 @@ mod tests {
             let env = PeerEnv::new(
                 &local.key_pair,
                 &local.soranet_transport_key_pair,
+                Some(streaming_identity),
                 local.ports,
                 &chain,
                 &topology,
@@ -1185,9 +1273,14 @@ mod tests {
             let config = reader
                 .read_and_complete::<iroha_config::parameters::user::Root>()
                 .expect("config in env should be exhaustive");
-            config
+            let admitted = config
                 .parse()
                 .expect("generated environment must pass canonical config admission");
+            assert_eq!(
+                admitted.streaming.key_material.identity().public_key(),
+                &streaming_identity.0,
+                "the node must admit the rendered streaming identity instead of a fallback"
+            );
             assert!(mock_env.unvisited().is_empty());
         }
     }

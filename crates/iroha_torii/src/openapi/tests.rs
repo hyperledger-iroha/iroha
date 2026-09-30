@@ -1310,10 +1310,6 @@ fn uploaded_private_model_runtime_openapi_surface_is_absent() {
     );
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one cohesive exact Soracloud release-route and schema authority audit"
-)]
 fn soracloud_release_openapi_matches_the_exact_closed_catalog_surface() {
     use iroha_torii_shared::route_catalog::{AdmissionPolicy, AuthenticationPolicy, RouteEffect};
 
@@ -2930,6 +2926,7 @@ include!("tests/sns_contract.rs");
 include!("tests/query_asset_absence_contract.rs");
 include!("tests/sorafs_pop_contracts.rs");
 include!("tests/vpn_da.rs");
+include!("tests/sumeragi_lanes_contract.rs");
 mod catalog_and_contracts;
 
 #[test]

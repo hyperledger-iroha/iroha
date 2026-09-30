@@ -1416,10 +1416,6 @@ mod tests {
         (policy, signing)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one fixture signs every mutually bound committee, auditor and approval view"
-    )]
     fn response_validation_fixture_v1() -> ResponseValidationFixtureV1 {
         let network_id = validation_network(0x31);
         let route = validation_route(7);
@@ -2314,10 +2310,6 @@ mod tests {
 #[cfg(test)]
 mod captured_frame_identity_tests {
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one assertion pins each declared wire identity"
-    )]
     fn observed_declared_identities() {
         crate::captured_identity_tests::assert_bidirectional::<
             super::PrivateSettlementAuditApprovalRequestV1,

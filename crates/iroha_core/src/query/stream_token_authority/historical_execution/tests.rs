@@ -9,7 +9,7 @@ use crate::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::AccountId,
-    block::consensus_v2::HeightContextId,
+    block::consensus::HeightContextId,
     sorafs::stream_token_authority::{
         StreamTokenAuthorityRequestV1, StreamTokenOperationV1, StreamTokenReviewedV1,
     },

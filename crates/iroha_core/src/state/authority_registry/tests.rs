@@ -78,7 +78,7 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
             Role::Canonical(Canonical::Owner(children)) => assert!(!children.is_empty()),
             Role::Derived { sources, check } => {
                 assert!(!sources.is_empty());
-                let DerivationCheck::Rebuild(owner) = check;
+                let (DerivationCheck::Rebuild(owner) | DerivationCheck::Commitment(owner)) = check;
                 assert!(!owner.is_empty());
             }
             Role::History {

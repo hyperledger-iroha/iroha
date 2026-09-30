@@ -1028,7 +1028,7 @@ pub mod network {
     /// Drop transaction gossip for dataspaces that are missing from the lane catalog instead of
     /// falling back to restricted targeting.
     pub const TX_GOSSIP_DROP_UNKNOWN_DATASPACE: bool = false;
-    /// Optional cap on restricted-dataspace gossip targets (None = commit topology fanout).
+    /// Optional cap on restricted-dataspace gossip targets (None = all authorized native lane validators).
     pub const TX_GOSSIP_RESTRICTED_TARGET_CAP: Option<NonZeroUsize> = None;
     /// Optional cap on public-dataspace gossip targets (None = broadcast; default = 16).
     pub const TX_GOSSIP_PUBLIC_TARGET_CAP: Option<NonZeroUsize> = Some(nonzero!(16_usize));
@@ -1036,10 +1036,6 @@ pub mod network {
     pub const TX_GOSSIP_PUBLIC_TARGET_RESHUFFLE: Duration = TRANSACTION_GOSSIP_PERIOD;
     /// Interval between reshuffles of restricted gossip target selection.
     pub const TX_GOSSIP_RESTRICTED_TARGET_RESHUFFLE: Duration = TRANSACTION_GOSSIP_PERIOD;
-    /// Fallback strategy for restricted gossip when no targets are available (`drop`|`public_overlay`).
-    pub const TX_GOSSIP_RESTRICTED_FALLBACK: &str = "drop";
-    /// Policy for handling restricted payloads when only the public overlay is available (`refuse`|`forward`).
-    pub const TX_GOSSIP_RESTRICTED_PUBLIC_PAYLOAD: &str = "refuse";
     /// Interval between peer gossip batches.
     pub const PEER_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
     /// Maximum interval between peer gossip batches (change-driven gossip backs off toward this).
@@ -1186,13 +1182,15 @@ pub mod network {
     // Maximum allowed encrypted frame size for peer messages (bytes).
     /// Maximum encrypted frame size for peer messages in bytes.
     ///
-    /// The recommended maximal Sumeragi v2 `CertifiedBodyResponse` occupies
-    /// 16,844,237 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// The cap was sized for a maximal certified-body response of 16,844,237 bytes
+    /// before the P2P relay/data wrapper and AEAD nonce/tag.
     /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
     /// layers while keeping every retained frame allocation finite.
     /// The encrypted ceiling includes AEAD expansion in addition to the full
     /// 17 MiB plaintext topic cap; keeping these as distinct constants avoids
     /// making the default geometry invalid by exactly one nonce and tag.
+    // TODO(S4): re-derive the 16,844,237-byte sizing from the current Sumeragi full-body
+    // transport message; it was measured on the retired certified-body response.
     pub const MAX_FRAME_BYTES: NonZeroUsize =
         nonzero!(17 * 1024 * 1024_usize + DEFAULT_AEAD_FRAME_OVERHEAD_BYTES);
     // Per-topic caps (defaults stricter than global except BlockSync)
@@ -3413,7 +3411,7 @@ pub mod nexus {
             Option<(
                 iroha_data_model::block::consensus::ValidatorIndex,
                 iroha_model_base::peer::PeerId,
-                mv::allocation::AllocationCharge,
+                iroha_allocation::AllocationCharge,
             )>,
         );
         /// Exact fixed backing for the maximum retained pending penalty plan.
@@ -3452,7 +3450,7 @@ pub mod nexus {
             iroha_primitives::numeric::Quantity,
             iroha_primitives::numeric::Quantity,
         )>() + 3
-            * (1 + 32 + core::mem::size_of::<mv::allocation::AllocationCharge>());
+            * (1 + 32 + core::mem::size_of::<iroha_allocation::AllocationCharge>());
         /// Finite process-local pool for stake-index backings and nested account keys.
         pub const CONSENSUS_STAKE_INDEX_BYTES: usize = 64 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).

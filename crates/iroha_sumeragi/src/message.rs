@@ -3,6 +3,9 @@
 
 use core::fmt;
 
+use iroha_schema::IntoSchema;
+use norito::{Decode, Encode, NoritoSchema};
+
 use crate::{
     crypto::Crypto,
     preimage,
@@ -20,10 +23,11 @@ pub const MAX_SYNC_ENTRIES: usize = 1024;
 /// Largest signer bitmap in bytes.
 pub const MAX_BITMAP_BYTES: usize = MAX_COMMITTEE_SIZE.div_ceil(8);
 
+pub use crate::bytes::ByteAdmissionError;
 mod attestation;
 pub use attestation::{
     AttestationSignature, CommitAttestation, MAX_ATTESTATION_SIGNATURE_BYTES,
-    MAX_RESULT_WITNESS_BYTES, ResultWitness, WitnessAdmissionError,
+    MAX_RESULT_WITNESS_BYTES, ResultWitness,
 };
 
 /// The wire-format version of [`WireMessage`] for the P2P handshake (§3.5). Every incompatible
@@ -31,9 +35,7 @@ pub use attestation::{
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// Vote / certificate kind (§3.3).
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, norito::Encode, norito::Decode,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub enum VoteKind {
     /// First phase; its certificate is the `PrepareQC` (lock).
     Prepare,
@@ -52,7 +54,7 @@ impl VoteKind {
 }
 
 /// Block header (§3.2). Its hash is [`preimage::block_hash`].
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::BlockHeader")]
 pub struct BlockHeader {
     /// Instance id `I`.
@@ -69,6 +71,8 @@ pub struct BlockHeader {
     pub parent_result: Hash32,
     /// `H(TAG_PAY ‖ payload)`.
     pub payload_hash: Hash32,
+    /// Commitment to the complete ordered original RS16 row table.
+    pub availability_digest: Hash32,
     /// `len(payload)`.
     pub payload_len: u32,
     /// Canonical index of `L(h, origin_view)`.
@@ -92,30 +96,24 @@ impl BlockHeader {
     }
 }
 
-/// A block: header plus opaque payload (§3.2).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_sumeragi::Block")]
-pub struct Block {
-    /// The header.
+/// Complete original author evidence, independent of actual received row custody.
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
+#[norito_schema(name = "iroha_sumeragi::PayloadManifest")]
+pub struct PayloadManifest {
+    /// Original signed header whose hash binds the complete ordered row commitments.
     pub header: BlockHeader,
-    /// Payload bytes (opaque to the core); `EMPTY = []` is the canonical empty block.
-    pub payload: Vec<u8>,
+    /// Mandatory complete original signature table.
+    pub availability: crate::availability::AvailabilityFrame,
 }
-
-impl Block {
-    /// `block_hash(self.header)`.
+impl PayloadManifest {
+    /// Exact original block identity; this grants no payload custody.
     pub fn hash(&self, crypto: &dyn Crypto) -> Hash32 {
         self.header.hash(crypto)
-    }
-
-    /// `body_ok` (§3.2): payload length and hash match the header.
-    pub fn body_ok(&self, crypto: &dyn Crypto) -> bool {
-        preimage::body_ok(crypto, self)
     }
 }
 
 /// A leader's proposal for round `(height, view)` (§3.3).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Proposal")]
 pub struct Proposal {
     /// Instance id.
@@ -130,10 +128,19 @@ pub struct Proposal {
     pub justify: Option<TimeoutCert>,
     /// A `CommitQC` of `height − 1`; `None` iff `height == g + 1`.
     pub parent_qc: Option<Qc>,
-    /// Payload bytes; unsigned (bound through the header); relays may strip it.
-    pub payload: Option<Vec<u8>>,
     /// Signature of `L(height, view)` over `prop_preimage(height, view, bh, ad)`.
     pub sig: Signature,
+}
+
+/// Sole proposal wire carrier: signed metadata plus mandatory original availability evidence.
+/// Independent equivocation/header evidence carries only the actual signed `Proposal`.
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
+#[norito_schema(name = "iroha_sumeragi::ProposalMessage")]
+pub struct ProposalMessage {
+    /// Original signed round statement.
+    pub proposal: Proposal,
+    /// Original author's complete signature table, never raw payload bytes.
+    pub availability: crate::availability::AvailabilityFrame,
 }
 
 impl Proposal {
@@ -257,18 +264,10 @@ impl Proposal {
             &self.att_digest(crypto),
         )
     }
-
-    /// The block, if the payload is present (not checked; see [`Block::body_ok`]).
-    pub fn block(&self) -> Option<Block> {
-        self.payload.as_ref().map(|payload| Block {
-            header: self.header.clone(),
-            payload: payload.clone(),
-        })
-    }
 }
 
 /// A Prepare or Commit vote (§3.3).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Vote")]
 pub struct Vote {
     /// Prepare or Commit.
@@ -344,7 +343,7 @@ macro_rules! vote_content {
 vote_content! { Vote => needs_attestation; Qc => needs_attestations; }
 
 /// A timeout vote (§3.3).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::TimeoutVote")]
 pub struct TimeoutVote {
     /// Instance id.
@@ -382,7 +381,7 @@ impl TimeoutVote {
 }
 
 /// A quorum certificate: `PrepareQC` if `kind == Prepare`, `CommitQC` if `kind == Commit` (§3.4).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Qc")]
 pub struct Qc {
     /// Prepare or Commit.
@@ -421,8 +420,8 @@ impl Qc {
     /// the original witness. The caller must preserve the source and retry local refusals.
     pub fn admit_attestation_witness(
         &mut self,
-        budget: &mv::allocation::AllocationBudget,
-    ) -> Result<(), WitnessAdmissionError> {
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<(), ByteAdmissionError> {
         self.attestation_witness
             .as_mut()
             .map_or(Ok(()), |witness| witness.admit(budget))
@@ -435,7 +434,7 @@ impl Qc {
 }
 
 /// One signer of a [`TimeoutCert`] with the view of the `PrepareQC` it carried (`hq`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct TcEntry {
     /// Canonical index of the signer.
     pub signer: ValidatorIndex,
@@ -444,7 +443,7 @@ pub struct TcEntry {
 }
 
 /// A timeout certificate for `(height, view)` (§3.4).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::TimeoutCert")]
 pub struct TimeoutCert {
     /// Instance id.
@@ -478,9 +477,7 @@ impl TimeoutCert {
 /// Periodic "state, not custody" summary (§3.5, §6.11). While awaiting (§6.8) a node reports
 /// `height = tip.height + 1`, view 0, `committed_qc = tip.commit_qc`, no lock, TC or proposal hash
 /// and `want_proposal = false`.
-#[derive(
-    Clone, PartialEq, Eq, Debug, Default, norito::Encode, norito::Decode, norito::NoritoSchema,
-)]
+#[derive(Clone, PartialEq, Eq, Debug, Default, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Status")]
 pub struct Status {
     /// Instance id.
@@ -508,7 +505,7 @@ pub struct Status {
 
 /// A signed answer to a probe (§3.5, §7.4 R2): `sig` by `key` over
 /// `echo_preimage(nonce, Status.height)`.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Echo")]
 pub struct Echo {
     /// Authenticated epoch authorizing the replier's reported height.
@@ -522,7 +519,7 @@ pub struct Echo {
 }
 
 /// Request for committed blocks starting at `from_height` (§6.9).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct SyncRequest {
     /// Instance id.
     pub instance: Hash32,
@@ -535,17 +532,17 @@ pub struct SyncRequest {
 }
 
 /// One committed block with its `CommitQC`.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct SyncEntry {
-    /// The committed block.
-    pub block: Block,
+    /// Committed original evidence; actual bodies are acquired from authenticated rows.
+    pub manifest: PayloadManifest,
     /// Its `CommitQC`.
     pub commit_qc: Qc,
 }
 
 /// Committed blocks at consecutive heights starting at the requested height (§3.5). An empty
 /// response means "I hold nothing at `from_height`".
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct SyncResponse {
     /// Instance id.
     pub instance: Hash32,
@@ -554,8 +551,8 @@ pub struct SyncResponse {
 }
 
 /// Request for one block body (§6.9).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
-pub struct BlockRequest {
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
+pub struct PayloadRequest {
     /// Instance id.
     pub instance: Hash32,
     /// Height of the wanted block.
@@ -564,18 +561,25 @@ pub struct BlockRequest {
     pub block_hash: Hash32,
 }
 
-/// One block body, answering a [`BlockRequest`] (§6.9).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
-pub struct BlockResponse {
-    /// Instance id.
+/// One actual RS16 row. Its original signature is retained in the mandatory manifest table.
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
+#[norito_schema(name = "iroha_sumeragi::PayloadChunk")]
+pub struct PayloadChunk {
+    /// Consensus instance.
     pub instance: Hash32,
-    /// The block.
-    pub block: Block,
+    /// Original block height.
+    pub height: u64,
+    /// Header hash bound by the original row authorization.
+    pub block_hash: Hash32,
+    /// Flat canonical stripe-major row position.
+    pub index: u32,
+    /// Actual bounded original-funded row bytes; a table entry alone cannot fill this field.
+    pub bytes: crate::availability::RowBytes,
 }
 
 /// One bounded application partial tied to an exact applied parent and scheduling context.
 /// The application authenticates its contents and the P2P sender before changing producer state.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub struct ApplicationControl {
     /// Complete view-independent source of this partial.
     pub context: crate::api::ApplicationControlContext,
@@ -584,11 +588,11 @@ pub struct ApplicationControl {
 }
 
 /// Everything that travels between nodes (§3.5).
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::WireMessage")]
 pub enum WireMessage {
     /// Round message: a proposal.
-    Proposal(Box<Proposal>),
+    Proposal(Box<ProposalMessage>),
     /// Round message: a Prepare or Commit vote.
     Vote(Vote),
     /// Round message: a `PrepareQC` or `CommitQC`.
@@ -604,11 +608,13 @@ pub enum WireMessage {
     /// Service message: sync response.
     SyncResponse(SyncResponse),
     /// Service message: body request.
-    BlockRequest(BlockRequest),
-    /// Service message: body response.
-    BlockResponse(BlockResponse),
+    PayloadRequest(PayloadRequest),
+    /// Service message: complete original manifest, without actual row custody.
+    PayloadManifest(PayloadManifest),
     /// Bounded source-bound application partial, independently verified by the application.
     ApplicationControl(ApplicationControl),
+    /// Service message: actual authenticated RS16 row body.
+    PayloadChunk(PayloadChunk),
 }
 
 // The exact same graph is borrowed for custody inspection and borrowed mutably for
@@ -630,8 +636,8 @@ macro_rules! witness_iterators {
                 }
                 Self::Qc(value) => fixed[0] = qc(value),
                 Self::Proposal(value) => {
-                    fixed[0] = value.parent_qc.$borrow().and_then(qc);
-                    fixed[1] = value.justify.$borrow().and_then(tc);
+                    fixed[0] = value.proposal.parent_qc.$borrow().and_then(qc);
+                    fixed[1] = value.proposal.justify.$borrow().and_then(tc);
                 }
                 Self::Timeout(value) => fixed[0] = value.high_pqc.$borrow().and_then(qc),
                 Self::Tc(value) => fixed[0] = tc(value),
@@ -641,7 +647,7 @@ macro_rules! witness_iterators {
                     fixed[2] = value.high_tc.$borrow().and_then(tc);
                 }
                 Self::SyncResponse(value) => entries = &$($mut)? value.blocks,
-                Self::SyncRequest(_) | Self::BlockRequest(_) | Self::BlockResponse(_)
+                Self::SyncRequest(_) | Self::PayloadRequest(_) | Self::PayloadManifest(_) | Self::PayloadChunk(_)
                 | Self::ApplicationControl(_) => {}
             }
             fixed.into_iter().flatten().chain(
@@ -651,7 +657,27 @@ macro_rules! witness_iterators {
     )*};
 }
 
+macro_rules! availability_iterators {
+    ($($name:ident, $iter:ident, [$($mut:tt)?]);* $(;)?) => { $(
+        fn $name(&$($mut)? self) -> impl Iterator<Item=&$($mut)? crate::availability::AvailabilityFrame> {
+            let mut entries: &$($mut)? [SyncEntry]=&$($mut)? [];
+            let fixed = match self {
+                Self::Proposal(value)=>Some(&$($mut)? value.availability),
+                Self::PayloadManifest(value)=>Some(&$($mut)? value.availability),
+                Self::SyncResponse(value)=>{entries=&$($mut)? value.blocks;None},
+                _=>None,
+            };
+            fixed.into_iter().chain(entries.$iter().map(|entry| &$($mut)? entry.manifest.availability))
+        }
+    )*};
+}
+
 impl WireMessage {
+    availability_iterators! {
+        availability_frames, iter, [];
+        availability_frames_mut, iter_mut, [mut];
+    }
+
     witness_iterators! {
         witnesses, iter, as_ref, [];
         witnesses_mut, iter_mut, as_mut, [mut];
@@ -662,11 +688,15 @@ impl WireMessage {
     /// This performs no allocation and does not validate signatures or require a witness
     /// where the protocol demands one; those remain independent cryptographic checks.
     #[must_use]
-    pub fn attestation_witnesses_admitted_to(
-        &self,
-        budget: &mv::allocation::AllocationBudget,
-    ) -> bool {
+    pub fn owned_bytes_admitted_to(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
         self.witnesses().all(|witness| witness.admitted_to(budget))
+            && self
+                .availability_frames()
+                .all(|frame| frame.admitted_to(budget))
+            && match self {
+                Self::PayloadChunk(chunk) => chunk.bytes.admitted_to(budget),
+                _ => true,
+            }
     }
 
     /// Admit every result witness before a production message is retained by consensus.
@@ -676,18 +706,24 @@ impl WireMessage {
     /// # Errors
     /// Rejects foreign admitted storage or an original-pool allocation refusal. The caller must
     /// not retain this message in the production ingress until every witness is admitted.
-    pub fn admit_attestation_witnesses(
+    pub fn admit_owned_bytes(
         &mut self,
-        budget: &mv::allocation::AllocationBudget,
-    ) -> Result<(), WitnessAdmissionError> {
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<(), ByteAdmissionError> {
         self.witnesses_mut()
-            .try_for_each(|witness| witness.admit(budget))
+            .try_for_each(|witness| witness.admit(budget))?;
+        self.availability_frames_mut()
+            .try_for_each(|frame| frame.admit(budget))?;
+        if let Self::PayloadChunk(chunk) = self {
+            chunk.bytes.admit(budget)?;
+        }
+        Ok(())
     }
 
     /// The instance id the message claims.
     pub fn instance(&self) -> &Hash32 {
         match self {
-            Self::Proposal(p) => &p.instance,
+            Self::Proposal(p) => &p.proposal.instance,
             Self::Vote(x) => &x.instance,
             Self::Qc(c) => &c.instance,
             Self::Timeout(t) => &t.instance,
@@ -695,8 +731,9 @@ impl WireMessage {
             Self::Status(s) => &s.instance,
             Self::SyncRequest(r) => &r.instance,
             Self::SyncResponse(r) => &r.instance,
-            Self::BlockRequest(r) => &r.instance,
-            Self::BlockResponse(r) => &r.instance,
+            Self::PayloadRequest(r) => &r.instance,
+            Self::PayloadManifest(r) => &r.header.instance,
+            Self::PayloadChunk(r) => &r.instance,
             Self::ApplicationControl(m) => &m.context.instance,
         }
     }
@@ -705,7 +742,7 @@ impl WireMessage {
     /// height-filtered, §6.1).
     pub fn round_height(&self) -> Option<u64> {
         match self {
-            Self::Proposal(p) => Some(p.height),
+            Self::Proposal(p) => Some(p.proposal.height),
             Self::Vote(x) => Some(x.height),
             Self::Qc(c) => Some(c.height),
             Self::Timeout(t) => Some(t.height),
@@ -713,13 +750,14 @@ impl WireMessage {
             Self::Status(_)
             | Self::SyncRequest(_)
             | Self::SyncResponse(_)
-            | Self::BlockRequest(_)
-            | Self::BlockResponse(_)
+            | Self::PayloadRequest(_)
+            | Self::PayloadManifest(_)
+            | Self::PayloadChunk(_)
             | Self::ApplicationControl(_) => None,
         }
     }
 
-    /// The Norito enum tag of this message: its position in §3.5, 0 to 10.
+    /// The sole first-release Norito enum tag, 0 to 11.
     pub fn wire_tag(&self) -> u32 {
         match self {
             Self::Proposal(_) => 0,
@@ -730,16 +768,16 @@ impl WireMessage {
             Self::Status(_) => 5,
             Self::SyncRequest(_) => 6,
             Self::SyncResponse(_) => 7,
-            Self::BlockRequest(_) => 8,
-            Self::BlockResponse(_) => 9,
+            Self::PayloadRequest(_) => 8,
+            Self::PayloadManifest(_) => 9,
+            Self::PayloadChunk(_) => 11,
             Self::ApplicationControl(_) => 10,
         }
     }
 
     /// The §12.3 O8 traffic class (the table of §3.5).
     pub fn traffic_class(&self) -> TrafficClass {
-        let payload = matches!(self, Self::Proposal(p) if p.payload.is_some());
-        class_of_tag(self.wire_tag(), payload).unwrap_or(TrafficClass::Control)
+        class_of_tag(self.wire_tag()).unwrap_or(TrafficClass::Control)
     }
 
     /// Canonical Norito encoding (one exact V1 frame).
@@ -768,9 +806,12 @@ impl WireMessage {
     /// The first violated limit.
     pub fn check_limits(&self) -> Result<(), CodecError> {
         match self {
-            Self::Proposal(p) => check_proposal(p),
+            Self::Proposal(p) => {
+                check_proposal(&p.proposal)?;
+                check_manifest_frame(&p.availability)
+            }
             // Signature and witness lengths are invariant in their opaque bounded owners.
-            Self::Vote(_) | Self::SyncRequest(_) | Self::BlockRequest(_) => Ok(()),
+            Self::Vote(_) | Self::SyncRequest(_) | Self::PayloadRequest(_) => Ok(()),
             Self::Qc(c) => check_qc(c),
             Self::Timeout(t) => check_opt_qc(t.high_pqc.as_ref()),
             Self::Tc(t) => check_tc(t),
@@ -787,11 +828,24 @@ impl WireMessage {
                     return Err(CodecError::Limit("sync entries"));
                 }
                 r.blocks.iter().try_for_each(|entry| {
-                    check_header(&entry.block.header)?;
+                    check_header(&entry.manifest.header)?;
+                    check_manifest_frame(&entry.manifest.availability)?;
                     check_qc(&entry.commit_qc)
                 })
             }
-            Self::BlockResponse(r) => check_header(&r.block.header),
+            Self::PayloadManifest(r) => {
+                check_header(&r.header)?;
+                check_manifest_frame(&r.availability)
+            }
+            Self::PayloadChunk(r) => {
+                if r.index >= crate::availability::MAX_DA_CHUNK_COUNT
+                    || !r.bytes.as_slice().len().is_multiple_of(2)
+                {
+                    Err(CodecError::Limit("RS16 row shape"))
+                } else {
+                    Ok(())
+                }
+            }
             Self::ApplicationControl(m) => {
                 if m.bytes.is_empty() {
                     Err(CodecError::Limit("empty application control"))
@@ -801,6 +855,13 @@ impl WireMessage {
             }
         }
     }
+}
+
+fn check_manifest_frame(frame: &crate::availability::AvailabilityFrame) -> Result<(), CodecError> {
+    frame
+        .has_valid_structure()
+        .then_some(())
+        .ok_or(CodecError::Limit("mandatory availability table"))
 }
 
 /// One bounded canonical decode path for wire messages and independent evidence frames.
@@ -866,25 +927,20 @@ pub(crate) fn check_proposal(p: &Proposal) -> Result<(), CodecError> {
 /// bulk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TrafficClass {
-    /// Votes, certificates, timeouts, `Status`, requests, proposals without payload.
+    /// Votes, certificates, timeouts, `Status`, requests.
     Control,
-    /// Proposals with payload and every `BlockResponse`.
+    /// Mandatory proposal/manifest carriers.
     Proposal,
-    /// `SyncResponse`.
+    /// `SyncResponse` and actual payload rows.
     Bulk,
 }
 
-/// The class of wire tag `tag` (`payload`: a proposal carries its payload); `None` for an
-/// unknown tag.
-// SPEC: §12.3 O8 put a `BlockResponse` for the current height in the proposal class and other
-// ones in bulk; the transport classifies a frame before it is decoded, so every `BlockResponse`
-// is proposal class (Appendix E, E44).
-fn class_of_tag(tag: u32, payload: bool) -> Option<TrafficClass> {
+/// The single declared class of each canonical wire tag.
+fn class_of_tag(tag: u32) -> Option<TrafficClass> {
     match tag {
-        0 if payload => Some(TrafficClass::Proposal),
-        0..=6 | 8 | 10 => Some(TrafficClass::Control),
-        7 => Some(TrafficClass::Bulk),
-        9 => Some(TrafficClass::Proposal),
+        1..=6 | 8 | 10 => Some(TrafficClass::Control),
+        0 | 9 => Some(TrafficClass::Proposal),
+        7 | 11 => Some(TrafficClass::Bulk),
         _ => None,
     }
 }
@@ -902,7 +958,7 @@ fn wire_schema_hash() -> [u8; 16] {
 
 /// The traffic class of an encoded [`WireMessage`] frame without decoding it (§3.5): the
 /// canonical frame header (magic, version, schema hash, no compression, compact lengths, exact
-/// length), the enum tag and, for a proposal, the `Option` tag of its payload. `None` for bytes
+/// length) and the sole declared enum tag. `None` for bytes
 /// that are not such a frame. Never panics; for every frame that
 /// [`WireMessage::decode`] accepts it equals [`WireMessage::traffic_class`].
 pub fn traffic_class_of_frame(frame: &[u8]) -> Option<TrafficClass> {
@@ -916,45 +972,7 @@ pub fn traffic_class_of_frame(frame: &[u8]) -> Option<TrafficClass> {
     }
     let body = &frame[FRAME_HEADER..];
     let tag = u32::from_le_bytes(body.get(..4)?.try_into().ok()?);
-    if tag != 0 {
-        return class_of_tag(tag, false);
-    }
-    // `Proposal(Box<Proposal>)`: the variant's length, the box's length, then the fields
-    // `instance, height, view, header, justify, parent_qc` and the `Option` of `payload`, each
-    // prefixed with its compact length.
-    let mut rest = body.get(4..)?;
-    for _ in 0..2 {
-        rest = take_len(rest)?.1;
-    }
-    for _ in 0..6 {
-        let (field, tail) = take_len(rest)?;
-        rest = tail.get(field..)?;
-    }
-    let (len, tail) = take_len(rest)?;
-    match (len, tail.first()) {
-        (1.., Some(0)) => class_of_tag(0, false),
-        (1.., Some(1)) => class_of_tag(0, true),
-        _ => None,
-    }
-}
-
-/// Split a canonical compact length (LEB128, at most ten bytes, shortest form) off `bytes`.
-fn take_len(bytes: &[u8]) -> Option<(usize, &[u8])> {
-    let mut value: u64 = 0;
-    for (i, byte) in bytes.iter().take(10).enumerate() {
-        let bits = u64::from(byte & 0x7f);
-        if i == 9 && bits > 1 {
-            return None; // beyond 64 bits
-        }
-        value |= bits.checked_shl(u32::try_from(7 * i).ok()?)?;
-        if byte & 0x80 == 0 {
-            if i > 0 && bits == 0 {
-                return None; // not the shortest form
-            }
-            return Some((usize::try_from(value).ok()?, bytes.get(i + 1..)?));
-        }
-    }
-    None
+    class_of_tag(tag)
 }
 
 /// Encoding or decoding failure.
@@ -987,7 +1005,7 @@ impl std::error::Error for CodecError {}
 
 /// What was wrong with a signed proposal (§6.2 steps 3, 5, 6). Only signed-content defects
 /// produce evidence; an `Invalid` execution never does (§3.6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Encode, Decode, IntoSchema)]
 pub enum Defect {
     /// `view == 0` but `justify` is present.
     UnexpectedJustify,
@@ -1028,7 +1046,7 @@ pub enum Defect {
 }
 
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
-#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, NoritoSchema, IntoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Evidence")]
 #[allow(clippy::large_enum_variant, reason = "boxing changes Norito encoding")]
 pub enum Evidence {
@@ -1083,18 +1101,13 @@ impl Evidence {
     }
 
     /// Check native artifact bounds without accepting their claimed authority context.
-    /// Evidence never transports a proposal body: only the original signed header and
+    /// Evidence transports only signed proposal metadata: only the original signed header and
     /// justification can establish the native signed-content offences.
     ///
     /// # Errors
     /// A nested native proof exceeds its protocol bound or includes an unsigned payload.
     pub fn check_limits(&self) -> Result<(), CodecError> {
-        let proposal = |value: &Proposal| {
-            if value.payload.is_some() {
-                return Err(CodecError::Limit("evidence proposal payload"));
-            }
-            check_proposal(value)
-        };
+        let proposal = check_proposal;
         match self {
             Self::ProposalEquivocation(first, second) => {
                 proposal(first)?;
@@ -1139,6 +1152,7 @@ mod tests {
             parent_hash: h(2),
             parent_result: h(3),
             payload_hash: h(4),
+            availability_digest: crate::types::Hash32::ZERO,
             payload_len: 3,
             proposer: 1,
             skipped_leaders: vec![key(5), key(6)],
@@ -1224,9 +1238,27 @@ mod tests {
             header: sample_header(),
             justify: Some(sample_tc()),
             parent_qc: Some(sample_qc(VoteKind::Commit, 0)),
-            payload: Some(vec![1, 2, 3]),
             sig: Signature([13; SIGNATURE_LEN]),
         }
+    }
+
+    // Codec-only synthetic table; all signatures are intentionally untrusted here.
+    fn sample_frame() -> crate::availability::AvailabilityFrame {
+        let mut bytes = vec![0; 4 + SIGNATURE_LEN + 6 * (32 + SIGNATURE_LEN)];
+        bytes[..4].copy_from_slice(&6_u32.to_be_bytes());
+        crate::availability::AvailabilityFrame::from_untrusted(bytes).unwrap()
+    }
+    fn sample_manifest() -> PayloadManifest {
+        PayloadManifest {
+            header: sample_header(),
+            availability: sample_frame(),
+        }
+    }
+    fn proposal_message(proposal: Proposal) -> WireMessage {
+        WireMessage::Proposal(Box::new(ProposalMessage {
+            proposal,
+            availability: sample_frame(),
+        }))
     }
 
     fn sample_status() -> Status {
@@ -1250,18 +1282,14 @@ mod tests {
     }
 
     fn all_wire_messages() -> Vec<WireMessage> {
-        let block = Block {
-            header: sample_header(),
-            payload: vec![1, 2, 3],
-        };
+        let manifest = sample_manifest();
         vec![
-            WireMessage::Proposal(Box::new(sample_proposal())),
-            WireMessage::Proposal(Box::new(Proposal {
+            proposal_message(sample_proposal()),
+            proposal_message(Proposal {
                 justify: None,
                 parent_qc: None,
-                payload: None,
                 ..sample_proposal()
-            })),
+            }),
             WireMessage::Vote(sample_vote(VoteKind::Prepare)),
             WireMessage::Vote(sample_vote(VoteKind::Commit)),
             WireMessage::Qc(sample_qc(VoteKind::Prepare, 2)),
@@ -1302,27 +1330,21 @@ mod tests {
                 instance: h(1),
                 blocks: vec![
                     SyncEntry {
-                        block: block.clone(),
+                        manifest: manifest.clone(),
                         commit_qc: sample_qc(VoteKind::Commit, 0),
                     },
                     SyncEntry {
-                        block: Block {
-                            payload: vec![],
-                            ..block.clone()
-                        },
+                        manifest: manifest.clone(),
                         commit_qc: sample_qc(VoteKind::Commit, 1),
                     },
                 ],
             }),
-            WireMessage::BlockRequest(BlockRequest {
+            WireMessage::PayloadRequest(PayloadRequest {
                 instance: h(1),
                 height: 9,
                 block_hash: h(7),
             }),
-            WireMessage::BlockResponse(BlockResponse {
-                instance: h(1),
-                block,
-            }),
+            WireMessage::PayloadManifest(manifest),
             WireMessage::ApplicationControl(ApplicationControl {
                 context: crate::api::ApplicationControlContext {
                     instance: h(1),
@@ -1333,6 +1355,13 @@ mod tests {
                 },
                 bytes: crate::types::ControlWitness::try_from_slice(b"canonical partial fixture")
                     .unwrap(),
+            }),
+            WireMessage::PayloadChunk(PayloadChunk {
+                instance: h(1),
+                height: 9,
+                block_hash: h(7),
+                index: 0,
+                bytes: crate::availability::RowBytes::from_untrusted(vec![1, 2]).unwrap(),
             }),
         ]
     }
@@ -1366,10 +1395,7 @@ mod tests {
     #[test]
     fn standalone_round_trips() {
         round_trip(&sample_header());
-        round_trip(&Block {
-            header: sample_header(),
-            payload: vec![],
-        });
+        round_trip(&sample_manifest());
         round_trip(&sample_proposal());
         round_trip(&sample_vote(VoteKind::Commit));
         round_trip(&sample_timeout());
@@ -1409,8 +1435,20 @@ mod tests {
                 sample_qc(VoteKind::Commit, 1),
             ),
         ];
-        for item in &evidence {
+        let evidence_schema = Evidence::schema();
+        let Some(iroha_schema::Metadata::Enum(evidence_variants)) =
+            evidence_schema.get::<Evidence>()
+        else {
+            panic!("native evidence schema");
+        };
+        assert_eq!(evidence_variants.variants.len(), evidence.len());
+        for (item, variant) in evidence.iter().zip(&evidence_variants.variants) {
             round_trip(item);
+            let payload = norito::codec::Encode::encode(item);
+            assert_eq!(
+                u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                variant.discriminant
+            );
         }
         let defects = [
             Defect::UnexpectedJustify,
@@ -1421,6 +1459,8 @@ mod tests {
             Defect::InvalidParentQc,
             Defect::HeaderInstance,
             Defect::HeaderHeight,
+            Defect::EpochContext,
+            Defect::BoundaryAttestation,
             Defect::ParentHash,
             Defect::ParentResult,
             Defect::PayloadTooLarge,
@@ -1430,7 +1470,18 @@ mod tests {
             Defect::SkippedLeaders,
             Defect::EmptyPayload,
         ];
-        for defect in defects {
+        let defect_schema = Defect::schema();
+        let Some(iroha_schema::Metadata::Enum(defect_variants)) = defect_schema.get::<Defect>()
+        else {
+            panic!("native defect schema");
+        };
+        assert_eq!(defect_variants.variants.len(), defects.len());
+        for (defect, variant) in defects.into_iter().zip(&defect_variants.variants) {
+            let payload = norito::codec::Encode::encode(&defect);
+            assert_eq!(
+                u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                variant.discriminant
+            );
             round_trip(&Evidence::InvalidProposal {
                 proposal: Box::new(sample_proposal()),
                 defect,
@@ -1447,7 +1498,7 @@ mod tests {
         let heights: Vec<_> = messages.iter().map(WireMessage::round_height).collect();
         assert_eq!(&heights[..10], &[Some(9); 10]);
         assert!(heights[10..].iter().all(Option::is_none));
-        assert_eq!(heights.len(), 18);
+        assert_eq!(heights.len(), 19);
 
         let tc = sample_tc();
         assert_eq!(tc.max_hq(), Some(2));
@@ -1466,18 +1517,8 @@ mod tests {
         assert_eq!(qc.preimage(), sample_vote(VoteKind::Prepare).preimage());
 
         let proposal = sample_proposal();
-        let block = proposal.block().unwrap();
-        assert_eq!(block.header, proposal.header);
-        assert!(
-            Proposal {
-                payload: None,
-                ..proposal.clone()
-            }
-            .block()
-            .is_none()
-        );
         let crypto = FakeCrypto::new();
-        assert_eq!(proposal.block_hash(&crypto), block.hash(&crypto));
+        assert_eq!(proposal.block_hash(&crypto), proposal.header.hash(&crypto));
         assert_eq!(
             proposal.signing_preimage(&crypto),
             preimage::prop_preimage(
@@ -1485,7 +1526,7 @@ mod tests {
                 &crate::testing::TEST_EPOCH.id,
                 9,
                 4,
-                &block.hash(&crypto),
+                &proposal.header.hash(&crypto),
                 &proposal.att_digest(&crypto)
             )
         );
@@ -1494,8 +1535,6 @@ mod tests {
             sample_tc().digest(&crypto),
             preimage::tc_digest(&crypto, &sample_tc())
         );
-        // body_ok with a fake hash: the sample header's payload_hash is arbitrary.
-        assert!(!block.body_ok(&crypto));
     }
 
     #[test]
@@ -1559,41 +1598,35 @@ mod tests {
                 }),
                 ..sample_status()
             })),
-            WireMessage::Proposal(Box::new(Proposal {
+            proposal_message(Proposal {
                 parent_qc: Some(big_bitmap.clone()),
                 ..sample_proposal()
-            })),
-            WireMessage::Proposal(Box::new(Proposal {
+            }),
+            proposal_message(Proposal {
                 justify: Some(TimeoutCert {
                     high_pqc: Some(big_bitmap.clone()),
                     ..sample_tc()
                 }),
                 ..sample_proposal()
-            })),
-            WireMessage::Proposal(Box::new(Proposal {
+            }),
+            proposal_message(Proposal {
                 header: BlockHeader {
                     skipped_leaders: vec![key(1); MAX_COMMITTEE_SIZE + 1],
                     ..sample_header()
                 },
                 ..sample_proposal()
-            })),
-            WireMessage::BlockResponse(BlockResponse {
-                instance: h(1),
-                block: Block {
-                    header: BlockHeader {
-                        skipped_leaders: vec![PublicKey::unchecked(vec![])],
-                        ..sample_header()
-                    },
-                    payload: vec![],
+            }),
+            WireMessage::PayloadManifest(PayloadManifest {
+                header: BlockHeader {
+                    skipped_leaders: vec![PublicKey::unchecked(vec![])],
+                    ..sample_header()
                 },
+                availability: sample_frame(),
             }),
             WireMessage::SyncResponse(SyncResponse {
                 instance: h(1),
                 blocks: vec![SyncEntry {
-                    block: Block {
-                        header: sample_header(),
-                        payload: vec![],
-                    },
+                    manifest: sample_manifest(),
                     commit_qc: big_bitmap,
                 }],
             }),
@@ -1613,13 +1646,7 @@ mod tests {
             instance: h(1),
             blocks: vec![
                 SyncEntry {
-                    block: Block {
-                        header: BlockHeader {
-                            skipped_leaders: vec![],
-                            ..sample_header()
-                        },
-                        payload: vec![],
-                    },
+                    manifest: sample_manifest(),
                     commit_qc: sample_qc(VoteKind::Commit, 0),
                 };
                 MAX_SYNC_ENTRIES + 1
@@ -1696,9 +1723,9 @@ mod tests {
     #[test]
     fn wire_tags_and_classes_pinned() {
         use TrafficClass::{Bulk, Control, Proposal as Prop};
-        let expected: [(&str, u32, TrafficClass); 18] = [
-            ("proposal with payload", 0, Prop),
-            ("proposal without payload", 0, Control),
+        let expected: [(&str, u32, TrafficClass); 19] = [
+            ("proposal manifest with justification", 0, Prop),
+            ("fresh proposal manifest", 0, Prop),
             ("prepare vote", 1, Control),
             ("commit vote", 1, Control),
             ("prepare qc", 2, Control),
@@ -1712,9 +1739,10 @@ mod tests {
             ("sync request", 6, Control),
             ("empty sync response", 7, Bulk),
             ("sync response", 7, Bulk),
-            ("block request", 8, Control),
-            ("block response", 9, Prop),
+            ("payload request", 8, Control),
+            ("payload manifest", 9, Prop),
             ("application control", 10, Control),
+            ("actual payload row", 11, Bulk),
         ];
         let messages = all_wire_messages();
         assert_eq!(messages.len(), expected.len());
@@ -1736,13 +1764,13 @@ mod tests {
         assert_eq!(PROTOCOL_VERSION, 1);
         assert!(TrafficClass::Control < TrafficClass::Proposal);
         assert!(TrafficClass::Proposal < TrafficClass::Bulk);
-        assert_eq!(class_of_tag(11, false), None);
-        assert_eq!(class_of_tag(u32::MAX, true), None);
+        assert_eq!(class_of_tag(12), None);
+        assert_eq!(class_of_tag(u32::MAX), None);
     }
 
     #[test]
     fn every_nested_witness_is_admitted_before_retention_and_retry_preserves_wire() {
-        use mv::allocation::{AllocationBudget, ChargedBuffer};
+        use iroha_allocation::{AllocationBudget, ChargedBuffer};
         let witness = ResultWitness::from_untrusted(vec![7; 200]).unwrap();
         let qc = Qc {
             attestation_witness: Some(witness.clone()),
@@ -1761,11 +1789,11 @@ mod tests {
                 ..sample_vote(VoteKind::Commit)
             }),
             WireMessage::Qc(qc.clone()),
-            WireMessage::Proposal(Box::new(Proposal {
+            proposal_message(Proposal {
                 parent_qc: Some(qc.clone()),
                 justify: Some(tc.clone()),
                 ..sample_proposal()
-            })),
+            }),
             WireMessage::Timeout(Box::new(TimeoutVote {
                 high_pqc: Some(qc.clone()),
                 ..sample_timeout()
@@ -1780,10 +1808,7 @@ mod tests {
             WireMessage::SyncResponse(SyncResponse {
                 instance: qc.instance,
                 blocks: vec![SyncEntry {
-                    block: Block {
-                        header: sample_header(),
-                        payload: Vec::new(),
-                    },
+                    manifest: sample_manifest(),
                     commit_qc: qc,
                 }],
             }),
@@ -1801,22 +1826,22 @@ mod tests {
             );
             let before = message.encode().unwrap();
             let budget = AllocationBudget::new(4096);
-            assert!(!message.attestation_witnesses_admitted_to(&budget));
+            assert!(!message.owned_bytes_admitted_to(&budget));
             let occupied = ChargedBuffer::<u8>::new(4096, &budget).unwrap();
             assert!(
                 message
-                    .admit_attestation_witnesses(&budget)
+                    .admit_owned_bytes(&budget)
                     .unwrap_err()
                     .is_local_refusal()
             );
             assert_eq!(message.encode().unwrap(), before);
             drop(occupied);
-            message.admit_attestation_witnesses(&budget).unwrap();
-            assert!(message.attestation_witnesses_admitted_to(&budget));
+            message.admit_owned_bytes(&budget).unwrap();
+            assert!(message.owned_bytes_admitted_to(&budget));
             let reserved = budget.reserved_bytes();
             assert!(reserved >= 200);
             let mut clone = message.clone();
-            clone.admit_attestation_witnesses(&budget).unwrap();
+            clone.admit_owned_bytes(&budget).unwrap();
             assert_eq!(
                 budget.reserved_bytes(),
                 reserved,
@@ -1824,10 +1849,10 @@ mod tests {
             );
             assert_eq!(clone.encode().unwrap(), before);
             let foreign = AllocationBudget::new(4096);
-            assert!(!message.attestation_witnesses_admitted_to(&foreign));
+            assert!(!message.owned_bytes_admitted_to(&foreign));
             assert!(matches!(
-                clone.admit_attestation_witnesses(&foreign),
-                Err(WitnessAdmissionError::ForeignBudget)
+                clone.admit_owned_bytes(&foreign),
+                Err(ByteAdmissionError::ForeignBudget)
             ));
             drop(message);
             assert_eq!(budget.reserved_bytes(), reserved);
@@ -1872,13 +1897,12 @@ mod tests {
                 hq: Some(2),
             })
             .collect();
-        let proposal = WireMessage::Proposal(Box::new(Proposal {
+        let proposal = proposal_message(Proposal {
             header,
             parent_qc: Some(parent),
             justify: Some(tc),
-            payload: Some(Vec::new()),
             ..sample_proposal()
-        }));
+        });
         let frame = proposal.encode().unwrap();
         assert!(
             frame.len() <= crate::pacemaker::FRAME_OVERHEAD as usize,
@@ -1891,9 +1915,7 @@ mod tests {
     /// The raw classifier refuses what is not a canonical `WireMessage` frame.
     #[test]
     fn raw_classification_rejects_other_frames() {
-        let frame = WireMessage::Proposal(Box::new(sample_proposal()))
-            .encode()
-            .unwrap();
+        let frame = proposal_message(sample_proposal()).encode().unwrap();
         assert_eq!(traffic_class_of_frame(&frame), Some(TrafficClass::Proposal));
         let mut cases: Vec<Vec<u8>> = vec![
             Vec::new(),
@@ -1916,17 +1938,6 @@ mod tests {
         for case in &cases {
             assert_eq!(traffic_class_of_frame(case), None, "{case:?}");
         }
-        assert_eq!(take_len(&[0x80, 0x00]), None, "overlong length");
-        assert_eq!(take_len(&[0xff; 11]), None, "unterminated length");
-        let mut max = vec![0xff; 9];
-        max.push(0x01);
-        assert_eq!(
-            take_len(&max).map(|(v, _)| u64::try_from(v).unwrap()),
-            Some(u64::MAX)
-        );
-        max[9] = 0x02;
-        assert_eq!(take_len(&max), None, "beyond 64 bits");
-        assert_eq!(take_len(&[0x85, 0x01, 7]), Some((133, &[7u8][..])));
     }
 
     /// Property (§3.5): for random frames — valid frames of every variant with random bytes
@@ -1943,10 +1954,13 @@ mod tests {
         };
         let mut messages = all_wire_messages();
         // Larger payloads and attestations exercise multi-byte lengths.
-        messages.push(WireMessage::Proposal(Box::new(Proposal {
-            payload: Some(vec![0x5a; 300]),
-            ..sample_proposal()
-        })));
+        messages.push(WireMessage::PayloadChunk(PayloadChunk {
+            instance: h(1),
+            height: 9,
+            block_hash: h(7),
+            index: 1,
+            bytes: crate::availability::RowBytes::from_untrusted(vec![0x5a; 300]).unwrap(),
+        }));
         messages.push(WireMessage::Vote(Vote {
             attest: true,
             attestation: Some(CommitAttestation {
@@ -2105,7 +2119,10 @@ mod tests {
     }
     #[test]
     fn application_control_frame_is_bounded_classified_and_not_an_empty_default() {
-        let mut message = all_wire_messages().pop().unwrap();
+        let mut message = all_wire_messages()
+            .into_iter()
+            .find(|message| matches!(message, WireMessage::ApplicationControl(_)))
+            .unwrap();
         assert!(matches!(message, WireMessage::ApplicationControl(_)));
         let WireMessage::ApplicationControl(ref mut partial) = message else {
             unreachable!()

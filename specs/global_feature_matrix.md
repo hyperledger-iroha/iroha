@@ -6,11 +6,11 @@ Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially i
 
 | Feature | Status | Notes | Evidence |
 |---------|--------|-------|----------|
-| Signed committee and manifest context | ◉ | Consensus mode, validator set, quorum, cadence, and RS16 geometry are signed chain context; peers reject mismatched manifests instead of consulting local Sumeragi switches. | `sumeragi.md`; `sumeragi_v2.md` |
-| Deterministic pacemaker | ◉ | The view timeout is derived from signed cadence and view number. Local EMA/RTT/jitter/backoff knobs are not authoritative inputs. | `sumeragi_pacemaker.md` |
-| NEW_VIEW gating & highest QC tracking | ◉ | Authenticated control flow carries timeout certificates and evidence; the highest justified QC advances monotonically. | `sumeragi.md`; `sumeragi_v2.md` |
-| Availability-certified commit | ◉ | Revision-4 commits require the signed manifest, RS16 availability proof, and a `2f + 1` commit QC before local application. | `sumeragi.md`; `sumeragi_v2.md` |
-| Commit QC state-root binding | ◉ | Commit QCs bind the canonical block and state transition in the signed consensus context. | `sumeragi.md`; `sumeragi_v2.md` |
+| Signed committee and manifest context | ◉ | Validator set, quorum and cadence are signed chain context from genesis and committed state; `[sumeragi]` holds only node-local settings, never protocol switches. | `sumeragi.md` |
+| Deterministic pacemaker | ◉ | View deadlines and retransmission derive deterministically from signed parameters (§9). Local knobs are not authoritative inputs. | `sumeragi.md` |
+| Timeout certificates & lock tracking | ◉ | Timeout certificates carry exactly `n - f` equal votes and the lock advances monotonically. | `sumeragi.md` |
+| Availability-certified commit | ▲ | Commits require an `n - f` CommitQC over the full block body; signed RS16 payload availability is not yet integrated into the body transport. | `sumeragi.md`; `sumeragi_goals.md` |
+| Commit QC state-root binding | ○ | Commit QCs bind the canonical block and its execution result; the full World state and event commitment in that result is in progress. | `sumeragi.md`; `sumeragi_goals.md` |
 | Evidence propagation & audit endpoints | ◉ | Authenticated evidence is governed by `SumeragiNposParameters.reconfig`; Torii exposes read-only evidence and consensus diagnostics. | `sumeragi_evidence_api.md`; `governance_api.md` |
 | Consensus observability | ◉ | `/v1/sumeragi/status` is authoritative. First-release telemetry omits retired adaptive-pacemaker fields and exposes only current status plus node-local queue, transport, and DA observations. | `telemetry.md`; `references/operator_aids.md` |
 | Consensus fingerprint verification | ◉ | Peers derive and compare the canonical signed-context fingerprint; obsolete local K/r or DA tables cannot select protocol behavior. | `sumeragi.md`; `references/configuration.md` |

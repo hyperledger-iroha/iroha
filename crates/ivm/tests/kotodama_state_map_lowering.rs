@@ -2,9 +2,9 @@
 use iroha_crypto::PublicKey;
 use ivm::{
     CoreHost, IVM,
-    kotodama::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic},
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
+use kotodama_lang::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic};
 mod common;
 fn encoded_state_path(name: &str, key: i64) -> String {
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(

@@ -9,8 +9,9 @@ use iroha_data_model::{
     sumeragi_lanes::{SumeragiLaneFrontier, SumeragiLaneRecord},
 };
 use iroha_sumeragi::{
+    availability::{AvailabilitySource, AvailableBody},
     crypto::NoAttestation,
-    message::{SyncEntry, VoteKind},
+    message::{Qc, VoteKind},
     types::{Hash32, HeightConfig},
 };
 
@@ -46,6 +47,9 @@ pub enum LaneEntryError {
 /// `record`, `network`, `chain_id` and `predecessor` must come from authenticated history,
 /// never from the supplied frame. This checks signatures and source identity, not the lane
 /// admission result; a Byzantine lane quorum can sign arbitrary payload/result bytes.
+/// The opaque body must carry the exact complete independent source, including committee,
+/// parameters, availability layout and authority generation; its prior verification alone is
+/// not authority to relabel it for this record.
 ///
 /// # Errors
 /// Invalid pinned credentials, source/predecessor mismatch or invalid exact native quorum.
@@ -54,11 +58,12 @@ pub fn verify_lane_certificate(
     network: &NetworkId,
     chain_id: &str,
     predecessor: &SumeragiLaneFrontier,
-    entry: &SyncEntry,
+    body: &AvailableBody,
+    qc: &Qc,
 ) -> Result<HeightConfig, LaneEntryError> {
     if record.lane.as_u32() == 0
         || record.incarnation == [0; 32]
-        || !iroha_data_model::block::consensus_v2::is_valid_committee_size(record.committee.len())
+        || !iroha_data_model::block::consensus::is_valid_committee_size(record.committee.len())
         || record
             .committee
             .windows(2)
@@ -92,8 +97,7 @@ pub fn verify_lane_certificate(
         .height
         .checked_add(1)
         .ok_or(LaneEntryError::Binding("lane predecessor height overflow"))?;
-    let header = &entry.block.header;
-    let qc = &entry.commit_qc;
+    let header = body.header();
     if header.height != height
         || header.instance != instance
         || header.epoch != config.epoch.id
@@ -103,11 +107,10 @@ pub fn verify_lane_certificate(
         || !header.control_witness.is_empty()
         || header.payload_len > config.params.max_block_bytes
         || usize::try_from(header.proposer).map_or(true, |index| index >= config.committee.n())
-        || !entry.block.body_ok(&crypto)
         || qc.kind != VoteKind::Commit
         || qc.height != height
         || qc.view < header.origin_view
-        || qc.block_hash != entry.block.hash(&crypto)
+        || qc.block_hash != body.hash(&crypto)
         || qc.attest != header.attest
     {
         return Err(LaneEntryError::Binding(
@@ -117,6 +120,13 @@ pub fn verify_lane_certificate(
     iroha_sumeragi::crypto::Verifier::new(&crypto, &instance, &config.epoch.id, &config.committee)
         .verify_qc(&NoAttestation, qc)
         .map_err(|error| LaneEntryError::Certificate(format!("{error:?}")))?;
+    let source = AvailabilitySource::new(instance, height, qc.block_hash, config.clone())
+        .map_err(|_| LaneEntryError::Binding("invalid independent availability source"))?;
+    if body.source() != &source {
+        return Err(LaneEntryError::Binding(
+            "body was authenticated under another historical authority",
+        ));
+    }
     Ok(config)
 }
 
@@ -134,9 +144,10 @@ pub fn verify_lane_entry(
     anchors: &impl AnchorView,
     history: &LaneChainView,
     predecessor: &SumeragiLaneFrontier,
-    entry: &SyncEntry,
+    body: &AvailableBody,
+    qc: &Qc,
 ) -> Result<LaneResult, LaneEntryError> {
-    let config = verify_lane_certificate(record, network, chain_id, predecessor, entry)?;
+    let config = verify_lane_certificate(record, network, chain_id, predecessor, body, qc)?;
     let checks = StatelessChecks::new(*network);
     let Admission::Valid(result) = admit(
         record,
@@ -144,12 +155,12 @@ pub fn verify_lane_entry(
         history,
         &checks,
         &config,
-        &entry.block.payload,
+        body.payload().as_slice(),
     )?
     else {
         return Err(LaneEntryError::UnavailableAnchor);
     };
-    if result.hash() != entry.commit_qc.result {
+    if result.hash() != qc.result {
         return Err(LaneEntryError::Binding(
             "QC result differs from reproduced admission",
         ));
@@ -158,4 +169,5 @@ pub fn verify_lane_entry(
 }
 
 #[cfg(test)]
+#[path = "evidence/tests.rs"]
 mod tests;

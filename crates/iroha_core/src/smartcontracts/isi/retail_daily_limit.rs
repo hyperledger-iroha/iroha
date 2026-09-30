@@ -265,6 +265,9 @@ impl Execute for RetailMonetaryMovementV1 {
 }
 
 #[cfg(test)]
+mod finality_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{

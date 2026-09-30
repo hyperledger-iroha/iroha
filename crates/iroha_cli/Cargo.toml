@@ -1,12 +1,10 @@
 [package]
-name = "iroha_cli"
+name = "iroha_cli_lib"
 autobins = false
 
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
-
-build = "../build-support/script.rs"
 
 description.workspace = true
 repository.workspace = true
@@ -17,6 +15,10 @@ license.workspace = true
 keywords.workspace = true
 categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
 
+[lib]
+name = "iroha_cli"
+path = "src/main_shared.rs"
+
 [lints]
 workspace = true
 
@@ -26,15 +28,7 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [features]
-default = ["cli"]
-cli = [
-    "bridge",
-    "offline-visual-codecs",
-    "iroha_core/node",
-    "iroha_crypto/consensus",
-    "norito/node-codec",
-]
-dev-tools = ["cli"]
+default = ["bridge", "offline-visual-codecs"]
 offline-visual-codecs = ["dep:image"]
 # Experimental selector support. Forwarded to client/data-model crates when enabled.
 ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
@@ -42,27 +36,9 @@ ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
 cli_integration_harness = []
 bridge = []
 
-[[bin]]
-name = "iroha"
-path = "src/bin/iroha.rs"
-required-features = ["cli"]
-
-[[bin]]
-name = "account_literal_reencode"
-path = "src/bin/account_literal_reencode.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
-name = "gov_instruction"
-path = "src/bin/gov_instruction.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
-name = "taira_fee_sponsor_program"
-path = "src/bin/taira_fee_sponsor_program.rs"
-required-features = ["dev-tools"]
-
 [dependencies]
+iroha_core_privacy = { workspace = true }
+iroha_core_timed_ovn = { workspace = true }
 iroha_model_base = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 iroha_service_model = { workspace = true }
@@ -75,8 +51,10 @@ iroha_sccp_rpc = { workspace = true }
 iroha_sccp_wallet = { workspace = true }
 iroha_primitives = { workspace = true }
 ivm = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }
-iroha_core = { workspace = true, default-features = false }
+kotodama_lang = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["sm", "consensus"] }
+iroha_core = { workspace = true, default-features = false, features = ["node"] }
+iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
 iroha_genesis = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 iroha_config = { workspace = true }
@@ -94,7 +72,7 @@ eyre = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap-markdown = "0.1.5"
 humantime = { workspace = true }
-norito = { workspace = true, default-features = false }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 supports-color = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 futures = { workspace = true, features = ["async-await", "std"] }
@@ -120,12 +98,8 @@ png = "0.18.0"
 pathdiff = "0.2.3"
 tempfile = { workspace = true }
 
-[build-dependencies]
-build-support = { path = "../build-support", default-features = false }
-
 [dev-dependencies]
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_sumeragi = { workspace = true }
-assert_cmd = "2.1.1"
 iroha_test_samples = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }

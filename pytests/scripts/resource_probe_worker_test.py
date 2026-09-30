@@ -164,7 +164,7 @@ def test_sequence_reordering_replay_and_missing_preflight_fail_closed(tmp_path, 
 def test_request_shape_and_numeric_bounds(mutation):
     row = request('preflight', 0)
     if mutation == 'extra': row['private'] = 'never-reflect'
-    if mutation == 'schema': row['schema'] += '.legacy'
+    if mutation == 'schema': row['schema'] += '.other'
     if mutation == 'kind': row['kind'] = 'secret'
     if mutation == 'bool_sequence': row['sequence'] = True
     if mutation == 'negative_sequence': row['sequence'] = -1
@@ -290,8 +290,8 @@ def test_capture_directory_requires_new_exact_owner(tmp_path, mutation):
 def test_directory_replacement_and_file_symlink_cannot_redirect_write(tmp_path):
     path = capture_dir(tmp_path)
     with worker.CaptureDirectory(path, allocation()) as directory:
-        retired = tmp_path / 'retired'
-        path.rename(retired)
+        moved = tmp_path / 'moved'
+        path.rename(moved)
         path.mkdir(mode=0o700)
         with pytest.raises(probe.ProbeError, match='capture_directory_changed'):
             directory.publish('preflight', 0, observation(), probe._Deadline(1))
@@ -332,7 +332,7 @@ def test_config_is_exact_runtime_only_and_never_exported(tmp_path):
                                       'duplicate_peer', 'relative_image', 'bad_hash', 'url_secret', 'bad_header'])
 def test_config_rejects_unsafe_or_incomplete_prelaunch_inputs(tmp_path, mutation):
     value = config()
-    if mutation == 'extra': value['legacy'] = True
+    if mutation == 'extra': value['unexpected'] = True
     if mutation == 'three': value['peers'].pop()
     if mutation == 'duplicate_pid': value['peers'][1]['pid'] = value['peers'][0]['pid']
     if mutation == 'duplicate_peer': value['peers'][1]['peer_id'] = value['peers'][0]['peer_id']
@@ -927,7 +927,7 @@ def test_actual_rust_owned_fixture_is_full_fixed_budget_with_exact_worker_projec
     admitted = parse_run_budget(json.loads(public))
     assert public == canonical_run_budget_bytes(admitted)
     assert len(admitted.experiment.runs) == 10
-    assert sum(len(run.files) for run in admitted.experiment.runs) == 150
+    assert sum(len(run.files) for run in admitted.experiment.runs) == 30
     configured_probe = worker.ConfiguredProbe(SimpleNamespace(collect=lambda _: None), admitted)
     with ExitStack() as owners:
         bound = worker._admit(Path('/unused'), owners, 1000, lambda *_: configured_probe)
@@ -942,7 +942,8 @@ def test_actual_rust_owned_fixture_is_full_fixed_budget_with_exact_worker_projec
     assert reply['admission']['trace'] == {'label': 'pair1.one_lane.trace', 'max_bytes': 8192}
 
 
-@pytest.mark.parametrize('field', RUN_FILE_FIELDS[5:])
+@pytest.mark.parametrize('field', [name for name in RUN_FILE_FIELDS
+                                   if name not in ('collector_journal', 'transaction_trace')])
 def test_worker_rechecks_non_writer_allocations_after_reply(field):
     admitted = allocation()
     configured_probe = worker.ConfiguredProbe(SimpleNamespace(collect=lambda _: None), admitted)

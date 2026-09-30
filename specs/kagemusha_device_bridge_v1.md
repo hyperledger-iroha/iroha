@@ -502,7 +502,9 @@ namespace. The Java Android facade uses the Kotlin transport. Swift invokes the
 corresponding C exports through the validated native loader. The SDK checks the complete
 twelve-word ABI inventory, retains unsigned handle bits, serializes calls, and
 correlates all returned identities/envelopes before exposing bounded fields.
-On logout or account switch, close revokes the process-local handle before
+Every error after native dispatch, including failed response publication or
+decoding, revokes the process-local handle before another invocation. On logout
+or account switch, close revokes the process-local handle before
 delegating session teardown. A stale handle cannot invoke, and a second open
 cannot create another hardware owner in the same process; the app must start a
 new process to select a new coordinator. Close does not erase uncertain monetary

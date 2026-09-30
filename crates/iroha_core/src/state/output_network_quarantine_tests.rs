@@ -105,7 +105,6 @@ fn earlier_ranked(
 
 #[test]
 fn actual_quarantine_zero_exact_and_overflow_quota_own_complete_rows_and_effects() {
-    let _guard = exec_witness::exec_witness_guard();
     for quota in [0, 1, 3] {
         let mut state = fixture(65_536, None);
         state.pipeline.quarantine_max_txs_per_block = quota;
@@ -136,8 +135,7 @@ fn actual_quarantine_zero_exact_and_overflow_quota_own_complete_rows_and_effects
             .map(|(_, index)| index)
             .collect();
         let source = carrier(inputs);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         assert_eq!(retained(&block).rows.len(), 3);
@@ -181,7 +179,6 @@ fn actual_quarantine_zero_exact_and_overflow_quota_own_complete_rows_and_effects
 
 #[test]
 fn hash_ranked_selection_is_mode_independent_and_does_not_reorder_actual_effects() {
-    let _guard = exec_witness::exec_witness_guard();
     let seed = fixture(65_536, None);
     let inputs: Vec<_> = (0..3)
         .map(|index| {
@@ -216,8 +213,7 @@ fn hash_ranked_selection_is_mode_independent_and_does_not_reorder_actual_effects
             state.pipeline.parallel_apply = parallel;
             state.pipeline.quarantine_max_txs_per_block = 2;
             let source = carrier(order.iter().map(|index| inputs[*index].clone()).collect());
-            exec_witness::start_block();
-            let mut block = state.block(source.header());
+            let (mut block, _recording) = recorded_network_block(&state, &source);
             execute(&mut block, &source).unwrap();
             let mut actual = Vec::new();
             for (position, original) in order.iter().copied().enumerate() {
@@ -268,7 +264,6 @@ fn hash_ranked_selection_is_mode_independent_and_does_not_reorder_actual_effects
 
 #[test]
 fn only_exact_signed_boolean_true_uses_the_disabled_quarantine_quota() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut state = fixture(65_536, None);
     state.pipeline.quarantine_max_txs_per_block = 0;
     let classifications = [
@@ -297,8 +292,7 @@ fn only_exact_signed_boolean_true_uses_the_disabled_quarantine_quota() {
             })
             .collect(),
     );
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     assert_quarantine_overflow(network_row(&block, 0), 0);
     for index in 1..5 {
@@ -321,7 +315,6 @@ fn only_exact_signed_boolean_true_uses_the_disabled_quarantine_quota() {
 
 #[test]
 fn stateless_invalid_lower_hash_does_not_consume_a_quarantine_slot() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut state = fixture(65_536, None);
     state.pipeline.quarantine_max_txs_per_block = 1;
     let healthy = signed_quarantine_input(
@@ -340,8 +333,7 @@ fn stateless_invalid_lower_hash_does_not_consume_a_quarantine_slot() {
     );
     assert!(invalid.hash() < healthy.hash());
     let source = carrier(vec![invalid, healthy]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     let row = network_row(&block, 0);
     assert!(
@@ -373,7 +365,6 @@ fn stateless_invalid_lower_hash_does_not_consume_a_quarantine_slot() {
 
 #[test]
 fn actual_business_failure_does_not_refill_the_frozen_quarantine_selection() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut state = fixture(65_536, None);
     state.pipeline.quarantine_max_txs_per_block = 1;
     let later = signed_quarantine_input(
@@ -394,8 +385,7 @@ fn actual_business_failure_does_not_refill_the_frozen_quarantine_selection() {
         false,
     );
     let source = carrier(vec![rejected, later]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     let row = network_row(&block, 0);
@@ -424,7 +414,6 @@ fn actual_business_failure_does_not_refill_the_frozen_quarantine_selection() {
 
 #[test]
 fn healthy_callback_output_overflow_does_not_refill_quarantine_or_apply_effects() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut state = fixture(16_384, Some(32_768));
     state.pipeline.quarantine_max_txs_per_block = 1;
     let later = signed_quarantine_input(
@@ -442,8 +431,7 @@ fn healthy_callback_output_overflow_does_not_refill_quarantine_or_apply_effects(
         false,
     );
     let source = carrier(vec![oversized, later]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     assert!(retained(&block).rows[0].is_output_limit_rejection());
@@ -489,7 +477,6 @@ fn healthy_callback_output_overflow_does_not_refill_quarantine_or_apply_effects(
 
 #[test]
 fn signed_batch_and_ballot_cannot_bypass_a_zero_quarantine_quota() {
-    let _guard = exec_witness::exec_witness_guard();
     let mut state = fixture(65_536, None);
     state.pipeline.quarantine_max_txs_per_block = 0;
     let ballot: InstructionBox = CastPlainBallot {
@@ -513,8 +500,7 @@ fn signed_batch_and_ballot_cannot_bypass_a_zero_quarantine_quota() {
         ),
         signed_quarantine_input(&state, vec![ballot], Some(Json::new(true)), false, 2, false),
     ]);
-    exec_witness::start_block();
-    let mut block = state.block(source.header());
+    let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     for index in 0..2 {
@@ -549,7 +535,6 @@ fn signed_batch_and_ballot_cannot_bypass_a_zero_quarantine_quota() {
 
 #[test]
 fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes() {
-    let _guard = exec_witness::exec_witness_guard();
     for quota in [0, 1] {
         let mut state = fixture(65_536, None);
         state.pipeline.quarantine_max_txs_per_block = quota;
@@ -587,8 +572,7 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
             ));
         }
         let source = carrier(commits);
-        exec_witness::start_block();
-        let mut committing = state.block(source.header());
+        let (mut committing, committing_recording) = recorded_network_block(&state, &source);
         let prior_pending_count = committing.world.smart_contract_state().iter().count();
         execute(&mut committing, &source).unwrap();
         for index in 0..2 {
@@ -604,6 +588,7 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
         // Retain actual commitment instruction writes through the existing world-only
         // fixture helper. No fake pending record, finalized block, or QC is installed.
         committing.commit_world_overlay_for_testing().unwrap();
+        drop(committing_recording);
         let selected = reveals
             .iter()
             .enumerate()
@@ -638,8 +623,7 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
             ),
         ));
         let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         for index in 0..2 {
@@ -680,7 +664,6 @@ fn real_nexus_fee_is_not_charged_for_quota_refusal_before_business_execution() {
         asset::{AssetDefinitionId, AssetId},
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
-    let _guard = exec_witness::exec_witness_guard();
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for quota in [0, 1] {
         let asset = AssetDefinitionId::parse_address_literal(
@@ -710,8 +693,7 @@ fn real_nexus_fee_is_not_charged_for_quota_refusal_before_business_execution() {
                 .with_instructions([write_quarantine("paid_quarantine_effect", 1)])
                 .sign(ALICE_KEYPAIR.private_key()),
         )]);
-        exec_witness::start_block();
-        let mut block = state.block(source.header());
+        let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
         if quota == 0 {

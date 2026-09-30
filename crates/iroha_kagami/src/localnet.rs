@@ -17,7 +17,8 @@ use iroha_config::{
     base::toml::TomlSource,
     parameters::{actual, defaults::taira as taira_defaults},
 };
-use iroha_core::{state::derive_committee_key_id, zk::confidential_v2};
+use iroha_core::state::derive_committee_key_id;
+use iroha_core_zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 #[cfg(test)]
 use iroha_data_model::isi::UnregisterBox;
@@ -32,8 +33,8 @@ use iroha_data_model::{
     asset::AssetDefinitionAlias,
     block::{
         BlockHeader,
-        consensus_v2::{
-            MAX_VALIDATORS_PER_HEIGHT, SumeragiV2GenesisContextParameters, is_valid_committee_size,
+        consensus::{
+            MAX_VALIDATORS_PER_HEIGHT, SumeragiGenesisContextParameters, is_valid_committee_size,
         },
     },
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
@@ -106,7 +107,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::{Zeroize as _, Zeroizing};
-mod scaling;
 
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
@@ -970,11 +970,8 @@ pub struct Args {
     /// Optional UTF-8 seed for deterministic development keys.
     ///
     /// Omit this option to generate independent keys from operating-system entropy.
-    #[arg(long, short, conflicts_with = "scaling_lanes")]
+    #[arg(long, short)]
     seed: Option<String>,
-    /// Fixed scaling only: inherited read-only nonblocking pipe with exactly 64 lowercase hex bytes and EOF.
-    #[arg(long, value_name = "FD", requires = "scaling_lanes", conflicts_with = "seed", value_parser = clap::value_parser!(i32).range(3..=65535))]
-    seed_fd: Option<i32>,
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
@@ -988,14 +985,6 @@ pub struct Args {
     /// Apply a localnet performance profile (10k TPS / 1s finality presets).
     #[arg(long, value_enum, value_name = "PROFILE")]
     perf_profile: Option<LocalnetPerfProfileArg>,
-    /// Generate a fixed execution-lane layout with four NPoS validators and autoscaling disabled.
-    /// Use the same private development seed and options for both variants.
-    #[arg(long, value_enum, value_name = "LANES", requires = "seed_fd")]
-    scaling_lanes: Option<scaling::ScalingLanes>,
-    /// Ordered workload accounts for a fixed scaling layout (4..=64, in groups of four).
-    /// Defaults to four when --scaling-lanes is present.
-    #[arg(long, value_name = "COUNT", requires = "scaling_lanes", value_parser = clap::value_parser!(u16).range(4..=64))]
-    scaling_accounts: Option<u16>,
     /// Host to bind P2P and Torii listeners to (host/IP only, no port).
     #[arg(long, default_value = DEFAULT_BIND_HOST, value_name = "HOST")]
     bind_host: String,
@@ -1028,7 +1017,7 @@ pub struct Args {
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..))]
     block_cadence_ms: Option<u64>,
     /// Consensus mode to emit in genesis/configs.
-    /// Defaults to `permissioned` for generic localnets and `npos` for fixed scaling layouts.
+    /// Defaults to `permissioned`.
     /// Sora profile localnets and perf profiles require `npos`.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
@@ -1051,13 +1040,10 @@ impl<T: Write> RunArgs<T> for Args {
         let Self {
             peers,
             seed,
-            seed_fd,
             chain_id,
             sora_profile,
             private_dataspace,
             perf_profile,
-            scaling_lanes,
-            scaling_accounts,
             bind_host,
             public_host,
             base_api_port,
@@ -1073,22 +1059,9 @@ impl<T: Write> RunArgs<T> for Args {
         // validation. Once validation succeeds, `LocalnetOptions` takes over
         // the same custody obligation through its `Drop` implementation.
         let mut seed = seed.map(Zeroizing::new);
-        if let Some(seed_fd) = seed_fd {
-            ensure!(
-                seed.is_none() && scaling_lanes.is_some(),
-                "fixed scaling requires only --seed-fd"
-            );
-            seed = Some(scaling::seed::read_development_seed(seed_fd)?);
-        } else {
-            ensure!(scaling_lanes.is_none(), "fixed scaling requires --seed-fd");
-        }
         let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
         let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
-        let scaling = scaling::ScalingLayout::from_args(scaling_lanes, scaling_accounts)?;
-        let consensus_mode = resolve_requested_consensus_mode(
-            consensus_mode.or_else(|| scaling.map(|_| ConsensusModeArg::Npos)),
-            perf_profile,
-        );
+        let consensus_mode = resolve_requested_consensus_mode(consensus_mode, perf_profile);
         let mut assets = if sample_asset {
             vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
@@ -1119,7 +1092,7 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms,
         };
-        generate_localnet_for_layout(&opts, writer, Some(&chain_id), scaling)
+        generate_localnet_inner(&opts, writer, Some(&chain_id))
     }
 }
 struct Peer {
@@ -1167,10 +1140,6 @@ impl LocalnetPeerStoragePaths {
             out_dir.join("storage").join(format!("peer{peer_index}")),
             out_dir.join("state").join(format!("peer{peer_index}")),
         )
-    }
-    fn scaling(out_dir: &Path, peer_index: usize) -> Self {
-        let role = out_dir.join("storage").join(format!("peer{peer_index}"));
-        Self::from_roots(role.join("kura"), role.join("state"))
     }
     fn from_roots(kura: PathBuf, state: PathBuf) -> Self {
         let streaming = state.join("streaming");
@@ -1225,12 +1194,12 @@ fn validate_localnet_options(opts: &LocalnetOptions, taira: bool) -> Result<Reso
     }
     if validator_count > MAX_VALIDATORS_PER_HEIGHT {
         return Err(eyre!(
-            "`--peers` ({validator_count}) exceeds the Sumeragi v2 protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
+            "`--peers` ({validator_count}) exceeds the Sumeragi protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
     if !is_valid_committee_size(validator_count) {
         return Err(eyre!(
-            "`--peers` ({validator_count}) must form an exact Sumeragi v2 3f+1 validator committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
+            "`--peers` ({validator_count}) must form an exact Sumeragi 3f+1 validator committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
     if let Some(perf_spec) = opts.perf_profile.map(LocalnetPerfProfile::spec) {
@@ -1300,24 +1269,13 @@ fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) ->
 fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
     account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
 }
+#[allow(clippy::too_many_lines)]
 fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     chain_id: Option<&str>,
 ) -> Outcome {
-    generate_localnet_for_layout(opts, writer, chain_id, None)
-}
-#[allow(clippy::too_many_lines)]
-fn generate_localnet_for_layout<T: Write>(
-    opts: &LocalnetOptions,
-    writer: &mut BufWriter<T>,
-    chain_id: Option<&str>,
-    scaling: Option<scaling::ScalingLayout>,
-) -> Outcome {
     init_instruction_registry();
-    if let Some(layout) = scaling {
-        layout.validate(opts)?;
-    }
     let chain_id = resolve_localnet_chain_id(chain_id)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
     let hosts = validate_localnet_options(opts, taira)?;
@@ -1342,13 +1300,9 @@ fn generate_localnet_for_layout<T: Write>(
         .wrap_err("prepare fresh localnet private output directory")?;
     let shell_out_dir = crate::shell::absolute_quote_path(&out_dir)
         .wrap_err("validate localnet output path for shell handoff commands")?;
-    let rans_tables_path = if scaling.is_none() {
-        write_localnet_gitignore(&out_dir)?;
-        tui::status("Copying rANS tables");
-        Some(copy_rans_tables(&out_dir)?)
-    } else {
-        None
-    };
+    write_localnet_gitignore(&out_dir)?;
+    tui::status("Copying rANS tables");
+    let rans_tables_path = copy_rans_tables(&out_dir)?;
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
@@ -1370,23 +1324,15 @@ fn generate_localnet_for_layout<T: Write>(
         chain_discriminant,
         taira,
     )?;
-    let scaling_accounts = scaling
-        .map(|layout| layout.identities(seed_bytes))
-        .transpose()?
-        .unwrap_or_default();
     let client_identity = localnet_ephemeral_identity(seed_bytes, b"operator-root")?;
     let http_operator_identity = localnet_ephemeral_identity(seed_bytes, b"http-operator-root")?;
     let onboarding_identity = localnet_ephemeral_identity(seed_bytes, b"onboarding-root")?;
-    let runtime_bundle = if scaling.is_none() {
-        Some(write_localnet_runtime_bundle(
-            &out_dir,
-            &client_identity,
-            &http_operator_identity,
-            &onboarding_identity,
-        )?)
-    } else {
-        None
-    };
+    let runtime_bundle = write_localnet_runtime_bundle(
+        &out_dir,
+        &client_identity,
+        &http_operator_identity,
+        &onboarding_identity,
+    )?;
     if taira {
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
     }
@@ -1442,9 +1388,6 @@ fn generate_localnet_for_layout<T: Write>(
         &client_identity.account_id,
         &onboarding_identity.account_id,
     )?;
-    if let Some(layout) = scaling {
-        genesis = layout.append_accounts(genesis, &scaling_accounts, &peers)?;
-    }
     genesis = apply_parameter_overrides(
         genesis,
         opts.peers,
@@ -1499,14 +1442,8 @@ fn generate_localnet_for_layout<T: Write>(
     )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
-    let alias_setup_intent_path = if scaling.is_none() {
-        Some(write_localnet_alias_setup_intent(
-            &out_dir,
-            &alias_setup_request,
-        )?)
-    } else {
-        None
-    };
+    let alias_setup_intent_path =
+        write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
     let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
@@ -1534,11 +1471,7 @@ fn generate_localnet_for_layout<T: Write>(
     let bootstrap_peer = peers
         .first()
         .expect("localnet always has at least one peer");
-    let bootstrap_paths = if scaling.is_some() {
-        LocalnetPeerStoragePaths::scaling(&out_dir, 0)
-    } else {
-        LocalnetPeerStoragePaths::new(&out_dir, 0)
-    };
+    let bootstrap_paths = LocalnetPeerStoragePaths::new(&out_dir, 0);
     let bootstrap_config = render_peer_config(
         bootstrap_peer,
         &trusted,
@@ -1550,7 +1483,7 @@ fn generate_localnet_for_layout<T: Write>(
         ))),
         &bls_entries,
         &bootstrap_paths,
-        rans_tables_path.as_deref(),
+        Some(rans_tables_path.as_path()),
         &chain_id,
         chain_discriminant,
         (&hosts.bind, &hosts.public),
@@ -1561,7 +1494,7 @@ fn generate_localnet_for_layout<T: Write>(
             operator_account: &operator_account_literal,
             operator_public_key: &http_operator_identity.public_key,
             onboarding_account: &onboarding_account_literal,
-            runtime: runtime_bundle.as_ref(),
+            runtime: Some(&runtime_bundle),
         },
         opts.sora_profile,
         lane_manifest_directory.as_deref(),
@@ -1572,18 +1505,7 @@ fn generate_localnet_for_layout<T: Write>(
         signature_batch_max_ed25519,
         queue_capacity,
     );
-    let bootstrap_config = if let Some(layout) = scaling {
-        scaling::runtime_paths::bind(
-            layout.render_config(bootstrap_config, &scaling_accounts)?,
-            &bootstrap_paths,
-        )?
-    } else {
-        bootstrap_config
-    };
     let config = parse_localnet_peer_config(&bootstrap_config, None)?;
-    if scaling.is_some() {
-        scaling::runtime_paths::validate(&config, &bootstrap_paths)?;
-    }
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
     let confidential_policy_hash =
         iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
@@ -1592,14 +1514,12 @@ fn generate_localnet_for_layout<T: Write>(
         .with_consensus_meta();
     let genesis_public_key_path = out_dir.join(GENESIS_PUBLIC_KEY_FILE);
     let genesis_private_key_path = out_dir.join(GENESIS_PRIVATE_KEY_FILE);
-    if scaling.is_none() {
-        write_genesis_key_files(
-            &genesis_public_key_path,
-            &genesis_private_key_path,
-            &genesis_public_key,
-            &genesis_private,
-        )?;
-    }
+    write_genesis_key_files(
+        &genesis_public_key_path,
+        &genesis_private_key_path,
+        &genesis_public_key,
+        &genesis_private,
+    )?;
     let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
         public_key: &genesis_public_key,
@@ -1620,47 +1540,35 @@ fn generate_localnet_for_layout<T: Write>(
     )?;
     tui::status("Genesis staged and bootstrap-validated");
     tui::status("Writing peer configs");
-    let mut scaling_genesis_context = None;
-    let mut scaling_config_digests = Vec::new();
     for (idx, peer) in peers.iter().enumerate() {
-        let paths = if scaling.is_some() {
-            LocalnetPeerStoragePaths::scaling(&out_dir, idx)
-        } else {
-            LocalnetPeerStoragePaths::new(&out_dir, idx)
-        };
+        let paths = LocalnetPeerStoragePaths::new(&out_dir, idx);
         fs::create_dir_all(&paths.kura)
             .wrap_err_with(|| format!("failed to create kura dir {}", paths.kura.display()))?;
         fs::create_dir_all(&paths.state).wrap_err_with(|| {
             format!("failed to create peer state dir {}", paths.state.display())
         })?;
-        if scaling.is_none() {
-            fs::create_dir_all(&paths.tiered_state).wrap_err_with(|| {
-                format!(
-                    "failed to create tiered state dir {}",
-                    paths.tiered_state.display()
-                )
-            })?;
-            fs::create_dir_all(&paths.da_store).wrap_err_with(|| {
-                format!(
-                    "failed to create DA WSV snapshot dir {}",
-                    paths.da_store.display()
-                )
-            })?;
-        }
+        fs::create_dir_all(&paths.tiered_state).wrap_err_with(|| {
+            format!(
+                "failed to create tiered state dir {}",
+                paths.tiered_state.display()
+            )
+        })?;
+        fs::create_dir_all(&paths.da_store).wrap_err_with(|| {
+            format!(
+                "failed to create DA WSV snapshot dir {}",
+                paths.da_store.display()
+            )
+        })?;
         let rendered = render_peer_config(
             peer,
             &trusted,
             &peer_telemetry_urls,
             &genesis_public_key,
             &genesis_signed_path,
-            if scaling.is_some() {
-                LocalnetGenesisIdentitySource::BootstrapInline(genesis_expected_hash)
-            } else {
-                LocalnetGenesisIdentitySource::PublishedFile
-            },
+            LocalnetGenesisIdentitySource::PublishedFile,
             &bls_entries,
             &paths,
-            rans_tables_path.as_deref(),
+            Some(rans_tables_path.as_path()),
             &chain_id,
             chain_discriminant,
             (&hosts.bind, &hosts.public),
@@ -1671,7 +1579,7 @@ fn generate_localnet_for_layout<T: Write>(
                 operator_account: &operator_account_literal,
                 operator_public_key: &http_operator_identity.public_key,
                 onboarding_account: &onboarding_account_literal,
-                runtime: runtime_bundle.as_ref(),
+                runtime: Some(&runtime_bundle),
             },
             opts.sora_profile,
             lane_manifest_directory.as_deref(),
@@ -1682,14 +1590,6 @@ fn generate_localnet_for_layout<T: Write>(
             signature_batch_max_ed25519,
             queue_capacity,
         );
-        let rendered = if let Some(layout) = scaling {
-            scaling::runtime_paths::bind(
-                layout.render_config(rendered, &scaling_accounts)?,
-                &paths,
-            )?
-        } else {
-            rendered
-        };
         let path = out_dir.join(format!("peer{idx}.toml"));
         let parsed_config =
             parse_localnet_peer_config(&rendered, Some(&path)).wrap_err_with(|| {
@@ -1704,47 +1604,22 @@ fn generate_localnet_for_layout<T: Write>(
                 genesis_expected_hash
             ));
         }
-        if scaling.is_some() && idx == 0 {
-            // Derive from the final signed body and this exact final effective
-            // config, never from the provisional policy-derivation config.
-            scaling_genesis_context = Some(scaling::genesis_context_bytes(
-                &genesis_json_path,
-                &genesis_signed_path,
-                &parsed_config,
-            )?);
-        }
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
-        if scaling.is_some() {
-            scaling_config_digests.push(iroha_crypto::sha256(rendered.as_bytes()));
-        }
-    }
-    if let Some(context) = &scaling_genesis_context {
-        let path = out_dir.join(scaling::GENESIS_CONTEXT_FILE);
-        write_owner_only_localnet_file(&path, &context)
-            .wrap_err("publish fixed scaling genesis context")?;
-        let persisted = crate::secure_fs::read_private_file(&path)
-            .wrap_err("read back fixed scaling genesis context")?;
-        ensure!(
-            persisted.as_slice() == context.as_slice(),
-            "fixed scaling genesis context changed during publication"
-        );
     }
     tui::status("Peer configs written and validated");
-    if scaling.is_none() {
-        tui::status("Writing start/stop scripts");
-        let fee_asset_definition_id = localnet_xor_asset_literal();
-        write_scripts(
-            &out_dir,
-            opts.peers.get(),
-            sora_profile_enabled,
-            taira,
-            &client_account_literal,
-            &fee_asset_definition_id,
-        )?;
-    }
+    tui::status("Writing start/stop scripts");
+    let fee_asset_definition_id = localnet_xor_asset_literal();
+    write_scripts(
+        &out_dir,
+        opts.peers.get(),
+        sora_profile_enabled,
+        taira,
+        &client_account_literal,
+        &fee_asset_definition_id,
+    )?;
     tui::status("Writing client config");
-    let scaling_client_digest = write_client_config(
+    write_client_config(
         &out_dir,
         opts.base_api_port,
         &hosts.public,
@@ -1752,76 +1627,36 @@ fn generate_localnet_for_layout<T: Write>(
         chain_discriminant,
         &client_identity,
     )?;
-    let scaling_account_digests = if let Some(layout) = scaling {
-        layout.write_accounts(
-            &out_dir,
-            opts.base_api_port,
-            &hosts.public,
-            &chain_id,
-            *config.common.chain_discriminant.value(),
-            &scaling_accounts,
-        )?
-    } else {
-        Vec::new()
-    };
     let primary_torii_url = hosts.public.torii_url(opts.base_api_port);
     let client_config_path = out_dir.join("client.toml");
     let start_path = out_dir.join("start.sh");
     let stop_path = out_dir.join("stop.sh");
-    if let Some(runtime_bundle) = runtime_bundle.as_ref() {
-        write_localnet_readme(
-            &out_dir,
-            &chain_id,
-            opts.seed.as_deref(),
-            opts.consensus_mode,
-            opts.peers.get(),
-            &primary_torii_url,
-            &genesis_json_path,
-            &genesis_signed_path,
-            &genesis_expected_hash_path,
-            &genesis_public_key_path,
-            &genesis_private_key_path,
-            &client_config_path,
-            &start_path,
-            &stop_path,
-            &client_identity.account_literal(chain_discriminant),
-            &onboarding_identity.account_id.to_string(),
-            runtime_bundle,
-            alias_setup_intent_path
-                .as_deref()
-                .ok_or_else(|| eyre!("ordinary localnet lost its alias intent"))?,
-            &shell_out_dir,
-        )?;
-    }
-    let generic_executables = [start_path.as_path(), stop_path.as_path()];
-    let executable_files: &[&Path] = if scaling.is_some() {
-        &[]
-    } else {
-        &generic_executables
-    };
-    crate::secure_fs::harden_private_tree_with_owner_executables(&out_dir, executable_files)
-        .wrap_err("harden fresh localnet private artifact tree")?;
-    if let Some(layout) = scaling {
-        let context = scaling_genesis_context
-            .as_deref()
-            .ok_or_else(|| eyre!("fixed generation lost its original genesis context"))?;
-        let mut anchors = scaling::anchors::Inputs::new(&out_dir, genesis_expected_hash)?;
-        anchors.authenticate(&peers, &scaling_config_digests, context)?;
-        return anchors.publish(
-            writer,
-            layout,
-            &peers,
-            &scaling_accounts,
-            &hosts.public,
-            &chain_id,
-            scaling_client_digest,
-            &scaling_account_digests,
-        );
-    }
-    let runtime_bundle =
-        runtime_bundle.ok_or_else(|| eyre!("ordinary localnet lost its runtime bundle"))?;
-    let alias_setup_intent_path =
-        alias_setup_intent_path.ok_or_else(|| eyre!("ordinary localnet lost its alias intent"))?;
+    write_localnet_readme(
+        &out_dir,
+        &chain_id,
+        opts.seed.as_deref(),
+        opts.consensus_mode,
+        opts.peers.get(),
+        &primary_torii_url,
+        &genesis_json_path,
+        &genesis_signed_path,
+        &genesis_expected_hash_path,
+        &genesis_public_key_path,
+        &genesis_private_key_path,
+        &client_config_path,
+        &start_path,
+        &stop_path,
+        &client_identity.account_literal(chain_discriminant),
+        &onboarding_identity.account_id.to_string(),
+        &runtime_bundle,
+        &alias_setup_intent_path,
+        &shell_out_dir,
+    )?;
+    crate::secure_fs::harden_private_tree_with_owner_executables(
+        &out_dir,
+        &[start_path.as_path(), stop_path.as_path()],
+    )
+    .wrap_err("harden fresh localnet private artifact tree")?;
     tui::success("Localnet ready");
     writeln!(writer, "out_dir: {}", out_dir.display())?;
     writeln!(writer, "chain_id: {}", chain_id)?;
@@ -2132,10 +1967,6 @@ fn localnet_dataspace_manifest_hash(id: i64) -> String {
     hex.push_str("000000000000000000000000000000000000000000000000");
     hex
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the canonical lane matrices stay together so profile ordering remains auditable"
-)]
 fn localnet_lane_catalog(
     sora_profile: Option<SoraProfile>,
     taira: bool,
@@ -2272,10 +2103,6 @@ fn localnet_lane_catalog(
     Some((lane_count, catalog))
 }
 #[allow(clippy::items_after_statements)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the canonical routing matrices stay together so first-match ordering remains auditable"
-)]
 fn localnet_routing_policy(sora_profile: Option<SoraProfile>, taira: bool) -> Option<toml::Table> {
     use toml::{Table, Value};
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
@@ -3461,7 +3288,7 @@ fn generate_raw_genesis(
     let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         .then(|| localnet_npos_epoch_seed(&chain_id));
     let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."))
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
             localnet_kagemusha_mint_finality_genesis_parameters(peers)?,
         );
@@ -3483,7 +3310,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     let validators = peers
         .into_iter()
         .map(|peer| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+            iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &peer.mint_finality_seed,
                 0,
                 PeerId::new(peer.public_key.clone()),
@@ -3501,7 +3328,7 @@ fn localnet_kagemusha_mint_finality_genesis_parameters(
     parameters
         .validate()
         .map_err(|error| eyre!("invalid localnet KAGEMUSHA mint-finality roster: {error}"))?;
-    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    iroha_core_zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         &parameters,
     )
     .map_err(|error| eyre!("invalid localnet KAGEMUSHA curve keys: {error}"))?;
@@ -3516,23 +3343,47 @@ fn extend_genesis(
 ) -> Result<RawGenesisTransaction> {
     let taira = genesis.chain_id().to_string() == PUBLIC_TAIRA_CHAIN_ID;
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
-    let mut builder = genesis.into_builder().next_transaction();
+    let extended_batch =
+        genesis.transactions().len().checked_sub(1).ok_or_else(|| {
+            eyre!("localnet asset extension requires a bootstrap permission phase")
+        })?;
+    let bootstrap = &genesis.transactions()[extended_batch];
+    ensure!(
+        !bootstrap.instructions().is_empty()
+            && bootstrap.instructions().iter().all(|instruction| {
+                matches!(
+                    instruction.as_any().downcast_ref::<GrantBox>(),
+                    Some(GrantBox::Permission(grant))
+                        if grant.destination() == genesis_account_id
+                )
+            }),
+        "localnet asset extension requires the generated authority's bootstrap permission phase"
+    );
+    // generate_default leaves its global permission phase open. Continue it with
+    // global account/asset custody, separating scoped domain registration below.
+    // The lower owner refuses structured parameters, topology, and IVM triggers.
+    let mut current_length = bootstrap.instructions().len();
+    let mut builder = genesis.into_builder();
+    let mut lengths = Vec::new();
     for idx in 0..extra_accounts {
         let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes())
             .wrap_err_with(|| format!("failed to generate localnet extra account key {idx}"))?;
         let account_id = AccountId::new(pk.clone());
         if registrations.accounts.insert(account_id.clone()) {
             builder = builder.append_instruction(Register::account(Account::new(account_id)));
+            current_length += 1;
         }
     }
     for asset in assets {
         if registrations.accounts.insert(asset.owned_by.clone()) {
             builder =
                 builder.append_instruction(Register::account(Account::new(asset.owned_by.clone())));
+            current_length += 1;
         }
         if registrations.accounts.insert(asset.mint_to.clone()) {
             builder =
                 builder.append_instruction(Register::account(Account::new(asset.mint_to.clone())));
+            current_length += 1;
         }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
@@ -3565,16 +3416,27 @@ fn extend_genesis(
         )
         .with_metadata(metadata);
         builder = builder.append_instruction(Register::asset_definition(definition));
+        current_length += 1;
         if let Some(alias_literal) = asset.alias.as_deref() {
             let alias = alias_literal
                 .parse::<AssetDefinitionAlias>()
                 .wrap_err("invalid asset definition alias")?;
+            let scoped = alias.dataspace_segment() != "universal";
             // Alias binding resolves its namespace during genesis execution.
             // Materialize only the explicitly requested namespace before binding.
             if let Some(domain_name) = alias.domain_segment() {
                 let domain = DomainId::try_new(domain_name, alias.dataspace_segment())?;
                 if registrations.domains.insert(domain.clone()) {
+                    if scoped && current_length > 0 {
+                        lengths.push(current_length);
+                        current_length = 0;
+                    }
                     builder = builder.append_instruction(Register::domain(Domain::new(domain)));
+                    current_length += 1;
+                    if scoped {
+                        lengths.push(current_length);
+                        current_length = 0;
+                    }
                 }
             }
             builder = builder.append_instruction(SetAssetDefinitionAlias::bind(
@@ -3582,12 +3444,18 @@ fn extend_genesis(
                 alias,
                 None,
             ));
+            current_length += 1;
+            // Routing authenticates this input against its original World: the
+            // newly registered global definition has no alias there. Binding,
+            // global balance minting and ownership transfer form this atomic
+            // global phase after the scoped domain has been committed.
         }
         if asset.quantity > 0 {
             builder = builder.append_instruction(Mint::asset_quantity(
                 asset.quantity,
                 AssetId::new(asset_def.clone(), asset.mint_to.clone()),
             ));
+            current_length += 1;
         }
         if asset.owned_by != *genesis_account_id {
             builder = builder.append_instruction(Transfer::asset_definition(
@@ -3595,9 +3463,20 @@ fn extend_genesis(
                 asset_def,
                 asset.owned_by.clone(),
             ));
+            current_length += 1;
         }
     }
-    builder.build_raw()
+    if current_length > 0 {
+        lengths.push(current_length);
+    }
+    let manifest = builder.build_raw()?;
+    if lengths.is_empty() {
+        return Ok(manifest);
+    }
+    // This global bootstrap phase can mix asset custody with scoped domain
+    // registration. Separate only these instructions before staging, preserving every
+    // other bootstrap phase, including atomic temporary-role alias setup.
+    manifest.partition_instruction_only_transaction(extended_batch, &lengths)
 }
 fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     let mut epoch_seed: [u8; 32] =
@@ -3737,7 +3616,6 @@ fn apply_parameter_overrides(
     }
     let pending_parameters = parameters.parameters().collect::<Vec<_>>();
     if !pending_parameters.is_empty() {
-        builder = builder.next_transaction();
         for parameter in pending_parameters {
             builder = builder.append_parameter(parameter);
         }
@@ -3814,7 +3692,9 @@ fn append_localnet_service_accounts(
             Some(register.object.id.clone())
         })
         .collect::<BTreeSet<_>>();
-    let mut builder = genesis.into_builder().next_transaction();
+    // Generated account/asset custody leaves its global phase open. Service
+    // registration and its following fee/contract grants share that authority.
+    let mut builder = genesis.into_builder();
     for account_id in service_accounts {
         if registered.insert((*account_id).clone()) {
             builder =
@@ -4133,10 +4013,6 @@ struct LocalnetNposBootstrapContext<'a> {
     onboarding_account_id: &'a AccountId,
     taira: bool,
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the ordered NPoS bootstrap matrix stays linear so transaction ordering remains auditable"
-)]
 fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     context: &LocalnetNposBootstrapContext<'_>,
@@ -4310,12 +4186,10 @@ fn append_localnet_npos_bootstrap(
     {
         // The same physical peers serve global and participant lanes. Publish
         // both purpose-specific key records before the participant registrations.
-        builder = builder
-            .next_transaction()
-            .append_instruction(Grant::account_permission(
-                CanManageConsensusKeys,
-                genesis_account_id.clone(),
-            ));
+        builder = builder.append_instruction(Grant::account_permission(
+            CanManageConsensusKeys,
+            genesis_account_id.clone(),
+        ));
         for peer in peers {
             let id = derive_committee_key_id(&peer.public_key);
             builder = builder.append_instruction(RegisterConsensusKey {
@@ -4384,7 +4258,11 @@ fn append_public_lane_validator_registrations(
     taira: bool,
 ) -> GenesisBuilder {
     for &lane_id in lanes {
-        builder = builder.next_transaction();
+        // Universal registrations continue the universal funding/key bootstrap;
+        // each non-universal participant retains a separate physical input.
+        if lane_id != LaneId::SINGLE {
+            builder = builder.next_transaction();
+        }
         for peer in peers {
             let validator_id = peer.validator_account_id(taira);
             builder = builder.append_instruction(RegisterPublicLaneValidator {
@@ -4666,7 +4544,7 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
         .wrap_err("failed to reload persisted genesis.json before signing")?;
     let genesis_key_pair =
         KeyPair::new(public_key.clone(), private_key.0).wrap_err("make genesis key pair")?;
-    let (bound_manifest, block) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
+    let (bound_manifest, block) = crate::genesis::bind_and_sign_staged_sumeragi_context(
         persisted_genesis,
         &genesis_key_pair,
         Some(config),
@@ -5005,6 +4883,7 @@ done
 
 const ORDINARY_MINT_FINALITY_LAUNCH_PY: &str = r#"
 import errno
+import os
 import stat
 import subprocess
 import time
@@ -6384,24 +6263,8 @@ fn write_client_config(
     chain_id: &str,
     chain_discriminant: Option<u16>,
     client: &LocalnetClientIdentity,
-) -> Result<[u8; 32]> {
-    write_client_config_at(
-        &out_dir.join("client.toml"),
-        base_api_port,
-        torii_host,
-        chain_id,
-        chain_discriminant,
-        client,
-    )
-}
-fn write_client_config_at(
-    path: &Path,
-    base_api_port: u16,
-    torii_host: &CanonicalHost,
-    chain_id: &str,
-    chain_discriminant: Option<u16>,
-    client: &LocalnetClientIdentity,
-) -> Result<[u8; 32]> {
+) -> Result<()> {
+    let path = out_dir.join("client.toml");
     // Render explicitly to avoid pretty-printer wrapping the long keys.
     let torii_host = torii_host.url_host();
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
@@ -6439,9 +6302,8 @@ fn write_client_config_at(
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
     ));
-    write_owner_only_localnet_file(path, rendered.as_bytes())
-        .wrap_err_with(|| format!("write localnet client config {}", path.display()))?;
-    Ok(iroha_crypto::sha256(rendered.as_bytes()))
+    write_owner_only_localnet_file(&path, rendered.as_bytes())
+        .wrap_err_with(|| format!("write localnet client config {}", path.display()))
 }
 #[allow(clippy::too_many_arguments)]
 fn write_localnet_readme(

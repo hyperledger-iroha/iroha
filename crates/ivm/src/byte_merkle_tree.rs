@@ -450,10 +450,9 @@ impl ByteMerkleTree {
             if let Some(digests) = selected
                 .run(|| crate::vector::metal_sha256_leaves(&blocks))
                 .flatten()
+                && digests.len() == leaves_count
             {
-                if digests.len() == leaves_count {
-                    return Self::from_leaf_digests(&digests, chunk);
-                }
+                return Self::from_leaf_digests(&digests, chunk);
             }
         }
         // CUDA keeps generated padded chunks and complete output in owned host storage.
@@ -851,7 +850,7 @@ pub(crate) fn sha256_oneblock32(input: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mv::allocation::AllocationBudget;
+    use iroha_allocation::AllocationBudget;
 
     #[test]
     fn funded_leaves_keep_prepaid_owner_and_match_local_updates() {

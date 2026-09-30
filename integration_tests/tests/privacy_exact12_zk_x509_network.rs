@@ -53,17 +53,15 @@ use iroha::{
         },
     },
 };
-use iroha_core::{
-    privacy_profiles::compiled_privacy_profile_v1,
-    privacy_release_evidence::{
-        PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1, PRIVACY_RELEASE_STAGE_STACK_BYTES_V1,
-        PrivacyReleaseTransactionContextV1, PrivacyReleaseZkX509NetworkActionsV1,
-        PrivacyReleaseZkX509ResourceCertificateV1, PrivacyReleaseZkX509SemanticReplayV1,
-        build_privacy_release_zk_x509_network_actions_v1,
-        build_privacy_release_zk_x509_semantic_replay_v1, initialize_privacy_release_rayon_pool_v1,
-        privacy_release_zk_x509_resource_certificate_matches_source_v1,
-    },
+use iroha_core::privacy_release_evidence::{
+    PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1, PRIVACY_RELEASE_STAGE_STACK_BYTES_V1,
+    PrivacyReleaseTransactionContextV1, PrivacyReleaseZkX509NetworkActionsV1,
+    PrivacyReleaseZkX509ResourceCertificateV1, PrivacyReleaseZkX509SemanticReplayV1,
+    build_privacy_release_zk_x509_network_actions_v1,
+    build_privacy_release_zk_x509_semantic_replay_v1, initialize_privacy_release_rayon_pool_v1,
+    privacy_release_zk_x509_resource_certificate_matches_source_v1,
 };
+use iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1;
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;

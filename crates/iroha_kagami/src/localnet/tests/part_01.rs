@@ -8,6 +8,175 @@ use std::{
 include!("../runtime_artifact_tests.rs");
 
 #[test]
+fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(
+        known_chain_discriminant_for_chain_id(PUBLIC_TAIRA_CHAIN_ID).unwrap(),
+    );
+    let seed = b"explicit-localnet-asset-phases";
+    let peers = build_peers(4, Some(seed), 8_080, 13_337).unwrap();
+    let (genesis_public_key, _) = generate_genesis_key_pair(Some(seed), GENESIS_SEED).unwrap();
+    let genesis_account_id = AccountId::new(genesis_public_key.clone());
+    let original = generate_raw_genesis(
+        &genesis_public_key,
+        SumeragiConsensusMode::Npos,
+        PUBLIC_TAIRA_CHAIN_ID,
+        &peers,
+    )
+    .unwrap();
+    let asset = AssetSpec {
+        id: AssetDefinitionId::derive_from_components(
+            DomainId::parse_fully_qualified("phase.paynet").unwrap(),
+            "asset".parse().unwrap(),
+        )
+        .to_string(),
+        name: "Explicit phase asset".to_owned(),
+        alias: Some("asset#phase.paynet".to_owned()),
+        owned_by: localnet_client_account_id(),
+        mint_to: localnet_client_account_id(),
+        quantity: 5,
+    };
+    let extended = extend_genesis(
+        original.clone(),
+        &genesis_account_id,
+        Some(seed),
+        0,
+        std::slice::from_ref(&asset),
+    )
+    .unwrap();
+    assert_eq!(
+        extended.transactions().len(),
+        original.transactions().len() + 2
+    );
+    let original_prefix = original.instructions().collect::<Vec<_>>();
+    assert_eq!(
+        &extended.instructions().collect::<Vec<_>>()[..original_prefix.len()],
+        original_prefix,
+        "every original instruction and value precedes the exact appended asset sequence"
+    );
+    assert_eq!(
+        json::to_json(&extended.transactions()[0]).unwrap(),
+        json::to_json(&original.transactions()[0]).unwrap(),
+        "structured parameters and domain registration retain their boundary"
+    );
+    let global = extended.transactions()[original.transactions().len() - 1].instructions();
+    assert_eq!(
+        global.len(),
+        original.transactions().last().unwrap().instructions().len() + 2
+    );
+    assert!(matches!(
+        global[global.len() - 2]
+            .as_any()
+            .downcast_ref::<RegisterBox>(),
+        Some(RegisterBox::Account(_))
+    ));
+    assert!(matches!(
+        global
+            .last()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<RegisterBox>(),
+        Some(RegisterBox::AssetDefinition(_))
+    ));
+    let home = extended.transactions()[original.transactions().len()].instructions();
+    assert_eq!(home.len(), 1);
+    assert!(matches!(
+        home[0].as_any().downcast_ref::<RegisterBox>(),
+        Some(RegisterBox::Domain(_))
+    ));
+    let asset_phase = extended.transactions().last().unwrap().instructions();
+    assert_eq!(asset_phase.len(), 3);
+    assert!(asset_phase[0].as_any().is::<SetAssetDefinitionAlias>());
+    assert!(matches!(
+        asset_phase[1].as_any().downcast_ref::<MintBox>(),
+        Some(MintBox::Asset(_))
+    ));
+    assert!(matches!(
+        asset_phase[2].as_any().downcast_ref::<TransferBox>(),
+        Some(TransferBox::AssetDefinition(_))
+    ));
+    let mut before = json::value::to_value(&original).unwrap();
+    let mut after = json::value::to_value(&extended).unwrap();
+    before.as_object_mut().unwrap().remove("transactions");
+    after.as_object_mut().unwrap().remove("transactions");
+    assert_eq!(
+        after, before,
+        "all original genesis authorities and metadata stay exact"
+    );
+
+    let service_id = AccountId::new(generate_account_key_pair(Some(seed), b"service").unwrap().0);
+    let with_service = append_localnet_service_accounts(extended.clone(), &[&service_id]).unwrap();
+    assert_eq!(
+        with_service.transactions().len(),
+        extended.transactions().len(),
+        "generated universal service custody continues the open global asset phase"
+    );
+    let before_service = extended.instructions().collect::<Vec<_>>();
+    let after_service = with_service.instructions().collect::<Vec<_>>();
+    assert_eq!(&after_service[..before_service.len()], before_service);
+    assert_eq!(after_service.len(), before_service.len() + 1);
+    let Some(RegisterBox::Account(register)) = after_service
+        .last()
+        .unwrap()
+        .as_any()
+        .downcast_ref::<RegisterBox>()
+    else {
+        panic!("service phase must append the requested universal account");
+    };
+    assert_eq!(register.object.id, service_id);
+    assert_eq!(
+        json::to_json(
+            &append_localnet_service_accounts(with_service.clone(), &[&service_id]).unwrap()
+        )
+        .unwrap(),
+        json::to_json(&with_service).unwrap(),
+        "already registered service custody is idempotent"
+    );
+
+    let unexpected = original
+        .clone()
+        .into_builder()
+        .append_instruction(iroha_data_model::isi::Log::new(
+            iroha_data_model::level::Level::INFO,
+            "unexpected owner".to_owned(),
+        ))
+        .build_raw()
+        .unwrap();
+    assert!(
+        extend_genesis(
+            unexpected,
+            &genesis_account_id,
+            Some(seed),
+            0,
+            std::slice::from_ref(&asset)
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("bootstrap permission phase")
+    );
+    let structured = original
+        .into_builder()
+        .set_topology(
+            peers
+                .iter()
+                .map(|peer| {
+                    GenesisTopologyEntry::new(
+                        PeerId::new(peer.public_key.clone()),
+                        peer.bls_pop.clone(),
+                    )
+                })
+                .collect(),
+        )
+        .build_raw()
+        .unwrap();
+    assert!(
+        extend_genesis(structured, &genesis_account_id, Some(seed), 0, &[asset])
+            .unwrap_err()
+            .to_string()
+            .contains("not instruction-only")
+    );
+}
+
+#[test]
 fn localnet_kagemusha_authority_matches_canonical_four_validator_topology() {
     let peers = build_peers(4, Some(b"kagemusha-authority-fixture"), 8_080, 13_337)
         .expect("derive deterministic localnet peers");
@@ -37,10 +206,6 @@ fn localnet_kagemusha_authority_matches_canonical_four_validator_topology() {
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "this end-to-end fixture keeps each generated signer, validator registration, config, custody file, and launch-script assertion in one canonical consistency check"
-)]
 fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
     let temp = tempfile::tempdir().expect("temporary Taira directory");
     let opts = LocalnetOptions {
@@ -1446,10 +1611,22 @@ fn generated_localnet_needs_no_kagemusha_feature_switch() {
     );
     let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
         .expect("parse generated genesis");
-    let setup_transaction = manifest
+    let setup_transactions = manifest
         .transactions()
-        .last()
-        .expect("alias setup transaction");
+        .iter()
+        .filter(|transaction| {
+            transaction
+                .instructions()
+                .iter()
+                .any(|instruction| instruction.as_any().downcast_ref::<EnsureAlias>().is_some())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        setup_transactions.len(),
+        1,
+        "one original alias setup owner"
+    );
+    let setup_transaction = setup_transactions[0];
     let setup_instructions = setup_transaction
         .instructions()
         .iter()
@@ -1993,11 +2170,7 @@ fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
     assert_eq!(allow_prefixes, vec!["iroha."]);
 }
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the test audits the complete generated Sumeragi v2 schema and its prohibited legacy fields"
-)]
-fn generated_configs_use_strict_sumeragi_v2_schema() {
+fn generated_configs_use_strict_sumeragi_schema() {
     let temp = tempfile::tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
         sora_profile: None,
@@ -2752,10 +2925,8 @@ fn localnet_npos_election_ceiling_matches_generated_committee() {
             npos.epoch_length_blocks(),
             parameters.sumeragi().epoch_length_blocks
         );
-        assert!(
-            iroha_data_model::block::consensus_v2::is_valid_committee_size(
-                usize::try_from(npos.max_validators()).expect("bounded committee")
-            )
-        );
+        assert!(iroha_data_model::block::consensus::is_valid_committee_size(
+            usize::try_from(npos.max_validators()).expect("bounded committee")
+        ));
     }
 }

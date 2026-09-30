@@ -1,7 +1,6 @@
 //! Quick helper to compile an inline Kotodama source string and dump SCALLs.
-use ivm::{
-    Memory, ProgramMetadata, decode as ivm_decode, kotodama::compiler::Compiler as KotodamaCompiler,
-};
+use ivm::{Memory, ProgramMetadata, decode as ivm_decode};
+use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 fn dump(src: &str) {
     let code = KotodamaCompiler::new()
         .compile_source(src)

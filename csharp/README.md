@@ -252,10 +252,16 @@ artifacts. Build or obtain those artifacts, stage them with
 `scripts/package_csharp_native_artifacts.py`, then run:
 
 ```bash
-dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj \
-  -c Release \
-  --output artifacts/packages
+dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER=osx-arm64 ../ci/check_csharp_sdk_package_consumer.sh
 ```
+
+Pack the Release build validated above, then run the package-consumer gate with
+the host's supported runtime identifier (`linux-x64`, `linux-arm64`, `osx-x64`,
+`osx-arm64`, or `win-x64`). The gate installs the local NuGet package into a fresh
+consumer through `PackageReference`, verifies its staged native artifact, and
+runs the managed and native smoke checks. It rejects `ProjectReference` so a
+source build cannot substitute for the package being released.
 
 Repository layout:
 

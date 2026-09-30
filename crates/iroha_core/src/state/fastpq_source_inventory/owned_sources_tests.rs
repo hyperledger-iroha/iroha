@@ -48,7 +48,7 @@ use iroha_data_model::{
     },
 };
 use iroha_logger::Level;
-use iroha_model_base::{domain::DomainId, topology::LaneId};
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -224,7 +224,7 @@ fn fixture_with_effects(
     setup.commit_world_overlay_for_testing().unwrap();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
     let mut builder = BlockBuilder::new(header);
-    let mut routes = Vec::new();
+    let mut contexts = Vec::new();
     // A successful and an actually rejected Network input both remain sources.
     for body in [
         vec![InstructionBox::from(Log::new(
@@ -252,16 +252,25 @@ fn fixture_with_effects(
         );
         tx.set_creation_time(header.creation_time() - std::time::Duration::from_millis(1));
         let signed = tx.with_instructions(body).sign(ALICE_KEYPAIR.private_key());
-        routes.push(ExternalExecutionContext::new(
-            signed.hash_as_entrypoint(),
-            LaneId::SINGLE,
-            DataSpaceId::UNIVERSAL,
+        let accepted =
+            crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(&signed));
+        let view = state.view();
+        let snapshot = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view);
+        let native = snapshot
+            .inputs(view.world())
+            .execution_route(&accepted, header.height().get())
+            .expect("fixture input has its exact committed native route");
+        contexts.push(ExternalExecutionContext::new(
+            accepted.hash_as_entrypoint(),
+            native.lane_id,
+            native.dataspace_id,
         ));
+        drop(view);
         builder.push_transaction(signed);
     }
-    // Freeze each original input's route before signing the carrier and opening
-    // its recorder; neither execution nor sealing may invent missing routing.
-    builder.set_execution_context(Some(BlockExecutionContextBundle::new(routes)));
+    // Freeze each original input's committed route before signing the carrier
+    // and opening its recorder; execution and sealing cannot invent routing.
+    builder.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
     (
         state,
         builder.build_with_signature(0, ALICE_KEYPAIR.private_key()),
