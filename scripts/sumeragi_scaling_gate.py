@@ -1050,12 +1050,18 @@ class GateNetwork(soak.Localnet):
             stdin=json.dumps(lane_policy_parameter(policy)),
         )
 
-    def lanes(self) -> dict[str, Any]:
+    def lanes(self, deadline: Optional[float] = None) -> dict[str, Any]:
         """``/v1/sumeragi/lanes`` of every validator (``None`` where it did not answer)."""
-        return {
-            self.node(index): http_json_any(f"http://127.0.0.1:{self.api_port(index)}/v1/sumeragi/lanes")
-            for index in range(self.validators)
-        }
+        snapshot: dict[str, Any] = {}
+        for index in range(self.validators):
+            remaining = 3.0 if deadline is None else min(3.0, deadline - time.monotonic())
+            snapshot[self.node(index)] = (
+                http_json_any(
+                    f"http://127.0.0.1:{self.api_port(index)}/v1/sumeragi/lanes",
+                    timeout=remaining,
+                ) if remaining > 0 else None
+            )
+        return snapshot
 
     def statuses(self) -> dict[str, Any]:
         """``/v1/sumeragi/status`` of every validator."""
@@ -1064,25 +1070,62 @@ class GateNetwork(soak.Localnet):
             for index in range(self.validators)
         }
 
+    def advance_global_chain(self, message: str, timeout_s: float) -> None:
+        """Commit one global block: an operator ping transaction, waiting for its commit."""
+        self.cli(
+            self.client_config(0),
+            ["--fee-payer", "authority", "tx", "ping", "--msg", message],
+            min(180.0, timeout_s),
+        )
+
     def wait_for_lane_instances(self, lanes: int, timeout_s: float) -> dict[str, Any]:
-        """Wait until every validator runs an unhalted instance of every fixed lane."""
+        """Advance the global chain until every validator runs an unhalted instance of every
+        fixed lane; returns the ``/v1/sumeragi/lanes`` snapshot and the pings it took.
+
+        The policy's block creates the fixed lanes' records, which become active two global
+        heights later (``specs/sumeragi_lanes.md`` §2.2), and nodes start an instance when they
+        apply that height. The chain makes no empty blocks, so the gate commits pings until the
+        instances run. Reads and submitted pings share the caller's deadline;
+        a response received after it cannot establish readiness.
+        """
         deadline = time.monotonic() + timeout_s
-        expected = {str(lane) for lane in range(1, lanes)}
         snapshot: dict[str, Any] = {}
+        pings = 0
         while time.monotonic() < deadline:
-            snapshot = self.lanes()
-            ready = True
-            for statuses in snapshot.values():
-                running = {
-                    str((status.get("record") or {}).get("lane"))
-                    for status in statuses or []
-                    if status.get("instance") is not None and status["instance"].get("halted") is None
-                }
-                ready &= expected <= running
-            if ready:
-                return snapshot
-            time.sleep(1.0)
-        raise GateError(f"validators did not all run lanes {sorted(expected)} within {timeout_s:.0f} s: {snapshot}")
+            snapshot = self.lanes(deadline=deadline)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if lane_instances_running(snapshot, lanes):
+                return {"lanes": snapshot, "pings": pings}
+            self.advance_global_chain(f"scaling-lane-activation-{pings}", remaining)
+            pings += 1
+        raise GateError(
+            f"validators did not all run lanes 1..{lanes - 1} within {timeout_s:.0f} s "
+            f"after {pings} pings: {json.dumps(snapshot)[-1500:]}"
+        )
+
+
+def lane_instances_running(snapshot: Mapping[str, Any], lanes: int) -> bool:
+    """Whether every validator's ``/v1/sumeragi/lanes`` shows an unhalted instance of each of
+    the fixed lanes ``1..lanes`` (a validator that did not answer is not running them)."""
+    expected = {str(lane) for lane in range(1, lanes)}
+    if not snapshot:
+        return False
+    for statuses in snapshot.values():
+        if not isinstance(statuses, list):
+            return False
+        running = {
+            str(status["record"].get("lane"))
+            for status in statuses
+            if isinstance(status, Mapping)
+            and isinstance(status.get("record"), Mapping)
+            and isinstance(status.get("instance"), Mapping)
+            and status["instance"].get("halted") is None
+        }
+        if not expected <= running:
+            return False
+    return True
 
 
 def http_json_any(url: str, timeout: float = 3.0) -> Any:
@@ -1304,7 +1347,7 @@ def run_one(
                 json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             net.apply_lane_policy(policy)
-            net.wait_for_lane_instances(lanes, timeout_s=180)
+            record["lane_activation_pings"] = net.wait_for_lane_instances(lanes, timeout_s=300)["pings"]
         record["status_before"] = net.statuses()
         lanes_before = net.lanes()
         record["lanes_before"] = lanes_before

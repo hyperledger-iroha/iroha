@@ -8,8 +8,9 @@
 //! `specs/sumeragi.md` §7.4) of every unit, initial and beacon alike: the launcher
 //! starts `iroha3d_taira --config … --sora` and adds `--sumeragi-assert-fresh-key`
 //! only when it consumes the token `/var/lib/taira/<slug>/sumeragi-first-boot`.
-//! Only the explicit first-boot step on the validator host creates that token
-//! (`scripts/taira_validator_unit.py --arm-first-boot`), and only while the
+//! Public reset creates that token with its authorization-marked fresh state;
+//! manual provisioning uses `scripts/taira_validator_unit.py --arm-first-boot`.
+//! Both require that the
 //! configured `sumeragi-records` directory and `sumeragi-installation.log` are
 //! absent (`specs/runbooks/sumeragi_taira_reset.md` §5).
 

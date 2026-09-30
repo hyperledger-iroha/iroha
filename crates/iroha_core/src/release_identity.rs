@@ -127,32 +127,46 @@ impl BuildIdentity {
 /// Wire-schema identity compiled into this binary.
 ///
 /// Hashes the compiled schemas of the covered wire roots, in order the block wire
-/// ([`SignedBlock`](iroha_data_model::block::SignedBlock)) and the consensus wire
-/// ([`WireMessage`](iroha_sumeragi::message::WireMessage)), with the IVM ABI hash of
+/// ([`SignedBlock`](iroha_data_model::block::SignedBlock)), the consensus wire
+/// ([`WireMessage`](iroha_sumeragi::message::WireMessage) plus native
+/// [`Evidence`](iroha_sumeragi::message::Evidence) frames), and the canonical
+/// [`ExecutionResultCommitment`](iroha_data_model::sumeragi_finality::ExecutionResultCommitment)
+/// payload carried inside result witnesses, with the IVM ABI hash of
 /// the sole first-release syscall policy through
 /// [`wire_schema_hash_of`](iroha_data_model::wire_schema::wire_schema_hash_of). Each
-/// root is rendered against its own types because the two wires describe different
-/// types under the same schema identifiers (both define a `BlockHeader`). The value
-/// is independent of the compilation target but not of the enabled features (the
-/// crypto `Algorithm` schema lists feature-gated variants), so release tooling reads
-/// it from a native build of the same commit with the release feature set.
+/// root is rendered against its own types because the wires describe different
+/// types under the same schema identifiers (both define a `BlockHeader`). Opaque
+/// consensus byte domains (attestation signatures, control
+/// witnesses, availability tables, rows) are described as length-prefixed byte
+/// sequences named with the lengths their decoders admit; the formats inside them are
+/// not part of the schema. The value is independent of the compilation target but not
+/// of the enabled features (the crypto `Algorithm` schema lists feature-gated
+/// variants), so release tooling reads it from a native build of the same commit with
+/// the release feature set.
 #[must_use]
 pub fn wire_schema_hash() -> [u8; 32] {
     static HASH: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
     *HASH.get_or_init(|| {
-        let [block, consensus] = covered_wire_roots();
+        let [block, consensus, execution] = covered_wire_roots();
         iroha_data_model::wire_schema::wire_schema_hash_of(
-            &[&block, &consensus],
+            &[&block, &consensus, &execution],
             ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         )
     })
 }
 
-/// Compiled schemas of the covered wire roots in identity order: block wire, consensus wire.
-fn covered_wire_roots() -> [iroha_schema::MetaMap; 2] {
+/// Compiled wire roots in identity order: block, consensus and canonical execution result.
+fn covered_wire_roots() -> [iroha_schema::MetaMap; 3] {
+    use iroha_schema::IntoSchema;
+
+    let mut consensus = iroha_sumeragi::message::WireMessage::schema();
+    // Blocks admit canonical native Evidence frames inside opaque byte fields.
+    // Include their actual derived layouts and every referenced type in the identity.
+    iroha_sumeragi::message::Evidence::update_schema_map(&mut consensus);
     [
         iroha_data_model::wire_schema::covered_wire_schema(),
-        <iroha_sumeragi::message::WireMessage as iroha_schema::IntoSchema>::schema(),
+        consensus,
+        iroha_data_model::sumeragi_finality::ExecutionResultCommitment::schema(),
     ]
 }
 
@@ -338,30 +352,30 @@ mod tests {
     #[test]
     fn wire_schema_hash_binds_compiled_wire_and_ivm_abi_v1() {
         let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        let [block, consensus] = covered_wire_roots();
-        let combined = wire_schema_hash_of(&[&block, &consensus], abi);
+        let [block, consensus, execution] = covered_wire_roots();
+        let combined = wire_schema_hash_of(&[&block, &consensus, &execution], abi);
         assert_eq!(wire_schema_hash(), combined);
         assert_eq!(
             wire_schema_hash(),
             wire_schema_hash(),
             "cached value is stable"
         );
-        let [block, consensus] = covered_wire_roots();
+        let [block, consensus, execution] = covered_wire_roots();
         assert_eq!(
-            wire_schema_hash_of(&[&block, &consensus], abi),
+            wire_schema_hash_of(&[&block, &consensus, &execution], abi),
             combined,
             "rebuilt schemas hash identically"
         );
         let mut other_abi = abi;
         other_abi[0] ^= 1;
         assert_ne!(
-            wire_schema_hash_of(&[&block, &consensus], other_abi),
+            wire_schema_hash_of(&[&block, &consensus, &execution], other_abi),
             combined
         );
         assert_eq!(hex::encode(wire_schema_hash()).len(), 64);
     }
 
-    /// Both roots are closed and unambiguous, so every type a consensus frame reaches is
+    /// All roots are closed and unambiguous, so every type a consensus frame reaches is
     /// described, and the schema's message discriminants are the canonical Norito tags.
     #[test]
     fn consensus_wire_root_is_closed_and_matches_the_codec_tags() {
@@ -371,8 +385,8 @@ mod tests {
             types::Hash32,
         };
 
-        let [block, consensus] = covered_wire_roots();
-        for root in [&block, &consensus] {
+        let [block, consensus, execution] = covered_wire_roots();
+        for root in [&block, &consensus, &execution] {
             let defects = wire_root_defects(root);
             assert!(defects.is_empty(), "{defects:?}");
         }
@@ -419,15 +433,15 @@ mod tests {
         use iroha_sumeragi::message::Vote;
 
         let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        let [block, consensus] = covered_wire_roots();
-        let combined = wire_schema_hash_of(&[&block, &consensus], abi);
+        let [block, consensus, execution] = covered_wire_roots();
+        let combined = wire_schema_hash_of(&[&block, &consensus, &execution], abi);
         assert_ne!(
-            wire_schema_hash_of(&[&block], abi),
+            wire_schema_hash_of(&[&block, &execution], abi),
             combined,
             "the consensus root is covered"
         );
         assert_ne!(
-            wire_schema_hash_of(&[&consensus, &block], abi),
+            wire_schema_hash_of(&[&consensus, &block, &execution], abi),
             combined,
             "the roots are hashed in identity order"
         );
@@ -446,9 +460,159 @@ mod tests {
         let defects = wire_root_defects(&changed);
         assert!(defects.is_empty(), "{defects:?}");
         assert_ne!(
-            wire_schema_hash_of(&[&block, &changed], abi),
+            wire_schema_hash_of(&[&block, &changed, &execution], abi),
             combined,
             "changing a consensus field type changes the identity"
         );
+    }
+
+    /// Native evidence in block effects remains covered despite its opaque outer byte field.
+    #[test]
+    fn wire_schema_hash_covers_native_evidence_fields_and_defects() {
+        use iroha_schema::{EnumVariantPayload, Metadata};
+        use iroha_sumeragi::message::{Defect, Evidence};
+
+        let [block, consensus, execution] = covered_wire_roots();
+        assert!(wire_root_defects(&consensus).is_empty());
+        let Some(Metadata::Enum(evidence)) = consensus.get::<Evidence>() else {
+            panic!("native evidence enum");
+        };
+        assert_eq!(evidence.variants.len(), 5);
+        let Some(Metadata::Struct(invalid)) = consensus.get::<EnumVariantPayload<Evidence, 3>>()
+        else {
+            panic!("native signed-content defect fields");
+        };
+        assert_eq!(invalid.declarations[1].name, "defect");
+        assert_eq!(
+            invalid.declarations[1].ty,
+            core::any::TypeId::of::<Defect>()
+        );
+        let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+        let original = wire_schema_hash_of(&[&block, &consensus, &execution], abi);
+        let Some(Metadata::Enum(mut defects)) = consensus.get::<Defect>().cloned() else {
+            panic!("native defect enum");
+        };
+        defects.variants[0].discriminant = 99;
+        let mut changed = consensus.clone();
+        changed.insert::<Defect>(Metadata::Enum(defects));
+        assert_ne!(
+            wire_schema_hash_of(&[&block, &changed, &execution], abi),
+            original
+        );
+        let Some(Metadata::Tuple(mut votes)) =
+            consensus.get::<EnumVariantPayload<Evidence, 1>>().cloned()
+        else {
+            panic!("two original signed votes");
+        };
+        votes.types[1] = core::any::TypeId::of::<u32>();
+        let mut changed = consensus;
+        changed.insert::<EnumVariantPayload<Evidence, 1>>(Metadata::Tuple(votes));
+        assert_ne!(
+            wire_schema_hash_of(&[&block, &changed, &execution], abi),
+            original
+        );
+    }
+
+    /// The canonical result payload remains covered inside opaque consensus witnesses.
+    #[test]
+    fn wire_schema_hash_covers_canonical_execution_result_fields() {
+        use iroha_data_model::sumeragi_finality::ExecutionResultCommitment;
+        use iroha_schema::{IntoSchema, Metadata};
+
+        let [block, consensus, execution] = covered_wire_roots();
+        assert!(wire_root_defects(&execution).is_empty());
+        let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+        let original = wire_schema_hash_of(&[&block, &consensus, &execution], abi);
+        assert_ne!(wire_schema_hash_of(&[&block, &consensus], abi), original);
+        let Some(Metadata::Struct(mut result)) =
+            execution.get::<ExecutionResultCommitment>().cloned()
+        else {
+            panic!("canonical execution result fields");
+        };
+        let height = result
+            .declarations
+            .iter_mut()
+            .find(|field| field.name == "height")
+            .expect("the result binds its exact executed height");
+        height.ty = core::any::TypeId::of::<u32>();
+        let mut changed = execution;
+        u32::update_schema_map(&mut changed);
+        changed.insert::<ExecutionResultCommitment>(Metadata::Struct(result));
+        assert!(wire_root_defects(&changed).is_empty());
+        assert_ne!(
+            wire_schema_hash_of(&[&block, &consensus, &changed], abi),
+            original
+        );
+    }
+
+    /// The consensus root describes each bounded byte domain a frame carries as its codec: a
+    /// length-prefixed byte sequence under the domain's frame identifier, named with the lengths
+    /// its decoder admits, so a changed domain or bound changes the identity.
+    #[test]
+    fn consensus_byte_domains_are_described_as_their_codec() {
+        use iroha_schema::{IntoSchema, MetaMap, Metadata, VecMeta};
+        use iroha_sumeragi::{
+            availability::{
+                AvailabilityFrame, MAX_AVAILABILITY_FRAME_BYTES, MAX_DA_CHUNK_SIZE_BYTES, RowBytes,
+            },
+            message::{
+                AttestationSignature, MAX_ATTESTATION_SIGNATURE_BYTES, MAX_RESULT_WITNESS_BYTES,
+                ResultWitness,
+            },
+            types::{ControlWitness, MAX_CONTROL_WITNESS_BYTES},
+        };
+        use norito::codec::Encode as _;
+
+        /// The schema identifier, name and description of `T` in `root`.
+        fn described<T: IntoSchema>(root: &MetaMap) -> (String, String, Option<Metadata>) {
+            (T::id(), T::type_name(), root.get::<T>().cloned())
+        }
+        let [_, consensus, _] = covered_wire_roots();
+        let bytes = Metadata::Vec(VecMeta {
+            ty: core::any::TypeId::of::<u8>(),
+        });
+        // A domain is named after the last segment of its frame path.
+        let domain = |frame: &str, min: usize, max: usize| {
+            let name = frame.rsplit("::").next().unwrap_or(frame);
+            let frame = format!("iroha_sumeragi::{frame}");
+            (frame, format!("{name}<{min}..={max}>"), Some(bytes.clone()))
+        };
+        let max_row = usize::try_from(MAX_DA_CHUNK_SIZE_BYTES).expect("row bound fits usize");
+        let actual = [
+            described::<ResultWitness>(&consensus),
+            described::<AttestationSignature>(&consensus),
+            described::<ControlWitness>(&consensus),
+            described::<AvailabilityFrame>(&consensus),
+            described::<RowBytes>(&consensus),
+        ];
+        let expected = [
+            domain("ResultWitness", 1, MAX_RESULT_WITNESS_BYTES),
+            domain("AttestationSignature", 0, MAX_ATTESTATION_SIGNATURE_BYTES),
+            domain("ControlWitness", 0, MAX_CONTROL_WITNESS_BYTES),
+            domain(
+                "availability::AvailabilityFrame",
+                0,
+                MAX_AVAILABILITY_FRAME_BYTES,
+            ),
+            domain("availability::RowBytes", 2, max_row),
+        ];
+        assert_eq!(actual, expected);
+
+        let raw = vec![1_u8, 2, 3];
+        for encoded in [
+            ResultWitness::from_untrusted(raw.clone()).unwrap().encode(),
+            AttestationSignature::try_from_slice(&raw).unwrap().encode(),
+            ControlWitness::try_from_slice(&raw).unwrap().encode(),
+            AvailabilityFrame::from_untrusted(raw.clone())
+                .unwrap()
+                .encode(),
+            RowBytes::from_untrusted(raw.clone()).unwrap().encode(),
+        ] {
+            assert_eq!(
+                encoded,
+                raw.encode(),
+                "a byte domain encodes as a byte sequence"
+            );
+        }
     }
 }

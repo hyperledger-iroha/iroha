@@ -25,7 +25,9 @@ const COMMITMENT_BYTES: usize = 512;
 /// native execution result at the exact network and carrier height. All fields have fixed size;
 /// the 256 siblings use eight fixed groups of 32, preserving the existing 96-item
 /// decoder bound without a sibling vector or fallback layout.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema, iroha_schema::IntoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::NativeLaneStateProof")]
 pub struct NativeLaneStateProof {
     commitment: SumeragiLaneStateCommitment,

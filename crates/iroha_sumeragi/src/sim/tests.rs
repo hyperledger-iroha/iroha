@@ -18,50 +18,105 @@ fn default_seeds() -> u64 {
     if cfg!(debug_assertions) { 5 } else { 20 }
 }
 
-/// Run `builder` over the configured seeds; panic with the first failure report.
-fn sweep(name: &str, builder: Builder) -> Vec<World> {
-    let mut worlds = Vec::new();
-    let mut failures = Vec::new();
-    for seed in seeds(default_seeds()) {
-        match run(builder(seed)) {
-            Ok(world) => worlds.push(world),
-            Err(report) => failures.push((seed, report)),
-        }
-    }
-    let sum = |f: &dyn Fn(&World) -> u64| worlds.iter().map(f).sum::<u64>();
-    let heights = sum(&|w| w.oracle.refs.iter().map(|r| r.len() as u64).sum());
-    let view_changes = sum(&|w| {
-        w.oracle
-            .refs
-            .iter()
-            .map(|r| r.values().filter(|b| b.view > 0).count() as u64)
-            .sum()
-    });
+/// Run `builder` over the configured seeds; check each World before releasing it.
+fn sweep(name: &str, builder: Builder, check: impl FnMut(&World)) {
+    sweep_seeds(name, builder, seeds(default_seeds()), check);
+}
+
+/// Retain only aggregate statistics between seeds, so nightly memory is independent of the
+/// seed count. Each scenario-specific assertion sees the complete World before it is dropped.
+fn sweep_seeds(
+    name: &str,
+    builder: Builder,
+    seeds: impl IntoIterator<Item = u64>,
+    mut check: impl FnMut(&World),
+) {
+    let mut passed = 0;
+    let mut failed = Vec::new();
+    let mut first_failure = None;
+    let mut heights = 0;
+    let mut view_changes = 0;
+    let mut crashes = 0;
+    let mut evidence = 0;
+    let mut lost = 0;
+    let mut ingress_drops = 0;
     // Peak start level (§9.2) → honest replicas.
     let mut peaks = std::collections::BTreeMap::<u32, usize>::new();
-    for world in &worlds {
-        for r in world.honest() {
-            *peaks
-                .entry(world.oracle.reps[r].max_start_level)
-                .or_default() += 1;
+    for seed in seeds {
+        match run(builder(seed)) {
+            Ok(world) => {
+                check(&world);
+                passed += 1;
+                heights += world
+                    .oracle
+                    .refs
+                    .iter()
+                    .map(|r| r.len() as u64)
+                    .sum::<u64>();
+                view_changes += world
+                    .oracle
+                    .refs
+                    .iter()
+                    .map(|r| r.values().filter(|b| b.view > 0).count() as u64)
+                    .sum::<u64>();
+                crashes += world.stats.crashes;
+                evidence += world.stats.evidence;
+                lost += world.stats.lost;
+                ingress_drops += world
+                    .replicas
+                    .iter()
+                    .map(|r| r.host.ingress_drops())
+                    .sum::<u64>();
+                for r in world.honest() {
+                    *peaks
+                        .entry(world.oracle.reps[r].max_start_level)
+                        .or_default() += 1;
+                }
+            }
+            Err(report) => {
+                failed.push(seed);
+                first_failure.get_or_insert(report);
+            }
         }
     }
     eprintln!(
-        "{name}: {} seeds passed, {} failed; heights {heights}, commits after a view change \
-         {view_changes}, crashes {}, evidence {}, lost {}, ingress drops {}, peak start levels \
-         {peaks:?}",
-        worlds.len(),
-        failures.len(),
-        sum(&|w| w.stats.crashes),
-        sum(&|w| w.stats.evidence),
-        sum(&|w| w.stats.lost),
-        sum(&|w| w.replicas.iter().map(|r| r.host.ingress_drops()).sum()),
+        "{name}: {passed} seeds passed, {} failed; heights {heights}, commits after a view \
+         change {view_changes}, crashes {crashes}, evidence {evidence}, lost {lost}, \
+         ingress drops {ingress_drops}, peak start levels {peaks:?}",
+        failed.len(),
     );
-    if let Some((seed, report)) = failures.first() {
-        let seeds: Vec<u64> = failures.iter().map(|(s, _)| *s).collect();
-        panic!("{name}: failing seeds {seeds:?}; first (seed {seed}):\n{report}");
+    if let Some(report) = first_failure {
+        panic!(
+            "{name}: failing seeds {failed:?}; first (seed {}):\n{report}",
+            failed[0]
+        );
     }
-    worlds
+}
+
+#[test]
+fn sweep_releases_each_world_before_running_the_next_seed() {
+    let mut previous = std::sync::Weak::new();
+    let mut observed = Vec::new();
+    sweep_seeds(
+        "bounded sweep",
+        |seed| {
+            let mut scenario = scenarios::smoke(seed, 4);
+            scenario.duration = 1_000;
+            scenario.checks.progress = 0;
+            scenario
+        },
+        0..3,
+        |world| {
+            assert!(
+                previous.upgrade().is_none(),
+                "the previous World was retained"
+            );
+            previous = std::sync::Arc::downgrade(&world.log);
+            observed.push(world.seed);
+        },
+    );
+    assert_eq!(observed, vec![0, 1, 2]);
+    assert!(previous.upgrade().is_none(), "the final World was retained");
 }
 
 #[test]
@@ -87,7 +142,7 @@ macro_rules! scenario_test {
     ($test:ident, $name:literal, $builder:path) => {
         #[test]
         fn $test() {
-            sweep($name, $builder);
+            sweep($name, $builder, |_| {});
         }
     };
 }
@@ -110,7 +165,7 @@ scenario_test!(f14_whole_cluster_restart, "F14", scenarios::f14);
 fn f15_slow_executors() {
     // `(variant, peak start level, final start level)` → honest replicas.
     let mut levels = std::collections::BTreeMap::<(u64, u32, u32), usize>::new();
-    for world in sweep("F15", scenarios::f15) {
+    sweep("F15", scenarios::f15, |world| {
         // §9.2 adaptation: where every executor is slower than `T(0)/2` (variants 1, 4 and 5),
         // the start level rose at every honest replica; in variant 4 executions become fast at
         // 20 s, so it decayed back to 0 by the end. In variant 5 only non-empty blocks are
@@ -129,7 +184,7 @@ fn f15_slow_executors() {
             );
         }
         if variant != 1 && variant != 4 && variant != 5 {
-            continue;
+            return;
         }
         for r in world.honest() {
             let Some(core) = world.replicas[r].host.core() else {
@@ -147,13 +202,13 @@ fn f15_slow_executors() {
             }
             *levels.entry((variant, max, last)).or_default() += 1;
         }
-    }
+    });
     eprintln!("F15 start levels (variant, peak, final) → replicas: {levels:?}");
 }
 scenario_test!(f16_validator_set_change, "F16", scenarios::f16);
 #[test]
 fn f17_far_behind_joiner() {
-    for world in sweep("F17", scenarios::f17) {
+    sweep("F17", scenarios::f17, |world| {
         // The joiner (machine 4, empty store at start) caught up past the pre-built chain.
         let joiner = world.replica_of(4, 0).unwrap_or(0);
         let prebuilt = world.oracle.refs[0].values().filter(|b| b.at == 0).count() as u64;
@@ -163,7 +218,7 @@ fn f17_far_behind_joiner() {
             world.seed,
             world.committed(joiner)
         );
-    }
+    });
 }
 scenario_test!(f18_floods, "F18", scenarios::f18);
 scenario_test!(f19_poison_payload, "F19", scenarios::f19);
@@ -173,7 +228,7 @@ scenario_test!(f22_idle_chain, "F22", scenarios::f22);
 scenario_test!(f23_non_3f1_committees, "F23", scenarios::f23);
 #[test]
 fn f24_record_corruption_and_loss() {
-    for world in sweep("F24", scenarios::f24) {
+    sweep("F24", scenarios::f24, |world| {
         // R2 works under every variant (forged, replayed and relayed echoes, rolled-back key
         // stores, reinstalled keys): every honest node that lost a record anchors again.
         for r in world.honest() {
@@ -187,7 +242,7 @@ fn f24_record_corruption_and_loss() {
                 world.seed
             );
         }
-    }
+    });
 }
 scenario_test!(f25_relay_tampering, "F25", scenarios::f25);
 scenario_test!(f26_byzantine_responders, "F26", scenarios::f26);
@@ -198,6 +253,12 @@ scenario_test!(f32_cluster_restart_lock_or_cqc, "F32", scenarios::f32);
 scenario_test!(f33_hidden_pqc, "F33", scenarios::f33);
 scenario_test!(f34_late_entrants, "F34", scenarios::f34);
 scenario_test!(f35_local_queue_asymmetry, "F35", scenarios::f35);
+
+/// The original sparse-work failures at n = 22 stay covered even in the default short sweep.
+#[test]
+fn f35_sparse_local_work_regression_seeds() {
+    sweep_seeds("F35 regressions", scenarios::f35, [6, 31, 78, 87], |_| {});
+}
 
 /// The F35 leader-turn bound (Appendix E, E62) is not vacuous: holders whose builders never
 /// return work (each prices payloads at its own 1.5 s base cost, above `exec_budget`, §9.1)
@@ -230,7 +291,7 @@ fn leader_turns_flags_holders_without_work() {
 fn f36_late_leaders() {
     // `(n, peak start level)` → honest replicas.
     let mut levels = std::collections::BTreeMap::<(usize, u32), usize>::new();
-    for world in sweep("F36", scenarios::f36) {
+    sweep("F36", scenarios::f36, |world| {
         // §9.2: a late but valid proposal or body never raises an honest start level (from
         // the anchor or the proposal's acceptance, every late turn would raise it by one).
         let n = world.instances[0].committee(1).n();
@@ -243,7 +304,7 @@ fn f36_late_leaders() {
             );
             *levels.entry((n, peak)).or_default() += 1;
         }
-    }
+    });
     eprintln!("F36 start levels (n, peak) → replicas: {levels:?}");
 }
 
@@ -262,17 +323,17 @@ fn det_r4_fresh_nonce_per_init() {
 
 #[test]
 fn f30_max_size_blocks() {
-    for world in sweep("F30", scenarios::f30) {
+    sweep("F30", scenarios::f30, |world| {
         assert_eq!(
             world.stats.oversize, 0,
             "no honest message exceeds the frame limit"
         );
-    }
+    });
 }
 
 #[test]
 fn f31_independent_finality() {
-    for world in sweep("F31", scenarios::f31) {
+    sweep("F31", scenarios::f31, |world| {
         // While one instance stalls, the other keeps committing.
         for (inst, (from, until)) in [(1usize, (10_000, 30_000)), (0, (40_000, 60_000))] {
             let during = world.oracle.refs[inst]
@@ -284,13 +345,13 @@ fn f31_independent_finality() {
                 "instance {inst} committed {during} blocks while the other stalled"
             );
         }
-    }
+    });
 }
 
 /// F38: a lane instance next to the global one, followed by every machine.
 #[test]
 fn f38_lane_next_to_global() {
-    for world in sweep("F38", scenarios::f38) {
+    sweep("F38", scenarios::f38, |world| {
         let lane: Vec<usize> = (0..world.replicas.len())
             .filter(|r| world.replicas[*r].inst == 1)
             .collect();
@@ -310,7 +371,7 @@ fn f38_lane_next_to_global() {
                 world.committed(r)
             );
         }
-    }
+    });
 }
 
 /// F22 over 100 000 retry intervals (flat memory, no idle blocks). Heavy: run with `--release
@@ -449,17 +510,15 @@ fn report() {
 /// oracle checks every honest commit; this counts that flagged blocks were committed at all).
 #[test]
 fn f37_commit_attestation() {
-    let worlds = sweep("F37", scenarios::f37);
-    let flagged: usize = worlds
-        .iter()
-        .map(|w| {
-            w.oracle.refs[0]
-                .values()
-                .filter(|b| b.header.attest)
-                .count()
-        })
-        .sum();
-    let total: usize = worlds.iter().map(|w| w.oracle.refs[0].len()).sum();
+    let mut flagged = 0;
+    let mut total = 0;
+    sweep("F37", scenarios::f37, |world| {
+        flagged += world.oracle.refs[0]
+            .values()
+            .filter(|b| b.header.attest)
+            .count();
+        total += world.oracle.refs[0].len();
+    });
     eprintln!("F37: {flagged} of {total} committed blocks flagged");
     assert!(
         flagged * 10 >= total,

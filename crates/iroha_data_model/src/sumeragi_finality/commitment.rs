@@ -127,7 +127,7 @@ pub fn result_of_preimage(preimage: &[u8]) -> Hash32 {
 /// The deterministic outcome of executing one block: the complete World state before and after
 /// it, the events it emitted, roots over its execution witness and the identity of the
 /// result-bearing block (`specs/sumeragi.md` §4.1, Appendix E, E51).
-#[derive(norito::NoritoSchema)]
+#[derive(norito::NoritoSchema, iroha_schema::IntoSchema)]
 #[norito_schema(name = "iroha_data_model::sumeragi_finality::ExecutionCommitment")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ExecutionCommitment {
@@ -219,7 +219,8 @@ impl ExecutionCommitment {
 
 /// The canonical preimage of `R`: exact executed height, execution, complete native schedule
 /// graph and the finalized beacon pulse consumed by this execution, when present.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, iroha_schema::IntoSchema)]
+#[schema(transparent = "wire::OwnedResult")]
 pub struct ExecutionResultCommitment {
     /// Exact height whose execution and schedule this result authenticates.
     pub height: u64,
@@ -234,6 +235,11 @@ pub struct ExecutionResultCommitment {
     /// Complete native context-set proof bound to the same network, height and write root.
     pub native_lanes: NativeLaneStateProof,
 }
+
+// Ready slots carry only height and parameters on the result wire: their complete epoch is
+// determined by the current context or the boundary's next context. The standalone schedule
+// codec remains an owned graph; this projection is the sole canonical result layout.
+mod wire;
 
 impl norito::NoritoSchema for ExecutionResultCommitment {
     fn nominal_name() -> String {
@@ -347,13 +353,12 @@ impl ExecutionResultCommitment {
         if preimage.len() > MAX_RESULT_PREIMAGE_BYTES {
             return Err(CommitmentError::PreimageLength(preimage.len()));
         }
-        // Complete epoch/generation records recur in the current, boundary and successor
-        // slots. Their owned key/PoP graphs can exceed four maximum wire lengths even for
-        // ten seats. Byte-array elements in repeated complete credential records also exceed
-        // a fixed 8192-element cap at the supported 31-seat boundary. Use the canonical
-        // input-derived cumulative element and allocation budgets, while retaining the tighter
-        // per-sequence, field and nesting caps. The 64 KiB frame ceiling bounds both budgets;
-        // stricter original caller limits remain in force. This grants no production pool owner.
+        // The compact wire retains complete current/boundary/preparation credentials once;
+        // decoding charges the reconstructed Ready-slot epochs to the same inherited budget.
+        // Credential byte arrays need input-derived cumulative element/allocation limits at
+        // 31 seats, alongside the tighter per-sequence, field and nesting caps. The 64 KiB
+        // frame ceiling bounds both budgets; stricter original caller limits stay in force.
+        // Decode accounting alone grants no production pool owner.
         let canonical = norito::canonical_decode_limits(preimage.len());
         let decoded: Self = norito::decode_canonical_with_limits(
             preimage,

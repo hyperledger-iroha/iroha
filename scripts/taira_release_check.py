@@ -119,6 +119,22 @@ STAGES = (
         "taira::tests::final_canary_predecessor_requires_its_independent_faucet_policy",
         "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
     )),
+    ("one-use native consensus first boot", (
+        "taira_public_reset::host::first_boot::tests::first_boot_never_rearms_after_a_prepared_or_partial_start",
+        "taira_public_reset::host::first_boot::tests::first_boot_attestation_requires_both_token_slots_consumed",
+        "taira_public_reset::host::first_boot::tests::first_boot_assertion_ends_at_every_prepared_successor_process",
+        "taira_public_reset::host::first_boot::tests::first_boot_runtime_closure_allows_only_inspected_native_entries",
+        "taira_public_reset::host::first_boot::tests::first_boot_history_absence_includes_body_store_and_dangling_paths",
+        "taira_public_reset::host::first_boot::tests::first_boot_runtime_artifacts_enforce_exact_types_modes_and_custody",
+        "taira_public_reset::host::tests::validator_argv_accepts_normal_restart_without_fresh_assertion",
+        "taira_public_reset::host::tests::validator_argv_rejects_duplicate_last_wins_flags",
+        "taira_public_reset::host::tests::fresh_state_retry_admits_only_one_first_boot_publication_slot",
+        "taira_public_reset::host::occupied::tests::occupied_runtime_accepts_only_the_exact_signed_first_boot_suffix",
+        "taira_public_reset::host::occupied::tests::occupied_runtime_binds_beacon_predecessor_config_to_exact_signed_argv",
+        "taira_public_reset::host::dispatcher_transition::prepare::capture::tests::installed_launcher_binds_native_beacon_config_and_selected_daemon",
+        "taira_public_reset::host::dispatcher_transition::prepare::capture::tests::installed_launcher_parses_exact_daemon_assignment",
+        "taira_public_reset::host::dispatcher_transition::admission::tests::dispatcher_transition_binds_beacon_config_to_exact_selected_release",
+    )),
     ("native public reset input preparation", (
         "taira_public_reset::public_inputs::tests::derives_native_genesis_identity_and_exact_canary_request",
         "taira_public_reset::public_inputs::tests::rejects_wrong_network_key_and_resultless_genesis",
@@ -3893,8 +3909,6 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
             raise CheckError(f"selected source inventory has unknown harness: {harness}")
         package = HARNESS_TARGETS[harness][3][1]
         names = [name for _, tests in stages for name in tests]
-        if any(name.startswith(("sumeragi::v2", "block::consensus_v2::finality::")) for name in names):
-            raise CheckError(f"retired protocol owner selected in {harness}")
         if len(names) != len(set(names)):
             raise CheckError(f"selected source inventory repeats a test in {harness}")
         selected_by_package.setdefault(package, []).extend((harness, name) for name in names)

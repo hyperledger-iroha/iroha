@@ -766,10 +766,17 @@ mod tests {
                     next.height += 1;
                 }
             }
-            assert!(
-                ExecutionResultCommitment::decode(&norito::encode_canonical(&invalid).unwrap())
-                    .is_err()
-            );
+            if matches!(mutation, 1..=3) {
+                assert!(matches!(
+                    norito::encode_canonical(&invalid),
+                    Err(norito::Error::NonCanonicalEncoding)
+                ));
+            } else {
+                assert!(
+                    ExecutionResultCommitment::decode(&norito::encode_canonical(&invalid).unwrap())
+                        .is_err()
+                );
+            }
         }
         assert_eq!(
             ExecutionResultCommitment::decode(&vec![0; MAX_RESULT_PREIMAGE_BYTES + 1]),
@@ -779,6 +786,17 @@ mod tests {
         );
         let mut wide = valid.clone();
         wide.schedule.current.committee = vec![valid.schedule.current.committee[0].clone(); 97];
+        // Keep the omitted epochs equal to their source so these probes reach decoder limits,
+        // rather than the projection's earlier contradictory-graph rejection.
+        let repeat_current = |value: &mut ExecutionResultCommitment| {
+            for slot in [&mut value.schedule.next, &mut value.schedule.after_next] {
+                let ScheduledSlot::Ready(config) = slot else {
+                    unreachable!()
+                };
+                config.epoch = value.schedule.current.clone();
+            }
+        };
+        repeat_current(&mut wide);
         let frame = norito::encode_canonical(&wide).unwrap();
         assert!(frame.len() < MAX_RESULT_PREIMAGE_BYTES);
         assert!(matches!(
@@ -789,12 +807,14 @@ mod tests {
         long.schedule.current.committee[0]
             .proof_of_possession
             .push(0);
+        repeat_current(&mut long);
         assert!(matches!(
             ExecutionResultCommitment::decode(&norito::encode_canonical(&long).unwrap()),
             Err(CommitmentError::Encoding(_))
         ));
         let mut huge = valid;
         huge.schedule.current.committee[0].proof_of_possession = vec![0; MAX_RESULT_PREIMAGE_BYTES];
+        repeat_current(&mut huge);
         assert!(matches!(
             huge.preimage(),
             Err(CommitmentError::PreimageLength(_))

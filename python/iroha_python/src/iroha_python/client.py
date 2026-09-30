@@ -11294,6 +11294,7 @@ class ToriiPipelinePreflight:
             raw=dict(payload),
         )
 
+
 class _ToriiStatusState:
     """Internal helper tracking the previous status sample per client."""
 

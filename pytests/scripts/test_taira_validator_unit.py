@@ -52,7 +52,7 @@ class ValidatorUnitTests(unittest.TestCase):
         return path
 
     def execute(self, paths, *, beacon=True, reached_exec=True, occupy=False, config_file="config.toml",
-                fresh_key=False, exec_outcome="fail"):
+                fresh_key=False, exec_outcome="fail", during_staging=None):
         runtime, mint, credential = paths
         state_root = self.state(paths)
         code = unit.launcher(
@@ -63,6 +63,8 @@ class ValidatorUnitTests(unittest.TestCase):
         # The exec boundary observes inherited files, then either raises to
         # exercise production cleanup or ends the process like a real exec,
         # which never returns to the launcher. Fixture bytes never enter output.
+        # `during_staging` changes the state root at the first signer read,
+        # after the launcher's initial first-boot check and before its exec.
         driver = r'''
 import json, os, sys
 request = json.load(sys.stdin)
@@ -71,6 +73,21 @@ owned = None
 if request["occupy"]:
     owned = os.open(request["paths"][0], os.O_RDONLY)
     os.dup2(owned, 200, inheritable=True)
+if request["during_staging"] is not None:
+    signer_read = os.readv
+    mutated = []
+    def mutate_then_read(descriptor, buffers):
+        if not mutated:
+            mutated.append(request["during_staging"])
+            if request["during_staging"] == "replace-token":
+                # A new inode created beside the old one, then renamed over it.
+                replacement = request["token"] + ".replacement"
+                os.close(os.open(replacement, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+                os.rename(replacement, request["token"])
+            else:
+                os.mkdir(os.path.join(request["state_root"], "sumeragi-records"), 0o700)
+        return signer_read(descriptor, buffers)
+    os.readv = mutate_then_read
 def observe_exec(executable, argv):
     global seen
     seen = True
@@ -121,6 +138,7 @@ sys.stdout.write(json.dumps({"failure": failure}))
                               "beacon": beacon, "reached_exec": reached_exec,
                               "occupy": occupy, "config_file": config_file,
                               "fresh_key": fresh_key, "exec_outcome": exec_outcome,
+                              "during_staging": during_staging, "state_root": str(state_root),
                               "token": str(state_root / "sumeragi-first-boot")}),
             text=True, capture_output=True, timeout=10, check=False,
         )
@@ -242,29 +260,33 @@ sys.stdout.write(json.dumps({"failure": failure}))
                     self.assertEqual(output.read_bytes(), original)
 
     def test_first_boot_asserts_the_fresh_key_once_and_no_restart_repeats_it(self):
-        with tempfile.TemporaryDirectory() as directory:
-            paths = self.inputs(directory)
-            originals = [path.read_bytes() for path in paths]
-            token = self.arm(paths)
-            self.assert_token(token)
-            root = token.parent
-            first = self.execute(paths, fresh_key=True, exec_outcome="replace")
-            self.assertEqual(first["exec"][-1], FRESH_KEY)
-            self.assertFalse(os.path.lexists(token))
-            # The daemon's installation event writes the configured safety history.
-            (root / "sumeragi-records").mkdir(mode=0o700)
-            (root / "sumeragi-installation.log").write_bytes(b"installation entries")
-            restart = self.execute(paths, exec_outcome="replace")
-            self.assertNotIn(FRESH_KEY, restart["exec"])
-            # A lost record store and log look fresh but never renew the assertion.
-            shutil.rmtree(root / "sumeragi-records")
-            (root / "sumeragi-installation.log").unlink()
-            after_loss = self.execute(paths, exec_outcome="replace")
-            self.assertNotIn(FRESH_KEY, after_loss["exec"])
-            self.execute(paths)
-            self.assert_no_launch_copies(paths)
-            self.assertFalse(os.path.lexists(token))
-            self.assertEqual([path.read_bytes() for path in paths], originals)
+        # Initial and beacon units carry the same one-shot first boot.
+        for config_file in unit.CONFIG_FILES:
+            beacon = config_file == "beacon.toml"
+            with self.subTest(config_file=config_file), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                originals = [path.read_bytes() for path in paths]
+                token = self.arm(paths)
+                self.assert_token(token)
+                root = token.parent
+                first = self.execute(paths, beacon=beacon, config_file=config_file,
+                                     fresh_key=True, exec_outcome="replace")
+                self.assertEqual(first["exec"][-1], FRESH_KEY)
+                self.assertFalse(os.path.lexists(token))
+                # The daemon's installation event writes the configured safety history.
+                (root / "sumeragi-records").mkdir(mode=0o700)
+                (root / "sumeragi-installation.log").write_bytes(b"installation entries")
+                restart = self.execute(paths, beacon=beacon, config_file=config_file, exec_outcome="replace")
+                self.assertNotIn(FRESH_KEY, restart["exec"])
+                # A lost record store and log look fresh but never renew the assertion.
+                shutil.rmtree(root / "sumeragi-records")
+                (root / "sumeragi-installation.log").unlink()
+                after_loss = self.execute(paths, beacon=beacon, config_file=config_file, exec_outcome="replace")
+                self.assertNotIn(FRESH_KEY, after_loss["exec"])
+                self.execute(paths, beacon=beacon, config_file=config_file)
+                self.assert_no_launch_copies(paths)
+                self.assertFalse(os.path.lexists(token))
+                self.assertEqual([path.read_bytes() for path in paths], originals)
 
     def test_first_boot_is_refused_while_safety_history_exists(self):
         for history in ("records", "log", "both", "dangling-records-link"):
@@ -329,6 +351,47 @@ sys.stdout.write(json.dumps({"failure": failure}))
             retried = self.execute(paths, fresh_key=True, exec_outcome="replace")
             self.assertEqual(retried["exec"][-1], FRESH_KEY)
             self.assertFalse(os.path.lexists(token))
+
+    def test_first_boot_changed_during_staging_never_asserts_or_consumes_the_token(self):
+        for change, failure in (("replace-token", "first-boot token changed while staging"),
+                                ("create-records", "safety history already exists")):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                originals = [path.read_bytes() for path in paths]
+                token = self.arm(paths)
+                armed = token.lstat()
+                refused = self.execute(paths, reached_exec=False, during_staging=change)
+                self.assertIn(failure, refused["failure"])
+                # The launcher never removes a token it did not use.
+                self.assert_token(token)
+                if change == "replace-token":
+                    self.assertNotEqual(token.lstat().st_ino, armed.st_ino)
+                else:
+                    self.assertEqual(token.lstat().st_ino, armed.st_ino)
+                self.assert_no_launch_copies(paths)
+                self.assertEqual([path.read_bytes() for path in paths], originals)
+
+    def test_first_boot_refusal_precedes_any_signer_access(self):
+        for mutation, failure in (("records", "safety history already exists"),
+                                  ("log", "safety history already exists"),
+                                  ("mode", "untrusted Taira first-boot token")):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                paths = self.inputs(directory)
+                root = self.state(paths)
+                token = self.place_token(root / "sumeragi-first-boot")
+                if mutation == "records":
+                    (root / "sumeragi-records").mkdir(mode=0o700)
+                elif mutation == "log":
+                    (root / "sumeragi-installation.log").write_bytes(b"installation entries")
+                else:
+                    token.chmod(0o640)
+                # Without signers, only a check that runs before staging can report the token.
+                for path in paths:
+                    path.unlink()
+                refused = self.execute(paths, reached_exec=False)
+                self.assertIn(failure, refused["failure"])
+                self.assertTrue(os.path.lexists(token))
+                self.assert_no_launch_copies(paths)
 
     def test_arming_requires_a_private_state_root_and_never_replaces_a_token(self):
         with tempfile.TemporaryDirectory() as directory:

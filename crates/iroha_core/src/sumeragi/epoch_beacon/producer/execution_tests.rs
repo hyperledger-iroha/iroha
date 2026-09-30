@@ -51,13 +51,13 @@ fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {
         .next()
         .map(|(id, record)| (*id, record.clone()))
         .unwrap();
-    let slot = (BeaconSessionId::for_network_v1(&chain.network_id()), 9);
-    let attempts = view
-        .world()
-        .parliament_required_beacon_pulse_slots()
-        .get(&slot)
-        .unwrap()
-        .clone();
+    let roster = chain
+        .validators()
+        .iter()
+        .map(|(peer, _)| peer.clone())
+        .collect::<Vec<_>>();
+    let (_, _, attempt) =
+        crate::beacon::tests::pending_batched_sortition_attempt(&chain.network_id(), &roster, 9);
     chain.setup_world_at(2_000, |transaction| {
         transaction
             .world
@@ -70,8 +70,8 @@ fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {
         if demand {
             transaction
                 .world
-                .parliament_required_beacon_pulse_slots
-                .insert(slot, attempts);
+                .put_parliament_attempt(attempt)
+                .expect("admit the replay's Parliament demand");
         }
     });
     chain

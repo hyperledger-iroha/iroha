@@ -33,6 +33,11 @@ parity/CI dashboards that feed the roadmap and `status.md`.
 - `grafana/musubi_registry.json` — Grafana board for the Musubi V1 publication
   phases, replica quorum, integrity/cache/cursor/governance failures, and
   archive/cache storage pressure.
+- `grafana/sumeragi_consensus.json` — Grafana board for the node's Sumeragi
+  instances (global and lanes, `lane` label): halts, committed/applied heights,
+  commit and apply latency, views, timeouts, pacemaker levels, fetches, driver
+  drops, signing role and transaction-queue depth (`specs/telemetry.md`,
+  "Sumeragi consensus metrics").
 - `alerts/fastpq_acceleration_rules.yml` + `alerts/tests/fastpq_acceleration_rules.test.yml`
   — Alerting pack and promtool coverage for Metal downgrades/fallback bursts.
 - `alerts/sorafs_provider_admission_rules.yml` +
@@ -56,6 +61,10 @@ parity/CI dashboards that feed the roadmap and `status.md`.
   coverage for stalled publication, replication shortfall, ingest
   deadletters, integrity/cache/cursor/governance failures, and storage
   pressure.
+- `alerts/sumeragi_rules.yml` + `alerts/tests/sumeragi_rules.test.yml` —
+  Alerting pack and promtool coverage for halted Sumeragi instances, global
+  commits stalled while transactions are queued, instances waiting for block
+  application, and unanchored signing keys.
 
 The JSON structure for these dashboards is documented in
 `specs/references/ios_metrics.md`. Exporters should populate real feeds in

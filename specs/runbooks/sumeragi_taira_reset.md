@@ -131,12 +131,19 @@ because a lost record store looks the same.
 Every Taira validator unit rendered by `scripts/taira_validator_unit.py` (embedded in
 `iroha taira public-reset prepare-validator-units`; initial and beacon units alike) starts
 `iroha3d_taira --config … --sora` and adds `--sumeragi-assert-fresh-key` only when its launcher
-consumes the one-shot token `/var/lib/taira/<role>/sumeragi-first-boot`. The first-boot step is
-the only producer of that token:
+consumes the one-shot token `/var/lib/taira/<role>/sumeragi-first-boot`.
+`iroha taira public-reset apply` creates and syncs this empty root-owned, mode-0600 token
+with the fresh state's authorization markers during `Reset`. It refuses to arm over native
+record, installation-log or body-store history, or after any complete or partial durable
+`Start` manager intent. A retry can finish token publication before Start; it never recreates
+a consumed token after Start may have run.
+
+For independently authorized manual provisioning, the equivalent host steps are:
 
 1. Stop the validator and put the reset's fresh state root `/var/lib/taira/<role>` in place
    (owned by root, writable by nobody else).
-2. As root on the validator host, arm the first boot with the same-revision script:
+2. As root on the validator host, arm the first boot with the deployed revision's script (the
+   bytes its signed source manifest binds and `prepare-validator-units` embeds):
    `python3 scripts/taira_validator_unit.py --arm-first-boot --role <role>`. It refuses unless the
    state root is as in step 1 and neither the configured `records_dir`
    (`/var/lib/taira/<role>/sumeragi-records`) nor `installation_log`
@@ -156,15 +163,32 @@ At every start the launcher looks for the token before it stages any signer desc
 - After staging it checks the token again, removes it, syncs the state root and only then execs
   `iroha3d_taira --config … --sora --sumeragi-assert-fresh-key`. If the exec itself fails, it
   restores the token for the next start. A daemon that exits before it writes its installation
-  log has consumed the token all the same: unless the unit is stopped and the step repeated
-  first, its next start (an automatic `Restart=on-failure` retry included) writes the
-  `(instance, key)` entry without a record, as a first boot without the assertion does.
+  log has consumed the token all the same: its next start (an automatic
+  `Restart=on-failure` retry included) writes the
+  `(instance, key)` entry without a record, as a first boot without the assertion does (see
+  above for the recovery).
 
-TODO(S7): `iroha taira public-reset apply` does not run this step yet. Its host `Start` action
-starts the unit without arming the token, and its process attestation accepts only the argv
-`iroha3d_taira --config … --sora`. Until the host arms the token for the fresh state's first start
-and accepts the flag in that process's argv, a public reset starts a fresh chain whose keys stay
-unanchored.
+The public-reset host validates the original token before preparing the first Start, and
+recovery resumes only its durable manager operation. Daemon attestation requires the token
+to be consumed and binds an optional exact `--sumeragi-assert-fresh-key` suffix to that
+authorization's initial process; a prepared beacon transition or restart ends that allowance. A subsequent reset
+can admit the suffix in its signed predecessor argv. Rollback starts the retained predecessor
+without reasserting freshness and verifies that change against its own durable start evidence.
+The exact reset/quarantine closure admits only the token and its bounded publication slot,
+the `sumeragi-records` and `storage-sumeragi-bodies` directories and the
+`sumeragi-installation.log` regular file beside the existing generated entries. Each native
+entry must have root custody, the expected type and non-writable group/other modes; token
+and log files must have one link. Token slots cannot coexist with native history. These
+checks authorize quarantine of the fresh root, not restoration or trust of safety history.
+
+After native beacon activation, the signed predecessor closure names
+`<selected-release>/config/beacon.toml` and the exact matching
+`<service>/current/config/beacon.toml` argv. Initial predecessors use `config.toml` in
+those same positions. Runtime capture preserves that choice from the installed launcher,
+resolves the native daemon selector against the selected release, and hashes the actual
+configuration. Dispatcher transition and reset admission require the same selected-release
+path, source identity and signed bytes; neither substitutes the initial configuration for an
+active beacon provider nor admits an arbitrary configuration filename.
 
 ## 6. Backups, restores and retired records
 

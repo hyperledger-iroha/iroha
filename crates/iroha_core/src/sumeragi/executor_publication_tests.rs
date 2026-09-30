@@ -149,7 +149,7 @@ fn proposal_with_transaction(
     let crypto = worker.context.crypto.as_ref().unwrap();
     let view = chain.state().view();
     let parent = view.latest_block().unwrap();
-    let cadence = Duration::from_millis(scheduled.params.block_time_ms);
+    let cadence = Duration::from_millis(scheduled.params.block_time);
     let block_time = parent.header().creation_time() + cadence;
     let tx = transaction(chain, u64::try_from(block_time.as_millis()).unwrap() - 1);
     let (_, time) = iroha_primitives::time::TimeSource::new_mock(block_time);

@@ -500,7 +500,9 @@ fn ordinary_localnet_mint_seed_launcher_removes_the_one_shot_path_only_once_it_i
         .mode(0o600)
         .open(signer_dir.join("peer0.seed"))
         .expect("create retained seed");
-    retained.write_all(&[0x65; 32]).expect("write retained seed");
+    retained
+        .write_all(&[0x65; 32])
+        .expect("write retained seed");
     retained.sync_all().expect("sync retained seed");
     drop(retained);
 
@@ -566,6 +568,157 @@ if process.wait(timeout=30) != 0:
         fs::read(signer_dir.join("peer0.seed")).expect("retained seed"),
         [0x65; 32]
     );
+}
+
+/// Drives the stock Taira launcher three times with a child that consumes FD 198 and FD 199 in
+/// the daemon's order, alternating whether the launcher returns before the child's
+/// post-consumption check ("launcher-first") or only after it ("daemon-check-first"). Linux
+/// pidfd identity capture is replaced by a double that only orders the launcher's return.
+#[cfg(unix)]
+const TAIRA_LAUNCH_ORDER_HARNESS_PY: &str = r#"
+CONSUME = """
+import os, sys, time
+order, markers, attempt = sys.argv[1], sys.argv[2], sys.argv[3]
+def wait_for(path):
+    deadline = time.monotonic() + 20.0
+    while not os.path.exists(path):
+        if time.monotonic() >= deadline:
+            sys.exit("timed out waiting for " + path)
+        time.sleep(0.01)
+consumed = []
+for descriptor, size in ((198, 71), (199, 32)):
+    before = os.fstat(descriptor)
+    if before.st_nlink != 1 or before.st_size != size:
+        sys.exit("the launcher changed a one-shot path before consumption")
+    if len(os.read(descriptor, size + 1)) != size:
+        sys.exit("short one-shot record")
+    os.lseek(descriptor, 0, 0)
+    if os.write(descriptor, bytes(size)) != size:
+        sys.exit("short erasure")
+    os.fsync(descriptor)
+    os.ftruncate(descriptor, 0)
+    os.fsync(descriptor)
+    consumed.append((descriptor, before))
+if order == "launcher-first":
+    wait_for(os.path.join(markers, "returned-" + attempt))
+for descriptor, before in consumed:
+    after = os.fstat(descriptor)
+    if (after.st_dev, after.st_ino, after.st_nlink, after.st_size) != (before.st_dev, before.st_ino, 1, 0):
+        sys.exit("a one-shot path changed before the post-consumption check")
+open(os.path.join(markers, "checked-" + attempt), "w").close()
+print("checked " + order, flush=True)
+"""
+
+def _wait_for_marker(path):
+    deadline = time.monotonic() + 20.0
+    while not os.path.exists(path):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("timed out waiting for " + path)
+        time.sleep(0.01)
+
+ORDER = None
+ATTEMPT = None
+
+def capture_taira_start(pid, record_path, peer_index, expected_argv):
+    if ORDER == "daemon-check-first":
+        _wait_for_marker(os.path.join(markers, "checked-" + ATTEMPT))
+
+env = os.environ.copy()
+network = env["IROHA_NETWORK_DIR"]
+markers = os.path.join(network, "markers")
+os.mkdir(markers, 0o700)
+records = [
+    (os.path.join(network, "runtime", "taira-runtime-signers", "peer0.private_key"),
+     os.path.join(network, "runtime", "taira-runtime-signers", "peer0.fd198"), 71, 198),
+    (os.path.join(network, "runtime", "mint-finality-signers", "peer0.seed"),
+     os.path.join(network, "runtime", "mint-finality-signers", "peer0.fd199"), 32, 199),
+]
+for attempt, order in enumerate(("launcher-first", "daemon-check-first", "launcher-first")):
+    ORDER, ATTEMPT = order, str(attempt)
+    process = launch_taira_process([sys.executable, "-c", CONSUME, order, markers, ATTEMPT], env, records)
+    open(os.path.join(markers, "returned-" + ATTEMPT), "w").close()
+    if process.wait(timeout=30) != 0:
+        raise RuntimeError("the consuming child failed in order " + order)
+    for _source, launch, _size, _descriptor in records:
+        consumed = os.lstat(launch)
+        if not stat.S_ISREG(consumed.st_mode) or consumed.st_nlink != 1 or consumed.st_size != 0:
+            raise RuntimeError("the launcher changed a consumed one-shot path after start")
+"#;
+
+#[cfg(unix)]
+#[test]
+fn taira_launcher_keeps_consumed_launch_paths_in_either_consumption_order() {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+    let root = tempfile::tempdir().expect("private localnet root");
+    let runtime = root.path().join("runtime");
+    let signer_dir = runtime.join(TAIRA_RUNTIME_SIGNER_DIRECTORY);
+    let seed_dir = runtime.join(MINT_FINALITY_SEED_DIRECTORY);
+    for directory in [&signer_dir, &seed_dir] {
+        fs::create_dir_all(directory).expect("create private record directory");
+    }
+    for directory in [&runtime, &signer_dir, &seed_dir] {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .expect("protect record directories");
+    }
+    let retained = [
+        (signer_dir.join("peer0.private_key"), vec![0x41; 71]),
+        (seed_dir.join("peer0.seed"), vec![0x66; 32]),
+    ];
+    for (path, bytes) in &retained {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .expect("create retained record");
+        file.write_all(bytes).expect("write retained record");
+        file.sync_all().expect("sync retained record");
+    }
+
+    // On a successful start the launcher keeps each one-shot path, so the daemon's
+    // post-consumption check sees one link in either order and the next start replaces the
+    // consumed file: the launcher never races the daemon for the pathname.
+    let python = format!(
+        "import errno\nimport os\nimport stat\nimport subprocess\nimport sys\nimport time\n{TAIRA_RUNTIME_LAUNCH_PY}{TAIRA_LAUNCH_ORDER_HARNESS_PY}"
+    );
+    let log = root.path().join("peer0.log");
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(python)
+        .env("IROHA_NETWORK_DIR", root.path())
+        .env("IROHA_PEER_INDEX", "0")
+        .env("IROHA_PEER_LOG", &log)
+        .env(
+            "IROHA_PEER_PROCESS_RECORD",
+            root.path().join("peer0.process.json"),
+        )
+        .output()
+        .expect("run stock Taira descriptor launcher");
+    assert!(
+        output.status.success(),
+        "Taira launcher order check failed: {}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert_eq!(
+        fs::read_to_string(&log)
+            .expect("read child log")
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "checked launcher-first",
+            "checked daemon-check-first",
+            "checked launcher-first"
+        ]
+    );
+    for (path, bytes) in &retained {
+        assert_eq!(&fs::read(path).expect("retained record"), bytes);
+        assert_eq!(fs::metadata(path).expect("retained metadata").nlink(), 1);
+    }
+    for launch in [signer_dir.join("peer0.fd198"), seed_dir.join("peer0.fd199")] {
+        assert_eq!(fs::metadata(launch).expect("consumed launch path").len(), 0);
+    }
 }
 
 #[cfg(unix)]

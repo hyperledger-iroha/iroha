@@ -345,13 +345,18 @@ impl DescriptorIdentityV1 {
         }
     }
 
+    /// Whether `metadata` of the erased descriptor still describes the checked file: the same
+    /// regular inode with the same owner and mode, now empty. A launcher removes the one-shot
+    /// pathname once it observes the empty file, which may precede this check, so the link
+    /// count is either unchanged or zero; any other count (such as a new hard link) is
+    /// rejected.
     fn same_security_identity_after_consumption(&self, metadata: &std::fs::Metadata) -> bool {
         metadata.is_file()
             && metadata.dev() == self.device
             && metadata.ino() == self.inode
             && metadata.uid() == self.owner
             && metadata.mode() == self.mode
-            && metadata.nlink() == self.links
+            && (metadata.nlink() == self.links || metadata.nlink() == 0)
             && metadata.len() == 0
     }
 }

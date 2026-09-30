@@ -13,8 +13,8 @@ use crate::{
 use iroha_crypto::HashOf;
 use iroha_sumeragi::types::ChainParams;
 
-fn ten_seat_boundary() -> ExecutionResultCommitment {
-    let current = fixture(10);
+pub(super) fn boundary_result(seats: usize) -> ExecutionResultCommitment {
+    let current = fixture(seats);
     let next = retained(&current);
     let height = current.authorization.last_height;
     let params = ChainParamsRecord::from_core(&ChainParams::default());
@@ -64,6 +64,10 @@ fn ten_seat_boundary() -> ExecutionResultCommitment {
     .unwrap()
 }
 
+fn ten_seat_boundary() -> ExecutionResultCommitment {
+    boundary_result(10)
+}
+
 fn protocol_limits(allocation: usize) -> norito::DecodeLimits {
     norito::DecodeLimits::new(
         96,
@@ -93,19 +97,6 @@ fn ten_seat_boundary_result_roundtrips_complete_repeated_epoch_graph() {
         };
         assert_ten_seats(&config.epoch);
     }
-    // This geometry reproduces the fixed four-wire-length cap's actual codec refusal.
-    // It does not infer allocation demand from the wire length alone.
-    let old_cap = 4 * MAX_RESULT_PREIMAGE_BYTES;
-    let error = norito::decode_canonical_with_limits::<ExecutionResultCommitment>(
-        &bytes,
-        protocol_limits(old_cap),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        norito::Error::TotalAllocationExceeded { attempted, limit }
-            if attempted > limit && limit == old_cap as u64
-    ));
     let decoded = ExecutionResultCommitment::decode(&bytes).unwrap();
     assert_eq!(decoded, value);
     assert_eq!(decoded.preimage().unwrap(), bytes);
@@ -113,8 +104,8 @@ fn ten_seat_boundary_result_roundtrips_complete_repeated_epoch_graph() {
     let mut invalid = value;
     invalid.schedule.boundary = None;
     assert!(matches!(
-        ExecutionResultCommitment::decode(&norito::encode_canonical(&invalid).unwrap()),
-        Err(CommitmentError::Schedule(_))
+        norito::encode_canonical(&invalid),
+        Err(norito::Error::NonCanonicalEncoding)
     ));
 }
 

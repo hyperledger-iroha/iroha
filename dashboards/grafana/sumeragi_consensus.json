@@ -1,0 +1,546 @@
+{
+  "$schema": "https://grafana.com/docs/grafana/latest/dashboards/reference/json-model/",
+  "title": "Sumeragi Consensus",
+  "uid": "sumeragi-consensus",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": [
+    "sumeragi",
+    "consensus",
+    "lanes"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "pluginId": "prometheus",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        }
+      },
+      {
+        "name": "instance",
+        "label": "Node",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(sumeragi_round_height, instance)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "lane",
+        "label": "Instance (global or lane id)",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(sumeragi_round_height, lane)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Halted Instances",
+      "id": 1,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(sumeragi_halted{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "halted",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Sumeragi instances that halted, whatever the reason. A halted instance signs and proposes nothing further; read the reason next to it and the node's /v1/sumeragi/status before restarting."
+    },
+    {
+      "type": "timeseries",
+      "title": "Halt Reasons",
+      "id": 2,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane, reason) (sumeragi_halted{instance=~\"$instance\", lane=~\"$lane\"}) > 0",
+          "legendFormat": "{{instance}} {{lane}} {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "The reason each halted instance reports (sumeragi_halted is 1 for exactly that reason)."
+    },
+    {
+      "type": "timeseries",
+      "title": "Committed Height",
+      "id": 3,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane) (sumeragi_committed_height{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "{{instance}} {{lane}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Committed tip height per instance. Peers of the same lane should move together; an idle chain keeps its height."
+    },
+    {
+      "type": "timeseries",
+      "title": "Commit Rate",
+      "id": 4,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, lane) (rate(sumeragi_commits_total{instance=~\"$instance\", lane=~\"$lane\"}[5m]))",
+          "legendFormat": "{{instance}} {{lane}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Blocks committed per second (rounds and catch-up), from sumeragi_commits_total."
+    },
+    {
+      "type": "timeseries",
+      "title": "Commit Ahead of Apply",
+      "id": 5,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane) (sumeragi_committed_height{instance=~\"$instance\", lane=~\"$lane\"} - sumeragi_applied_height{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "{{instance}} {{lane}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Committed minus applied height. The protocol keeps it at most two; a persistent value with sumeragi_awaiting_configuration at 1 means application is not keeping up."
+    },
+    {
+      "type": "timeseries",
+      "title": "Commit Latency (execution to CommitQC)",
+      "id": 6,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, lane) (rate(sumeragi_commit_latency_ms_bucket{instance=~\"$instance\", lane=~\"$lane\"}[5m])))",
+          "legendFormat": "p50 {{lane}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, lane) (rate(sumeragi_commit_latency_ms_bucket{instance=~\"$instance\", lane=~\"$lane\"}[5m])))",
+          "legendFormat": "p95 {{lane}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Node-local milliseconds from the first execution of a height's proposal to its CommitQC. Heights the node only caught up on are not sampled."
+    },
+    {
+      "type": "timeseries",
+      "title": "Apply Latency (CommitQC to durable apply)",
+      "id": 7,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, lane) (rate(sumeragi_apply_latency_ms_bucket{instance=~\"$instance\", lane=~\"$lane\"}[5m])))",
+          "legendFormat": "p50 {{lane}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, lane) (rate(sumeragi_apply_latency_ms_bucket{instance=~\"$instance\", lane=~\"$lane\"}[5m])))",
+          "legendFormat": "p95 {{lane}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Node-local milliseconds from a block's CommitQC to its durable application."
+    },
+    {
+      "type": "timeseries",
+      "title": "Round View",
+      "id": 8,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane) (sumeragi_round_view{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "{{instance}} {{lane}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "View of the current round (views advanced at the current height)."
+    },
+    {
+      "type": "timeseries",
+      "title": "View Changes and Own Timeout Votes (10m)",
+      "id": 9,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, lane) (increase(sumeragi_view_changes_total{instance=~\"$instance\", lane=~\"$lane\"}[10m]))",
+          "legendFormat": "views {{instance}} {{lane}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance, lane) (increase(sumeragi_timeout_votes_total{instance=~\"$instance\", lane=~\"$lane\"}[10m]))",
+          "legendFormat": "timeouts {{instance}} {{lane}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Views advanced and timeout votes this node signed. An idle chain keeps advancing views through timeout certificates; under load, view changes point at slow or faulty leaders."
+    },
+    {
+      "type": "timeseries",
+      "title": "Pacemaker Levels",
+      "id": 10,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane) (sumeragi_pacemaker_level{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "level {{instance}} {{lane}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (instance, lane) (sumeragi_pacemaker_start_level{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "start {{instance}} {{lane}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Pacemaker level of the current view and start level of the current height; view deadlines grow with the level."
+    },
+    {
+      "type": "timeseries",
+      "title": "Retransmission Interval",
+      "id": 11,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane) (sumeragi_retransmit_interval_ms{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "{{instance}} {{lane}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Current retransmission interval t_retx of each instance."
+    },
+    {
+      "type": "timeseries",
+      "title": "Catch-up and Body Fetches (10m)",
+      "id": 12,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 30
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, lane, kind) (increase(sumeragi_fetch_requests_total{instance=~\"$instance\", lane=~\"$lane\"}[10m]))",
+          "legendFormat": "{{kind}} {{instance}} {{lane}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "SyncRequests for committed blocks (kind=sync) and fetches of wanted block bodies (kind=body) this node sent."
+    },
+    {
+      "type": "timeseries",
+      "title": "Driver Drops (10m)",
+      "id": 13,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 30
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, lane, queue) (increase(sumeragi_dropped_total{instance=~\"$instance\", lane=~\"$lane\"}[10m]))",
+          "legendFormat": "{{queue}} {{instance}} {{lane}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Inbound messages (ingress), held effects (held) and serving requests (serve) dropped by the driver's bounded queues."
+    },
+    {
+      "type": "timeseries",
+      "title": "Signing Role",
+      "id": 14,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane) (sumeragi_signer_present{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "signer {{instance}} {{lane}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (instance, lane) (sumeragi_abstaining{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "abstaining {{instance}} {{lane}}",
+          "refId": "B"
+        },
+        {
+          "expr": "max by (instance, lane) (sumeragi_unanchored{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "unanchored {{instance}} {{lane}}",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "1 while a configured key signs at the current height, while the node is not a signing member, and while a key is unanchored (it probes and signs nothing)."
+    },
+    {
+      "type": "timeseries",
+      "title": "Round Stage and Awaiting Configuration",
+      "id": 15,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "targets": [
+        {
+          "expr": "max by (instance, lane) (sumeragi_round_stage{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "stage {{instance}} {{lane}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (instance, lane) (sumeragi_awaiting_configuration{instance=~\"$instance\", lane=~\"$lane\"})",
+          "legendFormat": "awaiting {{instance}} {{lane}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Routing stage (0, 1 or 2) of the current round, and 1 while the instance has committed and waits for the next height's configuration from application."
+    },
+    {
+      "type": "timeseries",
+      "title": "Transaction Queue",
+      "id": 16,
+      "datasource": "$datasource",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "targets": [
+        {
+          "expr": "max by (instance) (sumeragi_tx_queue_depth{instance=~\"$instance\"})",
+          "legendFormat": "depth {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (instance) (sumeragi_tx_queue_capacity{instance=~\"$instance\"})",
+          "legendFormat": "capacity {{instance}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Queued transactions and queue capacity; commits stalling while the queue holds work is a liveness incident."
+    }
+  ]
+}

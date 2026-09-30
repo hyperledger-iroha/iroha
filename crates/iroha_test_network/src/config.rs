@@ -3,7 +3,7 @@
 mod genesis_policy;
 use crate::init_instruction_registry;
 use color_eyre::{Report, eyre::eyre};
-pub(crate) use genesis_policy::discover_generated_policy_hashes;
+pub(crate) use genesis_policy::{discover_generated_policy_hashes, execute_generated_genesis};
 use iroha_config::base::toml::WriteExt;
 use iroha_config::parameters::actual::{
     Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Root as ActualRoot,

@@ -124,7 +124,7 @@ def test_parser_cannot_bypass_original_admission(kind):
     if kind == "global_overflow":
         for run in experiment["runs"]: run["collector_journal"]["max_bytes"] = budget.MAX_FILE_BYTES
     if kind == "bool_pair": value["pair_index"] = True
-    if kind == "unknown_variant": value["variant"] = "legacy"
+    if kind == "unknown_variant": value["variant"] = "two_lane"
     with pytest.raises(budget.BudgetError): budget.parse_run_budget(value)
 
 

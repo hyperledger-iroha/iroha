@@ -1280,12 +1280,58 @@ fn generated_peer_config_rejects_a_duplicate_inline_genesis_identity() {
 }
 #[test]
 fn generated_sumeragi_rejects_retired_queue_controls() {
+    for retired in ["queues", "block"] {
+        let mut native = toml::Table::new();
+        native.insert(retired.into(), toml::Value::Table(toml::Table::new()));
+        let error = normalize_peer_config_overrides(&mut None, &mut Some(native), &mut None)
+            .expect_err("retired tables must not become generated node configuration");
+        assert!(
+            matches!(
+                &error,
+                SupervisorError::Config(message)
+                    if message.contains(&format!("unknown parameter: `sumeragi.{retired}`"))
+            ),
+            "unexpected error for `sumeragi.{retired}`: {error}"
+        );
+    }
+}
+#[test]
+fn generated_sumeragi_keeps_node_local_overrides() {
     let mut native = toml::Table::new();
-    native.insert("queues".into(), toml::Value::Table(toml::Table::new()));
-    let error = normalize_peer_config_overrides(&mut None, &mut Some(native), &mut None)
-        .expect_err("retired queues must not become generated node configuration");
+    native.insert("view_timeout_base_ms".into(), toml::Value::Integer(2_500));
+    native.insert("role".into(), toml::Value::String("validator".into()));
+    let mut sumeragi = Some(native.clone());
+    normalize_peer_config_overrides(&mut None, &mut sumeragi, &mut None)
+        .expect("node-local Sumeragi settings are valid overrides");
+    assert_eq!(sumeragi, Some(native));
+}
+#[test]
+fn temporary_overlays_cannot_restore_retired_sumeragi_tables() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let paths = NetworkPaths::from_root(temp.path(), &NetworkProfile::default());
+    paths.ensure().expect("paths");
+    let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+    let genesis = test_genesis_material(&paths);
+    let mut queues = toml::Table::new();
+    queues.insert("commands".into(), toml::Value::Integer(1_024));
+    let mut sumeragi = toml::Table::new();
+    sumeragi.insert("queues".into(), toml::Value::Table(queues));
+    let mut overlay = toml::Table::new();
+    overlay.insert("sumeragi".into(), toml::Value::Table(sumeragi));
+    let error = spec
+        .write_config(
+            "retired-overlay-chain",
+            &genesis,
+            std::slice::from_ref(&spec),
+            &PeerConfigOverrides::default(),
+            &[overlay],
+        )
+        .expect_err("a temporary overlay must not restore sumeragi.queues");
     assert!(
-        matches!(error, SupervisorError::Config(message) if message.contains("sumeragi.queues is retired"))
+        error
+            .to_string()
+            .contains("unknown parameter: `sumeragi.queues`"),
+        "unexpected error: {error}"
     );
 }
 #[test]
@@ -1459,9 +1505,7 @@ fn supervisor_exposes_config_overrides() {
     let _stub = KagamiStub::install(temp.path());
     let nexus = toml::Table::new();
     let mut sumeragi = toml::Table::new();
-    let mut queues = toml::Table::new();
-    queues.insert("commands".into(), toml::Value::Integer(1024));
-    sumeragi.insert("queues".into(), toml::Value::Table(queues));
+    sumeragi.insert("status_keepalive_ms".into(), toml::Value::Integer(4_000));
     let mut torii = toml::Table::new();
     torii.insert(
         "address".into(),
@@ -1484,11 +1528,9 @@ fn supervisor_exposes_config_overrides() {
             .peer_config_overrides
             .sumeragi
             .as_ref()
-            .and_then(|table| table.get("queues"))
-            .and_then(toml::Value::as_table)
-            .and_then(|queues| queues.get("commands"))
+            .and_then(|table| table.get("status_keepalive_ms"))
             .and_then(toml::Value::as_integer),
-        Some(1024)
+        Some(4_000)
     );
     let torii = supervisor
         .peer_config_overrides

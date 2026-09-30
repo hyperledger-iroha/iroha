@@ -423,6 +423,95 @@ def test_four_lane_run_must_advance_every_lane_frontier_and_apply_lane_blocks():
     assert not used and any("differ from the expected" in item for item in problems)
 
 
+def test_lane_instances_run_only_when_every_validator_runs_every_fixed_lane():
+    running = lanes_snapshot({1: 0, 2: 0, 3: 0})
+    assert gate.lane_instances_running(running, 4) is True
+    assert gate.lane_instances_running(lanes_snapshot({1: 0, 2: 0}), 4) is False
+    assert gate.lane_instances_running(lanes_snapshot({1: 0, 2: 0, 3: 0}, halted=True), 4) is False
+    running["peer2"][1]["instance"]["halted"] = "Storage"
+    assert gate.lane_instances_running(running, 4) is False
+    unanswered = lanes_snapshot({1: 0, 2: 0, 3: 0})
+    unanswered["peer1"] = None
+    assert gate.lane_instances_running(unanswered, 4) is False
+    assert gate.lane_instances_running({}, 4) is False
+
+
+def test_lane_activation_commits_pings_until_the_instances_run(monkeypatch):
+    before = lanes_snapshot({1: 0, 2: 0, 3: 0}, halted=True)
+    after = lanes_snapshot({1: 0, 2: 0, 3: 0})
+    snapshots = iter([before, before, after])
+    pings = []
+    net = gate.GateNetwork.__new__(gate.GateNetwork)
+    monkeypatch.setattr(net, "lanes", lambda **_: next(snapshots), raising=False)
+    monkeypatch.setattr(net, "advance_global_chain", lambda message, _: pings.append(message), raising=False)
+    result = net.wait_for_lane_instances(4, timeout_s=60)
+    assert result == {"lanes": after, "pings": 2}
+    assert pings == ["scaling-lane-activation-0", "scaling-lane-activation-1"]
+
+
+def test_lane_activation_does_not_accept_late_readiness_or_submit_after_expiry(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    net = gate.GateNetwork.__new__(gate.GateNetwork)
+    pings = []
+
+    def late_lanes(*, deadline):
+        assert deadline == 5.0
+        clock[0] = deadline
+        return lanes_snapshot({1: 0, 2: 0, 3: 0})
+
+    monkeypatch.setattr(net, "lanes", late_lanes)
+    monkeypatch.setattr(net, "advance_global_chain", lambda *args: pings.append(args))
+    with pytest.raises(gate.GateError, match="after 0 pings"):
+        net.wait_for_lane_instances(4, timeout_s=5)
+    assert not pings
+
+
+def test_lane_activation_ping_uses_only_remaining_deadline(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    net = gate.GateNetwork.__new__(gate.GateNetwork)
+
+    def lanes(*, deadline):
+        clock[0] = 3.0
+        return lanes_snapshot({1: 0, 2: 0}, halted=True)
+
+    def ping(message, timeout_s):
+        assert message == "scaling-lane-activation-0"
+        assert timeout_s == 2.0
+        clock[0] += timeout_s
+
+    monkeypatch.setattr(net, "lanes", lanes)
+    monkeypatch.setattr(net, "advance_global_chain", ping)
+    with pytest.raises(gate.GateError, match="after 1 pings"):
+        net.wait_for_lane_instances(4, timeout_s=5)
+
+
+def test_lane_snapshot_stops_dispatching_reads_when_deadline_expires(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    net = gate.GateNetwork.__new__(gate.GateNetwork)
+    net.validators = 4
+    monkeypatch.setattr(net, "node", lambda index: f"peer{index}")
+    monkeypatch.setattr(net, "api_port", lambda index: 9000 + index)
+    reads = []
+
+    def read(url, timeout):
+        reads.append((url, timeout))
+        clock[0] += timeout
+        return []
+
+    monkeypatch.setattr(gate, "http_json_any", read)
+    assert net.lanes(deadline=2.0) == {"peer0": [], "peer1": None, "peer2": None, "peer3": None}
+    assert reads == [("http://127.0.0.1:9000/v1/sumeragi/lanes", 2.0)]
+
+
+def test_lane_readiness_rejects_malformed_record():
+    snapshot = lanes_snapshot({1: 0, 2: 0, 3: 0})
+    snapshot["peer0"][0]["record"] = "invalid"
+    assert not gate.lane_instances_running(snapshot, 4)
+
+
 def test_one_lane_run_has_no_lane_records():
     assert gate.lanes_used("one_lane", {f"peer{i}": [] for i in range(4)}, {f"peer{i}": [] for i in range(4)}, {}) == (True, [])
     used, _ = gate.lanes_used("one_lane", {}, lanes_snapshot({1: 3}), {})

@@ -551,6 +551,16 @@ pool before native ingress retains it. Immutable clones retain the same actual b
 charges. The frame allowance includes the witness, compact signatures and bounded header/TC
 metadata through the generic core committee bound.
 
+The canonical execution-result witness carries each complete authorized epoch context once:
+the current context, the optional boundary's next context, and its optional frozen preparation.
+Each ready successor slot carries only its exact height and lag-two parameters, deriving its
+epoch from the boundary's next context when present and otherwise from the current context.
+Pending-boundary slots retain their explicit predecessor identity and boundary height. Encoding
+rejects an owned ready slot that differs from its derivable context; decoding reconstructs and
+validates the complete graph while charging the additional owned credentials to the inherited
+decode allocation budget. This keeps supported 31-member boundary/preparation graphs within
+the same 64 KiB witness limit, with no alternate or repeated-context result decoder.
+
 ### 3.7 Commit attestation (application extension)
 
 Some blocks need more than consensus finality: KAGEMUSHA mint finality requires that `q`
@@ -3075,7 +3085,10 @@ executor that aborts discarded work at once — non-empty blocks must commit)
 · F16 validator-set change at an epoch
 boundary (add, remove, replace a majority) under load and crashes, including joiners that must
 fetch their parent's body · F17 node joining 10 000 heights behind; Byzantine sync responders
-(forged blocks, invalid QCs, withholding) · F18 floods of votes/timeouts for huge views and
+(forged blocks, invalid QCs, withholding). The run budgets each height's certified-metadata and
+signed-payload round trips, execution, body/block persistence and application, plus 60 s for
+source rotation and live progress; the joiner must pass the complete prebuilt prefix.
+· F18 floods of votes/timeouts for huge views and
 heights, oversize messages · F19 poison payload (executor rejects every block holding a given tx)
 → early timeout, quarantine and a later nonempty retry · F20 cross-instance replay with shared keys · F21
 nondeterministic executor at one honest node (only that node may halt) · F22 idle chain for 10⁵

@@ -274,7 +274,7 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         chain.network_id(),
         chain_id.clone(),
         Arc::clone(&crypto),
-        chain.state().ivm_execution_budget(),
+        chain.execution_budget(),
         Arc::new(
             iroha_core::sumeragi::test_chain::TestLaneStoreAuthorities::new(
                 Arc::clone(chain.state()),
@@ -529,7 +529,7 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         control_witness: ControlWitness::empty(),
         attest: false,
     };
-    let budget = chain.state().ivm_execution_budget();
+    let budget = chain.execution_budget();
     let mut original = iroha_allocation::ChargedBuffer::new(payload.len(), &budget).unwrap();
     original.append(&payload).unwrap();
     let payload = PayloadBytes::from_charged(original, &budget)

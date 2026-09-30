@@ -123,9 +123,8 @@ The anchor's OpenPGP issuer fingerprint is structural metadata bound by the
 pinned commit object. No trusted public key is part of this contract, so the
 guard does **not** claim cryptographic signer authentication. It disables Git
 configuration injection, replacement objects, and lazy fetching; callers must
-provide the required history locally. Production Sumeragi records the result
-with pinned isolated Python between identity checkpoints and seals its log
-read-only.
+provide the required history locally. The PR workflow and
+`ci/check_sorafs_cli_release.sh` run it before any Cargo work.
 
 ## Focused dependency-graph ratchet
 

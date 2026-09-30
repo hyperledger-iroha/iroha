@@ -20,7 +20,7 @@ use iroha_data_model::{
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_model_base::chain::ChainId;
 #[cfg(any(test, feature = "test"))]
-use izanami::genesis_support::sign_prepared_genesis_from_config;
+use izanami::genesis_support::bind_and_sign_generated_genesis_from_config;
 use izanami::genesis_support::{ManagedNodeConfig, validate_prepared_genesis_for_startup};
 use norito::json::{self, Value};
 #[cfg(unix)]
@@ -204,14 +204,7 @@ pub fn sign_kagami_stub_genesis_from_config(
     key_pair: &KeyPair,
     expected_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> Result<(RawGenesisTransaction, iroha_data_model::block::SignedBlock)> {
-    let bound_manifest = RawGenesisTransaction::from_path(manifest_path)
-        .map_err(|error| {
-            SupervisorError::KagamiInvocation(format!(
-                "test Kagami stub failed signing canonical genesis: {error:#}"
-            ))
-        })?
-        .with_consensus_meta();
-    let block = sign_prepared_genesis_from_config(
+    let (bound_manifest, block) = bind_and_sign_generated_genesis_from_config(
         manifest_path,
         config_path,
         key_pair,

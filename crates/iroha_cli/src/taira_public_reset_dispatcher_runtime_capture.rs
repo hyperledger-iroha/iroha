@@ -133,9 +133,8 @@ fn selected_release(slug: &str) -> Result<(String, String)> {
 
 /// Accept only the exact installed launcher assignment, without executing it.
 #[cfg(any(target_os = "linux", test))]
-fn daemon_in_unit(bytes: &[u8], slug: &str) -> Result<(String, String)> {
+fn daemon_in_unit(bytes: &[u8], slug: &str, selected_commit: &str) -> Result<InstalledDaemon> {
     let text = std::str::from_utf8(bytes)?;
-    let config = format!("/srv/taira/{slug}/current/config/config.toml");
     // systemd stores the launcher's Python newlines as literal `\n` escapes.
     let lines: Vec<&str> = text
         .split("\\n")
@@ -148,10 +147,22 @@ fn daemon_in_unit(bytes: &[u8], slug: &str) -> Result<(String, String)> {
     let (daemon, tail) = lines[0]
         .split_once("', '--config', '")
         .ok_or_else(|| eyre!("installed unit daemon argv is malformed"))?;
-    need(
-        tail == format!("{config}', '--sora']"),
-        "installed daemon argv differs",
-    )?;
+    let config_name = ["config.toml", "beacon.toml"]
+        .into_iter()
+        .find(|name| tail == format!("/srv/taira/{slug}/current/config/{name}', '--sora']"))
+        .ok_or_else(|| eyre!("installed daemon argv differs"))?;
+    let stable = format!("/srv/taira/{slug}/current/bin/iroha3d_taira");
+    if daemon == stable {
+        validate_lower_hex("selected daemon revision", selected_commit, 40)?;
+        return Ok(InstalledDaemon {
+            argv0: daemon.to_owned(),
+            artifact_path: format!(
+                "/srv/taira/{slug}/releases/{selected_commit}/bin/iroha3d_taira"
+            ),
+            commit: selected_commit.to_owned(),
+            config_name,
+        });
+    }
     let prefix = "/private/runtime/taira-public-reset/release-";
     let release = daemon
         .strip_prefix(prefix)
@@ -161,21 +172,32 @@ fn daemon_in_unit(bytes: &[u8], slug: &str) -> Result<(String, String)> {
         .ok_or_else(|| eyre!("daemon update revision is absent"))?;
     validate_lower_hex("installed daemon revision", commit, 40)?;
     need(
-        suffix.starts_with("update-")
-            && suffix.ends_with("/bin/iroha3d_taira")
-            && suffix["update-".len()..]
-                .split('/')
-                .next()
-                .is_some_and(|operation| {
-                    operation.len() == 32
-                        && operation
-                            .bytes()
-                            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-                }),
+        suffix
+            .strip_prefix("update-")
+            .and_then(|value| value.strip_suffix("/bin/iroha3d_taira"))
+            .is_some_and(|operation| {
+                operation.len() == 32
+                    && operation
+                        .bytes()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            }),
         "installed daemon path is not a bounded update release",
     )?;
     validate_absolute_normal_path(Path::new(daemon), "installed daemon path")?;
-    Ok((daemon.to_owned(), commit.to_owned()))
+    Ok(InstalledDaemon {
+        argv0: daemon.to_owned(),
+        artifact_path: daemon.to_owned(),
+        commit: commit.to_owned(),
+        config_name,
+    })
+}
+
+#[cfg(any(target_os = "linux", test))]
+struct InstalledDaemon {
+    argv0: String,
+    artifact_path: String,
+    commit: String,
+    config_name: &'static str,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -204,13 +226,13 @@ fn capture_validator(slug: &str, observed: &mut Observed) -> Result<ValidatorAdm
     let unit_path = format!("/etc/systemd/system/{unit}");
     require_unit(&unit, &unit_path, false)?;
     let unit_pin = observed.pin(Path::new(&unit_path), Some(0o644), 16 * 1024 * 1024)?;
-    let (daemon, daemon_commit) = daemon_in_unit(&admission::read(&unit_pin)?, slug)?;
+    let daemon = daemon_in_unit(&admission::read(&unit_pin)?, slug, &commit)?;
     let artifacts = vec![
-        artifact(observed, "iroha3d", daemon.clone(), &daemon_commit)?,
+        artifact(observed, "iroha3d", daemon.artifact_path, &daemon.commit)?,
         artifact(
             observed,
             "config",
-            format!("{release_root}/config/config.toml"),
+            format!("{release_root}/config/{}", daemon.config_name),
             &commit,
         )?,
         artifact(
@@ -225,7 +247,7 @@ fn capture_validator(slug: &str, observed: &mut Observed) -> Result<ValidatorAdm
             format!("{release_root}/genesis/genesis.sha256"),
             &commit,
         )?,
-        artifact(observed, "validator_unit", unit_path, &daemon_commit)?,
+        artifact(observed, "validator_unit", unit_path, &daemon.commit)?,
     ];
     let state = format!("/var/lib/taira/{slug}");
     require_root_directory(Path::new(&state), true, "stopped validator state")?;
@@ -234,9 +256,9 @@ fn capture_validator(slug: &str, observed: &mut Observed) -> Result<ValidatorAdm
         commit,
         release_root,
         argv: vec![
-            daemon,
+            daemon.argv0,
             "--config".into(),
-            format!("/srv/taira/{slug}/current/config/config.toml"),
+            format!("/srv/taira/{slug}/current/config/{}", daemon.config_name),
             "--sora".into(),
         ],
         artifacts,
@@ -374,9 +396,71 @@ mod tests {
             "[Service]\nExecStart=/usr/bin/python3 -c \"import os\\ncmd = ['/private/runtime/taira-public-reset/release-{commit}-update-{}/bin/iroha3d_taira', '--config', '/srv/taira/{slug}/current/config/config.toml', '--sora']\\nreserved_fds = (198, 199)\"\n",
             "b".repeat(32),
         );
-        assert_eq!(daemon_in_unit(unit.as_bytes(), slug).unwrap().1, commit);
-        assert!(daemon_in_unit(unit.replace("--sora", "--other").as_bytes(), slug).is_err());
-        assert!(daemon_in_unit(format!("{unit}{unit}").as_bytes(), slug).is_err());
-        assert!(daemon_in_unit(unit.replace("cmd =", "other =").as_bytes(), slug).is_err());
+        assert_eq!(
+            daemon_in_unit(unit.as_bytes(), slug, &commit)
+                .unwrap()
+                .commit,
+            commit
+        );
+        assert!(
+            daemon_in_unit(unit.replace("--sora", "--other").as_bytes(), slug, &commit).is_err()
+        );
+        assert!(daemon_in_unit(format!("{unit}{unit}").as_bytes(), slug, &commit).is_err());
+        assert!(
+            daemon_in_unit(unit.replace("cmd =", "other =").as_bytes(), slug, &commit).is_err()
+        );
+        assert!(
+            daemon_in_unit(
+                unit.replace("/bin/iroha3d_taira", "/foreign/bin/iroha3d_taira")
+                    .as_bytes(),
+                slug,
+                &commit
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn installed_launcher_binds_native_beacon_config_and_selected_daemon() {
+        let slug = "taira-validator-1";
+        let commit = "a".repeat(40);
+        let unit = format!(
+            "[Service]\nExecStart=/usr/bin/python3 -c \"import os\\ncmd = ['/srv/taira/{slug}/current/bin/iroha3d_taira', '--config', '/srv/taira/{slug}/current/config/beacon.toml', '--sora']\\nreserved_fds = (198, 199)\"\n"
+        );
+        let parsed = daemon_in_unit(unit.as_bytes(), slug, &commit).unwrap();
+        assert_eq!(
+            parsed.argv0,
+            format!("/srv/taira/{slug}/current/bin/iroha3d_taira")
+        );
+        assert_eq!(
+            parsed.artifact_path,
+            format!("/srv/taira/{slug}/releases/{commit}/bin/iroha3d_taira")
+        );
+        assert_eq!(parsed.commit, commit);
+        assert_eq!(parsed.config_name, "beacon.toml");
+        for foreign in [
+            "foreign.toml",
+            "../beacon.toml",
+            "beacon.toml/other",
+            "beacon.toml', '--config', '/tmp/foreign.toml",
+        ] {
+            assert!(
+                daemon_in_unit(
+                    unit.replace("beacon.toml", foreign).as_bytes(),
+                    slug,
+                    &commit
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            daemon_in_unit(
+                unit.replace(slug, "taira-validator-2").as_bytes(),
+                slug,
+                &commit
+            )
+            .is_err()
+        );
+        assert!(daemon_in_unit(unit.as_bytes(), slug, "not-a-revision").is_err());
     }
 }

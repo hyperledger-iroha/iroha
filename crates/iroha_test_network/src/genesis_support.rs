@@ -17,7 +17,7 @@ use std::{
 /// Exact placeholder accepted while a genesis hash is not yet known.
 ///
 /// The placeholder is replaced only in memory and only by
-/// [`sign_prepared_genesis_from_config`]. Persisted node configurations still
+/// [`sign_prepared_genesis_from_config`] or [`bind_and_sign_generated_genesis_from_config`]. Persisted node configurations still
 /// have to contain the exact hash before normal startup validation.
 pub const UNRESOLVED_GENESIS_EXPECTED_HASH: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 /// Filesystem paths controlled by a local node-generation orchestrator.
@@ -155,8 +155,55 @@ pub fn sign_prepared_genesis_from_config(
     key_pair: &KeyPair,
     expected_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> Result<SignedBlock> {
+    sign_genesis_from_config(
+        manifest_path,
+        config_path,
+        key_pair,
+        expected_consensus_mode,
+        false,
+    )
+    .map(|(_, block)| block)
+}
+
+/// Prepare a newly generated manifest's policy commitments and strictly execute its signed block.
+///
+/// This generation boundary requires the exact unresolved network-identity sentinel. It uses
+/// the same chain, manifest-path, key and mode checks as the strict prepared signer, binds
+/// execution-derived policies at most once, and then requires strict execution to succeed.
+/// It never modifies either input file. Callers must publish the returned bound manifest with
+/// the returned block; an already selected network identity cannot be rebound here.
+///
+/// # Errors
+/// Rejects a resolved identity, inconsistent configuration bindings, or failed native execution.
+pub fn bind_and_sign_generated_genesis_from_config(
+    manifest_path: &Path,
+    config_path: &Path,
+    key_pair: &KeyPair,
+    expected_consensus_mode: Option<SumeragiConsensusMode>,
+) -> Result<(RawGenesisTransaction, SignedBlock)> {
+    sign_genesis_from_config(
+        manifest_path,
+        config_path,
+        key_pair,
+        expected_consensus_mode,
+        true,
+    )
+}
+
+fn sign_genesis_from_config(
+    manifest_path: &Path,
+    config_path: &Path,
+    key_pair: &KeyPair,
+    expected_consensus_mode: Option<SumeragiConsensusMode>,
+    bind_generated_policy: bool,
+) -> Result<(RawGenesisTransaction, SignedBlock)> {
     iroha_genesis::init_instruction_registry();
     let (parsed_config, unresolved_hash_replaced) = load_node_config(config_path, true)?;
+    if bind_generated_policy && !unresolved_hash_replaced {
+        return Err(eyre!(
+            "generated genesis preparation requires the unresolved network identity"
+        ));
+    }
     let config = ManagedNodeConfig::from_root(parsed_config.clone())?;
     let selected_manifest = config
         .genesis_manifest_path
@@ -218,6 +265,7 @@ pub fn sign_prepared_genesis_from_config(
         ));
     }
     let proposal = manifest
+        .clone()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
             key_pair,
             Some(config.da_proof_policies),
@@ -227,17 +275,26 @@ pub fn sign_prepared_genesis_from_config(
     let topology = iroha_core::sumeragi::startup::genesis_committee_peers(&proposal.0)
         .map_err(|error| eyre!("derive prepared genesis voting roster: {error}"))?;
     let genesis_account = AccountId::new(key_pair.public_key().clone());
-    let (block, _) = crate::config::preexecute_genesis_with_runtime_config(
-        &proposal,
-        &genesis_account,
-        &topology,
+    let (block, _, bound_manifest) = crate::config::execute_generated_genesis(
+        proposal,
+        manifest,
         key_pair,
-        None,
-        None,
-        None,
-        Some(&parsed_config),
+        bind_generated_policy,
+        |proposal| {
+            crate::config::preexecute_genesis_with_runtime_config(
+                proposal,
+                &genesis_account,
+                &topology,
+                key_pair,
+                None,
+                None,
+                None,
+                Some(&parsed_config),
+            )
+        },
     )
     .wrap_err("pre-execute canonical prepared genesis")?;
+    let block = block.0;
     if !unresolved_hash_replaced && block.hash() != config.genesis_expected_hash {
         return Err(eyre!(
             "prepared genesis hashes to {}, but configuration requires {}",
@@ -245,7 +302,7 @@ pub fn sign_prepared_genesis_from_config(
             config.genesis_expected_hash
         ));
     }
-    Ok(block)
+    Ok((bound_manifest, block))
 }
 /// Validate a canonical prepared-genesis bundle for node startup.
 ///
@@ -700,6 +757,76 @@ revocation_store_path = "managed/soranet/revocations.norito"
                 .contains("differs from configured manifest")
         );
     }
+    #[test]
+    fn generated_preparation_binds_policy_once_without_weakening_prepared_signing() {
+        let directory = tempfile::tempdir().expect("temporary generation");
+        let chain_id = ChainId::from("generated-policy-fixture");
+        let (manifest, key) = prepared_manifest(chain_id.clone());
+        let mut provisional = manifest.sumeragi_context_parameters();
+        provisional.execution_policy_hash = Hash::new(b"unbound fixture execution policy").into();
+        provisional.nexus_amx_context_hash = Hash::new(b"unbound fixture Nexus policy").into();
+        let manifest = manifest
+            .with_sumeragi_context_parameters(provisional)
+            .with_consensus_meta();
+        let manifest_path = directory.path().join("genesis.json");
+        let original = norito::json::to_json_pretty(&manifest).unwrap();
+        fs::write(&manifest_path, &original).unwrap();
+        let config_path = write_node_config(
+            directory.path(),
+            &chain_id,
+            manifest.chain_discriminant(),
+            key.public_key(),
+            UNRESOLVED_GENESIS_EXPECTED_HASH,
+        );
+        let mode = Some(SumeragiConsensusMode::Permissioned);
+        let strict = sign_prepared_genesis_from_config(&manifest_path, &config_path, &key, mode)
+            .unwrap_err();
+        assert!(format!("{strict:#}").contains("Signed genesis policy mismatch"));
+        let (bound, block) =
+            bind_and_sign_generated_genesis_from_config(&manifest_path, &config_path, &key, mode)
+                .unwrap();
+        assert_ne!(
+            bound.sumeragi_context_parameters().execution_policy_hash,
+            provisional.execution_policy_hash
+        );
+        assert_ne!(
+            bound.sumeragi_context_parameters().nexus_amx_context_hash,
+            provisional.nexus_amx_context_hash
+        );
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), original);
+        validate_prepared_genesis_for_startup(
+            &block.encode_wire().unwrap(),
+            &bound,
+            key.public_key(),
+            block.hash(),
+            &chain_id,
+        )
+        .unwrap();
+
+        // Publication of the exact generated manifest enables the unchanged strict signer.
+        fs::write(
+            &manifest_path,
+            norito::json::to_json_pretty(&bound).unwrap(),
+        )
+        .unwrap();
+        sign_prepared_genesis_from_config(&manifest_path, &config_path, &key, mode).unwrap();
+        let resolved = write_node_config(
+            directory.path(),
+            &chain_id,
+            manifest.chain_discriminant(),
+            key.public_key(),
+            CONFIGURED_HASH,
+        );
+        let error =
+            bind_and_sign_generated_genesis_from_config(&manifest_path, &resolved, &key, mode)
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires the unresolved network identity")
+        );
+    }
+
     #[test]
     fn resolved_hash_and_expected_chain_are_enforced() {
         let directory = tempfile::tempdir().expect("create temporary directory");

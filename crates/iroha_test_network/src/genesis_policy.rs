@@ -36,7 +36,7 @@ fn policy_mismatch_hashes(error: &Report) -> Option<StagedGenesisPolicyHashes> {
 
 /// Execute a locally generated manifest, binding provisional policy at most once.
 /// Explicitly supplied commitments always take the strict single-execution path.
-pub(super) fn execute_generated_genesis(
+pub(crate) fn execute_generated_genesis(
     proposal: GenesisBlock,
     manifest: RawGenesisTransaction,
     key: &KeyPair,

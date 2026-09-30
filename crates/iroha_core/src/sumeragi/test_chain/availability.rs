@@ -11,6 +11,13 @@ use iroha_sumeragi::{
 use super::*;
 
 impl CertifiedTestChain {
+    /// The original State allocation pool funding this fixture's execution and availability.
+    /// Lane fixtures must share this owner rather than create an unrelated admission budget.
+    #[must_use]
+    pub fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
+        self.state.ivm_execution_budget()
+    }
+
     /// Author the exact supplied payload with this chain's independently scheduled proposer.
     /// The original State pool funds payload backing, all RS16 work and original signatures.
     /// This supplies availability only; application execution and certification remain mandatory.
@@ -94,6 +101,14 @@ impl CertifiedTestChain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_budget_retains_the_original_state_owner() {
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        let backing = ChargedBuffer::<u8>::new(64, &chain.execution_budget()).unwrap();
+        assert!(backing.belongs_to(&chain.state.ivm_execution_budget()));
+        assert!(!backing.belongs_to(&iroha_allocation::AllocationBudget::new(1 << 27)));
+    }
 
     /// Authoring retains the exact independent context and original actual allocation pool.
     #[test]

@@ -8,7 +8,7 @@ use crate::{
     compose::{SigningAuthority, development_signing_authorities},
     config::{
         GenesisProfile, NetworkPaths, NetworkProfile, PortAllocator, ProfilePreset,
-        infer_workspace_root_from_sandbox_root,
+        infer_workspace_root_from_sandbox_root, validate_sumeragi_overlay,
     },
     generation::{
         GenerationInventoryContext, GenerationTransaction, VerifiedGeneration,
@@ -1682,14 +1682,8 @@ fn normalize_peer_config_overrides(
             }
         }
     }
-    if sumeragi
-        .as_ref()
-        .is_some_and(|table| table.contains_key("queues"))
-    {
-        return Err(SupervisorError::Config(
-            "sumeragi.queues is retired; native Sumeragi accepts only node-local configuration"
-                .to_owned(),
-        ));
+    if let Some(table) = sumeragi.as_ref() {
+        validate_sumeragi_overlay(table).map_err(SupervisorError::Config)?;
     }
     if let Some(table) = torii.as_ref()
         && let Some(da_ingest) = table.get("da_ingest")
@@ -3721,15 +3715,13 @@ impl PeerSpec {
                     .to_owned(),
             ));
         }
-        // Authored overlays cannot restore the retired consensus queue owner.
-        if root
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .is_some_and(|table| table.contains_key("queues"))
-        {
-            return Err(SupervisorError::Config(
-                "sumeragi.queues is retired".to_owned(),
-            ));
+        // Authored overlays may set only node-local Sumeragi settings; they cannot restore a
+        // retired consensus table such as `sumeragi.queues`.
+        if let Some(sumeragi) = root.get("sumeragi") {
+            let sumeragi = sumeragi
+                .as_table()
+                .ok_or_else(|| SupervisorError::Config("sumeragi must be a table".to_owned()))?;
+            validate_sumeragi_overlay(sumeragi).map_err(SupervisorError::Config)?;
         }
         if let Some(expected) = managed_account_onboarding.as_ref() {
             let configured = root

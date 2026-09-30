@@ -716,7 +716,15 @@ pub fn f17(seed: u64) -> Scenario {
     sc.prebuilt_holders = vec![0, 1, 2, 3];
     sc.byz = vec![(3, vec![Strategy::ForgeSync, Strategy::ForgeBodies])];
     sc.demotion_window = 16;
-    sc.duration = len * 12 + 60_000;
+    // Sync responses carry certified manifests; each body is then fetched as signed rows
+    // before sequential application (§6.9). Budget a metadata round trip and a body round
+    // trip per height, execution, body/block writes and application, plus a minute for
+    // source rotation and live work. The old 12 ms/height budget omitted the body network
+    // trip (up to 100 ms on the default links), so seed 0 ended at 2 919/10 000 heights.
+    let profile = Profile::default();
+    let replay_per_height =
+        4 * sc.net.delay_max + profile.exec_base + 2 * profile.write_max + profile.apply_ms;
+    sc.duration = len * replay_per_height + 60_000;
     sc.checks.progress = 3;
     sc
 }

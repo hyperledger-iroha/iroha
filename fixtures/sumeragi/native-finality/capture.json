@@ -5,28 +5,41 @@
   "network_id": "hash:CC5B7A93328338ED805FA7D5DA89B32BA4E2793A0F4019CE28887A1533B17659#EE57",
   "generator": {
     "path": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
-    "source_sha256": "8d234364b90571b92105d9d035f2305c18a54ab3156c39674563cc47019adfe9",
+    "source_sha256": "d90db6e81047bef5c72c0b82372665cd9a477d9b46209b2f9e4d87ecbb986543",
     "test": "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
-    "command": "target/cargo-fast/kot/debug/deps/iroha_data_model-23fdbf9fb0110121 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
-    "compiled_harness_sha256": "4d3f46ba68f0ee74adfdf6ddab316c5d32ab401a7386db0c8bc46e03c65bfbb8"
+    "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+    "compiled_harness_path": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96",
+    "compiled_harness_sha256": "5949fba2100ed5dc0b9607cefdcdc91ab5a61ad34e22fb93807257d66fe82139",
+    "source_commit": "4032051e02fa9782cefe21e8f5b9761c9281cc34",
+    "result_codec_sources": [
+      {
+        "path": "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
+        "sha256": "6f11b52173563e26f41784b20f05d9af7b2cd6d6e1706a47fc6c6bff4c176a7b"
+      },
+      {
+        "path": "crates/iroha_data_model/src/sumeragi_finality/commitment/wire.rs",
+        "sha256": "28499d642222c685e5d0eadc628368faac9f51da624f12e8b68a8167ff4e7808"
+      }
+    ],
+    "source_tree_clean": false
   },
   "captures": [
     {
-      "log": "target/unit-tests/rust-leaves/native-checkpoint-capture.log",
-      "sha256": "1f6dad8ea4433cfaff2533e995c249b20246c84c6523c6d94f15ac4d42a3adc8",
-      "command": "target/cargo-fast/kot/debug/deps/iroha_data_model-23fdbf9fb0110121 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-1.log",
+      "sha256": "19fa562bfa65ae48c460c79d652de075d092f79311ad2de33b06890018934b56",
+      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     },
     {
-      "log": "target/unit-tests/rust-leaves/native-checkpoint-capture-2.log",
-      "sha256": "4eb810617ac15205a3495f9131d95b7fe8a0443133cecb414d90e5ac9b9c732b",
-      "command": "target/cargo-fast/kot/debug/deps/iroha_data_model-23fdbf9fb0110121 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-2.log",
+      "sha256": "e4e077ce33502195bf38869122375966bbfe72e48b4d2590c7e2baa3cd1d8b5a",
+      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     },
     {
-      "log": "target/unit-tests/rust-leaves/native-checkpoint-capture-3.log",
-      "sha256": "389ebf957811c7a2bb0c6432076a5d40452eac6c203bb216781396d57dbeae42",
-      "command": "target/cargo-fast/kot/debug/deps/iroha_data_model-23fdbf9fb0110121 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
+      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-3.log",
+      "sha256": "54c37c82fe8e50f6c4046396233124976a1ccd3904c76e9053809eca740d41ff",
+      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
       "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
     }
   ],
@@ -35,15 +48,15 @@
     {
       "path": "fixtures/sumeragi/native-finality/genesis-checkpoint.nrt",
       "height": 1,
-      "bytes": 31425,
-      "sha256": "55525e7f5ce1630082f1ceedb477e87e46a0d3c46acfd69debcc39cefacdac95"
+      "bytes": 27575,
+      "sha256": "d000307202e5b2daacb247b87c8d583dcdc361507213af9e183f5e13b74d1b19"
     },
     {
       "path": "fixtures/sumeragi/native-finality/height-2-checkpoint.nrt",
       "height": 2,
-      "bytes": 35644,
-      "sha256": "d7871b118c67945ea4926492ac483808b499ea9265e365b2c5876ec4020463af"
+      "bytes": 31792,
+      "sha256": "20e368bdec9749e164e0ad4ce06d919c2916f00bb533d110d9c66f41ffec4c0f"
     }
   ],
-  "scope": "Deterministic protocol fixtures: exact signed genesis and real native three-of-four BLS H2 certificate plus genuine signed RS16 availability over synthetic outputs. Canonical roundtrip and contiguous checkpoint page verified by exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim."
+  "scope": "Deterministic protocol fixtures: exact signed genesis and real native three-of-four BLS H2 certificate plus genuine signed RS16 availability over synthetic outputs, using the sole compact ExecutionResultCommitment schedule projection. Canonical roundtrip and contiguous checkpoint page verified by exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim."
 }

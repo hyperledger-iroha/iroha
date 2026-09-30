@@ -14,7 +14,6 @@ on:
       - "crates/ivm/fuzz/**"
       - "crates/ivm/build.rs"
       - "crates/ivm/examples/numeric_v1_fixture.rs"
-      - "crates/ivm/src/numeric.rs"
       - "crates/ivm/src/numeric_v1.rs"
       - "crates/ivm/src/numeric_gas.rs"
       - "crates/ivm/src/numeric_tlv.rs"

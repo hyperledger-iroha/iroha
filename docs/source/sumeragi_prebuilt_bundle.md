@@ -16,13 +16,14 @@ result.
 | `kagami` | `release/kagami` | `KAGAMI_BIN` |
 | `irohad_taira` | `release/iroha3d_taira` | `TEST_NETWORK_BIN_IROHAD_TAIRA` |
 
-All four come from one `--locked --offline --release` build in the default
-feature graph; the Taira launcher and the standard daemon are distinct
-executables of the `irohad` package. The bundle directory is
+All four are built with `--locked --offline --release` into one Cargo cache in
+the default feature graph (`irohad` for `iroha3d` and `iroha3d_taira`, then
+`iroha_cli` and `iroha_kagami`); the Taira launcher and the standard daemon are
+distinct executables of the `irohad` package. The bundle directory is
 `<IROHA_RELEASE_ARTIFACT_ROOT>/sumeragi-release/<source-manifest-sha256>/programs/invocation.<token>`.
 It holds the four executables (mode `0500`) and the schema-2 manifest
 `.sumeragi-prebuilt-binaries.tsv` (mode `0400`) with exactly 25 ordered
-tab-separated fields: schema version, source manifest, `Cargo.lock`, Cargo and
+`key<TAB>value` lines: schema version, source manifest, `Cargo.lock`, Cargo and
 rustc version digests, host and target triples, profile, bundle directory, and
 the relative path, SHA-256, size and mode of each executable. Every directory is
 closed to mode `0500` after publication.
@@ -59,10 +60,13 @@ binaries only from the bundle. It requires `IROHA_TEST_SKIP_BUILD=1`,
 the manifest-addressed programs root of `IROHA_RELEASE_ARTIFACT_ROOT`, and a
 manifest whose SHA-256 equals `IROHA_RELEASE_PREBUILT_MANIFEST_SHA256`; it then
 checks every executable against the manifest. The BPNG alias-registry network
-test (`integration_tests/tests/alias_registry_bootstrap_network.rs`) resolves
-its binaries this way.
+test (`integration_tests/tests/alias_registry_bootstrap_network.rs`) and the
+integration Kagami helper (`integration_tests/src/kagami.rs`) resolve their
+binaries this way. `pytests/scripts/sumeragi_prebuilt_bundle_test.py` and
+`pytests/scripts/sumeragi_prebuilt_bundle_shell_test.py` cover the builder.
 
-TODO(release-runner): no maintained runner currently provides that test's full
-sealed release environment (`IROHA_RELEASE_SEALED_WORKTREE`,
-`IROHA_RELEASE_EXPECTED_IDENTITY_PATH` and the other `IROHA_RELEASE_*`
-identities), so it fails closed until one is added.
+TODO(release-runner): no maintained runner currently sources this builder or
+provides the BPNG test's full sealed release environment
+(`IROHA_RELEASE_SEALED_WORKTREE`, `IROHA_RELEASE_EXPECTED_IDENTITY_PATH` and the
+other `IROHA_RELEASE_*` identities), so that test fails closed until one is
+added.
