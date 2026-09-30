@@ -24,12 +24,13 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
 ## Immediate blockers
 
-The current Nexus happy-day workload exposed an execution-expanded proposal
-publication defect. Checked projection and retained per-peer client context have
-component coverage; telemetry/status wire retirement is applied. The successor
-build, real workload and repeated accepted settlements remain pending. Restricted
-native-lane gossip also needs fresh daemon/harness qualification with disjoint
-global and participant committees.
+Exact finalized-carrier retries now authenticate the original execution and
+acknowledge admission without requeueing or charging again. The rebuilt local
+Nexus happy-day workload completes its financial, signed RS16 finality and replay
+checks across all 16 peers. Repeated accepted settlements and restart remain
+unqualified on one fixed source candidate. Restricted native-lane gossip also
+needs fresh daemon/harness qualification with disjoint global and participant
+committees.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding
@@ -37,9 +38,9 @@ and original Validate-to-Apply custody remain open. Component repairs do not
 establish one retained execution through finality and restart.
 
 Remaining SoraFS Node failures concern fixture permissions, hedged-encryption
-randomness assumptions and cumulative quarantine decode budgets. The combined
-Core/Torii/daemon test graph compiles after the crate-extraction repairs. Full
-Node runtime and production qualification remain open under the
+randomness assumptions and cumulative quarantine decode budgets. The Core
+selection has scoped coverage and Torii's unit-test target compiles. Full Node
+and production qualification remain open under the
 [reliability goals](specs/sorafs/first_release_reliability_goals.md) and
 [closure ledger](specs/sorafs/v1_closure_ledger.md).
 

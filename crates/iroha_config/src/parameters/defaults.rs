@@ -202,7 +202,14 @@ pub mod taira {
     /// Exact per-replica root and temporary storage admission.
     pub const INROU_CANARY_HOST_STORAGE_BYTES: u64 =
         INROU_CANARY_ROOT_VOLUME_BYTES + INROU_CANARY_EPHEMERAL_STORAGE_BYTES;
+    const _: () = assert!(
+        iroha_data_model::soracloud::SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1 <= u32::MAX as u64
+    );
     /// Host CPU ceiling includes one canonical canary plus mandatory VMM overhead.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the source constant is compile-time bounded to u32 above"
+    )]
     pub const INROU_MAX_CPU_MILLIS: u32 = INROU_CANARY_CPU_MILLIS
         + iroha_data_model::soracloud::SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1 as u32;
     /// Host RAM ceiling includes one canonical canary plus mandatory VMM overhead.
@@ -246,6 +253,18 @@ pub mod taira {
     /// Inrou egress byte budget per minute.
     pub const INROU_EGRESS_MAX_BYTES_PER_MINUTE: u64 = 100 * 1024 * 1024;
 
+    const _: () = assert!(
+        NEXUS_KURA_BLOCKS_BPS + NEXUS_WSV_SNAPSHOTS_BPS + NEXUS_SORAFS_BPS
+            == STORAGE_WEIGHT_BASIS_POINTS
+    );
+    // Preseed stores the admitted guest and bundle together. Keep at least 64 MiB
+    // beyond both payload ceilings for discovery, manifests and storage metadata.
+    const _: () = assert!(
+        SORAFS_STORAGE_CAP_BYTES
+            >= INROU_GUEST_IMAGE_MAX_BYTES
+                + super::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
+                + 64 * 1024 * 1024
+    );
     #[cfg(test)]
     mod compact_tests {
         use super::*;
@@ -301,19 +320,6 @@ pub mod taira {
             assert_eq!(INROU_MAX_MEMORY_BYTES, 768 * 1024 * 1024);
         }
     }
-
-    const _: () = assert!(
-        NEXUS_KURA_BLOCKS_BPS + NEXUS_WSV_SNAPSHOTS_BPS + NEXUS_SORAFS_BPS
-            == STORAGE_WEIGHT_BASIS_POINTS
-    );
-    // Preseed stores the admitted guest and bundle together. Keep at least 64 MiB
-    // beyond both payload ceilings for discovery, manifests and storage metadata.
-    const _: () = assert!(
-        SORAFS_STORAGE_CAP_BYTES
-            >= INROU_GUEST_IMAGE_MAX_BYTES
-                + super::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
-                + 64 * 1024 * 1024
-    );
 }
 /// IVM- and banner-related defaults.
 pub mod ivm {
@@ -959,7 +965,7 @@ pub mod kura {
         };
     /// Maximum complete stored FASTPQ artifact bytes, matching the proof-sidecar default.
     pub const FASTPQ_ARTIFACT_MAX_BYTES: NonZeroUsize =
-        nonzero!(super::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.0 as usize);
+        nonzero!(fastpq_isi::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1);
     /// Maximum stable FASTPQ content records retained before storage refuses new content.
     pub const FASTPQ_ARTIFACT_MAX_COUNT: NonZeroUsize = nonzero!(1024_usize);
     /// Maximum stable plus temporary FASTPQ artifact bytes (256 MiB).

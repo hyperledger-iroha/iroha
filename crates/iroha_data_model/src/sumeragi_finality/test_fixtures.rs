@@ -233,7 +233,7 @@ impl NativeFinalityFixture {
             SignedBlock::try_genesis(vec![tx], authority.private_key(), None, None).unwrap();
         let epoch = genesis_epoch(&genesis).unwrap();
         let mut block = genesis.clone();
-        Self::install_network_results(&mut block, vec![Ok(Default::default())]);
+        Self::install_network_results(&mut block, vec![Ok(Vec::new())]);
         let result = Self::result(&block, &epoch);
         block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
             vec![],
@@ -338,7 +338,7 @@ impl NativeFinalityFixture {
         let mut builder = BlockBuilder::new(header);
         builder.push_transaction(tx);
         let mut block = builder.build(BTreeSet::new());
-        Self::install_network_results(&mut block, vec![Ok(Default::default())]);
+        Self::install_network_results(&mut block, vec![Ok(Vec::new())]);
         block
     }
 
@@ -360,10 +360,10 @@ impl NativeFinalityFixture {
             .set_execution_outputs(
                 outputs,
                 0,
-                Default::default(),
+                std::collections::BTreeMap::default(),
                 vec![],
-                Default::default(),
-                Default::default(),
+                crate::nexus::AxtPolicySnapshot::default(),
+                std::collections::BTreeSet::default(),
                 &ExecutionOutputLimits {
                     max_outputs: 1024,
                     max_output_bytes: 16 * 1024 * 1024,
@@ -381,7 +381,7 @@ impl NativeFinalityFixture {
     /// Panics if the block does not extend the fixture's exact tip or violates native proof rules.
     pub fn certify(&mut self, block: SignedBlock) -> SumeragiFinalityProof {
         let result = Self::result(&block, &self.epoch);
-        self.certify_result(block, result)
+        self.certify_result(block, &result)
     }
 
     /// Certify explicit synthetic ordinary writes with their mandatory native lane-state proof.
@@ -404,13 +404,13 @@ impl NativeFinalityFixture {
         let root = proof.computed_root().unwrap();
         assert!(proof.verify(self.network_id(), block.header().height().get(), root));
         let result = Self::result_with_lane_proof(&block, &self.epoch, proof, root);
-        self.certify_result(block, result)
+        self.certify_result(block, &result)
     }
 
     fn certify_result(
         &mut self,
         mut block: SignedBlock,
-        result: ExecutionResultCommitment,
+        result: &ExecutionResultCommitment,
     ) -> SumeragiFinalityProof {
         assert_eq!(block.header().height().get(), self.tip.height() + 1);
         assert_eq!(

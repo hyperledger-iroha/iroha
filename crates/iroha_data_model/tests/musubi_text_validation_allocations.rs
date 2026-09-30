@@ -52,15 +52,15 @@ unsafe impl GlobalAlloc for TrackingAllocator {
 }
 
 fn measured<T>(operation: impl FnOnce() -> T) -> (T, usize) {
-    REQUESTS.with(|requests| requests.set(0));
-    REQUESTED_BYTES.with(|requests| requests.set(0));
-    TRACKING.with(|tracking| assert!(!tracking.replace(true), "nested measurement"));
     struct StopTracking;
     impl Drop for StopTracking {
         fn drop(&mut self) {
             TRACKING.with(|tracking| tracking.set(false));
         }
     }
+    REQUESTS.with(|requests| requests.set(0));
+    REQUESTED_BYTES.with(|requests| requests.set(0));
+    TRACKING.with(|tracking| assert!(!tracking.replace(true), "nested measurement"));
     let stop = StopTracking;
     let result = operation();
     drop(stop);
@@ -252,7 +252,7 @@ fn decoded_namespace(raw: &str) -> MusubiNamespaceV1 {
 #[test]
 fn namespace_borrowed_ascii_preserves_exact_errors_and_codec_bytes() {
     let mut cases = vec![
-        ("".into(), Err("Musubi namespace must not be empty")),
+        (String::new(), Err("Musubi namespace must not be empty")),
         ("a".into(), Ok(())),
         ("domain.dataspace".into(), Ok(())),
         (" a".into(), Err("Musubi namespace is not canonical")),
@@ -295,7 +295,10 @@ fn namespace_borrowed_ascii_preserves_exact_errors_and_codec_bytes() {
         assert_eq!(requests, 0, "borrowed ASCII {raw:?}");
         let (parsed, requests) = measured(|| raw.parse::<MusubiNamespaceV1>());
         assert_eq!(
-            parsed.as_ref().map(|_| ()).map_err(|error| error.reason()),
+            parsed
+                .as_ref()
+                .map(|_| ())
+                .map_err(iroha_model_base::error::ParseError::reason),
             expected
         );
         assert_eq!(
@@ -325,7 +328,7 @@ fn namespace_unicode_uses_canonical_name_semantics_and_only_bounded_icu_scratch(
         "A\u{30a}".into(),
         "가".into(),
         "\u{1100}\u{1161}".into(),
-        "Å".into(),
+        "\u{212b}".into(),
         "Ａ".into(),
         "a\u{200d}b".into(),
         "a\u{202e}b".into(),
@@ -453,7 +456,7 @@ fn namespace_scratch_plan_is_borrowed_and_covers_all_sequential_segment_requests
     );
     assert!(namespace.validation_scratch_bytes() > 0);
     for raw in [
-        "".to_owned(),
+        String::new(),
         format!("{mark}/x"),
         format!("{mark}.x.y"),
         "a".repeat(256),

@@ -1,7 +1,7 @@
 //! Native epoch roots derived from exact authenticated signed genesis.
 //!
 //! Genesis execution results do not supply signing authority. This reader uses only signed
-//! registrations, metadata and NPoS parameters; the executed overlay must independently match
+//! registrations, metadata and `NPoS` parameters; the executed overlay must independently match
 //! the same context before its result or retained schedule can be published.
 
 use crate::{
@@ -20,13 +20,16 @@ use iroha_crypto::Hash;
 /// Authenticate the genesis body and reconstruct its complete native signing context.
 /// The returned context is independent of result-only certificate data and mutable World.
 /// Its network identity is the signed genesis header hash, not a caller-selected network.
+///
+/// # Errors
+/// Rejects non-genesis input, invalid proposal commitments or original signatures,
+/// ambiguous authority or consensus metadata, malformed signed parameters, and an
+/// invalid reconstructed epoch or committee.
 pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, String> {
     if !genesis.header().is_genesis() {
         return Err("native epoch root requires height-one signed genesis".into());
     }
-    genesis
-        .validate_proposal_commitments()
-        .map_err(|error| error.to_string())?;
+    genesis.validate_proposal_commitments()?;
     let first = genesis
         .external_transactions()
         .next()
@@ -76,7 +79,7 @@ pub fn genesis_epoch(genesis: &SignedBlock) -> Result<ValidatorEpochContextV1, S
             }
         }
     }
-    let metadata = signed_genesis_consensus_metadata(genesis).map_err(|error| error.to_string())?;
+    let metadata = signed_genesis_consensus_metadata(genesis)?;
     if metadata.wire_protocol_version != u32::from(crate::sumeragi::PROTOCOL_VERSION) {
         return Err("genesis metadata does not bind the current native protocol".into());
     }

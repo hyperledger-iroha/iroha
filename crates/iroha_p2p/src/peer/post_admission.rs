@@ -166,8 +166,10 @@ impl Admission {
         &self,
         class: Class,
         plaintext: usize,
-        _progress: bool,
+        progress: bool,
     ) -> Option<OutboundPostOwnership> {
+        #[cfg(not(test))]
+        let _ = progress;
         match self {
             Self::Granted(source) => Some(OutboundPostOwnership::granted(
                 source.reserve(class, plaintext)?,
@@ -179,8 +181,8 @@ impl Admission {
                 overhead,
             } => {
                 let bytes = plaintext.checked_add(*overhead)?;
-                let lease = if _progress || !class.is_low() {
-                    high.try_reserve(bytes, _progress)?
+                let lease = if progress || !class.is_low() {
+                    high.try_reserve(bytes, progress)?
                 } else {
                     low.try_reserve(bytes, false)?
                 };

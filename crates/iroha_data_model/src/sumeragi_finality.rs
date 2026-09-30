@@ -642,7 +642,7 @@ impl SumeragiFinalityVerifier {
             result: value.result,
             committee_digest: value.committee_digest,
             schedule: value.commitment.schedule.clone(),
-            beacon: value.commitment.beacon.clone(),
+            beacon: value.commitment.beacon,
             executed_hash: value.commitment.execution.executed_block_wire_hash,
             executed_len: value.commitment.execution.executed_block_wire_len,
         }

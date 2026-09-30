@@ -1973,7 +1973,6 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
                 .is_local_refusal()
         );
         let overlay = std::ptr::from_ref(original.overlay.as_ref());
-        let result = std::ptr::from_ref(original.phase.ready().unwrap().get());
         let commitment = original.phase.ready().unwrap().get();
         let authority = commitment.schedule.current.committee.as_ptr();
         let proofs: Vec<_> = commitment
@@ -1996,8 +1995,31 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             let retained = worker.finishing.as_ref().unwrap();
             assert_eq!(std::ptr::from_ref(retained.overlay.as_ref()), overlay);
             assert_eq!(
-                std::ptr::from_ref(retained.phase.ready().unwrap().get()),
-                result
+                retained
+                    .phase
+                    .ready()
+                    .unwrap()
+                    .get()
+                    .schedule
+                    .current
+                    .committee
+                    .as_ptr(),
+                authority
+            );
+            let commitment = retained.phase.ready().unwrap().get();
+            assert_eq!(
+                commitment
+                    .schedule
+                    .current
+                    .committee
+                    .iter()
+                    .map(|member| member.proof_of_possession.as_ptr())
+                    .collect::<Vec<_>>(),
+                proofs
+            );
+            assert_eq!(
+                norito::encode_canonical(commitment).unwrap(),
+                canonical_result
             );
             assert_eq!(iroha_crypto::HashOf::new(&retained.witness), witness);
             assert!(

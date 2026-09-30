@@ -699,6 +699,8 @@ impl CertifiedTestChain {
         Self::npos_boundary_fixture_with_currency(true)
     }
 
+    /// Build the same authentic prefix with or without the currency in signed genesis.
+    /// The absent case reaches the real boundary check without corrupting World indexes.
     fn npos_boundary_fixture_with_currency(include_currency: bool) -> Self {
         use crate::beacon::{
             FinalizedGlobalThresholdBeaconKeySessionRecordV1,
@@ -1948,6 +1950,23 @@ mod tests {
         // Omit the currency in the original signed genesis. Removing an authenticated
         // live definition would violate AXT incarnation custody before boundary execution.
         let mut chain = CertifiedTestChain::npos_boundary_fixture_with_currency(false);
+        let currency = chain
+            .state()
+            .view()
+            .world()
+            .sumeragi_npos_parameters()
+            .unwrap()
+            .xor_asset_definition_id;
+        assert!(
+            chain
+                .state()
+                .view()
+                .world()
+                .asset_definitions()
+                .get(&currency)
+                .is_none(),
+            "negative fixture omits currency from its original signed genesis"
+        );
         let original = chain.committed(9);
         let proposal = chain.proposal(None, Vec::new());
         let error = match chain.begin_proposal(proposal, Default::default()) {

@@ -9333,10 +9333,10 @@ fn attach_client_fixture_outputs(
         .set_execution_outputs(
             outputs,
             fragments,
-            Default::default(),
+            std::collections::BTreeMap::default(),
             Vec::new(),
-            Default::default(),
-            Default::default(),
+            iroha_data_model::nexus::AxtPolicySnapshot::default(),
+            std::collections::BTreeSet::default(),
             &client_fixture_output_limits(),
         )
         .expect("attach bounded canonical client fixture outputs");

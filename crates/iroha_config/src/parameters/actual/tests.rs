@@ -1200,11 +1200,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
     fn minimal_root_with_sorafs_admission() -> Root {
         let config = format!(
-            r#"{MINIMAL_CONFIG}
+            r"{MINIMAL_CONFIG}
 
 [sorafs.discovery.admission]
 enabled = true
-"#
+"
         );
         let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");
         Root::from_toml_source(TomlSource::inline(table))

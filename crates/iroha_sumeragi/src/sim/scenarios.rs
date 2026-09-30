@@ -1269,12 +1269,17 @@ pub fn f30(seed: u64) -> Scenario {
     sc
 }
 
-/// F31 (partial): two instances with their own committees; each stalls in turn and the other
-/// keeps finalizing (independent finality). The toy AMX application is not modelled.
+/// F31: independent finality and two-phase settlement over G and two or three dataspaces.
+/// Stalled instances, delayed/forged relay proofs and relayer restart cannot break O-AMX.
 pub fn f31(seed: u64) -> Scenario {
     let n = pick(seed, &[4, 7, 5]);
     let mut sc = sized("F31", seed, n);
-    sc.instances = 2;
+    sc.instances = if seed.is_multiple_of(2) { 3 } else { 4 };
+    sc.amx = Some(super::amx::AmxConfig {
+        forger: Some(n - 1),
+        relayer_down: vec![(0, 20_000, 45_000), (1, 35_000, 55_000)],
+        ..super::amx::AmxConfig::default()
+    });
     sc.net_rules = vec![
         NetRule::StallInstance {
             inst: 0,

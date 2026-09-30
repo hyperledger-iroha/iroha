@@ -872,7 +872,7 @@ fn dev_source_template_prefunds_exact_canonical_staking_plans() {
     let manifest = super::super::GenesisSourceTemplate::from_path(&path)
         .unwrap()
         .materialize(
-            super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            &super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
             Some(definition.clone()),
         )
         .unwrap();
@@ -1021,7 +1021,7 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         let manifest = super::super::GenesisSourceTemplate::from_path(root.join(path))
             .unwrap_or_else(|error| panic!("{path}: {error:?}"))
             .materialize(
-                super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+                &super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
                 Some(xor),
             )
             .unwrap_or_else(|error| panic!("{path}: {error:?}"));

@@ -232,7 +232,7 @@ impl ValidatorEpochBoundaryV1 {
 /// Rejects invalid committee size, non-BLS identities, duplicates/order, or invalid proofs.
 pub fn validate_committee(members: &[ValidatorCommitteeMemberV1]) -> Result<(), String> {
     let n = members.len();
-    if n < 4 || n > MAX_VALIDATORS || (n - 1) % 3 != 0 {
+    if !(4..=MAX_VALIDATORS).contains(&n) || !(n - 1).is_multiple_of(3) {
         return Err("native committee must contain exact 3f+1 seats in 4..31".into());
     }
     let mut previous: Option<&[u8]> = None;

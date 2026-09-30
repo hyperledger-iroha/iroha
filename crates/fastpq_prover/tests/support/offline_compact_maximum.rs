@@ -89,7 +89,7 @@ fn maximum_axt_fixture() -> capture::CaptureFixture {
     let cap = VerificationLimits::default().transport.max_wire_bytes;
     let (mut low, mut high) = (1, cap);
     while low < high {
-        let midpoint = low + (high - low + 1) / 2;
+        let midpoint = low + (high - low).div_ceil(2);
         binding.source_receipt_id = "r".repeat(midpoint);
         if artifact_admission_bytes(&fixture, &binding) <= cap {
             low = midpoint;
@@ -285,7 +285,7 @@ fn three_delta_statement() -> FastpqPublicTransferStatementV1 {
 }
 
 /// Called by the existing serial public-producer negative test to avoid Busy races.
-pub(super) fn assert_maximum_context_preflight() {
+pub fn assert_maximum_context_preflight() {
     let fixture = maximum_axt_fixture();
     let limits = VerificationLimits::default();
     let mut proving = ProvingLimits::default();
@@ -384,7 +384,7 @@ fn captured_maximum_ordinary_artifact_verifies_without_reproving() {
         false,
         "maximum-ordinary",
         "FASTPQ_TEST_MAXIMUM_ORDINARY_ARTIFACT",
-        fixture(),
+        &fixture(),
     );
 }
 
@@ -395,6 +395,6 @@ fn captured_maximum_axt_artifact_verifies_without_reproving() {
         true,
         "maximum-axt",
         "FASTPQ_TEST_MAXIMUM_AXT_ARTIFACT",
-        maximum_axt_fixture(),
+        &maximum_axt_fixture(),
     );
 }

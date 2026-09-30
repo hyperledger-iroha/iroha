@@ -285,6 +285,13 @@ node syncs each lane instance alongside `G` and executes a `G` block once its la
 merged tips; lane frames of retired incarnations are kept while any retained `G` block references
 them and pruned with those `G` blocks.
 
+Retirement releases the node's registry owners after stopping the driver and its recovery
+job, including failed store openings that never started a driver. Their original funded
+buffers and exclusive locks are released; outstanding authenticated readers keep their
+ready-store ownership until finished. Historical openings after retirement keep their own
+recovery progress across subsequent lifecycle checks. This owner cleanup does not delete
+certified frames.
+
 ## 5. Routing and the queue
 
 ### 5.1 Routing function

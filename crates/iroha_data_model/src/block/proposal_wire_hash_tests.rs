@@ -282,8 +282,9 @@ fn checked_resultless_comparison_matches_complete_wire_and_ignores_only_result()
 
 #[test]
 fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields() {
+    type ProposalMutation = (&'static str, fn(&mut SignedBlock));
     let proposal = complete_comparison_proposal();
-    let edits: [(&str, fn(&mut SignedBlock)); 8] = [
+    let edits: [ProposalMutation; 8] = [
         ("signatures", |block| block.signatures.clear()),
         ("header", |block| {
             block.payload.header =
@@ -363,6 +364,12 @@ fn checked_resultless_comparison_uses_fixed_flags_independent_of_ambient_layout(
 
 #[test]
 fn checked_resultless_comparison_rejects_archive_cap_in_isolated_process() {
+    struct RestoreCap(u64);
+    impl Drop for RestoreCap {
+        fn drop(&mut self) {
+            norito::core::set_max_archive_len(self.0);
+        }
+    }
     const CHILD: &str = "IROHA_DATA_MODEL_CHECKED_RESULTLESS_CAP_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -381,12 +388,6 @@ fn checked_resultless_comparison_rejects_archive_cap_in_isolated_process() {
         return;
     }
     // No other libtest case runs in this child while changing the process-global ceiling.
-    struct RestoreCap(u64);
-    impl Drop for RestoreCap {
-        fn drop(&mut self) {
-            norito::core::set_max_archive_len(self.0);
-        }
-    }
     let _restore = RestoreCap(norito::core::max_archive_len());
     let small = plain_signed_block();
     let mut larger = small.clone();

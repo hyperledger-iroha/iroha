@@ -77,7 +77,7 @@ mod tests {
     fn hash() -> HashOf<crate::transaction::TransactionEntrypoint> {
         HashOf::from_untyped_unchecked(Hash::new(b"exact-transaction-read-fixture"))
     }
-    fn query(predicate: CompoundPredicate<CommittedTransaction>) -> QueryWithParams {
+    fn query(predicate: &CompoundPredicate<CommittedTransaction>) -> QueryWithParams {
         let query = FindTransactions::new();
         QueryWithParams {
             query: (),
@@ -89,7 +89,7 @@ mod tests {
         }
     }
     fn exact() -> QueryWithParams {
-        query(CompoundPredicate::from_filters(CommittedTxFilters {
+        query(&CompoundPredicate::from_filters(CommittedTxFilters {
             authority_eq: Some(authority(7)),
             entry_eq: Some(hash()),
             ..CommittedTxFilters::default()
@@ -140,7 +140,7 @@ mod tests {
             P::Const(true),
             P::Const(false),
         ] {
-            let query = query(CompoundPredicate::from_committed_tx_predicate(tree));
+            let query = query(&CompoundPredicate::from_committed_tx_predicate(tree));
             assert_eq!(classify(&query), None);
         }
     }
@@ -188,7 +188,7 @@ mod tests {
         .unwrap();
         let decoded = norito::json::from_json::<P>(&canonical).unwrap();
         assert_eq!(
-            classify(&query(CompoundPredicate::from_committed_tx_predicate(
+            classify(&query(&CompoundPredicate::from_committed_tx_predicate(
                 decoded
             ))),
             Some(authority(7))

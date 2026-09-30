@@ -12,7 +12,7 @@
 
 #![cfg_attr(
     not(feature = "dev-tools"),
-    doc = r#"
+    doc = r"
 Transparent batch-replay fixtures are excluded from the normal library API.
 Canonical quantity artifacts use [`offline_compact`]; AXT batches may use
 [`prove_axt_bound_batch`]. The retired normal replay surface is unavailable:
@@ -36,7 +36,7 @@ use fastpq_prover::verify_with_limits;
 ```compile_fail
 use fastpq_prover::preflight_native_v1_gpu_backend;
 ```
-"#
+"
 )]
 #![deny(unsafe_code)]
 #![deny(missing_docs)]

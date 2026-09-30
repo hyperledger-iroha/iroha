@@ -23,7 +23,8 @@ pub const MAX_DA_PARITY_SHARDS: u16 = 16;
 /// Protocol-wide upper bound for total shards in one RS16 stripe.
 pub const MAX_DA_STRIPE_WIDTH: u16 = MAX_DA_DATA_SHARDS + MAX_DA_PARITY_SHARDS;
 /// Protocol-wide upper bound for one canonical consensus payload.
-pub const MAX_DA_PAYLOAD_SIZE_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_DA_PAYLOAD_SIZE_BYTES: u64 = MAX_DA_PAYLOAD_SIZE as u64;
+const MAX_DA_PAYLOAD_SIZE: usize = 16 * 1024 * 1024;
 /// Protocol-wide upper bound for all encoded shards of one maximum payload.
 pub const MAX_DA_ENCODED_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
 /// Protocol-wide upper bound for encoded chunks committed by one manifest.
@@ -159,7 +160,7 @@ impl DataAvailabilityLayout {
     // Shared checked codec geometry follows explicit protocol-cap validation above.
     fn codec_shape(&self, payload_bytes: u64) -> Result<CompactShape, LayoutError> {
         CompactShape::new(
-            payload_bytes as usize,
+            usize::try_from(payload_bytes).map_err(|_| LayoutError::InvalidLayout)?,
             self.data_shards as usize,
             self.parity_shards as usize,
             self.chunk_size_bytes as usize,

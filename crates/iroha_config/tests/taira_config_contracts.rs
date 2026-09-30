@@ -231,9 +231,9 @@ fn nexus_routing_and_governance_collection_defaults_match_config_defaults() {
             .read_and_complete::<T>()
             .expect("read Nexus descriptor directly")
     }
-    fn read_json<T: norito::json::JsonDeserialize>(value: toml::Value) -> T {
+    fn read_json<T: norito::json::JsonDeserialize>(value: &toml::Value) -> T {
         norito::json::from_value(
-            iroha_config::base::toml::value_to_json(&value).expect("convert Nexus TOML"),
+            iroha_config::base::toml::value_to_json(value).expect("convert Nexus TOML"),
         )
         .expect("read Nexus descriptor through collection JSON decoding")
     }
@@ -260,7 +260,7 @@ fn nexus_routing_and_governance_collection_defaults_match_config_defaults() {
             policy = policy.write("rules", toml::Value::Array(vec![toml::Value::Table(rule)]));
         }
         let direct_policy = read::<RoutingPolicy>(policy.clone());
-        let json_policy = read_json::<RoutingPolicy>(toml::Value::Table(policy));
+        let json_policy = read_json::<RoutingPolicy>(&toml::Value::Table(policy));
         for policy in [direct_policy, json_policy] {
             assert_eq!(policy.default_lane, Some(0));
             assert_eq!(policy.rules.len(), usize::from(include_rule));
@@ -287,7 +287,7 @@ fn nexus_routing_and_governance_collection_defaults_match_config_defaults() {
             BTreeMap::new()
         };
         let direct_module = read::<GovernanceModule>(module.clone());
-        let mut modules = read_json::<BTreeMap<String, GovernanceModule>>(toml::Value::Table(
+        let mut modules = read_json::<BTreeMap<String, GovernanceModule>>(&toml::Value::Table(
             Table::new().write("parliament", module),
         ));
         for module in [

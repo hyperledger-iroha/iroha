@@ -127,6 +127,7 @@ pub struct KagemushaResponseEvidenceArchiveV1 {
 }
 
 impl KagemushaResponseEvidenceArchiveV1 {
+    #[cfg(test)]
     pub(super) fn create_new(
         path: &Path,
         lane: &KagemushaLaneIdV1,

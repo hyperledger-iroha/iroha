@@ -64,7 +64,10 @@ async fn operator_profile_exposes_status_only() {
 #[tokio::test]
 async fn extended_profile_exposes_prometheus_metrics() {
     let telemetry = telemetry_for(TelemetryProfile::Extended, |metrics| {
-        metrics.sumeragi_new_view_publish_total.inc();
+        metrics
+            .sumeragi_view_changes_total
+            .with_label_values(&["global"])
+            .inc();
     })
     .await;
     let status_resp = handle_status(
@@ -93,7 +96,10 @@ async fn developer_profile_hides_prometheus_metrics() {
 #[tokio::test]
 async fn full_profile_combines_all_capabilities() {
     let telemetry = telemetry_for(TelemetryProfile::Full, |metrics| {
-        metrics.sumeragi_new_view_publish_total.inc();
+        metrics
+            .sumeragi_view_changes_total
+            .with_label_values(&["global"])
+            .inc();
     })
     .await;
     let status = handle_status(
@@ -105,7 +111,7 @@ async fn full_profile_combines_all_capabilities() {
     .unwrap();
     assert_eq!(status.status(), StatusCode::OK);
     let prometheus = handle_metrics(&telemetry).await.unwrap();
-    assert!(prometheus.contains("sumeragi_new_view_publish_total"));
+    assert!(prometheus.contains("sumeragi_view_changes_total{lane=\"global\"} 1"));
 }
 
 #[path = "../src/build_identity_test_fixture.rs"]

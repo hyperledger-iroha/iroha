@@ -307,6 +307,7 @@ impl SorafsStreamTokenObserverConfig {
     }
 }
 
+#[derive(Clone, Copy)]
 struct AuthorityFields<'a> {
     service_id: Option<&'a str>,
     administrator_id: Option<&'a str>,

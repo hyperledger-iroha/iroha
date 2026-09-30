@@ -141,10 +141,6 @@ impl Binding {
         incoming_geometry: [u8; 32],
         outgoing_geometry: [u8; 32],
     ) -> Result<Self, Error> {
-        if local == remote {
-            return Err(Error::Format);
-        }
-        let _layout = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
         fn direction(
             network: &iroha_data_model::NetworkId,
             sender: &PeerId,
@@ -166,6 +162,10 @@ impl Binding {
             .map_err(Error::NoritoCodec)?;
             Ok(iroha_crypto::Hash::new(&bytes).into())
         }
+        if local == remote {
+            return Err(Error::Format);
+        }
+        let _layout = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
         Ok(Self {
             incoming: direction(
                 network,

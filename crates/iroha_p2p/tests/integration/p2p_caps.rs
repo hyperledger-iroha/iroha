@@ -290,13 +290,13 @@ async fn execution_transport_carries_large_connect_and_gossip_frames_without_wid
         assert_eq!(post.peer_id, *peer1.id());
         assert_eq!(post.priority, Priority::Low);
         sender.post(post);
-        let received = tokio::time::timeout(Duration::from_secs(10), inbox.recv())
+        let delivered = tokio::time::timeout(Duration::from_secs(10), inbox.recv())
             .await
             .expect("large frame crosses authenticated P2P transport")
             .expect("subscriber receives complete frame");
-        assert_eq!(received.payload.topic, topic);
+        assert_eq!(delivered.payload.topic, topic);
         assert!(
-            received.payload.data == data,
+            delivered.payload.data == data,
             "subscriber receives the exact complete blob"
         );
     }

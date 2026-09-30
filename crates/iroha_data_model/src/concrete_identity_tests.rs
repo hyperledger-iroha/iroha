@@ -250,10 +250,10 @@ fn concrete_header_inputs_match_capture() {
             .expect("decode captured context");
     let header = header();
     assert_eq!(header, context.curr_block);
-    assert_fixed_confidential_features(header);
+    assert_fixed_confidential_features(&header);
 }
 
-fn assert_fixed_confidential_features(header: BlockHeader) {
+fn assert_fixed_confidential_features(header: &BlockHeader) {
     let digest = header
         .confidential_features()
         .expect("fixed capture digest");
@@ -288,7 +288,7 @@ fn stream_block() -> crate::block::SignedBlock {
         None,
     )
     .expect("build signed genesis proposal");
-    assert_fixed_confidential_features(proposal.header());
+    assert_fixed_confidential_features(&proposal.header());
     let mut builder = BlockBuilder::new(proposal.header());
     builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
     builder.push_transaction(transaction);
@@ -323,7 +323,7 @@ fn concrete_stream_block_header_and_signature_match_capture() {
             .expect("decode captured block message");
     let block = stream_block();
     assert_eq!(block.header(), captured.0.header());
-    assert_fixed_confidential_features(block.header());
+    assert_fixed_confidential_features(&block.header());
     assert_eq!(
         block.signatures().collect::<Vec<_>>(),
         captured.0.signatures().collect::<Vec<_>>(),

@@ -27,6 +27,10 @@ use tokio::runtime::Runtime;
 #[path = "sumeragi_lanes_soak.rs"]
 mod soak;
 
+/// Independent native committees, stalled-lane isolation and retained-history restart.
+#[path = "sumeragi_lanes_disjoint.rs"]
+mod disjoint;
+
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const LANE: LaneId = LaneId::new(2);
 

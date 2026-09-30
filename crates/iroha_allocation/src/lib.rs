@@ -315,6 +315,9 @@ impl AllocationBudget {
     /// Admit an original movable scope before acquiring any physical writer.
     /// Its control storage comes from this same finite pool; refusal creates no
     /// scope and does not authorize replacement allocation or a different pool.
+    ///
+    /// # Errors
+    /// Refuses when the original pool cannot admit the exact scope control allocation.
     pub fn try_owned_refund_scope(&self) -> Result<OwnedAllocationScope, AllocationRefusal> {
         let layout = OwnedAllocationScope::allocation_layout();
         let mut reservation = self.try_reserve(layout)?;
@@ -398,6 +401,9 @@ impl AllocationBudget {
     }
 
     /// Prepay one exact allocation layout without allocating its payload.
+    ///
+    /// # Errors
+    /// Refuses demands above the policy limit or unavailable original-pool capacity.
     pub fn try_reserve(&self, layout: Layout) -> Result<AllocationReservation, AllocationRefusal> {
         self.try_reserve_layouts([layout])
     }
@@ -407,6 +413,9 @@ impl AllocationBudget {
     /// This method retains no collection of layouts. Their checked sum must fit
     /// the finite policy limit. Refusal changes no credits; a temporary capacity
     /// refusal includes the original pool's pre-probe release observation.
+    ///
+    /// # Errors
+    /// Refuses a sum that overflows `usize`, exceeds the policy limit, or lacks pool capacity.
     pub fn try_reserve_layouts(
         &self,
         layouts: impl IntoIterator<Item = Layout>,
@@ -427,6 +436,9 @@ impl AllocationBudget {
     /// `Layout`. Each actual allocation still splits its exact layout from the
     /// returned original reservation. This method does not infer nested storage
     /// or validate a caller's payload-cloning policy.
+    ///
+    /// # Errors
+    /// Refuses demands above the policy limit or unavailable original-pool capacity.
     pub fn try_reserve_bytes(
         &self,
         bytes: usize,
@@ -569,6 +581,9 @@ impl AllocationReservation {
     /// No pool CAS, allocation, refund or notification occurs. Both remainders
     /// retain the same original pool and together own exactly the previous sum.
     /// A refused partition leaves the original owner unchanged.
+    ///
+    /// # Errors
+    /// Returns the requested and remaining byte counts when the partition exceeds the remainder.
     pub fn try_partition_bytes(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
         if bytes > self.remaining {
             return Err(InsufficientReservation {
@@ -586,6 +601,9 @@ impl AllocationReservation {
     /// Move one exact layout's credits into an independent allocation owner.
     /// No pool acquisition or payload allocation occurs here. Refusal preserves
     /// the complete original reservation for a corrected split or abandonment.
+    ///
+    /// # Errors
+    /// Returns the requested and remaining byte counts when the layout exceeds the remainder.
     pub fn try_split(
         &mut self,
         layout: Layout,

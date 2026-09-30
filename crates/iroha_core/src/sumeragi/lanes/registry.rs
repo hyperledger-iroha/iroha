@@ -13,7 +13,7 @@ use std::{
 };
 
 use iroha_allocation::AllocationBudget;
-use iroha_data_model::NetworkId;
+use iroha_data_model::{NetworkId, sumeragi_lanes::SumeragiLaneState};
 use iroha_model_base::topology::LaneId;
 use iroha_sumeragi::{crypto::AttestationVerifier, types::Hash32};
 use parking_lot::Mutex;
@@ -55,9 +55,11 @@ pub trait LaneStoreAuthorities: Send + Sync {
     ) -> io::Result<Option<LaneStoreAuthority>>;
 }
 
+// The bool records a lane-runner opening. A historical reopen after retirement is retained
+// independently, so later lifecycle checks cannot restart its authenticated recovery prefix.
 enum StoreSlot {
-    Opening(LaneStoreOpen),
-    Ready(Arc<FileLaneBlockStore>),
+    Opening(LaneStoreOpen, bool),
+    Ready(Arc<FileLaneBlockStore>, bool),
 }
 
 /// The exclusive lane block store owners of one node.
@@ -134,14 +136,34 @@ impl LaneStores {
         lane: LaneId,
         incarnation: &[u8; 32],
     ) -> io::Result<Arc<FileLaneBlockStore>> {
+        self.store_with_runtime_owner(lane, incarnation, false)
+    }
+
+    /// Recover a store for the lane runner, retaining its lifecycle ownership even if the
+    /// original opening is refused. Historical readers use `store` without this marker.
+    pub(super) fn runtime_store(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+    ) -> io::Result<Arc<FileLaneBlockStore>> {
+        self.store_with_runtime_owner(lane, incarnation, true)
+    }
+
+    fn store_with_runtime_owner(
+        &self,
+        lane: LaneId,
+        incarnation: &[u8; 32],
+        runtime_owner: bool,
+    ) -> io::Result<Arc<FileLaneBlockStore>> {
         let key = (lane, *incarnation);
         let mut stores = self.stores.lock();
-        if let Some(StoreSlot::Ready(store)) = stores.get(&key) {
+        if let Some(StoreSlot::Ready(store, owned)) = stores.get_mut(&key) {
+            *owned |= runtime_owner;
             return Ok(Arc::clone(store));
         }
-        let opening = match stores.remove(&key) {
-            Some(StoreSlot::Opening(opening)) => opening,
-            Some(StoreSlot::Ready(_)) => unreachable!("ready owner returned while lock held"),
+        let (opening, runtime_owner) = match stores.remove(&key) {
+            Some(StoreSlot::Opening(opening, owned)) => (opening, owned || runtime_owner),
+            Some(StoreSlot::Ready(..)) => unreachable!("ready owner returned while lock held"),
             None => {
                 let instance = self.instance(lane, incarnation);
                 let authority = self
@@ -159,24 +181,25 @@ impl LaneStores {
                         "historical lane schedule belongs to another incarnation",
                     ));
                 }
-                FileLaneBlockStore::begin_open(
+                let opening = FileLaneBlockStore::begin_open(
                     &self.root,
                     &instance,
                     Arc::clone(&self.crypto),
                     self.budget.clone(),
                     authority.schedule,
                     authority.verifier,
-                )?
+                )?;
+                (opening, runtime_owner)
             }
         };
         match opening.complete() {
             Ok(store) => {
                 let store = Arc::new(store);
-                stores.insert(key, StoreSlot::Ready(Arc::clone(&store)));
+                stores.insert(key, StoreSlot::Ready(Arc::clone(&store), runtime_owner));
                 Ok(store)
             }
             Err((opening, error)) => {
-                stores.insert(key, StoreSlot::Opening(opening));
+                stores.insert(key, StoreSlot::Opening(opening, runtime_owner));
                 Err(error)
             }
         }
@@ -186,6 +209,23 @@ impl LaneStores {
     /// Frames remain on disk for replay. Outstanding ready-store Arcs retain their exclusive lock.
     pub fn release(&self, lane: LaneId, incarnation: &[u8; 32]) {
         self.stores.lock().remove(&(lane, *incarnation));
+    }
+
+    /// Release every runtime owner absent from the applied lane set, including openings
+    /// that never reached a running driver. Call after stopping retired drivers and recovery
+    /// jobs. Historical frames remain available to authenticated global replay; outstanding
+    /// readers retain their exclusive ready-store owner until their final Arc is dropped.
+    /// Subsequent historical openings have no runtime marker, so repeated reconciliation
+    /// cannot discard their retained recovery progress or original allocation custody.
+    pub(super) fn release_retired(&self, lanes: &SumeragiLaneState) {
+        self.stores.lock().retain(|(lane, incarnation), slot| {
+            matches!(
+                slot,
+                StoreSlot::Opening(_, false) | StoreSlot::Ready(_, false)
+            ) || lanes
+                .lane(*lane)
+                .is_some_and(|record| record.incarnation == *incarnation)
+        });
     }
 }
 

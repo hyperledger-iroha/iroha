@@ -87,7 +87,7 @@ impl Fixture {
             },
             custody_anchor: self.model.control().map(|_| SignerCustodyAnchorV1 {
                 height: height - 1,
-                block_hash: [height as u8; 32],
+                block_hash: [u8::try_from(height).unwrap(); 32],
                 state_digest: self.model.control_head().digest,
             }),
             floor: None,

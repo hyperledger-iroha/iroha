@@ -244,6 +244,7 @@ impl PrivateJournal {
     pub(crate) fn observed_version(&self) -> JournalFileVersion {
         self.observed_version
     }
+    /// The fully replayed durable prefix of the held production journal.
     pub(crate) fn recovery_prefix(
         &self,
     ) -> Result<super::KagemushaRecoveryJournalPrefixV1, PrivateJournalError> {

@@ -80,7 +80,7 @@ fn det_a1_flagged_block_commits_with_attestations() {
 
     // (b) The proxy tail forms the flagged CommitQC from attested votes.
     let mut h = H::new(4, pick::proxy_tail(0));
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     prop(&mut h, 0, &b, None);
     h.exec_all();
     let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
@@ -116,7 +116,7 @@ fn det_a1_flagged_block_commits_with_attestations() {
 #[test]
 fn det_a2_unattested_commit_votes_not_counted() {
     let mut h = H::new(4, pick::proxy_tail(0));
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
     qc_msg(&mut h, pqc);
@@ -171,7 +171,7 @@ fn det_a2_unattested_commit_votes_not_counted() {
 #[test]
 fn det_a3_attestation_binds_result() {
     let mut h = H::new(4, pick::proxy_tail(0));
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let value = (h.bh(&b), result_of(&b));
     let other = (value.0, Hash32([0x5a; 32]));
@@ -193,7 +193,7 @@ fn det_a3_attestation_binds_result() {
 
     // A CommitQC for R whose attestations were made for R′ does not commit.
     let mut h = H::new(4, pick::set_b(0));
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let value = (h.bh(&b), result_of(&b));
     let signers = h.others(3, &[]);
@@ -220,7 +220,7 @@ fn det_a3_attestation_binds_result() {
 #[test]
 fn det_a4_commitqc_attestations_checked_core() {
     let mut h = H::new(4, pick::set_b(0));
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let genuine = h.qc_q(VoteKind::Commit, 0, &b);
     let other_height = {
@@ -327,7 +327,7 @@ fn det_a5_no_authority_abstains_from_commit_only() {
     let mut h = H::new(4, pick::set_a(0));
     h.attestor = crate::testing::FakeAttestor::without_authority([h.key_at(h.me)]);
     h.restart();
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     prop(&mut h, 0, &b, None);
     let out = h.exec_all();
     assert_eq!(
@@ -358,7 +358,7 @@ fn det_a5_no_authority_abstains_from_commit_only() {
     let mut h = H::new(4, pick::proxy_tail(0));
     h.attestor = crate::testing::FakeAttestor::forging();
     h.restart();
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     h.bodies.insert(h.bh(&b), b.clone());
     let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
     let out = qc_msg(&mut h, pqc);
@@ -399,7 +399,7 @@ fn det_a9_pending_attestor_commits_after_execution() {
         let executed = crate::testing::Executed::new();
         h.attestor = crate::testing::FakeAttestor::new().after_execution(executed.clone());
         h.restart();
-        let b = h.flagged(h.block(0, b"mint"));
+        let b = h.flagged(&h.block(0, b"mint"));
         prop(&mut h, 0, &b, None);
         assert_eq!(h.pending_exec.len(), 1, "B is executing");
         let pqc = h.qc_q(VoteKind::Prepare, 0, &b);
@@ -440,7 +440,7 @@ fn det_a9_pending_attestor_commits_after_execution() {
 #[test]
 fn det_a6_flag_is_signed() {
     let mut h = H::new(4, pick::set_b(0));
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     let genuine = h.qc_q(VoteKind::Commit, 0, &b);
     // Well-formed as an unflagged certificate: without the witness too, only the signed flag
     // can reject it (a kept witness is refused as `AttestationShape` before the signature).
@@ -512,7 +512,7 @@ fn det_a7_empty_proposals_are_rejected_at_every_view() {
 #[test]
 fn det_a8_restart_resends_identical_attested_votes() {
     let mut h = H::new(4, pick::set_a(0));
-    let b = h.flagged(h.block(0, b"mint"));
+    let b = h.flagged(&h.block(0, b"mint"));
     prop(&mut h, 0, &b, None);
     let out = h.exec_all();
     let prepare = votes_of(&out, VoteKind::Prepare)[0].clone();

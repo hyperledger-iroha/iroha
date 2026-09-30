@@ -43,7 +43,9 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
     let original = frame(&chain, 1);
     let certificate = original.commit_certificate().unwrap();
     let mut result = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
-    result.execution.ordinary_writes_root = Hash::new(b"unsigned genesis result replacement");
+    // Preserve the authenticated lane-write opening's structural consistency. This
+    // attack changes a well-formed execution result which only the successor can bind.
+    result.execution.world_state_root = Hash::new(b"unsigned genesis result replacement");
     let changed = Arc::new(original.as_ref().clone().with_commit_certificate(Some(
         CommitCertificate::from_untrusted_parts(
             Vec::new(),

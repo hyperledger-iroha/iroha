@@ -39,6 +39,46 @@ const LOCK_NAME: &str = ".custody.lock";
 // Disk-corruption/allocation bound, not a consensus parameter.
 const MAX_FRAME_FILE_BYTES: usize = 80 * 1024 * 1024;
 
+/// Read-only inspection of one original committed lane frame under independent authority.
+/// Uses the same canonical decoder, certificate verification and signed RS16 restoration as
+/// store recovery, without acquiring a writer lock, creating files or changing a store tip.
+/// Keep this job across local resource refusals to retain its original allocation custody.
+pub struct LaneFrameRead {
+    budget: AllocationBudget,
+    job: RestoreFrame,
+}
+
+impl LaneFrameRead {
+    /// Begin inspecting an independently selected path and native height. The historical
+    /// schedule and verifier must come from authenticated authority, never the inspected frame.
+    ///
+    /// # Errors
+    /// I/O, a non-regular artifact or an oversized frame.
+    pub fn open(
+        path: &Path,
+        height: u64,
+        crypto: SharedCrypto,
+        budget: AllocationBudget,
+        schedule: Arc<dyn AvailabilitySchedule>,
+        verifier: Arc<dyn AttestationVerifier + Send + Sync>,
+    ) -> io::Result<Self> {
+        let job = RestoreFrame::open(path, height, budget.clone(), schedule, crypto, verifier)?;
+        Ok(Self { budget, job })
+    }
+
+    /// Authenticate the original certificate and restore complete available payload custody.
+    /// Returned clones share the already admitted owners; no uncharged bulk copy is made.
+    /// A successful job is consumed and cannot be polled again.
+    ///
+    /// # Errors
+    /// Invalid bytes, wrong historical authority, missing artifacts, I/O or original-pool
+    /// refusal. `WouldBlock` retains the exact pending read and may be retried.
+    pub fn poll(&mut self) -> io::Result<(AvailableBody, Qc)> {
+        let prepared = self.job.poll(&self.budget)?;
+        Ok((prepared.body().clone(), prepared.commit_qc().clone()))
+    }
+}
+
 struct PendingRead {
     height: u64,
     job: RestoreFrame,

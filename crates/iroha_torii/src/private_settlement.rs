@@ -623,6 +623,42 @@ fn error_response(status: StatusCode, code: &'static str) -> Response {
     response
 }
 
+/// Capture all replicated evidence from the same original immutable publication.
+#[cfg(feature = "test-network-private-settlement-route-control")]
+fn private_settlement_test_network_ledger_evidence_at_view(
+    view: &iroha_core::state::StateView<'_>,
+) -> Result<
+    (
+        u64,
+        iroha_core::state::PrivateSettlementLedgerEvidenceV1,
+        iroha_core::state::PrivateSettlementReplicatedStagedLockEvidenceV1,
+    ),
+    Response,
+> {
+    let height = u64::try_from(view.height()).map_err(|_| {
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private_settlement_height_unavailable",
+        )
+    })?;
+    active_config_at_view(height, view)?;
+    let unavailable = |_| {
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private_settlement_state_evidence_unavailable",
+        )
+    };
+    let ledger = view
+        .world()
+        .private_settlement_ledger_evidence_v1()
+        .map_err(unavailable)?;
+    let replicated_staged = view
+        .world()
+        .private_settlement_replicated_staged_lock_evidence_v1()
+        .map_err(unavailable)?;
+    Ok((height, ledger, replicated_staged))
+}
+
 /// Return a commitment to public APS maps and staged locks on this exact
 /// validator. This is a non-shipping release-evidence diagnostic, not a
 /// production privacy API.
@@ -638,41 +674,14 @@ pub(crate) async fn handler_test_network_state_commitment(
             "private_settlement_local_validator_required",
         );
     }
-    let height = match authoritative_height(&app) {
-        Ok(height) => height,
-        Err(response) => return response,
-    };
-    if active_config(&app, height).is_err() {
-        return private_settlement_unavailable();
-    }
-    let ledger = match app
-        .state
-        .view()
-        .world()
-        .private_settlement_ledger_evidence_v1()
-    {
-        Ok(evidence) => evidence,
-        Err(_) => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "private_settlement_state_evidence_unavailable",
-            );
-        }
-    };
-    let replicated_staged = match app
-        .state
-        .view()
-        .world()
-        .private_settlement_replicated_staged_lock_evidence_v1()
-    {
-        Ok(evidence) => evidence,
-        Err(_) => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "private_settlement_state_evidence_unavailable",
-            );
-        }
-    };
+    let (height, ledger, replicated_staged) =
+        match private_settlement_test_network_ledger_evidence_at_view(&app.state.view()) {
+            Ok(evidence) => evidence,
+            Err(response) => return response,
+        };
+    // Local reservations have their own atomic owner and retire asynchronously after
+    // finality. Release the World view before acquiring that owner; the observer checks
+    // monotonic local cleanup separately from the indivisible replicated ledger cut.
     let staged = match runtime
         .store()
         .and_then(|store| store.staged_lock_evidence_v1().map_err(map_store_error))
@@ -680,12 +689,6 @@ pub(crate) async fn handler_test_network_state_commitment(
         Ok(evidence) => evidence,
         Err(response) => return response,
     };
-    if authoritative_height(&app).ok() != Some(height) {
-        return error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private_settlement_state_evidence_retry",
-        );
-    }
     let commitment = Hash::new_from_chunks(&[
         PRIVATE_SETTLEMENT_TEST_NETWORK_STATE_EVIDENCE_DOMAIN_V1,
         &height.to_le_bytes(),
@@ -822,15 +825,14 @@ fn active_config(
     app: &SharedAppState,
     height: u64,
 ) -> Result<iroha_config::parameters::actual::NexusAtomicPrivateSettlement, Response> {
-    active_config_at_view(app, height, &app.state.view())
+    active_config_at_view(height, &app.state.view())
 }
 
 fn active_config_at_view(
-    app: &SharedAppState,
     height: u64,
     state: &iroha_core::state::StateView<'_>,
 ) -> Result<iroha_config::parameters::actual::NexusAtomicPrivateSettlement, Response> {
-    let config = app.state.nexus_snapshot().atomic_private_settlement;
+    let config = state.nexus().atomic_private_settlement.clone();
     if !config.enabled
         || config
             .activation_height
@@ -2054,7 +2056,7 @@ pub(crate) async fn handler_bundle_receipt(
             );
         }
     };
-    if active_config_at_view(&app, height, &view).is_err() {
+    if active_config_at_view(height, &view).is_err() {
         return private_settlement_unavailable();
     }
     let world = view.world();
@@ -2160,13 +2162,9 @@ mod tests {
     }
 
     #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn activated_public_receipt_route_returns_pending_without_sidecar_runtime() {
-        use iroha_core::{
-            query::store::LiveQueryStore,
-            smartcontracts::Execute,
-            state::{State as CoreState, World},
-        };
+    fn activated_private_settlement_chain_for_test()
+    -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+        use iroha_core::state::World;
         use iroha_data_model::{
             isi::privacy::{
                 RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1,
@@ -2177,7 +2175,6 @@ mod tests {
             },
         };
         use std::num::NonZeroU64;
-        use tower::ServiceExt as _;
 
         let mut config = iroha_config::parameters::actual::Nexus::default();
         config.atomic_private_settlement.enabled = true;
@@ -2212,13 +2209,21 @@ mod tests {
         let mut chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(chain_config)
             .expect("execute original privacy activation genesis");
         chain.commit_at(2, Vec::new());
+        chain
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn activated_public_receipt_route_returns_pending_without_sidecar_runtime() {
+        use tower::ServiceExt as _;
+        let chain = activated_private_settlement_chain_for_test();
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let inner = Arc::get_mut(&mut app).expect("unique test app");
         inner.state = chain.state().clone();
         inner.kura = chain.kura().clone();
         let view = app.state.view();
         assert_eq!(view.height(), 2);
-        active_config_at_view(&app, 2, &view).expect("real active capability gate");
+        active_config_at_view(2, &view).expect("real active capability gate");
         let bundle_id = Hash::new(b"identifier without local sidecars or terminal records");
         assert!(
             view.world()
@@ -2261,6 +2266,42 @@ mod tests {
         );
         let json: norito::json::Value = norito::json::from_slice(&bytes).expect("JSON");
         assert_eq!(json["value"].as_object().expect("pending value").len(), 1);
+    }
+
+    #[cfg(all(
+        feature = "app_api",
+        feature = "test-network-private-settlement-route-control"
+    ))]
+    #[test]
+    fn state_evidence_retains_one_committed_view_across_publication() {
+        let mut chain = activated_private_settlement_chain_for_test();
+        let state = Arc::clone(chain.state());
+        let captured = state.view();
+        let original = private_settlement_test_network_ledger_evidence_at_view(&captured)
+            .expect("original active evidence cut");
+        assert_eq!(original.0, 2);
+        chain.commit_at(3, Vec::new());
+        assert_eq!(
+            private_settlement_test_network_ledger_evidence_at_view(&captured).unwrap(),
+            original,
+            "a later publication cannot mix the retained height, ledger and replicated locks"
+        );
+        let mut current = state.view();
+        assert_eq!(
+            private_settlement_test_network_ledger_evidence_at_view(&current)
+                .unwrap()
+                .0,
+            3
+        );
+        assert!(
+            active_config_at_view(2, &current).is_err(),
+            "a height from another cut is rejected"
+        );
+        current.nexus.atomic_private_settlement.enabled = false;
+        assert!(
+            private_settlement_test_network_ledger_evidence_at_view(&current).is_err(),
+            "activation must use the supplied view's policy"
+        );
     }
 
     #[cfg(feature = "app_api")]

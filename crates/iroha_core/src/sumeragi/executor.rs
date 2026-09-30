@@ -2246,8 +2246,7 @@ mod tests {
     #[test]
     fn empty_and_encoded_zero_transaction_payloads_are_invalid_without_state_work() {
         use iroha_sumeragi::{
-            availability::{AuthoringError, AvailabilityError},
-            preimage::payload_hash,
+            availability::PayloadBytes, message::ByteAdmissionError, preimage::payload_hash,
         };
         use std::collections::BTreeSet;
 
@@ -2255,22 +2254,12 @@ mod tests {
             let original = publication_tests::proposal(chain, worker);
             let state_height = worker.state.view().height();
             let before = worker.state.ivm_execution_budget().reserved_bytes();
-            let mut empty_header = original.header().clone();
-            empty_header.payload_len = 0;
-            empty_header.payload_hash =
-                payload_hash(&**worker.context.crypto.as_ref().unwrap(), &[]);
-            let (empty_owner, error) = chain
-                .author_payload_under_test_context(
-                    empty_header,
-                    Vec::new(),
-                    original.source().config(),
-                )
+            let budget = worker.state.ivm_execution_budget();
+            let empty = iroha_allocation::ChargedBuffer::new(0, &budget).unwrap();
+            let (empty_owner, error) = PayloadBytes::from_charged(empty, &budget)
                 .err()
                 .expect("empty payload never obtains available custody");
-            assert!(matches!(
-                error,
-                AuthoringError::Invalid(AvailabilityError::Shape)
-            ));
+            assert!(matches!(error, ByteAdmissionError::Length { length: 0 }));
             assert_eq!(worker.state.view().height(), state_height);
             assert!(worker.live.is_none());
             assert!(worker.finishing.is_none());

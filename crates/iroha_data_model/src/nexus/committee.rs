@@ -228,7 +228,7 @@ impl ValidatorElectionPolicyV1 {
             || self.min_nomination_bond.scale() > self.asset_scale
             || self.max_validators < 4
             || self.max_validators > 31
-            || (self.max_validators - 1) % 3 != 0
+            || !(self.max_validators - 1).is_multiple_of(3)
             || self.epoch_length_blocks < 3
         {
             return Err("invalid frozen validator election policy".to_owned());
@@ -804,7 +804,7 @@ mod tests {
                     pasta: possession(),
                     beacon: GlobalThresholdBeaconPartialSignatureV1 {
                         session_id: credentials.beacon.session_id,
-                        signer_index: index as u16 + 1,
+                        signer_index: u16::try_from(index).unwrap() + 1,
                         signature_share: [1; 48],
                         proof: GlobalThresholdBeaconPartialSignatureProofV1 {
                             x: [1; 96],
@@ -823,8 +823,10 @@ mod tests {
 
     #[test]
     fn frozen_policy_snapshots_signed_fields_and_rejects_non_xor_precision() {
-        let mut parameters = SumeragiNposParameters::default();
-        parameters.min_self_bond = "1000.000000001".parse().unwrap();
+        let mut parameters = SumeragiNposParameters {
+            min_self_bond: "1000.000000001".parse().unwrap(),
+            ..SumeragiNposParameters::default()
+        };
         let frozen = ValidatorElectionPolicyV1::from_npos_parameters(&parameters).unwrap();
         assert_eq!(
             frozen.xor_asset_definition_id,

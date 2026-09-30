@@ -30283,7 +30283,8 @@ where
 /// executable contains exactly the native instruction allowed by that route.
 /// The transaction is never rebuilt or re-signed: its caller authority,
 /// signature-bound payload, and stable hash remain the standard ingress
-/// idempotency identity.
+/// idempotency identity. An exact still-live finalized carrier is acknowledged
+/// only after authenticating its original complete execution; it is not queued again.
 pub(crate) async fn submit_signed_transaction_for_ingress(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -30329,6 +30330,7 @@ async fn admit_signed_transaction_for_ingress(
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
+    let worker_app = app.clone();
     let (prepared, compute_permit) = run_transaction_ingress_compute_job(
         compute_permit,
         "transaction_admission_worker_failed",
@@ -30367,15 +30369,11 @@ async fn admit_signed_transaction_for_ingress(
                         .to_owned(),
                 });
             }
-            Ok(PreparedTransactionIngress::Fresh(accepted_tx))
+            prepare_fresh_transaction_ingress(&worker_app, accepted_tx)
         },
     )
     .await?;
     drop(compute_permit);
-    let accepted_tx = match prepared {
-        PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx,
-    };
-    let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;
     submit_prepared_transaction_ingress(
         &app,
         prepared,
@@ -30389,6 +30387,8 @@ async fn admit_signed_transaction_for_ingress(
 struct PreparedFreshTransactionIngress {
     transaction: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: RoutingPlan,
+    /// Established against an immutable original State history cut in the physical worker.
+    committed_replay: bool,
 }
 
 fn prepare_fresh_transaction_ingress(
@@ -30400,9 +30400,15 @@ fn prepare_fresh_transaction_ingress(
         .route_plan_with_state(&transaction, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(app, error))?;
     require_current_transaction_route(&routing_plan)?;
-    if !app
-        .queue
-        .contains_exact_pending_input(&transaction, &app.state)
+    let committed_replay = !app.queue.is_expired(&transaction)
+        && ordinary_transaction_ingress::contains_exact_committed_input(
+            &app.state,
+            transaction.entrypoint(),
+        )?;
+    if !committed_replay
+        && !app
+            .queue
+            .contains_exact_pending_input(&transaction, &app.state)
     {
         routing::reject_ingress_if_queue_capacity_saturated(
             app.queue.as_ref(),
@@ -30413,6 +30419,7 @@ fn prepare_fresh_transaction_ingress(
     Ok(PreparedFreshTransactionIngress {
         transaction,
         routing_plan,
+        committed_replay,
     })
 }
 
@@ -30426,20 +30433,24 @@ async fn submit_prepared_transaction_ingress(
     let PreparedFreshTransactionIngress {
         transaction,
         routing_plan,
+        committed_replay,
     } = prepared;
 
     require_current_transaction_route(&routing_plan)?;
     ordinary_transaction_ingress::authenticate(app, transaction.entrypoint(), &routing_plan)
         .map_err(|message| Error::Query(iroha_data_model::ValidationFail::NotPermitted(message)))?;
-    if app
-        .queue
-        .contains_exact_pending_input(&transaction, &app.state)
+    if (committed_replay && !app.queue.is_expired(&transaction))
+        || app
+            .queue
+            .contains_exact_pending_input(&transaction, &app.state)
     {
+        let route =
+            ordinary_transaction_ingress::validate_retry_route(app, &transaction, &routing_plan)?;
         return Ok(transaction_submission_response(
             app,
             transaction.hash_as_entrypoint(),
             signed_transaction_hash_for_entrypoint(transaction.entrypoint()),
-            routing_plan.coordinator_route(),
+            route,
             "local",
             minimal_response,
             format,
@@ -30489,20 +30500,17 @@ async fn handler_post_transaction_entrypoint(
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
+    let worker_app = app.clone();
     let (prepared, compute_permit) = run_transaction_ingress_compute_job(
         compute_permit,
         "transaction_entrypoint_admission_worker_failed",
         move || {
             routing::accept_transaction_for_ingress(state, transaction, &telemetry)
-                .map(PreparedTransactionIngress::Fresh)
+                .and_then(|accepted| prepare_fresh_transaction_ingress(&worker_app, accepted))
         },
     )
     .await?;
     drop(compute_permit);
-    let accepted_tx = match prepared {
-        PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx,
-    };
-    let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;
     submit_prepared_transaction_ingress(
         &app,
         prepared,
