@@ -21,7 +21,10 @@ public struct KagemushaAppEnrollmentPreparationBindingV1: Sendable {
       throw KagemushaAppEnrollmentPreparationErrorV1.invalidBinding
     }
     switch platformClass {
-    case .appleAppAttest:
+    case .appleAppAttest, .androidOEMService, .appleOEMService,
+      .dedicatedSecureElement, .otherQualified:
+      // Qualified hardware selects its authenticated operation-1 credential
+      // before preparation; the ID is SHA256 of that exact P-256 SEC1 point.
       guard attestedKeyID.contains(where: { $0 != 0 }) else {
         throw KagemushaAppEnrollmentPreparationErrorV1.invalidBinding
       }
@@ -30,8 +33,6 @@ public struct KagemushaAppEnrollmentPreparationBindingV1: Sendable {
       guard attestedKeyID.allSatisfy({ $0 == 0 }) else {
         throw KagemushaAppEnrollmentPreparationErrorV1.invalidBinding
       }
-    default:
-      throw KagemushaAppEnrollmentPreparationErrorV1.invalidBinding
     }
     self.platformClass = platformClass
     self.clientNonce = Data(clientNonce)

@@ -1,186 +1,66 @@
-# MOCHI Desktop Bundle
+# Mochi native developer bundle
 
-This directory contains a portable build of the MOCHI desktop supervisor for
-local Hyperledger Iroha networks. The layout is intentionally simple so it can
-be unpacked anywhere and checked into reproducible build artefacts:
+The bundle contains matching native executables for the desktop, developer CLI
+and four-validator runtime:
 
-```
-bin/mochi              # egui desktop executable
-bin/kagami             # bundled kagami helper for genesis generation
-config/sample.toml     # starter configuration and comments
-docs/README.md         # this guide
-LICENSE                # workspace licence
-manifest.json          # deterministic file manifest with SHA-256 hashes
-```
-
-## Running the desktop shell
-
-1. Install the `iroha3d` binary somewhere in your `PATH`.
-   MOCHI supervises this executable instead of embedding the node itself.
-   The bundle now includes a matching `kagami` binary under `bin/` so genesis
-   generation works out of the box. If you store the binaries elsewhere, point
-   the supervisor at them with the `MOCHI_IROHAD`/`MOCHI_KAGAMI`
-   environment variables, command-line overrides (e.g., `./bin/mochi --kagami
-   /path/to/kagami --chain-id sora-devnet`), or the `binaries`/`supervisor`
-   sections in `config/local.toml`. When running from the source workspace you
-   can also pass `--build-binaries` (or set `MOCHI_BUILD_BINARIES=true`) to let
-   MOCHI invoke `cargo build` automatically when binaries are missing. Bundled
-   configs can persist the same toggle via `supervisor.build_binaries = true`.
-2. (Optional) Copy `config/sample.toml` to `config/local.toml` and customise the
-   data directory, base ports, generated chain ID, or restart policy before
-   first launch. The `[supervisor.restart]` table lets you disable automatic
-   restarts (`mode = "never"`) or adjust the retry count/backoff for flaky
-   development environments.
-   You can also switch topology profiles: use the
-   `profile = "four-peer-bft"` preset, while custom profiles use a table such
-   as `profile = { peer_count = 7, consensus_mode = "permissioned" }`. Custom
-   peer counts must form an exact Sumeragi committee (`3f+1`), so this bundle
-   accepts 4 or 7 peers. Preset names are exact: `four-peer-bft` is the only
-   built-in topology preset. For NPoS
-   genesis presets, set `consensus_mode = "npos"` and include
-   `genesis_profile = "iroha3-dev"` in the same table (or set
-   `supervisor.genesis_profile` when using presets).
-   CLI runs accept the same presets or an inline profile table via
-   `--profile '{ peer_count = 7, consensus_mode = "permissioned" }'`.
-   For multi-lane/Nexus profiles, populate the `[nexus]` section in
-   `config/local.toml` (or pass `--nexus-config` on the CLI). An optional
-   `[sumeragi]` table accepts only the node's node-local Sumeragi settings
-   (participation role, consensus-key policy, local-parameter overrides and
-   safety-record paths); Mochi rejects every other key, such as the retired
-   `sumeragi.queues` table, before it writes peer configs.
-   Nexus routing is mandatory; generated configs omit the retired availability
-   switch and require NPoS consensus for custom multi-lane topology. Consensus
-   mode and chain parameters come from signed genesis and committed state; the
-   bundle exposes no node-local enable/disable switch. Torii DA replay and manifest
-   roots are immutable per-generation managed paths; configured overrides are
-   rejected before publication.
-3. Start the supervisor via `./bin/mochi`. The egui application will create the
-   per-profile data tree on demand and generate a Kagami-aligned genesis block.
-   For a selected genesis profile, Mochi requires `kagami verify` to confirm
-   the requested chain and VRF seed before publishing the generation. Runtime
-   binaries are resolved only when the operation that needs them starts.
-   Readiness is gated on a small smoke transaction by default; disable it with
-   `--disable-smoke`, `MOCHI_READINESS_SMOKE=false`, or
-   `supervisor.readiness_smoke = false`.
-
-The first-release desktop bundle supports secret-bearing signer vaults and
-`.env.local` bootstrap output on Unix hosts (macOS and Linux). Those operations
-fail before writing on other platforms until equivalent owner-only file and
-directory-durability guarantees are implemented.
-
-The bundle keeps everything relative so the archive can be expanded anywhere
-on disk or inside CI artefact stores. All generated state (peer configs,
-genesis manifests, logs, Kura storage) lives under the data root configured in
-the sample manifest. Per-peer runtime storage separates `storage/kura`,
-`storage/snapshot`, and `storage/torii`; Kura's authenticated catalog root never
-contains snapshot or Torii files. Exported snapshot metadata records the exact
-`kura-subdirectory-v1` storage layout, and restore fails closed on unmarked or
-unknown layouts. Restore copies and hashes storage under fixed V1 depth and entry
-budgets, then journals the peer-storage swap so an interrupted operation is
-rolled back or its committed cleanup is completed at the next launch. An
-explicit snapshot root always starts with its required empty `generations/`
-directory.
-Generated `config.toml` files include a short MOCHI header with the resolved
-chain id and (when available) consensus fingerprint so operators can confirm
-they are launching the intended genesis profile.
-
-## Topology recipes
-
-Use these quick snippets inside `config/local.toml` to match common layouts:
-
-```
-[supervisor]
-profile = "four-peer-bft" # 4 validators
+```text
+bin/mochi              # desktop
+bin/kagami             # developer CLI and managed process owner
+bin/iroha3d            # matching validator
+docs/README.md        # this guide
+LICENSE
+manifest.json          # file inventory with sizes and SHA-256 digests
 ```
 
-```
-[supervisor]
-profile = { peer_count = 7, consensus_mode = "permissioned" } # 7 validators
-```
+Executable names end in `.exe` on Windows. Keep all three binaries together.
 
-For NPoS runs, switch to `consensus_mode = "npos"` and include a supported
-genesis profile (`iroha3-dev` or `iroha3-taira`) as shown below. Public Nexus
-manifest generation remains a Kagami workflow because it requires an explicit
-canonical XOR asset definition id.
+## Start from a project
 
-## Nexus lane runs
-
-Define Nexus lane catalogs in `config/local.toml`:
-
-```
-[supervisor]
-profile = { peer_count = 4, consensus_mode = "npos", genesis_profile = "iroha3-dev" }
-
-[nexus]
-lane_count = 3
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "core"
-dataspace = "universal"
-visibility = "public"
-
-[[nexus.lane_catalog]]
-index = 1
-alias = "governance"
-dataspace = "universal"
-visibility = "restricted"
-
-[[nexus.lane_catalog]]
-index = 2
-alias = "zk"
-dataspace = "universal"
-visibility = "restricted"
-
-[[nexus.dataspace_catalog]]
-alias = "universal"
-id = 0
-
-[sumeragi]
-# role = "validator"
-# Only node-local settings belong here. Consensus mode, committee geometry, block limits and
-# payload limits come from signed genesis and committed state.
+```sh
+/path/to/bundle/bin/kagami localnet up
+/path/to/bundle/bin/kagami contract deploy hello.ko
+/path/to/bundle/bin/kagami localnet down
 ```
 
-Alternatively, store exactly the `[nexus]` block above, with no sibling root
-keys or tables, in a standalone TOML file and load it with
-`--nexus-config path/to/nexus.toml`.
+No supplied TOML, source checkout, build tools or container runtime is needed.
+Deployment accepts `.ko`, `.to` and existing Musubi packages. With no selected
+context, deployment starts the default localnet in the same invocation.
 
-Torii DA ingest replay and manifest roots are generated inside each peer's
-selected storage generation. They cannot be redirected by bundle settings.
+Open the desktop for the same project with:
 
-## Lane maintenance and status
-
-The Settings dialog exposes lane catalogs and lifecycle controls, plus a per-lane
-Kura/merge-log path preview (the generated peer configs include the same paths
-in their header). Use the Maintenance bar to reset a single lane:
-MOCHI submits a signed retire/add lifecycle replacement via Torii and leaves the
-authenticated storage transition to Kura. The Lane status panel surfaces DA cursors,
-relay lag, transport-byte observations, and relay ingest state per peer so operators
-can spot lagging lanes quickly.
-The Settings dialog also includes a profile override field that accepts preset
-slugs or inline TOML tables for custom peer counts/consensus modes.
-
-## Deterministic manifest
-
-`manifest.json` lists every file in the bundle with its byte size and SHA-256
-hash. CI systems can use it to implement snapshot automation:
-
-```json
-{
-  "generated_unix_ms": 1711843200000,
-  "target": "macos-aarch64",
-  "profile": "release",
-  "files": [
-    { "path": "bin/mochi", "size": 123456, "sha256": "…" }
-  ]
-}
+```sh
+/path/to/bundle/bin/mochi --workspace /path/to/project
 ```
 
-Use `sha256sum` (or your platform equivalent) to verify entries against the
-manifest when promoting bundles to release channels.
+Omit `--workspace` to use the current directory. Both frontends call the same
+services and select the same retained context. The desktop does not own a
+separate network generator or supervisor.
 
-## Support
+## Retained state
 
-MOCHI is still in early development. File issues in the main Iroha repository
-if the bundle script or documentation falls behind — PRs are welcome!
+Generated configuration, keys, journals and ledger files stay in private OS
+application storage outside the project. Each workspace has its own selection.
+Repeated `localnet up` and `down`/`up` retain the same network and account.
+Repeated unchanged deployment recovers its original evidence and verifies
+current code and alias state.
+
+Use `kagami context list`, `context show`, `context use <name>`,
+`localnet status` and `localnet logs` to inspect the environment.
+`localnet reset local` explicitly retires a stopped generation; a subsequent
+`localnet up` creates a fresh ledger. Reset does not transfer old funds or
+contract state.
+
+Advanced operator bundle generation is `kagami localnet generate`; managed
+startup needs none of its input files or generated scripts.
+
+## Artifact verification and qualification
+
+`manifest.json` records every packaged file and its size and SHA-256 digest.
+Release provenance must authenticate the manifest before those digests establish
+trust in a downloaded bundle.
+
+The release acceptance gates include clean-install runs on macOS/Linux ARM64
+and x86-64 and Windows x86-64. Source compilation and component tests do not
+establish those native runtime results. Private dataspace attachment and startup
+latency remain separate acceptance gates in the repository's developer-experience
+specification.

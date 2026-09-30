@@ -9,7 +9,10 @@ use iroha_core::beacon::ceremony::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
-use std::os::unix::fs::symlink;
+use std::{
+    fs,
+    os::unix::fs::{PermissionsExt as _, symlink},
+};
 
 /// Owner-only `data_dir` below the checkout, so no world-writable temporary ancestor weakens the
 /// production custody policy.
@@ -651,35 +654,25 @@ fn symlinked_secrets_or_data_dir_is_refused() {
 }
 
 #[test]
-fn walk_admits_only_root_owned_system_links() {
-    // The platform temporary directory may sit behind root-owned system links (macOS `/var`).
-    assert_eq!(walk_trusted_symlinks(&std::env::temp_dir()), Ok(true));
+fn native_secret_paths_reject_traversal_and_user_links() {
     let fixture = SecretsFixture::new();
-    assert_eq!(
-        walk_trusted_symlinks(&fixture.data_dir.secrets_dir()),
-        Ok(true)
+    let file = NodeSecretFile::Validator;
+    assert_eq!(existing_secret_path(&fixture.data_dir, file), Ok(None));
+    fixture.write(file, &signer_record(&signer_key(0x61)));
+    assert!(
+        existing_secret_path(&fixture.data_dir, file)
+            .unwrap()
+            .is_some()
     );
-    assert_eq!(
-        walk_trusted_symlinks(&fixture.data_dir.root().join("absent/secrets")),
-        Ok(false)
-    );
-    for untrusted in [
-        PathBuf::from("relative/secrets"),
-        fixture.data_dir.root().join("../data/secrets"),
+    for path in [
+        PathBuf::from("relative"),
+        fixture.data_dir.root().join("../data"),
     ] {
-        assert_eq!(
-            walk_trusted_symlinks(&untrusted),
-            Err(RuntimeCredentialErrorV1::InvalidSource),
-            "{}",
-            untrusted.display()
-        );
+        assert!(existing_secret_path(&DataDir::new(path), file).is_err());
     }
     let link = fixture.root.path().join("user-link");
     symlink(fixture.data_dir.root(), &link).expect("user-owned link");
-    assert_eq!(
-        walk_trusted_symlinks(&link.join("secrets")),
-        Err(RuntimeCredentialErrorV1::InvalidSource)
-    );
+    assert!(existing_secret_path(&DataDir::new(link), file).is_err());
 }
 
 #[test]

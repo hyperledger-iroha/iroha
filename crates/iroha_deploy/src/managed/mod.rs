@@ -1,0 +1,244 @@
+//! Persistent local developer networks shared by Kagami and Mochi.
+//!
+//! [`ManagedStore::up`] creates canonical artifacts through the shared localnet generator. This
+//! module retains those files and identities across starts, owns the native processes, and
+//! advertises readiness only after all four peers serve genesis and a signed smoke commits.
+//! Secrets stay in the private store; public receipts contain only connection metadata.
+
+mod runtime;
+mod store;
+mod transport;
+mod workspace;
+
+use std::{path::PathBuf, time::Duration};
+
+use norito::json::{JsonDeserialize, JsonSerialize};
+
+pub use runtime::run_worker;
+pub use store::{LocalnetPorts, ManagedStore};
+pub use workspace::{InstalledRuntime, default_state_root, workspace_state_root};
+
+/// Result of one managed developer-network operation.
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// A managed operation that could not safely complete.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// This workspace has never selected a managed environment.
+    #[error("no developer environment is selected in this workspace")]
+    NoSelection,
+    /// A filesystem, socket or process operation failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// Stored metadata or caller input is invalid.
+    #[error("{0}")]
+    Invalid(String),
+    /// Another operation or process still owns this network.
+    #[error("managed network `{0}` is already owned; inspect its status before retrying")]
+    Busy(String),
+    /// Startup could not prove readiness within the requested budget.
+    #[error("localnet startup did not complete within {0:?}; inspect `kagami localnet logs`")]
+    Timeout(Duration),
+}
+
+/// Selected, secret-free client context backed by owner-private generated configuration.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ManagedContext {
+    /// Store-local name, such as `local`.
+    pub name: String,
+    /// Canonical chain label.
+    pub chain_id: String,
+    /// Canonical checked network identity derived from signed genesis.
+    pub network_id: String,
+    /// Canonical public account identity of the developer signer.
+    pub account_id: String,
+    /// Physical dataspace selected for default contract deployment.
+    pub dataspace_id: u64,
+    /// Leased dataspace namespace used for deployment aliases.
+    pub dataspace_alias: String,
+    /// Preferred loopback Torii URL.
+    pub torii_url: String,
+    /// Owner-private generated client configuration; never supplied by the user.
+    pub client_config: PathBuf,
+}
+
+/// One canonical node configuration and its public connection metadata.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ManagedPeer {
+    /// Absolute canonical generated node configuration.
+    pub config_path: PathBuf,
+    /// Loopback Torii URL served by this validator.
+    pub torii_url: String,
+    /// Plain filename for retained node logs, such as `peer0.log`.
+    pub log_name: String,
+}
+
+/// The output of canonical genesis/configuration preparation.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct PreparedLocalnet {
+    /// Client identity and connection information generated with this genesis.
+    pub context: ManagedContext,
+    /// Exactly four independent validators, in stable order.
+    pub peers: Vec<ManagedPeer>,
+}
+
+/// A localnet startup request. Omitted CLI settings should use [`Self::new`].
+#[derive(Debug, Clone)]
+pub struct LocalnetRequest {
+    /// Store-local network name.
+    pub name: String,
+    /// Installed Kagami executable, used to start the native background worker.
+    pub launcher: PathBuf,
+    /// Matching installed daemon executable; no source builds or PATH fallback occur here.
+    pub daemon: PathBuf,
+    /// Total readiness budget, including generation.
+    pub startup_timeout: Duration,
+}
+
+impl LocalnetRequest {
+    /// Construct the default named localnet with a thirty-second readiness budget.
+    #[must_use]
+    pub fn new(launcher: PathBuf, daemon: PathBuf) -> Self {
+        Self {
+            name: "local".into(),
+            launcher,
+            daemon,
+            startup_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+/// Current lifecycle observation, never inferred solely from a saved PID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedPhase {
+    /// No worker owns this prepared generation.
+    Stopped,
+    /// The worker is proving node and transaction readiness.
+    Starting,
+    /// Readiness was proved and every supervised validator is still alive.
+    Ready,
+    /// Startup or an active validator failed.
+    Failed,
+}
+
+impl ManagedPhase {
+    /// Stable phase spelling used in CLI JSON and retained status metadata.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Starting => "starting",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl JsonSerialize for ManagedPhase {
+    fn json_serialize(&self, output: &mut String) {
+        self.as_str().json_serialize(output);
+    }
+}
+
+impl JsonDeserialize for ManagedPhase {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> std::result::Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "stopped" => Ok(Self::Stopped),
+            "starting" => Ok(Self::Starting),
+            "ready" => Ok(Self::Ready),
+            "failed" => Ok(Self::Failed),
+            _ => Err(norito::json::Error::Message(
+                "invalid managed lifecycle phase".into(),
+            )),
+        }
+    }
+}
+
+/// Secret-free status returned to CLI and desktop clients.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ManagedStatus {
+    /// Retained client context.
+    pub context: ManagedContext,
+    /// Current worker observation.
+    pub phase: ManagedPhase,
+    /// Number of still-running owned validator processes.
+    pub running_peers: usize,
+    /// Public reason for a failed operation, without child output or credentials.
+    pub failure: Option<String>,
+}
+
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct BinaryPin {
+    path: PathBuf,
+    blake3: String,
+}
+
+#[derive(Clone, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct RetainedLocalnet {
+    prepared: PreparedLocalnet,
+    launcher: BinaryPin,
+    daemon: BinaryPin,
+    startup_timeout_ms: u64,
+}
+
+#[derive(JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct WorkerRecord {
+    token: String,
+}
+
+#[derive(JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ControlRequest {
+    token: String,
+    action: String,
+}
+
+const MANIFEST: &str = "localnet.json";
+const WORKER: &str = "worker.json";
+const STATUS: &str = "status.json";
+const MAX_METADATA: usize = 1024 * 1024;
+const POLL: Duration = Duration::from_millis(50);
+
+fn encode(value: &impl JsonSerialize) -> Result<Vec<u8>> {
+    norito::json::to_vec(value).map_err(|_| Error::Invalid("cannot encode managed metadata".into()))
+}
+
+fn decode<T: JsonDeserialize>(bytes: &[u8]) -> Result<T> {
+    norito::json::from_slice(bytes)
+        .map_err(|_| Error::Invalid("managed control or context metadata is invalid".into()))
+}
+
+fn validate_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.len() > 48
+        || !name.as_bytes()[0].is_ascii_alphanumeric()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(Error::Invalid("managed names must contain 1..48 ASCII letters, digits, `-` or `_`, starting with a letter or digit".into()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+pub(crate) fn native_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    // Resource tests intentionally share the preferred loopback ports. Serializing them also
+    // keeps parallel private-directory ancestor custody within macOS's default 256-FD budget.
+    static NATIVE_RESOURCES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    NATIVE_RESOURCES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}

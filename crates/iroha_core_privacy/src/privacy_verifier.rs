@@ -1908,7 +1908,7 @@ pub struct PrivacyCompiledActivationFailureV1 {
 pub struct PrivacyEnvelopeFailureV1 {
     source: PrivacyProofEnvelopeValidationError,
 }
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, Copy)]
 #[cfg(not(feature = "zk-stark"))]
 #[error("native privacy engine for {protocol_id:?} is not available")]
 pub struct PrivacyEngineUnavailableFailureV1 {

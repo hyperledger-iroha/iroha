@@ -251,6 +251,112 @@ pub(super) fn prepare_build(
     })
 }
 
+pub(super) fn build_runtime_package(
+    config: &iroha::config::Config,
+    manifest: &Path,
+    package: Option<&str>,
+    contract: Option<&str>,
+    locked: bool,
+    archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
+) -> Result<crate::deployment_runtime::BuiltArtifact, Diagnostic> {
+    let selection = SelectionArgs {
+        packages: package
+            .map(str::parse)
+            .transpose()
+            .map_err(|_| Diagnostic::new(ErrorCode::Usage, "invalid package selector"))?
+            .into_iter()
+            .collect(),
+        ..SelectionArgs::default()
+    };
+    let (workspace, selected) = load_selected_workspace(Some(manifest), &selection)?;
+    let previous = read_optional_workspace_lock(&workspace)?;
+    let mode = GraphModeArgs {
+        locked,
+        ..GraphModeArgs::default()
+    };
+    let resolve_mode = if locked {
+        ResolveModeV1::Locked
+    } else {
+        ResolveModeV1::UpdateLock
+    };
+    // Local packages must not consult any network file, environment, wallet or registry.
+    let local = resolve_workspace_local(&workspace, &selected, previous.clone(), resolve_mode)
+        .map_err(graph_diagnostic)?;
+    let (outcome, registry) = if let Some(outcome) = local {
+        (outcome, None)
+    } else {
+        let client = iroha::client::Client::builder(config.clone())
+            .build()
+            .map_err(|error| Diagnostic::new(ErrorCode::Network, format!("{error:#}")))?;
+        let registry = RegistryReadClientV1::new(
+            &client,
+            config
+                .torii_request_timeout
+                .min(std::time::Duration::from_secs(60)),
+            config.account_chain_discriminant,
+        )
+        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+        ensure_network_identity(config.network_id, registry.network_id())?;
+        let cache_root = platform_cache_root_v1().map_err(cache_maintenance_diagnostic_ref)?;
+        let resolver_cache = ResolverIndexCacheV1::open(&cache_root)
+            .map_err(|error| Diagnostic::new(ErrorCode::CacheCorrupt, error.to_string()))?;
+        let mut snapshot_mismatches = 0_u8;
+        let outcome = loop {
+            match resolve_workspace_online_cached(
+                &registry,
+                &resolver_cache,
+                &workspace,
+                &selected,
+                previous.clone(),
+                None,
+                resolve_mode,
+                GraphPurposeV1::Workspace,
+            ) {
+                Err(GraphErrorV1::SnapshotChanged) if snapshot_mismatches < 2 => {
+                    snapshot_mismatches += 1;
+                }
+                result => break result.map_err(graph_diagnostic)?,
+            }
+        };
+        (outcome, Some(registry))
+    };
+    if outcome.changed {
+        write_resolved_lock(&workspace, GraphPurposeV1::Workspace, &outcome.lockfile)?;
+    }
+    let graph = ResolvedWorkspaceGraphV1 {
+        lock: outcome.lockfile,
+        registry,
+        cached_source: None,
+        prepared_archive_fetch: archive_transport.map(Ok),
+        platform_config_provenance: None,
+        account_chain_discriminant: config.account_chain_discriminant,
+    };
+    let cache = if graph.lock.nodes.is_empty() {
+        None
+    } else {
+        Some(open_user_cache()?)
+    };
+    if let Some(cache) = &cache {
+        ensure_graph_archives(cache, &graph, mode)?;
+    }
+    let execution = execute_compiler_graph(
+        cache.as_ref(),
+        &workspace,
+        &selected,
+        &graph.lock,
+        CompilerActionV1::Build,
+        config.account_chain_discriminant,
+    )
+    .map_err(|error| graph_mode_compiler_diagnostic(&error, mode))?;
+    let artifact = deploy::select_artifact(&execution.artifacts, contract)?;
+    crate::deployment_runtime::BuiltArtifact::from_bytes(deploy::read_selected_artifact(artifact)?)
+        .map_err(|error| Diagnostic::new(ErrorCode::PackageInvalid, format!("{error:#}")))
+}
+
+fn cache_maintenance_diagnostic_ref(error: CacheError) -> Diagnostic {
+    cache_maintenance_diagnostic(&error)
+}
+
 fn artifact_json(artifact: &CompilerArtifactV1) -> Value {
     object([
         ("package", Value::from(artifact.package.to_string())),

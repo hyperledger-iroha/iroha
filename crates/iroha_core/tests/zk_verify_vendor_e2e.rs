@@ -142,13 +142,25 @@ seiyaku VendorBridgeGate {
         ivm::verify_contract_artifact(&contract_program).expect("verify vendor-bridge contract");
     let contract_code_hash = verified_contract.code_hash;
     RegisterSmartContractBytes {
-        code_hash: contract_code_hash,
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            contract_code_hash,
+        ),
         code: contract_program.clone(),
     }
     .execute(&authority, &mut stx)
     .expect("register vendor-bridge contract bytes");
-    RegisterSmartContractCode {
-        manifest: verified_contract.manifest.signed(&ALICE_KEYPAIR),
+    {
+        let scoped_manifest = verified_contract.manifest.signed(&ALICE_KEYPAIR);
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
     }
     .execute(&authority, &mut stx)
     .expect("register vendor-bridge contract manifest");

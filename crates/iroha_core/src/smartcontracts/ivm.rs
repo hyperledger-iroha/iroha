@@ -98,10 +98,21 @@ pub(crate) fn validate_generic_execution_metadata(
 pub(crate) fn validate_generic_execution_context(
     world: &impl WorldReadOnly,
     metadata: &Metadata,
-    code_hash: Hash,
+    artifact_id: iroha_data_model::smart_contract::ContractArtifactId,
 ) -> Result<(), ValidationFail> {
     validate_generic_execution_metadata(metadata)?;
-    if world.contract_manifests().get(&code_hash).is_some() {
+    let scope = crate::sumeragi::lanes::routing::committed_root_scope(world).ok_or_else(|| {
+        ValidationFail::NotPermitted("generic IVM requires immutable root scope".into())
+    })?;
+    if !matches!(
+        scope,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global
+    ) {
+        return Err(ValidationFail::NotPermitted(
+            "private roots require address-bound contract execution".into(),
+        ));
+    }
+    if world.contract_manifests().get(&artifact_id).is_some() {
         return Err(ValidationFail::NotPermitted(
             "generic IVM program hash is bound to a contract manifest in live state".to_owned(),
         ));
@@ -430,16 +441,51 @@ mod tests {
     fn generic_program_hash_rejects_live_manifest_binding() {
         let code_hash = Hash::new(b"generic-binding-probe");
         let metadata = Metadata::default();
-        let mut world = crate::state::World::new();
-        validate_generic_execution_context(&world.view(), &metadata, code_hash)
+        let mut world = crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        );
+        validate_generic_execution_context(&world.view(), &metadata, artifact_id)
             .expect("unbound generic program is valid");
         world.contract_manifests.insert(
-            code_hash,
+            artifact_id,
             manifest_with_hashes(Some(code_hash), Some(Hash::new(b"generic-abi"))),
         );
-        let error = validate_generic_execution_context(&world.view(), &metadata, code_hash)
+        let error = validate_generic_execution_context(&world.view(), &metadata, artifact_id)
             .expect_err("a manifest-bound hash is not generic");
         assert!(error.to_string().contains("contract manifest"));
+    }
+    #[test]
+    fn generic_artifact_classification_is_scoped_and_requires_a_global_root() {
+        use iroha_data_model::{
+            block::consensus::SumeragiRootScope, smart_contract::ContractArtifactId,
+        };
+        use iroha_model_base::topology::DataSpaceId;
+        let hash = Hash::new(b"same-bytecode-distinct-dataspaces");
+        let own = ContractArtifactId::new(DataSpaceId::new((1_u64 << 40) + 7), hash);
+        let foreign = ContractArtifactId::new(DataSpaceId::new(7), hash);
+        let metadata = Metadata::default();
+        let mut world =
+            crate::sumeragi::lanes::routing::test_support::world(SumeragiRootScope::Global);
+        world.contract_manifests.insert(
+            foreign,
+            manifest_with_hashes(Some(hash), Some(Hash::new(b"abi"))),
+        );
+        assert!(validate_generic_execution_context(&world.view(), &metadata, own).is_ok());
+        assert!(validate_generic_execution_context(&world.view(), &metadata, foreign).is_err());
+        let unbound = crate::state::World::new();
+        assert!(validate_generic_execution_context(&unbound.view(), &metadata, own).is_err());
+        let private =
+            crate::sumeragi::lanes::routing::test_support::world(SumeragiRootScope::Dataspace {
+                parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"parent")),
+                ),
+                dataspace_id: own.dataspace_id,
+            });
+        assert!(validate_generic_execution_context(&private.view(), &metadata, own).is_err());
     }
     #[test]
     fn runtime_upgrade_manifest_abi_validation_fails_closed() {

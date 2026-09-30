@@ -37,7 +37,8 @@ use crate::{
         fcmp_plus_plus::{
             FcmpOutputTupleV1, FcmpRuntimeContextBindingV1, FcmpWalletNoteV1,
             derive_fcmp_runtime_context_hash_v1, encrypt_fcmp_wallet_note_v1,
-            fcmp_recipient_public_key_v1, fcmp_release_fixture_v1, prove_fcmp_plus_plus_v1,
+            fcmp_recipient_public_key_v1, prove_fcmp_plus_plus_v1,
+            release_evidence_access::fcmp_release_fixture_v1,
         },
         ivm_private_note::{
             ivm_private_note_network_fixture_v1, prove_ivm_private_note_v1_with_rng,

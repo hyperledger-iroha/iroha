@@ -62,7 +62,7 @@ use super::{
         traits::{BlockStore as _, Executor as _},
     },
     executor::{ExecutorContext, StateExecutor, attestation_required},
-    node::global_instance,
+    node::root_instance,
     payload::{self, Assembly},
     startup::{self, GENESIS_HEIGHT},
 };
@@ -524,7 +524,7 @@ impl CertifiedTestChain {
             )
             .expect("fixture committee admits");
         let shared: SharedCrypto = crypto.clone();
-        let instance = global_instance(&genesis, &chain_id.to_string());
+        let instance = root_instance(&genesis, &chain_id.to_string()).map_err(invalid)?;
         let availability: Arc<dyn AvailabilitySchedule> = Arc::new(
             super::runtime_availability::NativeGlobalAvailability::new(
                 Arc::clone(&state),

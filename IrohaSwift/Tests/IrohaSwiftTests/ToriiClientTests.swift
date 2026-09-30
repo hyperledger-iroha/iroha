@@ -15958,20 +15958,22 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testFetchContractManifestParsesResponse() {
+    func testFetchContractManifestParsesResponse() throws {
         let expectation = expectation(description: "fetch manifest")
         let codeHash = String(repeating: "b", count: 64)
         let abiHash = String(repeating: "d", count: 64)
+        let artifactId = try ContractArtifactId(dataspaceId: UInt64.max,
+            codeHash: "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2")
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/code/\(codeHash)")
+            XCTAssertEqual(request.url?.path, "/v1/contracts/artifacts/\(UInt64.max)/\(codeHash)")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"manifest":{"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_types":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
+            {"network_id":"\(TestNetworkIds.canonical.literal)","artifact_id":{"dataspace_id":18446744073709551615,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"},"manifest":{"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_types":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        makeClient().fetchContractManifest(codeHashHex: codeHash) { result in
+        makeClient().fetchContractManifest(artifactId: artifactId, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let record):
                 XCTAssertEqual(record.manifest.codeHash, codeHash)
@@ -15990,7 +15992,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
     func testContractManifestRecordRejectsMismatchedHashConveniences() throws {
         let manifest = #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"}"#
-        let valid = "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}"
+        let identity = "\"network_id\":\"\(TestNetworkIds.canonical.literal)\",\"artifact_id\":{\"dataspace_id\":18446744073709551615,\"code_hash\":\"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2\"},"
+        let valid = "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}"
         let record = try JSONDecoder().decode(
             ToriiContractManifestRecord.self,
             from: Data(valid.utf8)
@@ -15999,10 +16002,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(record.abiHash, record.manifest.abiHash)
 
         let invalid = [
-            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "d", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
-            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "B", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
-            "{\"manifest\":\(manifest),\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
-            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\",\"code_bytes\":null}",
+            "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "d", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "B", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\(identity)\"manifest\":\(manifest),\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\(identity)\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\",\"code_bytes\":null}",
         ]
         for payload in invalid {
             XCTAssertThrowsError(
@@ -16877,6 +16880,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
+    private struct ManifestFixture: Decodable {
+        let manifest: ToriiContractManifest
+    }
+
     func testExportedStructIdentitySurvivesPublicAndDurableSchemas() throws {
         struct NameVectors: Decodable { let valid: [String]; let invalid: [String] }
         var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -16889,7 +16896,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let identity = "std/math@1.0.0::Math::Receipt"
         for name in vectors.valid {
             let bytes = Data(payload.replacingOccurrences(of: identity, with: name).utf8)
-            let record = try JSONDecoder().decode(ToriiContractManifestRecord.self, from: bytes)
+            let record = try JSONDecoder().decode(ManifestFixture.self, from: bytes)
             let entrypoint = try XCTUnwrap(record.manifest.entrypoints?.first)
             XCTAssertEqual(entrypoint.returnSchema?.canonicalTypeName, "struct \(name)")
             XCTAssertEqual(entrypoint.argumentSchema?.fields.first?.type.canonicalTypeName, "struct \(name)")
@@ -16940,7 +16947,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             root.deleteLastPathComponent()
         }
         let bytes = try Data(contentsOf: XCTUnwrap(fixture))
-        let record = try JSONDecoder().decode(ToriiContractManifestRecord.self, from: bytes)
+        let record = try JSONDecoder().decode(ManifestFixture.self, from: bytes)
         let schema = try XCTUnwrap(record.manifest.entrypoints?.first?.returnSchema)
         XCTAssertEqual(schema.canonicalTypeName, "Result<(), example/vault@1.0.0::金庫::拒否>")
         XCTAssertEqual(schema.nodes[1], .unit)
@@ -16956,7 +16963,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let encoded = try JSONEncoder().encode(record.manifest)
         XCTAssertEqual(try JSONDecoder().decode(ToriiContractManifest.self, from: encoded), record.manifest)
         let changed = String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "CapacityExceeded", with: "DifferentMeaning", range: String(decoding: bytes, as: UTF8.self).range(of: "CapacityExceeded"))
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data(changed.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(ManifestFixture.self, from: Data(changed.utf8)))
         var stateOnly = record.manifest
         stateOnly.entrypoints = []
         XCTAssertNoThrow(try JSONEncoder().encode(stateOnly))
@@ -16965,11 +16972,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let unknownState = String(decoding: bytes, as: UTF8.self).replacingOccurrences(
             of: "\"type_name\": \"Result<(), example/vault@1.0.0::金庫::拒否>\"",
             with: "\"type_name\": \"Result<(), missing/vault@1.0.0::金庫::拒否>\"")
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data(unknownState.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(ManifestFixture.self, from: Data(unknownState.utf8)))
         for forged in ["StatePage{anything: int}", "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<bool>>}"] {
             let changedState = String(decoding: bytes, as: UTF8.self).replacingOccurrences(
                 of: "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}", with: forged)
-            XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractManifestRecord.self, from: Data(changedState.utf8)))
+            XCTAssertThrowsError(try JSONDecoder().decode(ManifestFixture.self, from: Data(changedState.utf8)))
         }
     }
 
@@ -18350,19 +18357,79 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testFetchContractCodeBytesDecodesResponse() {
+    func testContractArtifactIdentityRejectsInvalidScopeAndHash() throws {
+        let hash = "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
+        let artifact = try ContractArtifactId(dataspaceId: UInt64.max, codeHash: hash)
+        let encoded = try JSONEncoder().encode(artifact)
+        XCTAssertEqual(try JSONDecoder().decode(ContractArtifactId.self, from: encoded), artifact)
+        XCTAssertEqual(artifact.codeHashHex, String(repeating: "b", count: 64))
+        XCTAssertThrowsError(try ContractArtifactId(dataspaceId: 17, codeHash: String(repeating: "b", count: 64)))
+        for scope in ["-1", "18446744073709551616", "\"17\""] {
+            let invalid = "{\"dataspace_id\":\(scope),\"code_hash\":\"\(hash)\"}"
+            XCTAssertThrowsError(try JSONDecoder().decode(ContractArtifactId.self, from: Data(invalid.utf8)))
+        }
+    }
+
+    func testContractArtifactReadsRejectForeignNetworkAndDataspace() async throws {
+        let code = Data([0, 0, 0])
+        let hash = IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + code).hexLowercased()
+        let literal = try XCTUnwrap(ToriiCanonicalHashLiteral.literal(fromNormalizedHex: hash))
+        let artifact = try ContractArtifactId(dataspaceId: UInt64.max, codeHash: literal)
+        let otherNetwork = try NetworkId(bytes: IrohaHash.hash(Data("foreign artifact network".utf8)))
+        for (network, scope) in [(otherNetwork, UInt64.max), (TestNetworkIds.canonical, UInt64(17))] {
+            StubURLProtocol.handler = { request in
+                XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"])!
+                let identity = "\"network_id\":\"\(network.literal)\",\"artifact_id\":{\"dataspace_id\":\(scope),\"code_hash\":\"\(literal)\"}"
+                let payload: String
+                if request.url!.path.hasSuffix("/bytes") {
+                    payload = "{\(identity),\"code_b64\":\"AAAA\"}"
+                } else {
+                    payload = "{\(identity),\"manifest\":{\"code_hash\":\"\(literal)\"},\"code_hash\":\"\(hash)\",\"abi_hash\":null}"
+                }
+                return (response, Data(payload.utf8))
+            }
+            do {
+                _ = try await makeClient().fetchContractManifest(artifactId: artifact, canonicalAuth: canonicalReadAuth)
+                XCTFail("foreign manifest identity was accepted")
+            } catch { XCTAssertTrue(error is ToriiClientError) }
+            do {
+                _ = try await makeClient().fetchContractCodeBytes(artifactId: artifact, canonicalAuth: canonicalReadAuth)
+                XCTFail("foreign bytecode identity was accepted")
+            } catch { XCTAssertTrue(error is ToriiClientError) }
+        }
+    }
+
+    func testContractCodeBytesRejectNoncanonicalAndMismatchedArtifacts() throws {
+        let bytes = Data([0])
+        let hash = IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + bytes).hexLowercased()
+        let literal = try XCTUnwrap(ToriiCanonicalHashLiteral.literal(fromNormalizedHex: hash))
+        let prefix = "\"network_id\":\"\(TestNetworkIds.canonical.literal)\",\"artifact_id\":{\"dataspace_id\":17,\"code_hash\":\"\(literal)\"}"
+        let valid = "{\(prefix),\"code_b64\":\"AA==\"}"
+        XCTAssertNoThrow(try JSONDecoder().decode(ToriiContractCodeBytes.self, from: Data(valid.utf8)))
+        for invalid in ["AB==", "AA", "AAAA", "", " AA=="] {
+            let payload = "{\(prefix),\"code_b64\":\"\(invalid)\"}"
+            XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractCodeBytes.self, from: Data(payload.utf8)))
+        }
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractCodeBytes.self, from: Data("{\"code_b64\":\"AA==\"}".utf8)))
+    }
+
+    func testFetchContractCodeBytesDecodesResponse() throws {
         let expectation = expectation(description: "fetch code bytes")
-        let codeHash = String(repeating: "2", count: 64)
+        let codeHash = IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + Data([0, 0, 0])).hexLowercased()
+        let artifactId = try ContractArtifactId(dataspaceId: UInt64.max,
+            codeHash: XCTUnwrap(ToriiCanonicalHashLiteral.literal(fromNormalizedHex: codeHash)))
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/code-bytes/\(codeHash)")
+            XCTAssertEqual(request.url?.path, "/v1/contracts/artifacts/\(UInt64.max)/\(codeHash)/bytes")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"code_b64":"AAAA"}
+            {"network_id":"\(TestNetworkIds.canonical.literal)","artifact_id":{"dataspace_id":18446744073709551615,"code_hash":"\(artifactId.codeHash)"},"code_b64":"AAAA"}
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        makeClient().fetchContractCodeBytes(codeHashHex: codeHash, canonicalAuth: canonicalReadAuth) { result in
+        makeClient().fetchContractCodeBytes(artifactId: artifactId, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let record):
                 XCTAssertEqual(record.codeB64, "AAAA")
@@ -18374,22 +18441,24 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testFetchContractCodeBytesRejectsInvalidBase64() {
+    func testFetchContractCodeBytesRejectsInvalidBase64() throws {
         let expectation = expectation(description: "fetch code bytes invalid b64")
-        let codeHash = String(repeating: "2", count: 64)
+        let codeHash = IrohaHash.hash(Data("iroha:ivm:contract-artifact:v1\0".utf8) + Data([0, 0, 0])).hexLowercased()
+        let artifactId = try ContractArtifactId(dataspaceId: UInt64.max,
+            codeHash: XCTUnwrap(ToriiCanonicalHashLiteral.literal(fromNormalizedHex: codeHash)))
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/code-bytes/\(codeHash)")
+            XCTAssertEqual(request.url?.path, "/v1/contracts/artifacts/\(UInt64.max)/\(codeHash)/bytes")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"code_b64":"%%%"}
+            {"network_id":"\(TestNetworkIds.canonical.literal)","artifact_id":{"dataspace_id":18446744073709551615,"code_hash":"\(artifactId.codeHash)"},"code_b64":"%%%"}
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        makeClient().fetchContractCodeBytes(codeHashHex: codeHash, canonicalAuth: canonicalReadAuth) { result in
+        makeClient().fetchContractCodeBytes(artifactId: artifactId, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success:
                 XCTFail("expected invalid base64 decoding failure")

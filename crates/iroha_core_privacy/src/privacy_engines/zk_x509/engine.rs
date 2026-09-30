@@ -100,7 +100,10 @@ pub struct ZkX509CompiledProfileV1 {
 }
 impl ZkX509CompiledProfileV1 {
     /// Consensus transcript digest of the complete release manifest.
-    pub(crate) const fn digest(self) -> [u8; 32] {
+    ///
+    /// This fingerprint identifies the compiled profile; it grants no source-pin or activation
+    /// authority. Acceptance still requires the complete proof, soundness and resource checks.
+    pub const fn digest(self) -> [u8; 32] {
         self.digest
     }
 }

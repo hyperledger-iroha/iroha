@@ -750,10 +750,10 @@ seiyaku GovernedReadFixture {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
-    let code_hash = register_code_bytes(&harness.authority, artifact, &mut transaction)
+    let code_hash = register_code_bytes(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), artifact, &mut transaction)
         .expect("register governed contract bytes");
     assert_eq!(code_hash, verified.code_hash);
-    register_manifest(&harness.authority, signed_manifest, &mut transaction)
+    register_manifest(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), signed_manifest, &mut transaction)
         .expect("register governed contract manifest");
     transaction
         .world_mut_for_testing()

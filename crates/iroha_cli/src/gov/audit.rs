@@ -129,9 +129,13 @@ impl AuditDeployArgs {
             }
         };
         record.insert("code_hash".into(), Value::from(code_hash.clone()));
+        let artifact_id = crate::contracts::contract_artifact_id(
+            contract_address.dataspace_id()?.as_u64(),
+            &code_hash,
+        )?;
         let manifest_proposal_binding =
-            audit_manifest_map(client, &code_hash, &mut manifest_map, &mut issues);
-        audit_code_map(client, &code_hash, &mut code_map, &mut issues);
+            audit_manifest_map(client, &artifact_id, &mut manifest_map, &mut issues);
+        audit_code_map(client, &artifact_id, &mut code_map, &mut issues);
         audit_proposal_map(
             client,
             proposal_operator.as_ref(),
@@ -666,14 +670,15 @@ fn finalize_record(
 }
 fn audit_manifest_map(
     client: &Client,
-    code_hash: &str,
+    artifact_id: &iroha::data_model::smart_contract::ContractArtifactId,
     manifest_map: &mut Map,
     issues: &mut Vec<String>,
 ) -> Option<(
     String,
     Option<iroha::data_model::smart_contract::manifest::ManifestProvenance>,
 )> {
-    let manifest_value = client.get_contract_manifest_json(code_hash);
+    let code_hash = hex::encode(artifact_id.code_hash.as_ref());
+    let manifest_value = client.get_contract_manifest_json(artifact_id);
     manifest_map.insert("present".into(), Value::from(manifest_value.is_ok()));
     let mut proposal_binding = None;
     match manifest_value {
@@ -747,8 +752,14 @@ fn audit_manifest_map(
     }
     proposal_binding
 }
-fn audit_code_map(client: &Client, code_hash: &str, code_map: &mut Map, issues: &mut Vec<String>) {
-    match client.get_contract_code_bytes(code_hash) {
+fn audit_code_map(
+    client: &Client,
+    artifact_id: &iroha::data_model::smart_contract::ContractArtifactId,
+    code_map: &mut Map,
+    issues: &mut Vec<String>,
+) {
+    let code_hash = hex::encode(artifact_id.code_hash.as_ref());
+    match client.get_contract_code_bytes(artifact_id) {
         Ok(bytes) => {
             let length = bytes.len() as u64;
             code_map.insert("present".into(), Value::from(true));

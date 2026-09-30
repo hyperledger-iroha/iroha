@@ -883,8 +883,7 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
         vec![
             Register::account(Account::new(authority.clone())).into(),
             Grant::account_permission(permission, authority.clone()).into(),
-            UploadSmartContractCodeChunk {
-                code_hash: Hash::new(b"prospective publisher code"),
+            UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, Hash::new(b"prospective publisher code")),
                 total_size: 4,
                 chunk_index: 0,
                 chunk_count: 1,

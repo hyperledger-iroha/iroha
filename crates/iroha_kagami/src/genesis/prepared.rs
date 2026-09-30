@@ -245,7 +245,7 @@ fn load_validator_configs(
             .wrap_err_with(|| format!("read effective validator config {}", path.display()))?,
         );
         let config = super::sign::load_peer_config_bytes(path, &config_bytes)?;
-        super::sign::ensure_peer_config_matches_manifest(&config, manifest)?;
+        iroha_deploy::genesis::staging::ensure_peer_config_matches_manifest(&config, manifest)?;
         ensure!(
             config.genesis.public_key == *genesis_public_key,
             "effective validator config {slug} genesis public key differs from the admitted signer"

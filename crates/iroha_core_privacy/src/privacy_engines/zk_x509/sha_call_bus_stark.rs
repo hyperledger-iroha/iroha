@@ -1960,6 +1960,7 @@ impl<'a> ZkX509ShaColumnFillGuardV1<'a> {
         self.target[row] = value;
         self.written += 1;
     }
+    #[cfg(test)]
     fn finish_v1(mut self) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
         if !self.valid || self.written != self.target.len() {
             return Err(ZkX509ShaCallBusStarkErrorV1::Topology);

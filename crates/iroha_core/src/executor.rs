@@ -92,6 +92,8 @@ use std::{
 };
 #[path = "executor_execution_fee.rs"]
 mod execution_fee;
+/// Authenticated root scope for native and contract-generated instruction effects.
+pub(crate) mod root_scope;
 pub(crate) use execution_fee::{ExecutionFeeMeter, ExecutionFeeSettlementError};
 #[path = "executor_execution_effects.rs"]
 mod execution_effects;
@@ -256,7 +258,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindParameters(_)
         | SingularQueryBox::FindAccountRecoveryPolicyByAlias(_)
         | SingularQueryBox::FindAccountRecoveryRequestByAlias(_)
-        | SingularQueryBox::FindContractManifestByCodeHash(_)
+        | SingularQueryBox::FindContractManifestByArtifactId(_)
         | SingularQueryBox::FindAbiVersion(_)
         | SingularQueryBox::FindAssetDefinitionById(_)
         | SingularQueryBox::FindOracleFeedById(_)
@@ -2728,6 +2730,7 @@ impl ContractEntrypointAuthorizationSnapshot {
             .map_err(ValidationFail::NotPermitted)
     }
     fn validate_live(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
+        root_scope::ensure_committed_contract_scope(world, &self.contract_address)?;
         if let Some(parent) = self.parent.as_deref() {
             parent.validate_live(world)?;
         }
@@ -3398,7 +3401,7 @@ fn ensure_contract_invocation_metadata_binding(
     }
     Ok(())
 }
-fn requested_contract_address(
+pub(crate) fn requested_contract_address(
     metadata: &Metadata,
 ) -> Result<Option<iroha_data_model::smart_contract::ContractAddress>, ValidationFail> {
     metadata
@@ -5660,6 +5663,7 @@ impl Executor {
         call: &ContractInvocation,
         ivm_cache: &mut IvmCache,
     ) -> Result<ResolvedContractInvocation, ValidationFail> {
+        root_scope::ensure_contract_scope(state_transaction, &call.contract_address)?;
         code::ensure_contract_execution_allowed(
             &state_transaction.world,
             &call.contract_address,
@@ -5686,7 +5690,12 @@ impl Executor {
         let code_bytes = state_transaction
             .world
             .contract_code()
-            .get(&identity.code_hash)
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                identity.contract_address.dataspace_id().map_err(|_| {
+                    ValidationFail::NotPermitted("invalid contract dataspace".into())
+                })?,
+                identity.code_hash,
+            ))
             .ok_or_else(|| {
                 ValidationFail::NotPermitted(format!(
                     "contract bytecode `{}` not found in WSV",
@@ -5754,6 +5763,7 @@ impl Executor {
         logical_time_ms: u64,
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        root_scope::ensure_contract_scope(state_transaction, &call.contract_address)?;
         use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         let ResolvedContractInvocation {
             identity,
@@ -5768,7 +5778,12 @@ impl Executor {
         let manifest = state_transaction
             .world
             .contract_manifests()
-            .get(&identity.code_hash)
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                identity.contract_address.dataspace_id().map_err(|_| {
+                    ValidationFail::NotPermitted("invalid contract dataspace".into())
+                })?,
+                identity.code_hash,
+            ))
             .ok_or_else(|| {
                 ValidationFail::NotPermitted(format!(
                     "contract instance `{}` has no manifest",
@@ -6035,6 +6050,7 @@ impl Executor {
         transaction: SignedTransaction,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
+        root_scope::ensure_executable_scope(state_transaction, transaction.instructions())?;
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
         state_transaction.bind_governance_ballot_entrypoint_v1(None);
@@ -6176,6 +6192,7 @@ impl Executor {
             &transaction,
             ivm_cache,
             state_transaction.block_height(),
+            root_scope::captured_dataspace(state_transaction)?,
         )?;
         #[cfg(feature = "zk-preverify")]
         {
@@ -6683,7 +6700,7 @@ impl Executor {
                         crate::smartcontracts::ivm::validate_generic_execution_context(
                             &state_transaction.world,
                             &md,
-                            summary.code_hash,
+                            root_scope::captured_artifact_id(state_transaction, summary.code_hash)?,
                         )?;
                         let effective_cycles = validate_prepared_ivm_execution_policy(
                             state_transaction,
@@ -7138,6 +7155,7 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        root_scope::ensure_instruction_scope(&instruction, state_transaction)?;
         ensure_contract_deployment_permission_mutation_allowed(
             state_transaction,
             authority,
@@ -7192,6 +7210,7 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        root_scope::ensure_instruction_scope(instruction, state_transaction)?;
         ensure_contract_deployment_permission_mutation_allowed(
             state_transaction,
             authority,
@@ -13586,14 +13605,20 @@ mod tests {
             .world
             .contract_subject_bindings
             .insert(contract_address.clone(), subject_binding);
-        state_transaction
-            .world
-            .contract_code
-            .insert(code_hash, program);
-        state_transaction
-            .world
-            .contract_manifests
-            .insert(code_hash, verified.manifest.signed(&keypair));
+        state_transaction.world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            program,
+        );
+        state_transaction.world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            verified.manifest.signed(&keypair),
+        );
         state_transaction
             .world
             .contract_instances
@@ -18185,10 +18210,20 @@ seiyaku GuardedValue {
         let metadata_marker: Name = "guarded_value"
             .parse()
             .expect("valid direct-call metadata marker");
-        world.contract_code.insert(code_hash, program.clone());
-        world
-            .contract_manifests
-            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            program.clone(),
+        );
+        world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            manifest.signed(&ALICE_KEYPAIR),
+        );
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = State::new_with_chain(
             world,
@@ -18339,6 +18374,7 @@ seiyaku GuardedValue {
             &raw_transaction,
             &mut ivm_cache,
             state_tx.block_height(),
+            contract_address.dataspace_id().unwrap(),
         )
         .expect_err("raw-IVM pre-proof admission must observe the execution block height");
         assert!(
@@ -18352,6 +18388,7 @@ seiyaku GuardedValue {
             &raw_transaction,
             &mut ivm_cache,
             2,
+            contract_address.dataspace_id().unwrap(),
         )
         .expect("the half-open hold must not deny raw-IVM admission at its expiry height");
         state_tx.apply();
@@ -18438,7 +18475,10 @@ seiyaku GuardedValue {
         let live_code = state_tx
             .world
             .contract_code
-            .remove(code_hash)
+            .remove(iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ))
             .expect("remove live bytecode for warm-cache adversarial check");
         state_tx.apply();
         let mut state_tx =
@@ -18467,11 +18507,20 @@ seiyaku GuardedValue {
         );
         drop(state_tx);
         let mut state_tx = block.transaction();
-        state_tx.world.contract_code.insert(code_hash, live_code);
+        state_tx.world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            live_code,
+        );
         let live_manifest = state_tx
             .world
             .contract_manifests
-            .remove(code_hash)
+            .remove(iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ))
             .expect("remove live manifest for warm-cache adversarial check");
         state_tx.apply();
         let mut state_tx =
@@ -18500,10 +18549,13 @@ seiyaku GuardedValue {
         );
         drop(state_tx);
         let mut state_tx = block.transaction();
-        state_tx
-            .world
-            .contract_manifests
-            .insert(code_hash, live_manifest);
+        state_tx.world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            live_manifest,
+        );
         Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("revoke direct-call entrypoint permission");
@@ -18557,14 +18609,20 @@ seiyaku GuardedValueRebound {
             )
             .expect("compile a fully valid rebound contract");
         let rebound_code_hash = ivm::contract_code_hash(&rebound_program);
-        state_tx
-            .world
-            .contract_code
-            .insert(rebound_code_hash, rebound_program);
-        state_tx
-            .world
-            .contract_manifests
-            .insert(rebound_code_hash, rebound_manifest.signed(&ALICE_KEYPAIR));
+        state_tx.world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                rebound_code_hash,
+            ),
+            rebound_program,
+        );
+        state_tx.world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                rebound_code_hash,
+            ),
+            rebound_manifest.signed(&ALICE_KEYPAIR),
+        );
         state_tx
             .world
             .contract_instances
@@ -18631,12 +18689,18 @@ seiyaku GuardedValueRebound {
         state_tx
             .world
             .contract_code
-            .remove(rebound_code_hash)
+            .remove(iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                rebound_code_hash,
+            ))
             .expect("remove rebound bytecode after restoring the original binding");
         state_tx
             .world
             .contract_manifests
-            .remove(rebound_code_hash)
+            .remove(iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                rebound_code_hash,
+            ))
             .expect("remove rebound manifest after restoring the original binding");
         state_tx
             .world
@@ -18750,10 +18814,20 @@ seiyaku OrderedBatchGuard {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        world.contract_code.insert(code_hash, program);
-        world
-            .contract_manifests
-            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            program,
+        );
+        world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            manifest.signed(&ALICE_KEYPAIR),
+        );
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = State::new_with_chain(
             world,
@@ -18978,10 +19052,20 @@ seiyaku MeteredFailure {
         .expect("derive metered failure contract address");
         let contract_account = Account::new(contract_address.subject_id()).build(&authority);
         let mut world = World::with([domain], [account, contract_account], []);
-        world.contract_code.insert(code_hash, program);
-        world
-            .contract_manifests
-            .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
+        world.contract_code.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            program,
+        );
+        world.contract_manifests.insert(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                contract_address.dataspace_id().unwrap(),
+                code_hash,
+            ),
+            manifest.signed(&ALICE_KEYPAIR),
+        );
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = State::new(
             world,
@@ -19661,7 +19745,10 @@ seiyaku ReviewedValue {
         drop(state_transaction);
         let mut state_transaction = block.transaction();
         state_transaction.world.contract_manifests.insert(
-            generic_code_hash,
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                generic_code_hash,
+            ),
             iroha_data_model::smart_contract::manifest::ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(generic_code_hash),
@@ -19690,10 +19777,12 @@ seiyaku ReviewedValue {
         assert!(error.to_string().contains("contract manifest"));
         drop(state_transaction);
         let mut state_transaction = block.transaction();
-        state_transaction
-            .world
-            .contract_manifests
-            .remove(generic_code_hash);
+        state_transaction.world.contract_manifests.remove(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                generic_code_hash,
+            ),
+        );
         state_transaction.apply();
         let signed = transaction(Metadata::default());
         let mut state_transaction =

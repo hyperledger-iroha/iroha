@@ -1231,7 +1231,7 @@ mod model {
         /// Fetch a proof record by its identifier.
         FindProofRecordById(proof::prelude::FindProofRecordById),
         /// Fetch a contract manifest by its code hash.
-        FindContractManifestByCodeHash(smart_contract::prelude::FindContractManifestByCodeHash),
+        FindContractManifestByArtifactId(smart_contract::prelude::FindContractManifestByArtifactId),
         /// Fetch the active ABI version.
         FindAbiVersion(runtime::prelude::FindAbiVersion),
         /// Fetch an asset by identifier.
@@ -4306,7 +4306,7 @@ impl_singular_queries! {
     account::prelude::FindAccountRecoveryPolicyByAlias => crate::account::AccountRecoveryPolicy,
     account::prelude::FindAccountRecoveryRequestByAlias => crate::account::AccountRecoveryRequest,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
-    smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
+    smart_contract::prelude::FindContractManifestByArtifactId => crate::smart_contract::manifest::ContractManifest,
     runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
     asset::prelude::FindAssetById => crate::asset::value::Asset,
     asset::prelude::FindAssetDefinitionById => crate::asset::definition::AssetDefinition,
@@ -4644,19 +4644,19 @@ pub mod smart_contract {
     //! Smart contract code/manifest related queries.
     use derive_more::Display;
     queries! {
-        /// Find a smart contract manifest by its content-addressed code hash.
+        /// Find a smart contract manifest by its exact dataspace artifact identity.
         #[derive(Display)]
-        #[display("Find contract manifest by `{code_hash}`")]
+        #[display("Find contract manifest by `{artifact_id:?}`")]
         #[repr(transparent)]
-        #[norito_schema(name = "iroha_data_model::query::smart_contract::model::FindContractManifestByCodeHash")]
-        pub struct FindContractManifestByCodeHash {
-            /// Content-addressed code hash of the compiled `.to` bytecode.
-            pub code_hash: iroha_crypto::Hash,
+        #[norito_schema(name = "iroha_data_model::query::smart_contract::model::FindContractManifestByArtifactId")]
+        pub struct FindContractManifestByArtifactId {
+            /// Exact dataspace and complete artifact content hash.
+            pub artifact_id: crate::smart_contract::ContractArtifactId,
         }
     }
     pub mod prelude {
         //! Prelude re-exports for smart contract queries.
-        pub use super::FindContractManifestByCodeHash;
+        pub use super::FindContractManifestByArtifactId;
     }
 }
 pub mod transaction {

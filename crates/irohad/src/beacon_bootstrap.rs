@@ -871,6 +871,7 @@ fn rotation_phase_verifier(
     let mut verifier = NativeJournalCursor::new(
         proof.chain_id.clone(),
         proof.network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         proof.finality_limits.checked()?,
     )
     .map_err(|_| Error::Crypto)?;
@@ -960,8 +961,13 @@ fn read_verified_rotation_selection(
         limits.decode_limits().map_err(|_| Error::InvalidInput)?,
     )
     .map_err(|_| Error::InvalidInput)?;
-    let verifier = NativeJournalCursor::new(proof.chain_id.clone(), proof.network_id, limits)
-        .map_err(|_| Error::Crypto)?;
+    let verifier = NativeJournalCursor::new(
+        proof.chain_id.clone(),
+        proof.network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits,
+    )
+    .map_err(|_| Error::Crypto)?;
     let selected = verify_validator_committee_selection_evidence_v1(
         &evidence,
         &proof.chain_id,

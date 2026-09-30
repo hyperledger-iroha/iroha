@@ -1,8 +1,11 @@
-//! Cold complete element publication at one original native applied cut.
+//! Cold complete element publication at one original certified pre-tail World cut.
 //!
-//! Normal block execution retains only the incremental accumulator. This
+//! Normal execution retains the accumulator and funded touched-hash journal. This
 //! on-demand path borrows target values from the same locked World overlay and
 //! funds every retained snapshot entry with the original finite operation pool.
+//! Only private journal preimages can undo deterministic post-result writes. The
+//! complete reconstructed root/count must match certified R; current typed targets
+//! that changed in the tail are refused. Decoded restoration requires native replay.
 
 use super::world_state_cut::CutCapsule;
 use super::*;
@@ -58,8 +61,12 @@ impl<'a> SnapshotCollector<'a> {
                     .map_err(|error| error.to_string())?,
             );
         }
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(expected)
+            .map_err(|error| format!("World snapshot original storage is unavailable: {error}"))?;
         Ok(Self {
-            entries: Vec::with_capacity(expected),
+            entries,
             charges,
             budget,
             expected,
@@ -76,7 +83,7 @@ impl<'a> SnapshotCollector<'a> {
         if self.entries.len() >= self.expected {
             return Err("World snapshot differs from the original stored entry count".into());
         }
-        // String::from(str) owns one exact byte allocation; admit it before copying.
+        // Admit the exact field bytes before their sole owned allocation.
         let layout = Layout::array::<u8>(id.len()).map_err(|error| error.to_string())?;
         let charge = self
             .budget
@@ -84,7 +91,11 @@ impl<'a> SnapshotCollector<'a> {
             .map_err(|error| error.to_string())?
             .try_split(layout)
             .map_err(|error| error.to_string())?;
-        let field_id = id.to_owned();
+        let mut field_id = String::new();
+        field_id.try_reserve_exact(id.len()).map_err(|error| {
+            format!("World snapshot original field storage is unavailable: {error}")
+        })?;
+        field_id.push_str(id);
         self.charges.push_reserved(charge);
         self.entries.push(WorldStateSnapshotEntryV1 {
             field_id,
@@ -257,6 +268,15 @@ fn require_cut(view: &StateView<'_>, tip: &CommittedBlock) -> Result<(), String>
 }
 
 impl State {
+    /// Exact schema commitment of this build's canonical native World registry.
+    /// Consumers must compare it with the authenticated snapshot before assigning
+    /// typed meaning to a field or proving that a typed key is absent.
+    /// # Errors
+    /// The compiled registry has an invalid or inconsistent canonical schema.
+    pub fn native_world_schema_hash_v1() -> Result<Hash, String> {
+        Ok(field_index().as_ref().map_err(Clone::clone)?.schema)
+    }
+
     /// Publish every canonical World element and borrowed exact target originals on demand.
     ///
     /// `tip` must come from the retained native certified chain. This method checks

@@ -144,6 +144,8 @@ pub mod permission;
 pub mod petal_stream;
 /// Canonical protocol-bound privacy proof and activation types.
 pub mod privacy;
+/// Opaque certified private-root anchors with owner-authorized parent registration.
+pub mod private_dataspace;
 /// Zero-knowledge proof payload types
 pub mod proof;
 /// QR stream framing types for offline payload handoff.

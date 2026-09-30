@@ -1,0 +1,23 @@
+[package]
+name = "iroha_fs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native retained-handle custody for private Iroha files"
+
+[lints]
+workspace = true
+
+[dependencies]
+zeroize = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Memory"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

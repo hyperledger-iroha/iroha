@@ -1,6 +1,6 @@
 """End-to-end run of the soak orchestrator (``scripts/sumeragi_soak.py``) over fake binaries.
 
-A fake ``kagami localnet`` writes peer configs, a client config and a start script; a fake
+A fake ``kagami localnet generate`` writes peer configs, a client config and a start script; a fake
 ``iroha3d`` serves ``/health`` and ``/status`` on its Torii port and logs the driver's audit
 lines (JSON) for a deterministic chain whose height survives restarts; a fake ``iroha`` CLI
 answers ping batches and probes. The run exercises everything but consensus itself: config
@@ -41,6 +41,7 @@ import argparse, os, sys
 from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("command")
+parser.add_argument("action")
 parser.add_argument("--peers", type=int)
 parser.add_argument("--seed")
 parser.add_argument("--base-api-port", type=int)
@@ -48,6 +49,7 @@ parser.add_argument("--base-p2p-port", type=int)
 parser.add_argument("--out-dir", type=Path)
 args = parser.parse_args()
 assert args.command == "localnet"
+assert args.action == "generate"
 out = args.out_dir
 out.mkdir(parents=True)
 def crc(body):

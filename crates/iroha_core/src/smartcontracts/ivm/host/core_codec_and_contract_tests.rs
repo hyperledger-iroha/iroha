@@ -724,11 +724,12 @@ fn install_contract_with_interface_and_lifecycle(
         authority,
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into(),
     );
-    let code_hash =
-        register_code_bytes(authority, code, &mut tx).expect("register contract bytecode");
+    let code_hash = register_code_bytes(authority, DataSpaceId::UNIVERSAL, code, &mut tx)
+        .expect("register contract bytecode");
     manifest.code_hash = Some(code_hash);
     manifest = manifest.signed(&fixture_signing_keypair(authority));
-    register_manifest(authority, manifest, &mut tx).expect("register contract manifest");
+    register_manifest(authority, DataSpaceId::UNIVERSAL, manifest, &mut tx)
+        .expect("register contract manifest");
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()

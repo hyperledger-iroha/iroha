@@ -164,8 +164,13 @@ fn verify_signed_genesis_attempt(
     }
     // This cursor has no finalized tip until a genuine H2 journal authenticates
     // the signed genesis result through its native parent-result commitment.
-    let verifier =
-        NativeJournalCursor::new(chain_id.clone(), network, limits).map_err(|_| Error::Crypto)?;
+    let verifier = NativeJournalCursor::new(
+        chain_id.clone(),
+        network,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits,
+    )
+    .map_err(|_| Error::Crypto)?;
     Ok((roster, verifier, cutoff))
 }
 

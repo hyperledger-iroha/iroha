@@ -235,10 +235,11 @@ extension ToriiClient {
 
     @discardableResult
     public func fetchContractManifest(
-        codeHashHex: String,
+        artifactId: ContractArtifactId,
+        canonicalAuth: ToriiCanonicalRequestAuth,
         completion: @escaping (Result<ToriiContractManifestRecord, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.fetchContractManifest(codeHashHex: codeHashHex) }
+        runTask(completion) { try await self.fetchContractManifest(artifactId: artifactId, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult

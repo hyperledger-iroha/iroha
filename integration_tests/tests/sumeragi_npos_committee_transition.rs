@@ -625,8 +625,13 @@ fn read_contiguous_finality_chain(
             })
             .collect::<Result<Vec<_>>>()?,
     };
-    let cursor = NativeJournalCursor::new(client.client().chain().clone(), network_id, limits)
-        .map_err(|error| eyre!(error))?;
+    let cursor = NativeJournalCursor::new(
+        client.client().chain().clone(),
+        network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        limits,
+    )
+    .map_err(|error| eyre!(error))?;
     let blocks = with_verified_native_journal(
         &journal,
         client.client().chain(),
@@ -1103,8 +1108,13 @@ async fn execute_rotation_preparation(
         finality_journal: custody_journal,
         beacon_finalization: certificate,
     };
-    let proof_cursor = NativeJournalCursor::new(network.chain_id(), network_id, finality_limits())
-        .map_err(|error| eyre!(error))?;
+    let proof_cursor = NativeJournalCursor::new(
+        network.chain_id(),
+        network_id,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        finality_limits(),
+    )
+    .map_err(|error| eyre!(error))?;
     verify_validator_committee_provisioning_evidence_v1(
         &custody_evidence,
         &network.chain_id(),
@@ -1937,6 +1947,7 @@ fn native_finality_rejects_wrong_independent_genesis_before_query() {
         torii_api_url: "http://committee-transition.invalid/".parse().unwrap(),
         torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
         basic_auth: None,
+        api_token: None,
         transaction_add_nonce: false,
         transaction_ttl: Duration::from_secs(5),
         transaction_status_timeout: Duration::from_secs(10),

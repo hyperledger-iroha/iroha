@@ -1,0 +1,590 @@
+//! Private retained generations, context selection, and foreground control operations.
+
+use super::*;
+use iroha_fs::{PrivateDirectory, PublishMode};
+use std::{
+    fs::{self, File},
+    io::{Read as _, Seek as _, SeekFrom},
+    net::{Ipv4Addr, TcpListener},
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::Instant,
+};
+
+/// Held loopback reservations for the four Torii and four P2P listeners.
+///
+/// Keep this value alive until preparation finishes; the native worker acquires the actual
+/// listeners immediately after these reservations are released.
+pub struct LocalnetPorts {
+    /// First of four consecutive Torii ports.
+    pub base_api: u16,
+    /// First of four consecutive P2P ports.
+    pub base_p2p: u16,
+    reservations: Vec<TcpListener>,
+}
+
+impl LocalnetPorts {
+    /// Reserve two disjoint four-port blocks on IPv4 loopback.
+    ///
+    /// # Errors
+    /// Returns an error when the operating system cannot allocate the listeners.
+    pub fn reserve() -> Result<Self> {
+        let (base_api, mut reservations) = reserve_block(8080)?;
+        let (base_p2p, p2p) = reserve_block(1337)?;
+        reservations.extend(p2p);
+        Ok(Self {
+            base_api,
+            base_p2p,
+            reservations,
+        })
+    }
+
+    /// Number of sockets still reserved by this preparation.
+    #[must_use]
+    pub fn reserved_count(&self) -> usize {
+        self.reservations.len()
+    }
+}
+
+fn reserve_block(preferred: u16) -> Result<(u16, Vec<TcpListener>)> {
+    for attempt in 0..128 {
+        let base = if attempt == 0 {
+            preferred
+        } else {
+            let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+            probe.local_addr()?.port()
+        };
+        if base > u16::MAX - 3 {
+            continue;
+        }
+        let mut listeners = Vec::with_capacity(4);
+        for offset in 0..4 {
+            match TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)) {
+                Ok(listener) => listeners.push(listener),
+                Err(_) => break,
+            }
+        }
+        if listeners.len() == 4 {
+            return Ok((base, listeners));
+        }
+    }
+    Err(Error::Invalid(
+        "cannot reserve four consecutive loopback ports".into(),
+    ))
+}
+
+/// Owner-private managed contexts and their retained localnet generations.
+pub struct ManagedStore {
+    root: PrivateDirectory,
+    networks: PrivateDirectory,
+}
+
+impl ManagedStore {
+    /// Open or create a private store at an explicit application-selected path.
+    ///
+    /// # Errors
+    /// Fails if custody cannot be established or the directory cannot be created.
+    pub fn open(root: &Path) -> Result<Self> {
+        let root = PrivateDirectory::open_or_create(root)?;
+        let networks = root.ensure_child("networks")?;
+        Ok(Self { root, networks })
+    }
+
+    /// Canonical private root passed to the worker entry point.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.root.path()
+    }
+
+    pub(super) fn directory(&self, name: &str) -> Result<PrivateDirectory> {
+        validate_name(name)?;
+        Ok(PrivateDirectory::open(&self.networks.path().join(name))?)
+    }
+
+    /// Start or reconnect to a named network, preparing its generation only once.
+    ///
+    /// Canonical generation runs only for a new context, with private fixed-path seed custody
+    /// and reserved loopback ports. Existing identities, configuration and ledger are retained.
+    ///
+    /// # Errors
+    /// Invalid input, competing ownership, preparation, binary changes, startup or readiness failure.
+    pub fn up(&self, request: &LocalnetRequest) -> Result<ManagedStatus> {
+        transport::supported()?;
+        validate_name(&request.name)?;
+        if request.startup_timeout.is_zero() || request.startup_timeout > Duration::from_secs(600) {
+            return Err(Error::Invalid(
+                "startup timeout must be greater than zero and at most ten minutes".into(),
+            ));
+        }
+        let started = Instant::now();
+        let launcher = pin_binary(&request.launcher)?;
+        let daemon = pin_binary(&request.daemon)?;
+        let directory = self.networks.ensure_child(&request.name)?;
+        let _operation = acquire(&directory, "operation.lock", &request.name)?;
+        let mut reservations = None;
+        let retained = match directory.read(MANIFEST, MAX_METADATA) {
+            Ok(bytes) => {
+                let retained: RetainedLocalnet = decode(&bytes)?;
+                validate_prepared(&request.name, directory.path(), &retained.prepared)?;
+                if retained.launcher.blake3 != launcher.blake3
+                    || retained.daemon.blake3 != daemon.blake3
+                {
+                    return Err(Error::Invalid("managed generation uses different binary contents; select its original matching installation".into()));
+                }
+                retained
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let ports = LocalnetPorts::reserve()?;
+                let bundle = directory.create_child(&format!("generation-{}", random_token()))?;
+                let prepared =
+                    crate::localnet::prepare_localnet(&request.name, bundle.path(), &ports)?;
+                validate_prepared(&request.name, directory.path(), &prepared)?;
+                let retained = RetainedLocalnet {
+                    prepared,
+                    launcher,
+                    daemon,
+                    startup_timeout_ms: u64::try_from(request.startup_timeout.as_millis())
+                        .map_err(|_| Error::Invalid("startup timeout is too large".into()))?,
+                };
+                directory.write_atomic(MANIFEST, &encode(&retained)?, PublishMode::CreateNew)?;
+                reservations = Some(ports);
+                retained
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let remaining = request
+            .startup_timeout
+            .checked_sub(started.elapsed())
+            .ok_or(Error::Timeout(request.startup_timeout))?;
+        if let Ok(status) = exchange(&directory, "status") {
+            if status.phase == ManagedPhase::Ready {
+                self.select(&request.name)?;
+                return Ok(status);
+            }
+            if status.phase == ManagedPhase::Failed {
+                return Ok(status);
+            }
+        } else {
+            // A crashed controller's still-running children keep this lock. Never adopt or kill
+            // processes merely because their integer PID appears in a previous record.
+            let available = acquire(&directory, "runtime.lock", &request.name)?;
+            drop(available);
+            verify_binary(&retained.launcher)?;
+            let output = directory.open_append("supervisor.log")?;
+            let errors = output.try_clone()?;
+            let mut command = Command::new(&retained.launcher.path);
+            command
+                .arg("_managed-worker")
+                .arg("--root")
+                .arg(self.root())
+                .arg("--name")
+                .arg(&request.name)
+                .arg("--startup-timeout-ms")
+                .arg(remaining.as_millis().to_string())
+                .stdin(Stdio::null())
+                .stdout(output)
+                .stderr(errors);
+            transport::detach(&mut command);
+            directory.write_atomic(
+                STATUS,
+                &encode(&ManagedStatus {
+                    context: retained.prepared.context.clone(),
+                    phase: ManagedPhase::Starting,
+                    running_peers: 0,
+                    failure: None,
+                })?,
+                PublishMode::Replace,
+            )?;
+            drop(reservations.take());
+            let mut worker = command.spawn()?;
+            // Reap this exact child eventually without blocking the CLI after successful startup.
+            thread::spawn(move || {
+                let _ = worker.wait();
+            });
+        }
+        loop {
+            if started.elapsed() >= request.startup_timeout {
+                let _ = exchange(&directory, "down");
+                return Err(Error::Timeout(request.startup_timeout));
+            }
+            if let Ok(status) = exchange(&directory, "status") {
+                match status.phase {
+                    ManagedPhase::Ready => {
+                        self.select(&request.name)?;
+                        return Ok(status);
+                    }
+                    ManagedPhase::Failed | ManagedPhase::Stopped => return Ok(status),
+                    ManagedPhase::Starting => {}
+                }
+            } else if let Ok(bytes) = directory.read(STATUS, MAX_METADATA) {
+                let status: ManagedStatus = decode(&bytes)?;
+                if status.phase == ManagedPhase::Failed && !runtime_owned(&directory)? {
+                    return Ok(status);
+                }
+            }
+            thread::sleep(POLL);
+        }
+    }
+
+    /// Query the authenticated live worker, or report a stopped retained generation.
+    ///
+    /// # Errors
+    /// Missing context, custody failure, or live ownership without a reachable control endpoint.
+    pub fn status(&self, name: &str) -> Result<ManagedStatus> {
+        let directory = self.directory(name)?;
+        if let Ok(status) = exchange(&directory, "status") {
+            return Ok(status);
+        }
+        if runtime_owned(&directory)? {
+            return Err(Error::Busy(name.into()));
+        }
+        let retained: RetainedLocalnet = decode(&directory.read(MANIFEST, MAX_METADATA)?)?;
+        match directory.read(STATUS, MAX_METADATA) {
+            Ok(bytes) => {
+                let mut last: ManagedStatus = decode(&bytes)?;
+                if last.context != retained.prepared.context {
+                    return Err(Error::Invalid(
+                        "retained status belongs to another context".into(),
+                    ));
+                }
+                if last.phase != ManagedPhase::Stopped {
+                    if last.phase == ManagedPhase::Starting
+                        && file_owned(&directory, "operation.lock")?
+                    {
+                        // The foreground operation publishes Starting before native spawn; its
+                        // lock distinguishes that small handoff window from a crashed owner.
+                        last.running_peers = 0;
+                        return Ok(last);
+                    }
+                    if last.phase != ManagedPhase::Failed {
+                        last.failure = Some("the background controller stopped unexpectedly; inspect its retained log".into());
+                    }
+                    last.phase = ManagedPhase::Failed;
+                    last.running_peers = 0;
+                    return Ok(last);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(ManagedStatus {
+            context: retained.prepared.context,
+            phase: ManagedPhase::Stopped,
+            running_peers: 0,
+            failure: None,
+        })
+    }
+
+    /// Stop exactly this worker's children while retaining all chain and signer material.
+    ///
+    /// # Errors
+    /// Missing context, competing operation, failed custody or unreconciled process ownership.
+    pub fn down(&self, name: &str) -> Result<ManagedStatus> {
+        let directory = self.directory(name)?;
+        let _operation = acquire(&directory, "operation.lock", name)?;
+        if !runtime_owned(&directory)? {
+            return self.status(name);
+        }
+        let status = exchange(&directory, "down")?;
+        let started = Instant::now();
+        while runtime_owned(&directory)? {
+            if started.elapsed() > Duration::from_secs(15) {
+                return Err(Error::Busy(name.into()));
+            }
+            thread::sleep(POLL);
+        }
+        Ok(status)
+    }
+
+    /// Delete a stopped managed generation after the caller has obtained explicit reset intent.
+    ///
+    /// This is destructive: all chain state and signer material of the named context is removed.
+    /// Running or orphan-owned generations are refused, and unrelated contexts are untouched.
+    ///
+    /// # Errors
+    /// Competing operation, active ownership, malformed name, custody failure or deletion failure.
+    pub fn reset(&self, name: &str) -> Result<()> {
+        let directory = self.directory(name)?;
+        let _operation = acquire(&directory, "operation.lock", name)?;
+        let _runtime = acquire(&directory, "runtime.lock", name)?;
+        directory.revalidate()?;
+        directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
+        // The ownership directory and locked files remain pinned on every platform. Keep
+        // selection resolution explicit: a reset selection should report the missing
+        // generation, never silently switch transaction signing to another context.
+        Ok(())
+    }
+
+    /// Select an existing context without exposing its signer or copying its secret config.
+    ///
+    /// # Errors
+    /// The named generation is absent, malformed, or fails private custody checks.
+    pub fn select(&self, name: &str) -> Result<ManagedContext> {
+        let context = self.context(Some(name))?;
+        self.root.write_atomic(
+            "active.json",
+            &encode(&name.to_owned())?,
+            PublishMode::Replace,
+        )?;
+        Ok(context)
+    }
+
+    /// Load the named context, or the currently selected managed context.
+    ///
+    /// # Errors
+    /// Missing selection, missing generation or malformed retained public metadata.
+    pub fn context(&self, name: Option<&str>) -> Result<ManagedContext> {
+        let selected: String;
+        let name = if let Some(name) = name {
+            name
+        } else {
+            let bytes = self
+                .root
+                .read("active.json", MAX_METADATA)
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        Error::NoSelection
+                    } else {
+                        error.into()
+                    }
+                })?;
+            selected = decode(&bytes)?;
+            &selected
+        };
+        Ok(self.prepared(name)?.context)
+    }
+
+    /// Observe one retained generation's public context, peer endpoints and configuration paths.
+    ///
+    /// The returned metadata contains no key or token bytes and does not assert process health.
+    /// Use [`Self::status`] for authenticated live lifecycle observations.
+    ///
+    /// # Errors
+    /// Missing generation, malformed metadata, escaped paths or unsafe private custody.
+    pub fn prepared(&self, name: &str) -> Result<PreparedLocalnet> {
+        let directory = self.directory(name)?;
+        let retained: RetainedLocalnet = decode(&directory.read(MANIFEST, MAX_METADATA)?)?;
+        validate_prepared(name, directory.path(), &retained.prepared)?;
+        Ok(retained.prepared)
+    }
+
+    /// List retained contexts in stable name order.
+    ///
+    /// # Errors
+    /// A retained context or its parent cannot be read under private custody.
+    pub fn contexts(&self) -> Result<Vec<ManagedContext>> {
+        self.networks.revalidate()?;
+        let mut names = Vec::new();
+        for entry in fs::read_dir(self.networks.path())? {
+            let entry = entry?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| Error::Invalid("invalid context filename".into()))?;
+            validate_name(&name)?;
+            if entry.path().join(MANIFEST).try_exists()? {
+                names.push(name);
+            }
+        }
+        names.sort();
+        names
+            .into_iter()
+            .map(|name| self.context(Some(&name)))
+            .collect()
+    }
+
+    /// Read the bounded tail of one retained peer or supervisor log.
+    ///
+    /// # Errors
+    /// An unknown log, insecure file, or more than one MiB was requested.
+    pub fn logs(&self, name: &str, peer: Option<usize>, max_bytes: usize) -> Result<String> {
+        if max_bytes == 0 || max_bytes > 1024 * 1024 {
+            return Err(Error::Invalid(
+                "log tail size must be between 1 byte and one MiB".into(),
+            ));
+        }
+        let directory = self.directory(name)?;
+        let retained: RetainedLocalnet = decode(&directory.read(MANIFEST, MAX_METADATA)?)?;
+        validate_prepared(name, directory.path(), &retained.prepared)?;
+        let log_name = match peer {
+            Some(index) => retained
+                .prepared
+                .peers
+                .get(index)
+                .ok_or_else(|| Error::Invalid("localnet peer index must be 0..3".into()))?
+                .log_name
+                .as_str(),
+            None => "supervisor.log",
+        };
+        let mut file = directory.open_read(log_name)?;
+        let length = file.metadata()?.len();
+        file.seek(SeekFrom::Start(length.saturating_sub(max_bytes as u64)))?;
+        let mut bytes = Vec::new();
+        file.take(max_bytes as u64).read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+pub(super) fn random_token() -> String {
+    hex::encode(rand::random::<[u8; 32]>())
+}
+
+pub(super) fn acquire(directory: &PrivateDirectory, file: &str, name: &str) -> Result<File> {
+    let lock = directory.open_ownership_lock(file).map_err(|error| {
+        if ownership_contended(&error) {
+            Error::Busy(name.into())
+        } else {
+            error.into()
+        }
+    })?;
+    lock.try_lock().map_err(|error| match error {
+        fs::TryLockError::WouldBlock => Error::Busy(name.into()),
+        fs::TryLockError::Error(error) => error.into(),
+    })?;
+    Ok(lock)
+}
+
+fn runtime_owned(directory: &PrivateDirectory) -> Result<bool> {
+    file_owned(directory, "runtime.lock")
+}
+
+fn file_owned(directory: &PrivateDirectory, name: &str) -> Result<bool> {
+    let lock = match directory.open_ownership_lock(name) {
+        Ok(lock) => lock,
+        Err(error) if ownership_contended(&error) => return Ok(true),
+        Err(error) => return Err(error.into()),
+    };
+    match lock.try_lock() {
+        Ok(()) => Ok(false),
+        Err(fs::TryLockError::WouldBlock) => Ok(true),
+        Err(fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
+fn ownership_contended(error: &std::io::Error) -> bool {
+    // ERROR_SHARING_VIOLATION is the Windows handle-lifetime ownership fence. Unlike a
+    // process-owned LockFileEx lock, inherited child handles retain this writer exclusion.
+    cfg!(windows) && error.raw_os_error() == Some(32)
+}
+
+pub(super) fn pin_binary(path: &Path) -> Result<BinaryPin> {
+    let path = path.canonicalize()?;
+    let mut file = File::open(&path)?;
+    if !file.metadata()?.is_file() {
+        return Err(Error::Invalid(
+            "managed executable must be a regular file".into(),
+        ));
+    }
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(BinaryPin {
+        path,
+        blake3: hasher.finalize().to_hex().to_string(),
+    })
+}
+
+pub(super) fn verify_binary(pin: &BinaryPin) -> Result<()> {
+    if pin_binary(&pin.path)?.blake3 != pin.blake3 {
+        return Err(Error::Invalid(
+            "managed executable changed since this generation was prepared".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_prepared(
+    name: &str,
+    root: &Path,
+    prepared: &PreparedLocalnet,
+) -> Result<()> {
+    if prepared.context.name != name
+        || prepared.peers.len() != 4
+        || prepared.context.dataspace_id != 0
+        || prepared.context.dataspace_alias != "universal"
+    {
+        return Err(Error::Invalid(
+            "prepared localnet must bind its exact name, universal dataspace and four validators"
+                .into(),
+        ));
+    }
+    let mut endpoints = std::collections::BTreeSet::new();
+    let mut configs = std::collections::BTreeSet::new();
+    let mut logs = std::collections::BTreeSet::new();
+    for peer in &prepared.peers {
+        let url: url::Url = peer
+            .torii_url
+            .parse()
+            .map_err(|_| Error::Invalid("invalid managed Torii URL".into()))?;
+        if url.scheme() != "http"
+            || url.host_str() != Some("127.0.0.1")
+            || url.port().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !endpoints.insert(peer.torii_url.clone())
+        {
+            return Err(Error::Invalid(
+                "managed Torii endpoints must be distinct bare IPv4 loopback HTTP origins".into(),
+            ));
+        }
+        if !confined_path(root, &peer.config_path)?
+            || !configs.insert(peer.config_path.clone())
+            || peer.log_name.contains(['/', '\\'])
+            || !peer.log_name.ends_with(".log")
+            || peer.log_name.starts_with('.')
+            || peer.log_name == "supervisor.log"
+            || !logs.insert(peer.log_name.clone())
+        {
+            return Err(Error::Invalid(
+                "managed configs and log names must be distinct and confined to the generation"
+                    .into(),
+            ));
+        }
+        iroha_fs::read_private(&peer.config_path, MAX_METADATA)?;
+    }
+    if prepared.context.torii_url != prepared.peers[0].torii_url
+        || !confined_path(root, &prepared.context.client_config)?
+    {
+        return Err(Error::Invalid(
+            "client context must belong to this generation and its first validator".into(),
+        ));
+    }
+    iroha_fs::read_private(&prepared.context.client_config, MAX_METADATA)?;
+    Ok(())
+}
+
+fn confined_path(root: &Path, path: &Path) -> Result<bool> {
+    use std::path::Component;
+    // Do not normalize a malicious retained path into an allowed one: exact canonical spelling
+    // is part of the context binding, and the custody reader subsequently pins every component.
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+        || !path.starts_with(root)
+    {
+        return Ok(false);
+    }
+    Ok(path.canonicalize()? == path && root.canonicalize()? == root)
+}
+
+pub(super) fn exchange(directory: &PrivateDirectory, action: &str) -> Result<ManagedStatus> {
+    let worker: WorkerRecord = decode(&directory.read(WORKER, MAX_METADATA)?)?;
+    transport::request(
+        directory,
+        &ControlRequest {
+            token: worker.token,
+            action: action.into(),
+        },
+    )
+}

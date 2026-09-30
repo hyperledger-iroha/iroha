@@ -271,10 +271,16 @@ impl NativeBeaconProducer {
         {
             return Err(NativeBeaconError::Context);
         }
+        let root_scope = crate::sumeragi::lanes::routing::committed_root_scope(state.world())
+            .ok_or_else(|| {
+                NativeBeaconError::Source("native control requires immutable root scope".into())
+            })?;
+        let required = super::required(root_scope, state.world(), current, context.height)
+            .map_err(NativeBeaconError::Source)?;
         if self.prepared.as_ref() == Some(context) {
             return Ok(());
         }
-        let active = if super::required(state.world(), current, context.height) {
+        let active = if required {
             super::validate_pending_slot(state.world(), current, context.height)
                 .map_err(NativeBeaconError::Source)?;
             Some(ActiveRound::open(

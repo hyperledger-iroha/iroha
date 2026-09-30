@@ -1,3 +1,6 @@
+import { artifactReadContext, artifactReadOptions, withArtifactResponseIdentity } from "./contractArtifactReadTestHelpers.js";
+import { universalArtifactInstruction } from "./contractArtifactTestHelpers.js";
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
@@ -81,7 +84,7 @@ test("native Norito manifest codecs roundtrip Unit and nominal error schemas", a
   manifest.error_messages = [{ error_type: error.identity, code: 1, message: "残高が不足しています" }];
   manifest.entrypoints[0].return_type = `Result<(), ${error.identity}>`;
   manifest.entrypoints[0].return_schema = returnSchema;
-  const instruction = { RegisterSmartContractCode: { manifest } };
+  const instruction = universalArtifactInstruction({ RegisterSmartContractCode: { manifest } });
   const encoded = noritoEncodeInstruction(instruction, 753);
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.error_types, [error]);
@@ -96,7 +99,7 @@ test("canonical Norito manifest codec preserves nominal state cursor key schemas
   const schema = { nodes: [{ kind: "Option", value: null }, { kind: "StateCursor", value: { kind: "Int", value: null } }] };
   manifest.entrypoints[0].return_type = "Option<StateCursor<int>>";
   manifest.entrypoints[0].return_schema = schema;
-  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const encoded = noritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest } }), 753);
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, schema);
   assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
@@ -117,15 +120,16 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
   const manifest = structuredClone(fixture.manifest);
   manifest.entrypoints[0].return_type = "()";
   manifest.entrypoints[0].return_schema = { nodes: [{ kind: "Unit", value: null }] };
-  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const encoded = noritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest } }), 753);
   const decoded = noritoDecodeInstruction(encoded, 753).RegisterSmartContractCode.manifest;
   assert.deepEqual(decoded.entrypoints[0].return_schema, manifest.entrypoints[0].return_schema);
-  buildRegisterSmartContractCodeInstruction({ manifest });
-  const fetchManifest = async (value) => new ToriiClient("http://localhost:8080", {
-    fetchImpl: async () => new Response(JSON.stringify({ manifest: value, code_hash: null, abi_hash: null }), {
+  buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest }));
+  const fetchManifest = async (value) => new ToriiClient("https://localhost:8080", {
+    localSigningContext: artifactReadContext,
+    fetchImpl: async () => new Response(JSON.stringify(withArtifactResponseIdentity({ manifest: { ...value, code_hash: "hash:1111111111111111111111111111111111111111111111111111111111111111#4667" }, code_hash: "11".repeat(32), abi_hash: null }, "11".repeat(32))), {
       status: 200, headers: { "content-type": "application/json" },
     }),
-  }).getContractManifest("11".repeat(32));
+  }).getContractManifest({ dataspaceId: "0", codeHash: "11".repeat(32) }, artifactReadOptions());
   await fetchManifest(manifest);
   for (const fields of [["return_type"], ["return_schema"], ["return_type", "return_schema"]]) {
     for (const omitted of [false, true]) {
@@ -134,8 +138,8 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
         if (omitted) delete invalid.entrypoints[0][field];
         else invalid.entrypoints[0][field] = null;
       }
-      assert.throws(() => noritoEncodeInstruction({ RegisterSmartContractCode: { manifest: invalid } }, 753), /return_type.*return_schema/u);
-      assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest: invalid }), /return_type.*return_schema/u);
+      assert.throws(() => noritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest: invalid } }), 753), /return_type.*return_schema/u);
+      assert.throws(() => buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest: invalid })), /return_type.*return_schema/u);
       await assert.rejects(fetchManifest(invalid), /return_type.*return_schema/u);
     }
   }
@@ -163,7 +167,7 @@ test("exported structs retain locked identity in public and durable schemas", as
   }
   const base = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
   const manifest = { ...base.manifest, error_messages: null, ...fixture.manifest };
-  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const encoded = noritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest } }), 753);
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, fixture.manifest.entrypoints[0].return_schema);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.states, fixture.manifest.states);
@@ -175,7 +179,7 @@ test("exported structs retain locked identity in public and durable schemas", as
 
 test("manifest instruction encoding and decoding reject unavailable native bindings", async () => {
   const fixture = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
-  const instruction = { RegisterSmartContractCode: { manifest: fixture.manifest } };
+  const instruction = universalArtifactInstruction({ RegisterSmartContractCode: { manifest: fixture.manifest } });
   const encoded = noritoEncodeInstruction(instruction, 753);
   const directory = await mkdtemp(join(tmpdir(), "iroha-manifest-codec-native-absence-"));
   try {

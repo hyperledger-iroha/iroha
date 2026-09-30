@@ -51,6 +51,7 @@ pub fn read_effective_permissions(
     struct Page {
         items: Vec<Permission>,
         total: u64,
+        has_more: bool,
     }
     let mut permissions = BTreeSet::new();
     for page_index in 0..32_u64 {
@@ -60,6 +61,11 @@ pub fn read_effective_permissions(
             page_index * 500,
         )?;
         if response.status().as_u16() != 200 {
+            if response.status().as_u16() == 400 {
+                return Err(eyre!(
+                    "effective deployment permission pagination was rejected; the complete permission set must fit the network's configured page and fetch budgets"
+                ));
+            }
             return Err(eyre!(
                 "effective deployment permission read failed with HTTP {}",
                 response.status()
@@ -106,15 +112,18 @@ pub fn read_effective_permissions(
             ));
         }
         let page: Page = norito::json::from_slice(response.body())?;
-        // Public account-permission reads use the List fanout merger, whose total counts the
-        // returned deduplicated page. It differs from the internal route's all-matched total.
+        // The public total counts the deduplicated route-page union. Completeness comes only
+        // from the mandatory OR of every successfully authenticated route's `has_more`, not
+        // from a short merged page or that union's total.
         if page.total != page.items.len() as u64 {
             return Err(eyre!(
                 "effective permission page total disagrees with its items"
             ));
         }
-        if page.items.is_empty() {
-            return Ok(permissions);
+        if page.has_more && page.items.is_empty() {
+            return Err(eyre!(
+                "effective permission response advertises continuation without progress"
+            ));
         }
         permissions.extend(page.items);
         if permissions.len() > 16_000 {
@@ -122,9 +131,12 @@ pub fn read_effective_permissions(
                 "effective deployment permissions exceed fixed collection bound"
             ));
         }
+        if !page.has_more {
+            return Ok(permissions);
+        }
     }
     Err(eyre!(
-        "effective deployment permissions did not reach an empty complete page within the fixed traversal bound"
+        "effective deployment permissions did not reach complete route exhaustion within the fixed traversal bound"
     ))
 }
 

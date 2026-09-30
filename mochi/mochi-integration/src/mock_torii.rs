@@ -10,12 +10,11 @@ use axum::{
     routing::{get, post},
 };
 use color_eyre::{Result, eyre::eyre};
-use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::SumeragiDiagnosticsStatus,
-        consensus::SumeragiGenesisContextParameters,
         execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
         output_budget::ExecutionOutputLimits,
         stream::{BlockMessage, BlockSubscriptionRequest},
@@ -25,8 +24,6 @@ use iroha_data_model::{
         pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
         stream::{EventMessage, EventSubscriptionRequest},
     },
-    isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
-    parameter::system::SumeragiConsensusMode,
     sumeragi::SumeragiStatus,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
@@ -636,94 +633,10 @@ fn binary_response(body: Vec<u8>, content_type: &'static str) -> Response<Body> 
         .body(Body::from(body))
         .expect("binary response")
 }
-/// Utility used by the Kagami stub binary to emit default manifests.
-pub fn kagami_default_manifest_json(
-    _genesis_public_key: &PublicKey,
-    ivm_dir: impl AsRef<Path>,
-    chain_id: impl AsRef<str>,
-    consensus_mode: SumeragiConsensusMode,
-    kagemusha_mint_finality: &KagemushaMintFinalityGenesisParametersV1,
-) -> Result<String> {
-    let mut manifest = norito::json::Map::new();
-    manifest.insert(
-        "chain".to_string(),
-        Value::String(chain_id.as_ref().to_owned()),
-    );
-    manifest.insert(
-        "chain_discriminant".to_string(),
-        norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
-            .expect("serialize chain discriminant"),
-    );
-    manifest.insert("executor".to_string(), Value::Null);
-    manifest.insert(
-        "ivm_dir".to_string(),
-        Value::String(ivm_dir.as_ref().display().to_string()),
-    );
-    manifest.insert(
-        "consensus_mode".to_string(),
-        norito::json::value::to_value(&consensus_mode).expect("serialize consensus mode"),
-    );
-    manifest.insert(
-        "wire_protocol_version".to_string(),
-        norito::json::value::to_value(&u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION))
-            .expect("serialize wire protocol version"),
-    );
-    manifest.insert(
-        "sumeragi_context".to_string(),
-        norito::json::value::to_value(&SumeragiGenesisContextParameters::recommended())
-            .expect("serialize Sumeragi v2 genesis context"),
-    );
-    manifest.insert(
-        "kagemusha_mint_finality".to_string(),
-        norito::json::value::to_value(kagemusha_mint_finality)
-            .expect("serialize KAGEMUSHA mint-finality genesis parameters"),
-    );
-    manifest.insert(
-        "transactions".to_string(),
-        Value::Array(vec![Value::Object(norito::json::Map::new())]),
-    );
-    Ok(json::to_string_pretty(&Value::Object(manifest))?)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-    };
-    use iroha_model_base::peer::PeerId;
     mod replay_fixture_owner;
-
-    fn test_kagemusha_mint_finality_parameters() -> KagemushaMintFinalityGenesisParametersV1 {
-        let mut validators = (0x20_u8..0x24)
-            .map(|seed| {
-                let validator = PeerId::new(
-                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                        .expect("derive deterministic mock validator")
-                        .public_key()
-                        .clone(),
-                );
-                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                    &[0xA0_u8.wrapping_add(seed); 32],
-                    0,
-                    validator,
-                )
-                .expect("derive mock mint-finality validator keys")
-            })
-            .collect::<Vec<_>>();
-        validators.sort_by(|left, right| left.validator.cmp(&right.validator));
-        let parameters = KagemushaMintFinalityGenesisParametersV1 {
-            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                version: KAGEMUSHA_CHAIN_VERSION_V1,
-                generation: 0,
-                validators,
-            },
-        };
-        parameters
-            .validate()
-            .expect("mock mint-finality parameters are valid");
-        parameters
-    }
     #[test]
     fn default_data_uses_fixtures() {
         let data = MockToriiData::default();
@@ -759,63 +672,5 @@ mod tests {
                 ..
             })) if height == NonZeroU64::MIN
         ));
-    }
-    #[test]
-    fn kagami_manifest_helper_preserves_requested_chain_and_consensus_mode() {
-        let key_pair = iroha_crypto::KeyPair::random();
-        let ivm_dir = tempfile::tempdir().expect("tempdir");
-        let kagemusha_mint_finality = test_kagemusha_mint_finality_parameters();
-        let manifest = kagami_default_manifest_json(
-            key_pair.public_key(),
-            ivm_dir.path(),
-            "mochi-test-chain",
-            SumeragiConsensusMode::Npos,
-            &kagemusha_mint_finality,
-        )
-        .expect("manifest json");
-        let value: Value = json::from_str(&manifest).expect("parse manifest json");
-        assert_eq!(
-            value.get("chain").and_then(Value::as_str),
-            Some("mochi-test-chain")
-        );
-        assert_eq!(
-            value.get("consensus_mode").and_then(Value::as_str),
-            Some("Npos")
-        );
-        assert_eq!(
-            value.get("wire_protocol_version").and_then(Value::as_u64),
-            Some(u64::from(iroha_data_model::sumeragi::PROTOCOL_VERSION))
-        );
-        assert_eq!(
-            value
-                .get("sumeragi_context")
-                .and_then(Value::as_object)
-                .and_then(|context| context.get("da_layout"))
-                .and_then(Value::as_object)
-                .and_then(|layout| layout.get("chunk_size_bytes"))
-                .and_then(Value::as_u64),
-            Some(256 * 1024)
-        );
-        let parameters = value
-            .get("kagemusha_mint_finality")
-            .and_then(Value::as_object)
-            .expect("KAGEMUSHA mint-finality parameters");
-        assert_eq!(parameters.len(), 1);
-        let authority = parameters
-            .get("authority_generation")
-            .and_then(Value::as_object)
-            .expect("generation-zero authority template");
-        assert_eq!(authority.get("generation").and_then(Value::as_u64), Some(0));
-        assert_eq!(
-            authority.get("version").and_then(Value::as_u64),
-            Some(u64::from(KAGEMUSHA_CHAIN_VERSION_V1))
-        );
-        assert_eq!(
-            authority
-                .get("validators")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(4)
-        );
     }
 }

@@ -4899,16 +4899,6 @@ declare_mcp_dispatch_wrappers! {
             |arguments| extract_governance_selector_argument(arguments, "id", "tally id"),
             "/v1/gov/tally/{id}"
         );
-        dispatch_iroha_contracts_code_get => (
-            "code_hash",
-            |arguments| extract_code_hash_argument(arguments),
-            "/v1/contracts/code/{code_hash}"
-        );
-        dispatch_iroha_contracts_code_bytes_get => (
-            "code_hash",
-            |arguments| extract_code_hash_argument(arguments),
-            "/v1/contracts/code-bytes/{code_hash}"
-        );
         dispatch_iroha_accounts_get => (
             "account_id",
             |arguments| extract_account_id_argument(arguments),
@@ -7398,8 +7388,53 @@ fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
 fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(arguments, "hash")
 }
-fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
-    extract_canonical_path_string_argument(arguments, "code_hash")
+fn contract_artifact_route(arguments: &Map, bytes: bool) -> Result<String, String> {
+    let dataspace = extract_canonical_path_string_argument(arguments, "dataspace_id")?;
+    let hash = extract_canonical_path_string_argument(arguments, "code_hash")?;
+    let artifact = crate::routing::parse_contract_artifact_path(&dataspace, &hash)
+        .map_err(|error| error.to_string())?;
+    Ok(format!(
+        "/v1/contracts/artifacts/{}/{}{}",
+        artifact.dataspace_id.as_u64(),
+        hex::encode(artifact.code_hash.as_ref()),
+        if bytes { "/bytes" } else { "" }
+    ))
+}
+async fn dispatch_contract_artifact(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+    bytes: bool,
+) -> Result<Value, String> {
+    let route = contract_artifact_route(arguments, bytes)?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        &route,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_contracts_code_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_contract_artifact(app, inbound_headers, arguments, false).await
+}
+async fn dispatch_iroha_contracts_code_bytes_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_contract_artifact(app, inbound_headers, arguments, true).await
 }
 fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> {
     extract_canonical_path_string_argument(arguments, "contract_address")
@@ -10602,5 +10637,30 @@ mod tests {
                 .description
                 .contains("MUST NOT be used")
         );
+    }
+}
+
+#[cfg(test)]
+mod contract_artifact_route_tests {
+    use super::*;
+    #[test]
+    fn artifact_tools_require_exact_full_width_scope() {
+        let hash = hex::encode(iroha_crypto::Hash::new(b"MCP artifact").as_ref());
+        let arguments = norito::json::json!({"path": {"dataspace_id": "18446744073709551615", "code_hash": (hash.clone())}});
+        let arguments = arguments.as_object().unwrap();
+        assert_eq!(
+            contract_artifact_route(arguments, false).unwrap(),
+            format!("/v1/contracts/artifacts/{}/{hash}", u64::MAX)
+        );
+        assert_eq!(
+            contract_artifact_route(arguments, true).unwrap(),
+            format!("/v1/contracts/artifacts/{}/{hash}/bytes", u64::MAX)
+        );
+        for dataspace in ["", "00", "18446744073709551616", "../0"] {
+            let bad = norito::json::json!({"path": {"dataspace_id": dataspace, "code_hash": (hash.clone())}});
+            assert!(contract_artifact_route(bad.as_object().unwrap(), false).is_err());
+        }
+        let missing = norito::json::json!({"path": {"code_hash": hash}});
+        assert!(contract_artifact_route(missing.as_object().unwrap(), true).is_err());
     }
 }

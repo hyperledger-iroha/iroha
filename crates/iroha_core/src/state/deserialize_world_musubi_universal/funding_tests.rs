@@ -2,8 +2,8 @@
 
 use super::super::decode_tests::seeded_musubi_publication_snapshot;
 use super::*;
-use iroha_data_model::musubi::{MusubiArtifactGovernanceStateV1, MusubiStorageAvailabilityV1};
 use iroha_allocation::AllocationRefusal;
+use iroha_data_model::musubi::{MusubiArtifactGovernanceStateV1, MusubiStorageAvailabilityV1};
 use std::{
     alloc::Layout,
     future::Future,

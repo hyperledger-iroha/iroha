@@ -120,6 +120,7 @@ pub mod isi {
     use iroha_data_model::isi::runtime_upgrade;
     #[cfg(feature = "zk-stark")]
     use iroha_data_model::proof::VerifyingKeyBox;
+    use iroha_data_model::smart_contract::ContractArtifactId;
     use iroha_data_model::{
         Level,
         account::AccountController,
@@ -2552,20 +2553,24 @@ pub mod isi {
     }
     fn verify_registered_contract_artifact_for_manifest(
         world: &WorldTransaction<'_, '_>,
-        code_hash: &Hash,
+        artifact_id: &ContractArtifactId,
         manifest: &ContractManifest,
     ) -> Result<Vec<u8>, InstructionExecutionError> {
-        let code_bytes = world.contract_code.get(code_hash).cloned().ok_or_else(|| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "contract bytecode for manifest.code_hash not found".into(),
-            ))
-        })?;
+        let code_bytes = world
+            .contract_code
+            .get(artifact_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "contract bytecode for manifest.code_hash not found".into(),
+                ))
+            })?;
         let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 err.to_string().into(),
             ))
         })?;
-        if verified.code_hash != *code_hash {
+        if verified.code_hash != artifact_id.code_hash {
             return Err(InstructionExecutionError::InvariantViolation(
                 "stored contract bytecode hash does not match manifest.code_hash".into(),
             ));
@@ -5586,7 +5591,7 @@ pub mod isi {
     }
     fn upsert_manifest(
         state_transaction: &mut StateTransaction<'_, '_>,
-        key: iroha_crypto::Hash,
+        key: ContractArtifactId,
         abi_hash: [u8; 32],
         provenance: Option<&ManifestProvenance>,
     ) -> Result<bool, Error> {
@@ -5610,7 +5615,7 @@ pub mod isi {
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
         )
         .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
-        if verified.code_hash != key {
+        if verified.code_hash != key.code_hash {
             return Err(InstructionExecutionError::InvariantViolation(
                 "stored governance contract bytecode hash mismatch".into(),
             ));
@@ -6024,7 +6029,10 @@ pub mod isi {
         let manifest = state_transaction
             .world
             .contract_manifests
-            .get(&key)
+            .get(
+                &ContractArtifactId::for_address(&contract_address, key)
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
+            )
             .cloned()
             .ok_or_else(|| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -6033,7 +6041,8 @@ pub mod isi {
             })?;
         let code_bytes = verify_registered_contract_artifact_for_manifest(
             &state_transaction.world,
-            &key,
+            &ContractArtifactId::for_address(&contract_address, key)
+                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
             &manifest,
         )?;
         if state_transaction
@@ -6161,7 +6170,8 @@ pub mod isi {
         let key = iroha_crypto::Hash::prehashed(code_hash);
         let manifest_inserted = upsert_manifest(
             state_transaction,
-            key,
+            ContractArtifactId::for_address(&payload.contract_address, key)
+                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
             abi_hash,
             payload.manifest_provenance.as_ref(),
         )?;
@@ -6225,7 +6235,8 @@ pub mod isi {
                 let key = iroha_crypto::Hash::prehashed(action.code_hash.into_bytes());
                 upsert_manifest(
                     state_transaction,
-                    key,
+                    ContractArtifactId::for_address(&payload.contract_address, key)
+                        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
                     action.abi_hash.into_bytes(),
                     action.manifest_provenance.as_ref(),
                 )?;
@@ -7030,7 +7041,10 @@ pub mod isi {
         let Some(manifest) = state_transaction
             .world
             .contract_manifests
-            .get(&key)
+            .get(
+                &ContractArtifactId::for_address(&contract_address, key)
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
+            )
             .cloned()
         else {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -7039,7 +7053,8 @@ pub mod isi {
         };
         let code_bytes = verify_registered_contract_artifact_for_manifest(
             &state_transaction.world,
-            &key,
+            &ContractArtifactId::for_address(&contract_address, key)
+                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
             &manifest,
         )?;
         let contract_subject =
@@ -7124,7 +7139,10 @@ pub mod isi {
             let previous_trigger_ids: Vec<TriggerId> = state_transaction
                 .world
                 .contract_manifests
-                .get(&previous_code_hash)
+                .get(
+                    &ContractArtifactId::for_address(&contract_address, previous_code_hash)
+                        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
+                )
                 .and_then(|previous_manifest| previous_manifest.entrypoints.as_ref())
                 .map(|entrypoints| {
                     entrypoints
@@ -7714,7 +7732,10 @@ pub mod isi {
             let manifest = state_transaction
                 .world
                 .contract_manifests
-                .get(&code_hash)
+                .get(
+                    &ContractArtifactId::for_address(&contract_address, code_hash)
+                        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
+                )
                 .cloned()
                 .ok_or_else(|| {
                     InstructionExecutionError::InvalidParameter(
@@ -7725,7 +7746,8 @@ pub mod isi {
                 })?;
             verify_registered_contract_artifact_for_manifest(
                 &state_transaction.world,
-                &code_hash,
+                &ContractArtifactId::for_address(&contract_address, code_hash)
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
                 &manifest,
             )?;
             ensure_contract_subject_binding(
@@ -7842,7 +7864,10 @@ pub mod isi {
         let trigger_ids: Vec<TriggerId> = state_transaction
             .world
             .contract_manifests
-            .get(&prev_hash)
+            .get(
+                &ContractArtifactId::for_address(&key, prev_hash)
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?,
+            )
             .and_then(|manifest| manifest.entrypoints.as_ref())
             .map(|entrypoints| {
                 entrypoints
@@ -8097,7 +8122,7 @@ pub mod isi {
     }
     fn register_verified_contract_code_bytes(
         authority: &AccountId,
-        code_hash: Hash,
+        artifact_id: ContractArtifactId,
         code: Vec<u8>,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -8128,12 +8153,12 @@ pub mod isi {
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
         )
         .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
-        if verified.code_hash != code_hash {
+        if verified.code_hash != artifact_id.code_hash {
             return Err(InstructionExecutionError::InvariantViolation(
                 "code_hash does not match embedded contract artifact".into(),
             ));
         }
-        if let Some(existing) = state_transaction.world.contract_code.get(&code_hash) {
+        if let Some(existing) = state_transaction.world.contract_code.get(&artifact_id) {
             if existing.as_slice() != code.as_slice() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "different code bytes already stored for this code_hash".into(),
@@ -8145,7 +8170,10 @@ pub mod isi {
             .world
             .contract_instances
             .iter()
-            .any(|(_, existing_hash)| *existing_hash == code_hash)
+            .any(|(address, existing_hash)| {
+                address.dataspace_id().ok() == Some(artifact_id.dataspace_id)
+                    && *existing_hash == artifact_id.code_hash
+            })
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "contract bytecode cannot be registered after an instance is bound; register and verify bytes first"
@@ -8155,12 +8183,12 @@ pub mod isi {
         state_transaction
             .world
             .contract_code
-            .insert(code_hash, code);
+            .insert(artifact_id, code);
         state_transaction
             .world
             .emit_events(Some(SmartContractEvent::CodeRegistered(
                 ContractCodeRegistered {
-                    code_hash,
+                    artifact_id,
                     registrar: authority.clone(),
                 },
             )));
@@ -8175,7 +8203,7 @@ pub mod isi {
             ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             register_verified_contract_code_bytes(
                 authority,
-                *self.code_hash(),
+                *self.artifact_id(),
                 self.code().clone(),
                 state_transaction,
             )
@@ -8196,7 +8224,8 @@ pub mod isi {
             let total_size_usize =
                 validate_contract_upload_descriptor(total_size, chunk_count, cap_bytes)?;
             validate_contract_upload_chunk(total_size, chunk_index, chunk_count, &chunk)?;
-            let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *self.code_hash());
+            let upload_key =
+                SmartContractCodeUploadKey::new(authority.clone(), *self.artifact_id());
             let descriptor = SmartContractCodeUploadDescriptor {
                 total_size,
                 chunk_count,
@@ -8228,7 +8257,11 @@ pub mod isi {
                 Some(_) => true,
                 None => false,
             };
-            if let Some(existing) = state_transaction.world.contract_code.get(self.code_hash()) {
+            if let Some(existing) = state_transaction
+                .world
+                .contract_code
+                .get(self.artifact_id())
+            {
                 if existing.len() != total_size_usize {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "registered code length conflicts with upload descriptor".into(),
@@ -8318,7 +8351,8 @@ pub mod isi {
             let chunk_count = *self.chunk_count();
             let total_size_usize =
                 validate_contract_upload_descriptor(total_size, chunk_count, cap_bytes)?;
-            let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *self.code_hash());
+            let upload_key =
+                SmartContractCodeUploadKey::new(authority.clone(), *self.artifact_id());
             let descriptor = SmartContractCodeUploadDescriptor {
                 total_size,
                 chunk_count,
@@ -8340,7 +8374,7 @@ pub mod isi {
                 if let Some(existing) = state_transaction
                     .world
                     .contract_code
-                    .get(self.code_hash())
+                    .get(self.artifact_id())
                     .cloned()
                 {
                     if existing.len() != total_size_usize {
@@ -8350,7 +8384,7 @@ pub mod isi {
                     }
                     register_verified_contract_code_bytes(
                         authority,
-                        *self.code_hash(),
+                        *self.artifact_id(),
                         existing,
                         state_transaction,
                     )?;
@@ -8392,7 +8426,7 @@ pub mod isi {
             }
             register_verified_contract_code_bytes(
                 authority,
-                *self.code_hash(),
+                *self.artifact_id(),
                 code,
                 state_transaction,
             )?;
@@ -8406,7 +8440,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *self.code_hash());
+            let upload_key =
+                SmartContractCodeUploadKey::new(authority.clone(), *self.artifact_id());
             clear_contract_code_upload(&upload_key, state_transaction);
             Ok(())
         }
@@ -8421,18 +8456,22 @@ pub mod isi {
             if state_transaction
                 .world
                 .contract_manifests
-                .get(self.code_hash())
+                .get(self.artifact_id())
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "contract manifest referencing code_hash still exists".into(),
                 ));
             }
-            let code_in_use = state_transaction
-                .world
-                .contract_instances
-                .iter()
-                .any(|(_, hash)| hash == self.code_hash());
+            let code_in_use =
+                state_transaction
+                    .world
+                    .contract_instances
+                    .iter()
+                    .any(|(address, hash)| {
+                        address.dataspace_id().ok() == Some(self.artifact_id().dataspace_id)
+                            && *hash == self.artifact_id().code_hash
+                    });
             if code_in_use {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "active contract instance references this code_hash".into(),
@@ -8441,7 +8480,7 @@ pub mod isi {
             let removed = state_transaction
                 .world
                 .contract_code
-                .remove(*self.code_hash());
+                .remove(*self.artifact_id());
             if removed.is_none() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -8460,7 +8499,7 @@ pub mod isi {
             state_transaction
                 .world
                 .emit_events(Some(SmartContractEvent::CodeRemoved(ContractCodeRemoved {
-                    code_hash: *self.code_hash(),
+                    artifact_id: *self.artifact_id(),
                     removed_by: authority.clone(),
                     reason,
                 })));
@@ -14818,11 +14857,17 @@ pub mod isi {
         ) -> Result<(), Error> {
             ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             let manifest = self.manifest().clone();
-            let Some(key @ Hash { .. }) = manifest.code_hash else {
+            let Some(code_hash) = manifest.code_hash else {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract("manifest.code_hash missing".into()),
                 ));
             };
+            let key = *self.artifact_id();
+            if key.code_hash != code_hash {
+                return Err(invalid_smart_contract_parameter(
+                    "artifact_id.code_hash differs from manifest.code_hash",
+                ));
+            }
             if manifest.abi_hash.is_none() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract("manifest.abi_hash missing".into()),
@@ -14868,9 +14913,9 @@ pub mod isi {
         }
     }
     impl ValidSingularQuery
-        for iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash
+        for iroha_data_model::query::smart_contract::prelude::FindContractManifestByArtifactId
     {
-        #[metrics(+"find_contract_manifest_by_code_hash")]
+        #[metrics(+"find_contract_manifest_by_artifact_id")]
         fn execute(
             &self,
             state_ro: &impl StateReadOnly,
@@ -14878,10 +14923,11 @@ pub mod isi {
             iroha_data_model::smart_contract::manifest::ContractManifest,
             iroha_data_model::query::error::QueryExecutionFail,
         > {
+            crate::executor::root_scope::ensure_committed_artifact_scope(state_ro.world(), &self.artifact_id).map_err(|error| iroha_data_model::query::error::QueryExecutionFail::Conversion(error.to_string()))?;
             state_ro
                 .world()
                 .contract_manifests()
-                .get(&self.code_hash)
+                .get(&self.artifact_id)
                 .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)
                 .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
@@ -18288,6 +18334,14 @@ pub mod isi {
                 })?;
             }
             if let Parameter::Custom(custom) = self.inner() {
+                if custom.id()
+                    == &iroha_data_model::private_dataspace::PrivateDataspaceAdmissionPolicy::parameter_id()
+                {
+                    iroha_data_model::private_dataspace::PrivateDataspaceAdmissionPolicy::from_custom_parameter(custom)
+                        .map_err(|error| InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(error.to_string()),
+                        ))?;
+                }
                 if crate::state::is_retired_kagemusha_mint_finality_parameter(custom.id()) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -18353,7 +18407,14 @@ pub mod isi {
                     )
                 {
                     policy
-                        .and_then(|policy| crate::sumeragi::lanes::step::validate_policy(&policy))
+                        .and_then(|policy| {
+                            crate::sumeragi::private_dataspace::ensure_parent_execution_separate(
+                                &state_transaction.world,
+                                policy.fixed.iter().map(|lane| lane.dataspace)
+                                    .chain(policy.autoscale.iter().map(|autoscale| autoscale.dataspace)),
+                            )?;
+                            crate::sumeragi::lanes::step::validate_policy(&policy)
+                        })
                         .map_err(|error| {
                             invalid_smart_contract_parameter(format!(
                                 "invalid Sumeragi lane policy: {error}"
@@ -25674,11 +25735,11 @@ seiyaku GovernanceLifecycle {
                 0,
             ));
             let mut transaction = block.transaction();
-            transaction.world.contract_code.insert(code_hash, artifact);
+            transaction.world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), artifact);
             transaction
                 .world
                 .contract_manifests
-                .insert(code_hash, manifest);
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), manifest);
             let payload = governance_deploy_payload(&ALICE_ID, 301, code_hash, abi_hash);
             Register::account(Account::new(payload.contract_address.subject_id()))
                 .expect_execute(&ALICE_ID, &mut transaction, "register derived governance contract subject");
@@ -25739,7 +25800,7 @@ seiyaku GovernanceLifecycle {
             transaction
                 .world
                 .contract_manifests
-                .insert(code_hash, manifest);
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), manifest);
             let error =
                 super::bind_contract_instance(
                     &ALICE_ID,
@@ -25763,7 +25824,7 @@ seiyaku GovernanceLifecycle {
                     .is_none(),
                 "failed binding must not create an active stub instance"
             );
-            transaction.world.contract_code.insert(code_hash, artifact);
+            transaction.world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), artifact);
             assert!(
                 super::bind_contract_instance(
                     &ALICE_ID,
@@ -25805,13 +25866,13 @@ seiyaku GovernanceLifecycle {
             transaction
                 .world
                 .contract_code
-                .insert(malformed_hash, b"not-an-ivm-artifact".to_vec());
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, malformed_hash), b"not-an-ivm-artifact".to_vec());
             let mut malformed_manifest = valid_manifest.clone();
             malformed_manifest.code_hash = Some(malformed_hash);
             transaction
                 .world
                 .contract_manifests
-                .insert(malformed_hash, malformed_manifest);
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, malformed_hash), malformed_manifest);
             let malformed = governance_deploy_payload(&ALICE_ID, 303, malformed_hash, abi_hash);
             let error = super::bind_contract_instance(
                 &ALICE_ID,
@@ -25835,13 +25896,13 @@ seiyaku GovernanceLifecycle {
             transaction
                 .world
                 .contract_code
-                .insert(mismatched_hash, valid_artifact);
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, mismatched_hash), valid_artifact);
             let mut mismatched_manifest = valid_manifest.clone();
             mismatched_manifest.code_hash = Some(mismatched_hash);
             transaction
                 .world
                 .contract_manifests
-                .insert(mismatched_hash, mismatched_manifest);
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, mismatched_hash), mismatched_manifest);
             let mismatched = governance_deploy_payload(&ALICE_ID, 304, mismatched_hash, abi_hash);
             let error = super::bind_contract_instance(
                 &ALICE_ID,
@@ -25863,7 +25924,7 @@ seiyaku GovernanceLifecycle {
             transaction
                 .world
                 .contract_code
-                .insert(valid_hash, valid_artifact_for_stub);
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, valid_hash), valid_artifact_for_stub);
             let stub = ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(valid_hash),
@@ -25881,7 +25942,7 @@ seiyaku GovernanceLifecycle {
             transaction
                 .world
                 .contract_manifests
-                .insert(valid_hash, stub);
+                .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, valid_hash), stub);
             let stub_payload = governance_deploy_payload(&ALICE_ID, 305, valid_hash, abi_hash);
             let error = super::bind_contract_instance(
                 &ALICE_ID,
@@ -33973,16 +34034,14 @@ seiyaku GovernanceLifecycle {
                 artifact.len()
                     <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
             );
-            scode::UploadSmartContractCodeChunk {
-                code_hash,
+            scode::UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
                 total_size,
                 chunk_index: 0,
                 chunk_count: 1,
                 chunk: artifact,
             }
             .expect_execute(&ALICE_ID, &mut stx, "stage artifact above the live cycle ceiling");
-            let error = scode::FinalizeSmartContractCodeUpload {
-                code_hash,
+            let error = scode::FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
                 total_size,
                 chunk_count: 1,
             }
@@ -33996,8 +34055,8 @@ seiyaku GovernanceLifecycle {
                 ),
                 "unexpected cycle-ceiling error: {error:?}"
             );
-            let upload_key = SmartContractCodeUploadKey::new(ALICE_ID.clone(), code_hash);
-            assert!(stx.world.contract_code.get(&code_hash).is_none());
+            let upload_key = SmartContractCodeUploadKey::new(ALICE_ID.clone(),iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash));
+            assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_none());
             assert!(stx.world.contract_code_uploads.get(&upload_key).is_some());
             assert!(
                 stx.world
@@ -34006,7 +34065,7 @@ seiyaku GovernanceLifecycle {
                     .is_some(),
                 "failed cycle-ceiling finalization must retain staged bytes"
             );
-            scode::CancelSmartContractCodeUpload { code_hash }
+            scode::CancelSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)}
                 .expect_execute(&ALICE_ID, &mut stx, "owner cancels retained cycle-ceiling staging");
             assert!(stx.world.contract_code_uploads.get(&upload_key).is_none());
             assert!(
@@ -34033,14 +34092,11 @@ seiyaku GovernanceLifecycle {
             );
             let (artifact, manifest) = minimal_contract_artifact();
             let code_hash = manifest.code_hash.expect("artifact code hash");
-            scode::RegisterSmartContractBytes {
-                code_hash,
+            scode::RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
                 code: artifact,
             }
             .expect_execute(&ALICE_ID, &mut stx, "register verified artifact");
-            scode::RegisterSmartContractCode {
-                manifest: manifest.signed(&ALICE_KEYPAIR),
-            }
+            { let scoped_manifest = manifest.signed(&ALICE_KEYPAIR); scode::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
             .expect_execute(&ALICE_ID, &mut stx, "register verified manifest");
             let artifact_permission: Permission =
                 iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
@@ -34051,8 +34107,7 @@ seiyaku GovernanceLifecycle {
                 "deployment fixture must revoke the artifact-only capability before address creation",
             );
             let unregistered_hash = Hash::new(b"artifact permission separation regression");
-            let error = scode::RegisterSmartContractBytes {
-                code_hash: unregistered_hash,
+            let error = scode::RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, unregistered_hash),
                 code: vec![0_u8],
             }
             .expect_execute_err(
@@ -34061,7 +34116,7 @@ seiyaku GovernanceLifecycle {
                 "invalid artifact must remain rejected for an ordinary registered developer",
             );
             assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
-            assert!(stx.world.contract_code.get(&unregistered_hash).is_none());
+            assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, unregistered_hash)).is_none());
             stx.apply();
             let mut stx = block.transaction();
             let network_id = *stx.network_id();
@@ -34336,7 +34391,7 @@ seiyaku GovernanceLifecycle {
                 error_types: None,
                 provenance: None,
             };
-            stx.world.contract_manifests.insert(code_hash, manifest);
+            stx.world.contract_manifests.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), manifest);
             let contract_address = ContractAddress::derive(
                 &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                     .parse()

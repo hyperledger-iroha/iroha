@@ -103,13 +103,13 @@ fn install_trigger_contract(
         .execute(authority, state_transaction)
         .expect("grant trigger contract deployment permission");
     let registered_hash =
-        crate::smartcontracts::code::register_code_bytes(authority, code, state_transaction)
+        crate::smartcontracts::code::register_code_bytes(authority,contract_address.dataspace_id().expect("test contract dataspace"), code, state_transaction)
             .expect("register trigger contract bytecode");
     assert_eq!(registered_hash, code_hash);
     manifest.code_hash = Some(code_hash);
     crate::smartcontracts::code::register_manifest(
         authority,
-        manifest.signed(signing_keypair),
+contract_address.dataspace_id().expect("test contract dataspace"), manifest.signed(signing_keypair),
         state_transaction,
     )
     .expect("register trigger contract manifest");

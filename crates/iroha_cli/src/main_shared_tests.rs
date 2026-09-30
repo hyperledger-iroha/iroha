@@ -2445,6 +2445,7 @@ impl CaptureContext {
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             key_pair,
             basic_auth: None,
+            api_token: None,
             torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
             torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,

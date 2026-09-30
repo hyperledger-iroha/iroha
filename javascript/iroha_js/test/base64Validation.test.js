@@ -1,3 +1,4 @@
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -10,10 +11,10 @@ test("builders reject invalid base64 payloads", () => {
   const invalidCode = `${validCode.slice(0, 4)}*${validCode.slice(4)}`;
   assert.throws(
     () =>
-      buildRegisterSmartContractBytesInstruction({
+      buildRegisterSmartContractBytesInstruction(universalArtifactInput({
         codeHash,
         code: invalidCode,
-      }),
+      })),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
       assert.match(String(error?.message), /base64/i);

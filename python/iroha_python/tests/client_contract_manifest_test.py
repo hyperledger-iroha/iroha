@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import re
 from copy import deepcopy
@@ -14,11 +15,17 @@ from iroha_python import (
     ContractEntrypointKind,
     ContractManifest,
     ContractManifestRecord,
+    ContractArtifactId,
     ContractTriggerRepeatKind,
     EntrypointValueKindV1,
     EntrypointValueTypeNodeKindV1,
     EntrypointValueTypeV1,
 )
+
+def _hash_literal(hexadecimal: str) -> str:
+    prefix = "hash:" + hexadecimal.upper()
+    return f"{prefix}#{binascii.crc_hqx(prefix.encode('ascii'), 0xFFFF):04X}"
+
 
 _QUERY_VIEW_LAYOUTS = {
     "AccountView": (
@@ -976,18 +983,24 @@ def test_contract_manifest_record_cross_checks_hash_conveniences() -> None:
     manifest_payload = _full_manifest_payload()
     record = ContractManifestRecord.from_payload(
         {
+            "network_id": _hash_literal("a5" * 32),
+            "artifact_id": ContractArtifactId((1 << 64) - 1, "b" * 64).to_payload(),
             "manifest": manifest_payload,
             "code_hash": "b" * 64,
             "abi_hash": "d" * 64,
         }
     )
 
+    assert record.artifact_id.dataspace_id == (1 << 64) - 1
+    assert record.network_id == _hash_literal("a5" * 32)
     assert record.code_hash == record.manifest.code_hash == "b" * 64
     assert record.abi_hash == record.manifest.abi_hash == "d" * 64
 
 
 def test_contract_manifest_record_rejects_unknown_top_level_fields() -> None:
     payload: Dict[str, Any] = {
+        "network_id": _hash_literal("a5" * 32),
+        "artifact_id": ContractArtifactId((1 << 64) - 1, "b" * 64).to_payload(),
         "manifest": _full_manifest_payload(),
         "code_hash": "b" * 64,
         "abi_hash": "d" * 64,
@@ -1009,7 +1022,11 @@ def test_contract_manifest_record_rejects_unknown_top_level_fields() -> None:
 def test_contract_manifest_record_rejects_mismatched_or_noncanonical_hashes(
     mutation: Dict[str, Any],
 ) -> None:
-    payload: Dict[str, Any] = {"manifest": _full_manifest_payload()}
+    payload: Dict[str, Any] = {
+        "network_id": _hash_literal("a5" * 32),
+        "artifact_id": ContractArtifactId((1 << 64) - 1, "b" * 64).to_payload(),
+        "manifest": _full_manifest_payload(),
+    }
     payload.update(mutation)
 
     with pytest.raises(TypeError, match="hash|code_bytes"):
@@ -1283,3 +1300,53 @@ def test_contract_manifest_rejects_return_schema_exceeding_node_bound() -> None:
 
     with pytest.raises(TypeError, match="canonical V1 schema"):
         ContractManifest.from_payload(payload)
+
+
+@pytest.mark.parametrize("dataspace", [0, (1 << 63), (1 << 64) - 1])
+def test_contract_artifact_scope_has_exact_full_width_json_and_path(dataspace: int) -> None:
+    artifact = ContractArtifactId(dataspace, "b" * 64)
+    assert artifact.path == f"/v1/contracts/artifacts/{dataspace}/{'b' * 64}"
+    assert artifact.to_payload() == {"dataspace_id": dataspace, "code_hash": _hash_literal("b" * 64)}
+    assert ContractArtifactId.from_payload(artifact.to_payload()) == artifact
+
+
+@pytest.mark.parametrize("dataspace", [-1, 1 << 64, True, "1", 1.0])
+def test_contract_artifact_scope_rejects_non_u64(dataspace: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        ContractArtifactId(dataspace, "b" * 64)
+
+
+def test_contract_manifest_record_requires_scope_and_hash_agreement() -> None:
+    payload = {
+        "network_id": _hash_literal("a5" * 32),
+        "artifact_id": ContractArtifactId(1, "b" * 64).to_payload(),
+        "manifest": _full_manifest_payload(),
+        "code_hash": "b" * 64,
+        "abi_hash": "d" * 64,
+    }
+    for field in ["network_id", "artifact_id"]:
+        incomplete = dict(payload)
+        del incomplete[field]
+        with pytest.raises(TypeError):
+            ContractManifestRecord.from_payload(incomplete)
+    payload["artifact_id"] = ContractArtifactId(1, "d" * 64).to_payload()
+    with pytest.raises(TypeError, match="artifact_id.code_hash"):
+        ContractManifestRecord.from_payload(payload)
+
+
+def test_mock_artifacts_keep_equal_hashes_in_separate_dataspaces() -> None:
+    from iroha_torii_client.mock import _MockState, _artifact_fixture_key
+    state = _MockState()
+    digest = "b" * 64
+    state.contract_manifests = {f"1/{digest}": {"scope": 1}, f"18446744073709551615/{digest}": {"scope": 2}}
+    state.contract_code_bytes = {f"1/{digest}": {"code_b64": "AAAA"}}
+    for scope, expected in [(1, 1), ((1 << 64) - 1, 2)]:
+        response = state.handle_request("GET", f"/v1/contracts/artifacts/{scope}/{digest}", {}, b"", {})
+        assert response.status == 200
+        assert json.loads(response.body)["scope"] == expected
+    assert state.handle_request("GET", f"/v1/contracts/artifacts/2/{digest}", {}, b"", {}).status == 404
+    assert state.handle_request("GET", f"/v1/contracts/artifacts/1/{digest}/bytes", {}, b"", {}).status == 200
+    assert state.handle_request("GET", f"/v1/contracts/artifacts/2/{digest}/bytes", {}, b"", {}).status == 404
+    for invalid in [f"01/{digest}", f"-1/{digest}", f"18446744073709551616/{digest}", digest]:
+        with pytest.raises(ValueError):
+            _artifact_fixture_key(invalid)

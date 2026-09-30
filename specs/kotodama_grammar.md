@@ -123,7 +123,12 @@ comment         = "//" non-newline-character* ;
 
 String escapes are `\\`, `\"`, `\n`, `\r`, `\t`, `\0`, `\xNN`, and
 `\u{...}`. Raw and raw-byte strings preserve their contents without escape
-processing. Decimal fractions and decimal exponents are exact: they never
+processing. Quoted strings retain their decoded UTF-8 text even when it starts
+with `0x`: `"0x6162"` is six characters, not `"ab"`. Byte literals also retain
+their explicit contents: `b"0x6162"` contains six bytes, while `b"\x61\x62"`
+contains two. The shared runtime Blob pointer ABI does not permit the compiler
+to reinterpret a string as its internal hexadecimal byte-literal carrier.
+Decimal fractions and decimal exponents are exact: they never
 create a binary floating-point value. Separators are permitted only between
 digits. Spellings such as `1.`, `.5`, `1__0`, and an exponent without digits
 are invalid. Leading zeroes are valid in source numeric literals: `0007` is
@@ -1174,7 +1179,11 @@ The compiler-owned `EditorSnapshot` retains source/package identities, resolved
 symbols and lexical bindings, exact argument-label ranges, typed expression
 facts, and canonical callable signatures. LSP completion filters by source,
 scope, explicit import/export graph, and receiver type. Argument templates use
-the declaration's positional-only prefix and optional named parameters. Hover and
+the declaration's positional-only prefix and optional named parameters. Optional
+receivers offer `expect`, `unwrap_or`, and presence checks, including after
+chained reads such as `Requests.get(id).`; signatures retain the extracted
+payload type. Result receivers offer their supported extraction and status
+methods without advertising `Option.expect`. Hover and
 signature help expose types and effect/permission metadata; definition,
 references, and rename use resolved identities. Rename rechecks the complete
 source and export graph and verifies that every reference retains its resolver

@@ -2628,6 +2628,7 @@ mod measured_bytes_impls {
         ConfidentialTreeProfile,
         ContractAbiHash,
         ContractCodeHash,
+        iroha_data_model::smart_contract::ContractArtifactId,
         EntryPointKind,
         GovernanceReferendumMode,
         GovernanceReferendumStatus,
@@ -4320,8 +4321,8 @@ pub(crate) enum TieredKeyHandle {
     Proof(iroha_data_model::proof::ProofId),
     ProofTag(iroha_data_model::proof::ProofId),
     ProofByTag([u8; 4]),
-    ContractManifest(iroha_crypto::Hash),
-    ContractCode(iroha_crypto::Hash),
+    ContractManifest(iroha_data_model::smart_contract::ContractArtifactId),
+    ContractCode(iroha_data_model::smart_contract::ContractArtifactId),
     ContractCodeUpload(super::SmartContractCodeUploadKey),
     ContractCodeUploadChunk(super::SmartContractCodeUploadChunkKey),
     ContractInstance(iroha_data_model::smart_contract::ContractAddress),
@@ -4617,17 +4618,17 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Proof(id) => write!(f, "proof:{id}"),
             TieredKeyHandle::ProofTag(id) => write!(f, "proof_tag:{id}"),
             TieredKeyHandle::ProofByTag(tag) => write!(f, "proofs_by_tag:{tag:?}"),
-            TieredKeyHandle::ContractManifest(hash) => write!(f, "contract_manifest:{hash}"),
-            TieredKeyHandle::ContractCode(hash) => write!(f, "contract_code:{hash}"),
+            TieredKeyHandle::ContractManifest(hash) => write!(f, "contract_manifest:{hash:?}"),
+            TieredKeyHandle::ContractCode(hash) => write!(f, "contract_code:{hash:?}"),
             TieredKeyHandle::ContractCodeUpload(key) => write!(
                 f,
-                "contract_code_upload:{}:{}",
-                key.authority, key.code_hash
+                "contract_code_upload:{}:{:?}",
+                key.authority, key.artifact_id
             ),
             TieredKeyHandle::ContractCodeUploadChunk(key) => write!(
                 f,
-                "contract_code_upload_chunk:{}:{}:{}",
-                key.upload.authority, key.upload.code_hash, key.chunk_index
+                "contract_code_upload_chunk:{}:{:?}:{}",
+                key.upload.authority, key.upload.artifact_id, key.chunk_index
             ),
             TieredKeyHandle::ContractInstance(key) => write!(f, "contract_instance:{key:?}"),
             TieredKeyHandle::ContractSubjectBinding(key) => {
@@ -5158,7 +5159,13 @@ mod tests {
         .expect("fixture seed derives a valid keypair");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let code_hash = Hash::new(b"partial out-of-order contract upload");
-        let upload_key = crate::state::SmartContractCodeUploadKey::new(authority, code_hash);
+        let upload_key = crate::state::SmartContractCodeUploadKey::new(
+            authority,
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                code_hash,
+            ),
+        );
         let chunk_key = crate::state::SmartContractCodeUploadChunkKey::new(upload_key.clone(), 2);
         let final_chunk = vec![0xA5; 17];
         let total_size = u64::try_from(

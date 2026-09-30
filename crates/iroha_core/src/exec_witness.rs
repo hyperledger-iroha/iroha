@@ -797,6 +797,17 @@ pub(crate) fn record_write_amx_record(
     });
     Ok(())
 }
+/// Commit a public private-root registration/cursor under its domain-separated proof key.
+pub(crate) fn record_write_private_dataspace(
+    record: &iroha_data_model::private_dataspace::PrivateDataspaceRecord,
+) -> Result<(), norito::Error> {
+    let key = record.witness_key();
+    let value = norito::encode_canonical(record)?;
+    with_active_slot(|witness| {
+        witness.writes.insert(key, value);
+    });
+    Ok(())
+}
 /// Record a FASTPQ transfer transcript so `ExecWitness` consumers can replay transfers.
 pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
     with_active_slot(|g| {

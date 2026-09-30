@@ -36,6 +36,7 @@ struct PhaseOneOwnerV1 {
     challenge_id: Option<[u8; 32]>,
     prepared: Option<PreparedIssuerProofV1>,
     fresh_admission: Option<FreshIssuerAdmissionV1>,
+    admission_transferred: bool,
     cancelled_ticket: Option<u64>,
     qualification: Option<super::KagemushaPreEnrollmentQualificationOwnerV1>,
     app_preparation: Option<Vec<u8>>,
@@ -198,6 +199,7 @@ impl KagemushaEnrollmentPhaseOneBackendV1 {
             .fresh_admission
             .take()
             .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        owner.admission_transferred = true;
         admission
             .require_live()
             .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
@@ -270,6 +272,7 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
         ) && owner.accepted.is_none()
             && owner.prepared.is_none()
             && owner.fresh_admission.is_none()
+            && !owner.admission_transferred
         {
             archive_boundary::validate_request(method, request_frame)
                 .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;

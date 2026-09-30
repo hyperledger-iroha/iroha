@@ -54,7 +54,10 @@ fn execute_instruction_rejects_retired_blob_carriers_without_register_mutation()
     use iroha_crypto::Hash;
     let authority = ALICE_ID.clone();
     let instruction = InstructionBox::from(RegisterSmartContractBytes {
-        code_hash: Hash::new(b"strict-instruction-carrier"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            Hash::new(b"strict-instruction-carrier"),
+        ),
         code: vec![0x01, 0x02, 0x03],
     });
     let canonical = norito::to_bytes(&instruction).expect("encode instruction");
@@ -203,7 +206,10 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
     use iroha_crypto::Hash;
     let authority = ALICE_ID.clone();
     let request = RegisterSmartContractBytes {
-        code_hash: Hash::new(b"provenance-checked-contract"),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            Hash::new(b"provenance-checked-contract"),
+        ),
         code: vec![0xAA, 0xBB, 0xCC],
     };
     let payload = norito::to_bytes(&request).expect("encode register-bytes request");

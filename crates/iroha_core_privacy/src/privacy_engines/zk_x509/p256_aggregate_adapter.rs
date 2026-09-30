@@ -1914,6 +1914,7 @@ pub(crate) struct P256ArithmeticAggregateAuxStreamV1<'a> {
 impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
     /// Compute the source terminal from the two exact scalar operations, then
     /// prepare a streaming second pass.
+    #[cfg(test)]
     pub(crate) fn new_v1(
         role: P256EcdsaRoleV1,
         trace: &'a ZkX509P256ArithmeticTraceV1,

@@ -27,7 +27,8 @@ pub use response_evidence_archive::{
 mod authenticated_core_owner;
 #[cfg(all(unix, feature = "zk-halo2-ipa"))]
 pub use authenticated_core_owner::{
-    KagemushaAuthenticatedBootstrapStageV1, KagemushaAuthenticatedCoreOwnerV1,
+    KagemushaAuthenticatedBootstrapStageV1, KagemushaAuthenticatedBootstrappedWalletV1,
+    KagemushaAuthenticatedCoreOwnerV1,
 };
 mod candidate_lifecycle;
 mod commitments;

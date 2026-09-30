@@ -312,7 +312,10 @@ mod tests {
         assert!(keeper.tron.is_some(), "TRON builder");
         assert!(keeper.ton.is_some(), "TON builder");
         assert!(keeper.due());
-        assert!(!keeper.due(), "a poll is due at most once per poll_interval");
+        assert!(
+            !keeper.due(),
+            "a poll is due at most once per poll_interval"
+        );
     }
 
     #[tokio::test]

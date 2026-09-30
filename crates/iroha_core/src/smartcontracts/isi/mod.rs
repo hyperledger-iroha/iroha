@@ -287,6 +287,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     // AMX two-phase commit (`crate::sumeragi::amx`): World records only, no asset effect.
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxDataspaceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxPreparedV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -735,6 +737,8 @@ pub(crate) fn execute_borrowed_instruction(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
+    crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
+        .map_err(|error| Error::from(error.to_string()))?;
     iroha_logger::debug!(isi=%instruction, "Executing");
     if let Some(result) = INSTRUCTION_HANDLERS
         .iter()
@@ -1715,20 +1719,18 @@ mod tests {
         dm::Grant::account_permission(permission, alice.clone()).execute(&alice, &mut stx)?;
         let (code, manifest) = minimal_contract_artifact();
         let h = manifest.code_hash.expect("manifest code hash");
-        smart_contract_code::RegisterSmartContractBytes { code_hash: h, code }
+        smart_contract_code::RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, h), code }
             .execute(&alice, &mut stx)?;
         let manifest = manifest.signed(&ALICE_KEYPAIR);
-        smart_contract_code::RegisterSmartContractCode {
-            manifest: manifest.clone(),
-        }
+        { let scoped_manifest = manifest.clone(); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .execute(&alice, &mut stx)?;
         stx.apply();
         state_block.commit_world_overlay_for_testing().unwrap();
         // Verify it is stored
-        let got = state.view().world().contract_manifests().get(&h).cloned();
+        let got = state.view().world().contract_manifests().get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, h)).cloned();
         assert_eq!(got, Some(manifest.clone()));
         // Verify query returns it
-        let q = prelude::FindContractManifestByCodeHash { code_hash: h };
+        let q = prelude::FindContractManifestByArtifactId { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, h) };
         let out = <_ as crate::smartcontracts::ValidSingularQuery>::execute(&q, &state.view())?;
         assert_eq!(out, manifest);
         Ok(())
@@ -1753,7 +1755,7 @@ mod tests {
             iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
         let perm: permission::Permission = token.into();
         dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
-        let err = smart_contract_code::RegisterSmartContractCode { manifest }
+        let err = { let scoped_manifest = manifest; smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
             .execute(&alice, &mut stx)
             .expect_err("missing provenance must fail");
         match err {
@@ -1784,7 +1786,7 @@ mod tests {
             iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
         let perm: permission::Permission = token.into();
         dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
-        let err = smart_contract_code::RegisterSmartContractCode { manifest }
+        let err = { let scoped_manifest = manifest; smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
             .execute(&alice, &mut stx)
             .expect_err("wrong signer must fail");
         match err {

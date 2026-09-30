@@ -1,6 +1,32 @@
 mod public_artifact_tests {
     //! Public immutable artifact creation with separate privileged and owner-scoped mutations.
     use super::*;
+    world_test!(artifact_registry_and_pending_uploads_are_dataspace_scoped {
+        blank_test_state_transaction!(state, block, stx);
+        bootstrap_alice_account(&mut stx);
+        let (code, manifest) = minimal_contract_artifact();
+        let hash = manifest.code_hash.expect("artifact hash");
+        let private = ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash);
+        let public = ContractArtifactId::new(DataSpaceId::UNIVERSAL, hash);
+        scode::RegisterSmartContractBytes { artifact_id: private, code: code.clone() }
+            .expect_execute(&ALICE_ID, &mut stx, "register private artifact");
+        assert_eq!(stx.world.contract_code.get(&private), Some(&code));
+        assert!(stx.world.contract_code.get(&public).is_none());
+        scode::RegisterSmartContractBytes { artifact_id: public, code: code.clone() }
+            .expect_execute(&ALICE_ID, &mut stx, "same bytes have an independent public registration");
+        assert_eq!(stx.world.contract_code.get(&public), Some(&code));
+        let upload_hash = Hash::new(b"scoped pending upload");
+        let private_upload = ContractArtifactId::new(DataSpaceId::new(u64::MAX), upload_hash);
+        let public_upload = ContractArtifactId::new(DataSpaceId::UNIVERSAL, upload_hash);
+        for artifact_id in [private_upload, public_upload] {
+            scode::UploadSmartContractCodeChunk { artifact_id, total_size: 3, chunk_index: 0, chunk_count: 1, chunk: vec![1, 2, 3] }
+                .expect_execute(&ALICE_ID, &mut stx, "stage independently scoped upload");
+        }
+        scode::CancelSmartContractCodeUpload { artifact_id: public_upload }
+            .expect_execute(&ALICE_ID, &mut stx, "cancel only public staging");
+        assert!(stx.world.contract_code_uploads.get(&SmartContractCodeUploadKey::new(ALICE_ID.clone(), public_upload)).is_none());
+        assert!(stx.world.contract_code_uploads.get(&SmartContractCodeUploadKey::new(ALICE_ID.clone(), private_upload)).is_some());
+    });
     world_test!(contract_manifest_is_immutable_for_registered_code_hash {
         blank_test_state_transaction!(state, block, stx);
         bootstrap_alice_account(&mut stx);
@@ -19,48 +45,36 @@ mod public_artifact_tests {
             .expect_execute(&ALICE_ID, &mut stx, "register manifest authority");
         let (artifact, unsigned_manifest) = minimal_contract_artifact();
         let code_hash = unsigned_manifest.code_hash.expect("manifest code hash");
-        stx.world.contract_code.insert(code_hash, artifact);
+        stx.world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), artifact);
         let first_manifest = unsigned_manifest
             .clone()
             .try_signed(&signer_one)
             .expect("first signed manifest");
-        smart_contract_code::RegisterSmartContractCode {
-            manifest: first_manifest.clone(),
-        }
+        { let scoped_manifest = first_manifest.clone(); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&authority, &mut stx, "first manifest registration");
-        smart_contract_code::RegisterSmartContractCode {
-            manifest: first_manifest.clone(),
-        }
+        { let scoped_manifest = first_manifest.clone(); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&authority, &mut stx, "identical manifest registration is idempotent");
         let differently_signed_manifest = unsigned_manifest.clone()
             .try_signed(&signer_two)
             .expect("second signed manifest");
-        smart_contract_code::RegisterSmartContractCode {
-            manifest: differently_signed_manifest,
-        }
+        { let scoped_manifest = differently_signed_manifest; smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&authority, &mut stx, "another authorized signer reuses the immutable manifest");
         let developer_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
         let developer = AccountId::new(developer_key.public_key().clone());
         Register::account(Account::new(developer.clone()))
             .expect_execute(&ALICE_ID, &mut stx, "register independent ordinary developer");
-        smart_contract_code::RegisterSmartContractCode {
-            manifest: unsigned_manifest.clone().try_signed(&developer_key).expect("developer provenance"),
-        }
+        { let scoped_manifest = unsigned_manifest.clone().try_signed(&developer_key).expect("developer provenance"); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute(&developer, &mut stx, "an independent developer shares identical content");
-        let error = smart_contract_code::RegisterSmartContractCode {
-            manifest: first_manifest.clone(),
-        }
+        let error = { let scoped_manifest = first_manifest.clone(); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute_err(&developer, &mut stx, "existing content never bypasses submitter signature ownership");
         assert!(matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("manifest signer is not authorised")), "unexpected artifact failure: {error:?}");
         let mut changed = unsigned_manifest;
         changed.abi_hash = Some(Hash::new(b"substituted ABI"));
-        let error = smart_contract_code::RegisterSmartContractCode {
-            manifest: changed.try_signed(&developer_key).expect("changed content signature"),
-        }
+        let error = { let scoped_manifest = changed.try_signed(&developer_key).expect("changed content signature"); smart_contract_code::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
         .expect_execute_err(&developer, &mut stx, "valid signatures cannot replace immutable artifact semantics");
         assert!(matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("manifest payload does not match")), "unexpected artifact failure: {error:?}");
         assert_eq!(
-            stx.world.contract_manifests.get(&code_hash),
+            stx.world.contract_manifests.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)),
             Some(&first_manifest),
         );
     });
@@ -83,17 +97,16 @@ mod public_artifact_tests {
             .set_parameter(Parameter::Custom(protected));
         let (program, manifest) = minimal_contract_artifact();
         let code_hash = manifest.code_hash.expect("manifest code hash");
-        let register_bytes = scode::RegisterSmartContractBytes {
-            code_hash,
+        let register_bytes = scode::RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
             code: program,
         };
         let unregistered = AccountId::new(checked_keypair().public_key().clone());
         register_bytes.clone().expect_execute_err(
             &unregistered, &mut stx, "unregistered authority cannot create an artifact");
-        assert!(stx.world.contract_code.get(&code_hash).is_none());
+        assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_none());
         register_bytes.clone().expect_execute(
             &attacker, &mut stx, "ordinary registered developer may create verified code");
-        assert!(stx.world.contract_code.get(&code_hash).is_some());
+        assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_some());
         Grant::account_permission(
             Permission::new(
                 "CanManageSmartContractCode".to_owned(),
@@ -102,13 +115,12 @@ mod public_artifact_tests {
             attacker.clone(),
         )
         .expect_execute(&attacker, &mut stx, "store adversarial same-name permission payload");
-        let error = scode::RemoveSmartContractBytes { code_hash, reason: None }
+        let error = scode::RemoveSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), reason: None }
             .expect_execute_err(&attacker, &mut stx, "creation does not grant global removal authority");
         assert_contains!(error.to_string(), "CanManageSmartContractCode");
-        assert!(stx.world.contract_code.get(&code_hash).is_some());
+        assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_some());
         let upload_hash = Hash::new(b"ordinary owner pending upload");
-        let upload = scode::UploadSmartContractCodeChunk {
-            code_hash: upload_hash,
+        let upload = scode::UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, upload_hash),
             total_size: 3,
             chunk_index: 0,
             chunk_count: 1,
@@ -116,25 +128,24 @@ mod public_artifact_tests {
         };
         upload.clone().expect_execute_err(&unregistered, &mut stx, "missing accounts cannot stage uploads");
         upload.expect_execute(&attacker, &mut stx, "registered developer stages only their own upload");
-        let attacker_upload_key = SmartContractCodeUploadKey::new(attacker.clone(), upload_hash);
+        let attacker_upload_key = SmartContractCodeUploadKey::new(attacker.clone(),iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, upload_hash));
         assert!(stx.world.contract_code_uploads.get(&attacker_upload_key).is_some());
         assert!(stx.world.contract_code_upload_chunks.get(
             &SmartContractCodeUploadChunkKey::new(attacker_upload_key.clone(), 0)).is_some());
-        let finalize = scode::FinalizeSmartContractCodeUpload {
-            code_hash: upload_hash, total_size: 3, chunk_count: 1,
+        let finalize = scode::FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, upload_hash), total_size: 3, chunk_count: 1,
         };
         finalize.clone().expect_execute_err(&unregistered, &mut stx, "missing accounts cannot finalize uploads");
         let error = finalize.clone().expect_execute_err(&ALICE_ID, &mut stx, "another account cannot finalize the owner's staging");
         assert!(matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("pending contract upload descriptor not found")), "unexpected artifact failure: {error:?}");
         finalize.expect_execute_err(&attacker, &mut stx, "public upload still verifies complete IVM artifacts");
-        assert!(stx.world.contract_code.get(&upload_hash).is_none());
+        assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, upload_hash)).is_none());
         assert!(stx.world.contract_code_uploads.get(&attacker_upload_key).is_some());
-        scode::CancelSmartContractCodeUpload { code_hash: upload_hash }
+        scode::CancelSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, upload_hash)}
             .expect_execute(&ALICE_ID, &mut stx, "another account cancels only its own nonexistent staging");
         assert!(stx.world.contract_code_uploads.get(&attacker_upload_key).is_some());
         assert!(stx.world.contract_code_upload_chunks.get(
             &SmartContractCodeUploadChunkKey::new(attacker_upload_key.clone(), 0)).is_some());
-        scode::CancelSmartContractCodeUpload { code_hash: upload_hash }
+        scode::CancelSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, upload_hash)}
             .expect_execute(&attacker, &mut stx, "owner cancels its own staging without privileged grant");
         assert!(stx.world.contract_code_uploads.get(&attacker_upload_key).is_none());
         assert!(stx.world.contract_code_upload_chunks.iter().all(|(key,_)| key.upload != attacker_upload_key));
@@ -142,28 +153,25 @@ mod public_artifact_tests {
         register_bytes
             .clone()
             .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode registration");
-        let remove_bytes = scode::RemoveSmartContractBytes {
-            code_hash,
+        let remove_bytes = scode::RemoveSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
             reason: Some("permission regression fixture".to_owned()),
         };
         let error = remove_bytes
             .clone()
             .expect_execute_err(&attacker, &mut stx, "raw bytecode removal requires runtime lifecycle authority");
         assert_contains!(format!("{error:?}"), "CanManageSmartContractCode");
-        assert!(stx.world.contract_code.get(&code_hash).is_some());
+        assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_some());
         remove_bytes
             .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode removal");
-        assert!(stx.world.contract_code.get(&code_hash).is_none());
+        assert!(stx.world.contract_code.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_none());
         register_bytes
             .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode re-registration");
-        let register_manifest = scode::RegisterSmartContractCode {
-            manifest: manifest.signed(&ALICE_KEYPAIR),
-        };
+        let register_manifest = { let scoped_manifest = manifest.signed(&ALICE_KEYPAIR); scode::RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } };
         let error = register_manifest
             .clone()
             .expect_execute_err(&attacker, &mut stx, "manifest registration requires the submitting account signature");
         assert_contains!(format!("{error:?}"), "manifest signer is not authorised");
-        assert!(stx.world.contract_manifests.get(&code_hash).is_none());
+        assert!(stx.world.contract_manifests.get(&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)).is_none());
         register_manifest
             .expect_execute(&ALICE_ID, &mut stx, "authorized manifest registration");
         let contract_address = ContractAddress::derive(

@@ -40,13 +40,14 @@ readback. Progress is observational and never changes signing or recovery policy
 Musubi shows the complete network, signer, alias, and fee review plus stage progress
 on human stderr; machine mode retains one final JSON document and no progress output.
 
-Journal directories must be owner-only (0700); records are bounded regular
-single-link files (0600), opened relative to the locked directory without
-following symlinks. Both file and directory are synced before dispatch. A crash
+Journal custody uses `iroha_fs`: owner-only directories and bounded regular
+single-link records, opened relative to the retained locked directory without
+following symlinks or reparse points. Unix uses 0700/0600; Windows uses protected
+owner DACLs and handle-bound access. Both file and directory are synced before dispatch. A crash
 between recording an attempt and sending it deliberately remains unresolved;
 resume must not guess whether a request reached Torii. Partial records fail
-closed and are never silently overwritten. Unix filesystems are qualified;
-other platforms return an explicit unsupported-filesystem error before dispatch.
+closed and are never silently overwritten. Native macOS component tests pass;
+Linux and Windows runtime and crash qualification remain part of the release matrix.
 
 `inspect_journal` returns a typed `Pending`, `Failed`, `Completed`, or `Cancelled` disposition.
 A fixed failure contains the SDK's exact global, state-resolved rejection or

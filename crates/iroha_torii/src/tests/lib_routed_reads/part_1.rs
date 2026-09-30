@@ -858,8 +858,13 @@ fn merged_list_response_rejects_array_payloads_from_legacy_list_handlers() {
         norito::json!([{"id": "alpha"}]),
         norito::json!([{"id": "alpha"}, {"id": "beta"}]),
     ];
-    let response = merged_list_response(payloads, "fanout", routed_read_test_budget())
-        .expect_err("legacy raw-array list payloads must fail closed");
+    let response = merged_list_response(
+        payloads,
+        ToriiReadEndpointV1::AccountAssetsGet,
+        "fanout",
+        routed_read_test_budget(),
+    )
+    .expect_err("legacy raw-array list payloads must fail closed");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(
         response
@@ -2187,6 +2192,7 @@ async fn merged_list_response_deduplicates_items_and_sets_total() {
                 "total": 2
             }),
         ],
+        ToriiReadEndpointV1::AccountAssetsGet,
         "proxy",
         routed_read_test_budget(),
     )
@@ -2222,6 +2228,7 @@ async fn merged_list_response_preserves_first_seen_order() {
                 "total": 2
             }),
         ],
+        ToriiReadEndpointV1::AccountAssetsGet,
         "proxy",
         routed_read_test_budget(),
     )
@@ -3194,4 +3201,42 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
     .await
     .expect_err("no routes unavailable");
     assert_eq!(empty.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn permission_fanout_preserves_route_exhaustion_after_deduplication() {
+    for second_has_more in [false, true] {
+        let response = merged_list_response(
+            vec![
+                norito::json!({"items": [{"name": "CanSetParameters", "payload": null}], "total": 1, "has_more": false}),
+                norito::json!({"items": [{"name": "CanSetParameters", "payload": null}], "total": 2, "has_more": second_has_more}),
+            ],
+            ToriiReadEndpointV1::AccountPermissionsGet,
+            "fanout",
+            routed_read_test_budget(),
+        ).unwrap();
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(1));
+        assert_eq!(json["has_more"].as_bool(), Some(second_has_more));
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn permission_fanout_rejects_missing_or_nonprogressing_exhaustion_evidence() {
+    for payload in [
+        norito::json!({"items": [], "total": 0}),
+        norito::json!({"items": [], "total": 0, "has_more": "false"}),
+        norito::json!({"items": [], "total": 1, "has_more": true}),
+    ] {
+        let response = merged_list_response(
+            vec![payload],
+            ToriiReadEndpointV1::AccountPermissionsGet,
+            "fanout",
+            routed_read_test_budget(),
+        )
+        .unwrap_err();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

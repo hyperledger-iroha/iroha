@@ -138,6 +138,8 @@ pub struct Config {
     pub key_pair: KeyPair,
     /// Optional Basic Auth credentials for HTTP.
     pub basic_auth: Option<BasicAuth>,
+    /// Owner-held Torii listener credential, sent as `X-API-Token`.
+    pub api_token: Option<SecretString>,
     /// Torii API base URL.
     pub torii_api_url: Url,
     /// Timeout for Torii HTTP requests.
@@ -401,6 +403,20 @@ mod tests {
             .with_toml_source(TomlSource::inline(config_sample()))
             .read_and_complete::<user::Root>()
             .unwrap();
+    }
+    #[test]
+    fn owner_api_token_loads_without_exposure_in_debug() {
+        let token = "owner-only-listener-token-for-config-test";
+        let mut table = config_sample();
+        table.insert("api_token".into(), toml::Value::String(token.into()));
+        let config = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Root>()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(config.api_token.as_ref().unwrap().expose_secret(), token);
+        assert!(!format!("{config:?}").contains(token));
     }
     #[test]
     fn sdk_config_rejects_cli_owned_filesystem_sections() {

@@ -1,4 +1,6 @@
 //! This module contains data and structures related only to smart contract execution
+mod artifact_id;
+pub use artifact_id::ContractArtifactId;
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     id::NetworkId,

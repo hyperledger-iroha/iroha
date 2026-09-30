@@ -28,6 +28,7 @@ fn current_phase_fixture() -> (
     let verifier = NativeJournalCursor::new(
         chain_id,
         chain.network_id(),
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         test_finality_limits().checked().unwrap(),
     )
     .unwrap();
@@ -122,6 +123,7 @@ fn rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs() {
         let mut verifier = NativeJournalCursor::new(
             ChainId::from("rotation-phase-test"),
             test_network(),
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
             test_finality_limits().checked().expect("limits"),
         )
         .expect("independent cursor");
@@ -181,6 +183,7 @@ fn claimed_journal_count_never_substitutes_for_actual_native_source() {
     let mut cursor = NativeJournalCursor::new(
         ChainId::from("rotation-phase-test"),
         test_network(),
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         test_finality_limits().checked().expect("limits"),
     )
     .expect("cursor");

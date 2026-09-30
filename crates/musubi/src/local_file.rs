@@ -1,9 +1,10 @@
 //! Bounded final-component reads for hostile local filesystem inputs.
 //!
 //! On qualified Unix targets this module pins one regular final component through a no-follow,
-//! nonblocking descriptor and revalidates its path-visible identity after the bounded read. Other
-//! targets fail closed before reading. Callers remain responsible for ancestor confinement: these
-//! pathname-based opens do not claim to close a deliberately timed ancestor-directory ABA.
+//! nonblocking descriptor and revalidates its path-visible identity after the bounded read. Native
+//! Windows uses `iroha_fs` retained handles and rejects reparse points. Other targets fail closed.
+//! Unix callers remain responsible for ancestor confinement: those pathname-based opens do not
+//! claim to close a deliberately timed ancestor-directory ABA.
 #[cfg(unix)]
 use iroha_primitives::fs::secure_no_follow_nonblocking_flags;
 #[cfg(unix)]
@@ -18,8 +19,8 @@ use std::{io, path::Path};
 ///
 /// The returned bytes come from one descriptor whose type, size, link count, and stable platform
 /// identity match the named path before and after the read. On qualified Unix targets, nonblocking
-/// open keeps a raced FIFO from hanging before its descriptor type is rejected. Other targets fail
-/// closed until a stable handle-identity implementation is available.
+/// open keeps a raced FIFO from hanging before its descriptor type is rejected. Native Windows
+/// uses retained no-reparse handles and additionally enforces owner custody of the full path.
 pub fn read_bounded_single_link_regular_file_v1(
     path: &Path,
     max_bytes: u64,
@@ -28,7 +29,17 @@ pub fn read_bounded_single_link_regular_file_v1(
     {
         read_bounded_single_link_regular_file_impl_v1(path, max_bytes, |_| Ok(()))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let maximum = usize::try_from(max_bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "local-file byte limit exceeds this host",
+            )
+        })?;
+        iroha_fs::read_regular(path, maximum).map(|bytes| bytes.to_vec())
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, max_bytes);
         Err(io::Error::new(
@@ -249,7 +260,21 @@ mod tests {
         .expect_err("raced symlink must not be followed");
         assert_eq!(fs::read(&target).expect("read target"), b"other");
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    #[test]
+    fn windows_reads_bounded_regular_files_and_rejects_shared_identity() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("input");
+        fs::write(&path, b"exact").expect("write exact input");
+        assert_eq!(
+            read_bounded_single_link_regular_file_v1(&path, 5).expect("bounded read"),
+            b"exact"
+        );
+        assert!(read_bounded_single_link_regular_file_v1(&path, 4).is_err());
+        fs::hard_link(&path, temporary.path().join("alias")).expect("hard link");
+        assert!(read_bounded_single_link_regular_file_v1(&path, 5).is_err());
+    }
+    #[cfg(not(any(unix, windows)))]
     #[test]
     fn unsupported_platforms_fail_closed_before_reading() {
         let temporary = tempdir().expect("temporary directory");

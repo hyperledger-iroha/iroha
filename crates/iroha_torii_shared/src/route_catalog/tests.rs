@@ -321,24 +321,41 @@ mod tests {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
     #[test]
-    fn kagemusha_routes_are_universal_for_app_api_and_project_to_mcp() {
+    fn kagemusha_routes_are_universal_for_app_api_with_exact_mcp_projection() {
         let catalog = RouteCatalog::new(kagemusha::ROUTES);
+        let enabled = EnabledFeatures::new(&["app_api"]);
+        let complete = BTreeSet::from([
+            "kagemusha.readiness",
+            "kagemusha.top_up",
+            "kagemusha.redeem",
+            "kagemusha.operation",
+            "kagemusha.authority_state",
+        ]);
+        for projection in [CatalogProjection::Mounted, CatalogProjection::OpenApi] {
+            let projected = catalog.project(projection, enabled);
+            assert_eq!(projected.len(), complete.len());
+            assert_eq!(
+                projected
+                    .iter()
+                    .map(|route| route.stable_route_id())
+                    .collect::<BTreeSet<_>>(),
+                complete,
+                "every app-api node and authored OpenAPI contract must expose all five native KAGEMUSHA routes"
+            );
+        }
+        let mcp = catalog.project(CatalogProjection::Mcp, enabled);
+        assert_eq!(mcp.len(), 4);
         assert_eq!(
-            catalog
-                .project(
-                    CatalogProjection::Mounted,
-                    EnabledFeatures::new(&["app_api"]),
-                )
-                .len(),
-            kagemusha::ROUTES.len(),
-            "every app-api node must expose the complete KAGEMUSHA route family"
-        );
-        assert_eq!(
-            catalog
-                .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]))
-                .len(),
-            kagemusha::ROUTES.len(),
-            "the KAGEMUSHA route family must be available to MCP clients"
+            mcp.iter()
+                .map(|route| route.stable_route_id())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "kagemusha.readiness",
+                "kagemusha.top_up",
+                "kagemusha.redeem",
+                "kagemusha.operation",
+            ]),
+            "the data-only complete authority snapshot has no MCP projection"
         );
     }
     #[test]
@@ -1379,7 +1396,7 @@ mod tests {
             AdmissionPolicy::AuthenticatedAccount
         );
         for route in [
-            contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
+            contracts_and_verification_keys::CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_BYTES_GET,
             contracts_and_verification_keys::MULTISIG_SPEC_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,

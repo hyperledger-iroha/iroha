@@ -179,6 +179,10 @@ impl_direct_instruction_box!(
     crate::isi::sumeragi_amx::RelayAmxPreparedV1,
     crate::isi::sumeragi_amx::RelayAmxHandoffV1,
 );
+impl_direct_instruction_box!(
+    crate::isi::private_dataspace::RegisterPrivateDataspace,
+    crate::isi::private_dataspace::AnchorPrivateDataspace,
+);
 // Allow direct boxing of ZK asset and voting instructions
 impl_direct_instruction_box!(crate::isi::zk::RegisterZkAsset);
 impl_direct_instruction_box!(crate::isi::zk::ScheduleConfidentialPolicyTransition);
@@ -1905,6 +1909,7 @@ pub mod space_directory;
 pub mod staking;
 /// AMX two-phase-commit instructions of the global chain.
 pub mod sumeragi_amx;
+pub mod private_dataspace;
 /// Asset, account, and value transfer instructions.
 pub mod transfer;
 mod transparent;

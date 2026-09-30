@@ -1,0 +1,543 @@
+//! Native custody, immutable reads, atomic publication and ownership regressions.
+
+use super::*;
+use std::{
+    fs,
+    io::{Seek as _, SeekFrom, Write as _},
+};
+
+fn store() -> (tempfile::TempDir, PrivateDirectory) {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let store =
+        PrivateDirectory::open_or_create(temporary.path().join("private")).expect("private store");
+    (temporary, store)
+}
+
+#[test]
+fn retained_directory_listing_is_bounded_and_does_not_follow_children() {
+    let (_temporary, store) = store();
+    assert!(store.entries(0).unwrap().is_empty());
+    store
+        .write_atomic("zeta", b"one", PublishMode::CreateNew)
+        .unwrap();
+    let child = store.create_child("alpha").unwrap();
+    child
+        .write_atomic("nested", b"two", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(
+        store.entries(2).unwrap(),
+        vec![
+            std::ffi::OsString::from("alpha"),
+            std::ffi::OsString::from("zeta")
+        ]
+    );
+    assert!(store.entries(1).is_err());
+    assert!(store.entries(0).is_err());
+}
+
+#[test]
+fn project_authority_keeps_readers_and_publishes_private_files() {
+    let (_temporary, private) = store();
+    let path = private.path().to_path_buf();
+    drop(private);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let project = OwnerDirectory::open(&path).unwrap();
+    let identity = project.identity().unwrap();
+    assert_eq!(
+        OwnerDirectory::open_or_create(&path)
+            .unwrap()
+            .identity()
+            .unwrap(),
+        identity
+    );
+    fs::write(path.join("existing"), b"readable source").unwrap();
+    assert_eq!(
+        project.read_regular("existing", 15).unwrap().as_slice(),
+        b"readable source"
+    );
+    project
+        .write_atomic("existing", b"generated", PublishMode::Replace)
+        .unwrap();
+    assert_eq!(
+        read_private(path.join("existing"), 9).unwrap().as_slice(),
+        b"generated"
+    );
+    let child = project.create_child("target").unwrap();
+    assert_eq!(
+        project.open_child("target").unwrap().identity().unwrap(),
+        child.identity().unwrap()
+    );
+    assert_eq!(
+        project.ensure_child("target").unwrap().identity().unwrap(),
+        child.identity().unwrap()
+    );
+    assert_eq!(
+        project.create_child("target").unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(project.open_child("missing").is_err());
+    assert!(!path.join("missing").exists());
+    child.sync().unwrap();
+    project.revalidate().unwrap();
+    project.sync().unwrap();
+    let lock = project.open_lock("target.lock").unwrap();
+    lock.try_lock().unwrap();
+    assert!(
+        project
+            .open_lock("target.lock")
+            .unwrap()
+            .try_lock()
+            .is_err()
+    );
+    assert!(project.open_child("../escape").is_err());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+}
+
+#[test]
+fn retained_streaming_preserves_identity_bounds_and_exclusive_creation() {
+    let (_temporary, directory) = store();
+    let path = directory.path().join("payload");
+    let mut writer = RetainedFile::create_new_private(&path).unwrap();
+    let identity = writer.identity().unwrap();
+    writer.file_mut().write_all(b"bounded payload").unwrap();
+    writer.file().sync_all().unwrap();
+    writer.revalidate().unwrap();
+    assert_eq!(FileIdentity::of(writer.file()).unwrap(), identity);
+    assert!(RetainedFile::create_new_private(&path).is_err());
+    drop(writer);
+    for mut reader in [
+        RetainedFile::open_regular(&path).unwrap(),
+        RetainedFile::open_private(&path).unwrap(),
+    ] {
+        let mut buffer = [0; 7];
+        reader.file_mut().read_exact(&mut buffer).unwrap();
+        assert_eq!(&buffer, b"bounded");
+        reader.file_mut().seek(SeekFrom::Start(8)).unwrap();
+        let mut remainder = String::new();
+        reader.file_mut().read_to_string(&mut remainder).unwrap();
+        assert_eq!(remainder, "payload");
+        reader.revalidate().unwrap();
+        assert_eq!(reader.identity().unwrap(), identity);
+    }
+    fs::hard_link(&path, directory.path().join("alias")).unwrap();
+    assert!(RetainedFile::open_regular(&path).is_err());
+    assert!(RetainedFile::open_private(&path).is_err());
+}
+
+#[test]
+fn sealing_a_writer_keeps_its_identity_and_detects_later_writes() {
+    let (_temporary, directory) = store();
+    let mut file = RetainedFile::create_new_private(directory.path().join("payload")).unwrap();
+    file.file_mut().write_all(b"complete").unwrap();
+    let identity = file.identity().unwrap();
+    let mut sealed = file.seal().unwrap();
+    assert_eq!(sealed.identity().unwrap(), identity);
+    sealed.revalidate().unwrap();
+    sealed.file_mut().write_all(b"changed").unwrap();
+    sealed.file().sync_all().unwrap();
+    assert!(sealed.revalidate().is_err());
+}
+
+#[test]
+fn snapshot_tokens_bind_separately_opened_object_and_content() {
+    let (_temporary, directory) = store();
+    let path = directory.path().join("source");
+    directory
+        .write_atomic("source", b"first", PublishMode::CreateNew)
+        .unwrap();
+    let first = RetainedFile::open_regular(&path)
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    let same = RetainedFile::open_regular(&path)
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert_eq!(first, same);
+    directory
+        .write_atomic("source", b"other", PublishMode::Replace)
+        .unwrap();
+    let different = RetainedFile::open_regular(&path)
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert_ne!(first, different);
+}
+
+#[test]
+fn read_only_log_open_never_creates_or_writes() {
+    let (_temporary, directory) = store();
+    assert!(directory.open_read("missing").is_err());
+    assert!(!directory.path().join("missing").exists());
+    directory
+        .write_atomic("log", b"one\n", PublishMode::CreateNew)
+        .unwrap();
+    let mut reader = directory.open_read("log").unwrap();
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"one\n");
+    assert!(reader.write_all(b"replacement").is_err());
+    assert_eq!(directory.read("log", 4).unwrap().as_slice(), b"one\n");
+}
+
+#[test]
+fn directory_publication_preserves_exact_tree_and_never_replaces() {
+    let (_temporary, directory) = store();
+    let staged = directory.create_child("staged").unwrap();
+    staged
+        .write_atomic("complete", b"verified", PublishMode::CreateNew)
+        .unwrap();
+    staged.sync().unwrap();
+    let identity = staged.identity().unwrap();
+    let published = staged
+        .rename_to_sibling("src", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(published.identity().unwrap(), identity);
+    assert_eq!(published.path(), directory.path().join("src"));
+    assert_eq!(
+        published.read("complete", 8).unwrap().as_slice(),
+        b"verified"
+    );
+    assert!(!directory.path().join("staged").exists());
+    let conflicting = directory.create_child("other").unwrap();
+    assert!(
+        conflicting
+            .rename_to_sibling("src", PublishMode::CreateNew)
+            .is_err()
+    );
+    assert_eq!(published.identity().unwrap(), identity);
+    assert!(
+        directory
+            .create_child("replace")
+            .unwrap()
+            .rename_to_sibling("src", PublishMode::Replace)
+            .is_err()
+    );
+}
+
+#[test]
+fn retained_descendants_block_directory_publication() {
+    let (_temporary, directory) = store();
+    let staged = directory.create_child("staged").unwrap();
+    let child = staged.create_child("live").unwrap();
+    assert!(
+        staged
+            .rename_to_sibling("src", PublishMode::CreateNew)
+            .is_err()
+    );
+    child.revalidate().unwrap();
+    assert!(!directory.path().join("src").exists());
+}
+
+#[test]
+fn private_publication_and_bounded_read_round_trip() {
+    let (_temporary, store) = store();
+    store
+        .write_atomic("key", b"sensitive-data", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(store.read("key", 14).unwrap().as_slice(), b"sensitive-data");
+    assert!(store.read("key", 13).is_err());
+    assert_eq!(
+        read_private(store.path().join("key"), 14)
+            .unwrap()
+            .as_slice(),
+        b"sensitive-data"
+    );
+    assert_eq!(
+        read_regular(store.path().join("key"), 14)
+            .unwrap()
+            .as_slice(),
+        b"sensitive-data"
+    );
+    store.sync().unwrap();
+}
+
+#[test]
+fn create_new_never_clobbers_and_replace_changes_identity() {
+    let (_temporary, store) = store();
+    store
+        .write_atomic("journal", b"prepared", PublishMode::CreateNew)
+        .unwrap();
+    let identity = FileIdentity::of(&File::open(store.path().join("journal")).unwrap()).unwrap();
+    let error = store
+        .write_atomic("journal", b"second", PublishMode::CreateNew)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(store.read("journal", 8).unwrap().as_slice(), b"prepared");
+    store
+        .write_atomic("journal", b"committed", PublishMode::Replace)
+        .unwrap();
+    assert_eq!(store.read("journal", 9).unwrap().as_slice(), b"committed");
+    assert_ne!(
+        identity,
+        FileIdentity::of(&File::open(store.path().join("journal")).unwrap()).unwrap()
+    );
+    assert_eq!(fs::read_dir(store.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn child_creation_preserves_existing_custody_and_names() {
+    let (_temporary, store) = store();
+    let child = store.create_child("日本語").unwrap();
+    let existing = store.ensure_child("日本語").unwrap();
+    assert_eq!(child.path(), existing.path());
+    assert_eq!(
+        store.create_child("日本語").unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    child
+        .write_atomic("bytes", b"", PublishMode::CreateNew)
+        .unwrap();
+    assert!(child.read("bytes", 0).unwrap().is_empty());
+    let reopened = PrivateDirectory::open(child.path()).unwrap();
+    reopened.revalidate().unwrap();
+    assert!(PrivateDirectory::open(store.path().join("missing")).is_err());
+    assert!(!store.path().join("missing").exists());
+}
+
+#[test]
+fn traversal_stream_and_device_names_are_rejected_before_mutation() {
+    let (_temporary, store) = store();
+    for name in [
+        "",
+        ".",
+        "..",
+        "a/b",
+        "a\\b",
+        "secret:stream",
+        "NUL",
+        "nul.txt",
+        "COM1",
+        "LPT9.txt",
+        "trailing.",
+        "trailing ",
+        "nul\0byte",
+    ] {
+        assert!(
+            store
+                .write_atomic(name, b"secret", PublishMode::CreateNew)
+                .is_err(),
+            "{name:?}"
+        );
+        assert!(store.ensure_child(name).is_err(), "{name:?}");
+        assert!(store.read(name, 10).is_err(), "{name:?}");
+        assert!(store.open_lock(name).is_err(), "{name:?}");
+    }
+    assert_eq!(fs::read_dir(store.path()).unwrap().count(), 0);
+    assert!(PrivateDirectory::open_or_create(store.path().join("../escaped")).is_err());
+}
+
+#[test]
+fn persistent_lock_handles_exclude_another_open_and_do_not_truncate() {
+    let (_temporary, store) = store();
+    let mut first = store.open_lock("owner.lock").unwrap();
+    first.try_lock().unwrap();
+    first.write_all(b"owner").unwrap();
+    first.sync_all().unwrap();
+    let mut second = store.open_lock("owner.lock").unwrap();
+    assert!(second.try_lock().is_err());
+    let mut bytes = Vec::new();
+    second.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"owner");
+    drop(first);
+    // Another parallel test may be between fork/posix_spawn and exec. CLOEXEC keeps this
+    // descriptor out of the executed child, but the inherited open-file description can
+    // briefly retain its lock until exec completes. Ownership must remain excluded then.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        match second.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(error) => panic!("released lock remained unavailable: {error}"),
+        }
+    }
+}
+
+#[test]
+fn append_handle_can_read_tail_and_never_overwrites() {
+    let (_temporary, store) = store();
+    let mut log = store.open_append("serve.log").unwrap();
+    log.write_all(b"one\n").unwrap();
+    log.seek(SeekFrom::Start(0)).unwrap();
+    log.write_all(b"two\n").unwrap();
+    log.seek(SeekFrom::Start(0)).unwrap();
+    let mut bytes = Vec::new();
+    log.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"one\ntwo\n");
+}
+
+#[test]
+fn hard_linked_files_are_never_read_or_replaced() {
+    let (_temporary, store) = store();
+    store
+        .write_atomic("key", b"original", PublishMode::CreateNew)
+        .unwrap();
+    fs::hard_link(store.path().join("key"), store.path().join("alias")).unwrap();
+    assert!(store.read("key", 1024).is_err());
+    assert!(read_private(store.path().join("key"), 1024).is_err());
+    assert!(read_regular(store.path().join("key"), 1024).is_err());
+    assert!(store.open_lock("key").is_err());
+    assert!(
+        store
+            .write_atomic("key", b"replaced", PublishMode::Replace)
+            .is_err()
+    );
+    assert_eq!(fs::read(store.path().join("alias")).unwrap(), b"original");
+}
+
+#[test]
+fn clear_preserves_locked_files_and_directory_identity() {
+    let (_temporary, store) = store();
+    let lock = store.open_lock("owner.lock").unwrap();
+    lock.try_lock().unwrap();
+    let identity = FileIdentity::of(&lock).unwrap();
+    let child = store.create_child("generation").unwrap();
+    child
+        .write_atomic("secret", b"secret", PublishMode::CreateNew)
+        .unwrap();
+    drop(child);
+    store
+        .write_atomic("context", b"ready", PublishMode::CreateNew)
+        .unwrap();
+    store.clear_contents_preserving(&["owner.lock"]).unwrap();
+    assert_eq!(fs::read_dir(store.path()).unwrap().count(), 1);
+    assert_eq!(
+        FileIdentity::of(&store.open_lock("owner.lock").unwrap()).unwrap(),
+        identity
+    );
+    assert!(store.open_lock("owner.lock").unwrap().try_lock().is_err());
+    store.revalidate().unwrap();
+    assert!(store.clear_contents_preserving(&["../outside"]).is_err());
+}
+
+#[test]
+fn clear_rejects_shared_entries_and_missing_preserved_files() {
+    let (_temporary, store) = store();
+    store
+        .write_atomic("one", b"secret", PublishMode::CreateNew)
+        .unwrap();
+    fs::hard_link(store.path().join("one"), store.path().join("two")).unwrap();
+    assert!(store.clear_contents_preserving(&["missing"]).is_err());
+    assert!(store.clear_contents_preserving(&[]).is_err());
+    assert_eq!(fs::read(store.path().join("one")).unwrap(), b"secret");
+}
+
+#[cfg(windows)]
+mod windows {
+    use super::*;
+
+    #[test]
+    fn process_owner_comes_from_kernel_token() {
+        assert!(crate::windows::is_current_user_process(std::process::id()).unwrap());
+        assert!(crate::windows::is_current_user_process(0).is_err());
+    }
+
+    #[test]
+    fn retained_directories_cannot_be_renamed_or_replaced() {
+        let (temporary, store) = store();
+        assert!(fs::rename(store.path(), temporary.path().join("moved")).is_err());
+        store
+            .write_atomic("key", b"secret", PublishMode::CreateNew)
+            .unwrap();
+        assert_eq!(store.read("key", 6).unwrap().as_slice(), b"secret");
+    }
+}
+
+#[cfg(unix)]
+mod unix {
+    use super::*;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
+
+    #[test]
+    fn private_modes_are_present_from_creation_and_not_silently_hardened() {
+        let (_temporary, store) = store();
+        assert_eq!(fs::metadata(store.path()).unwrap().mode() & 0o7777, 0o700);
+        store
+            .write_atomic("key", b"secret", PublishMode::CreateNew)
+            .unwrap();
+        let path = store.path().join("key");
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o600);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(store.read("key", 100).is_err());
+        assert!(
+            store
+                .write_atomic("key", b"replacement", PublishMode::Replace)
+                .is_err()
+        );
+        assert_eq!(read_regular(&path, 100).unwrap().as_slice(), b"secret");
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o644);
+        fs::set_permissions(store.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(PrivateDirectory::open_or_create(store.path()).is_err());
+        assert!(store.revalidate().is_err());
+    }
+
+    #[test]
+    fn links_and_replaced_ancestors_do_not_redirect_operations() {
+        let (temporary, store) = store();
+        store
+            .write_atomic("key", b"original", PublishMode::CreateNew)
+            .unwrap();
+        symlink(store.path().join("key"), store.path().join("linked")).unwrap();
+        assert!(store.read("linked", 1024).is_err());
+        assert!(store.open_append("linked").is_err());
+        let moved = temporary.path().join("moved");
+        fs::rename(store.path(), &moved).unwrap();
+        fs::create_dir(store.path()).unwrap();
+        fs::set_permissions(store.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            store
+                .write_atomic("new", b"do not write", PublishMode::CreateNew)
+                .is_err()
+        );
+        assert!(!moved.join("new").exists());
+        assert!(!store.path().join("new").exists());
+    }
+
+    #[test]
+    fn unsafe_ancestors_are_rejected_before_private_creation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let unsafe_parent = temporary.path().join("shared");
+        fs::create_dir(&unsafe_parent).unwrap();
+        fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(PrivateDirectory::open_or_create(unsafe_parent.join("secret")).is_err());
+        assert!(!unsafe_parent.join("secret").exists());
+    }
+
+    #[test]
+    fn fifo_is_refused_without_waiting_for_a_writer() {
+        let (_temporary, store) = store();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .args(["-m", "600"])
+                .arg(store.path().join("fifo"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(store.read("fifo", 1024).is_err());
+        assert!(store.open_lock("fifo").is_err());
+    }
+
+    #[test]
+    fn public_input_rejects_an_untrusted_user_link() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("real");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("input"), b"code").unwrap();
+        symlink(&directory, temporary.path().join("alias")).unwrap();
+        assert!(read_regular(temporary.path().join("alias/input"), 1024).is_err());
+    }
+}

@@ -1,8 +1,8 @@
 # Native retail enrollment phases
 
 This kernel is compiled for qualified Rust backends. The generic C/JNI bridge
-exposes the bounded method-12 initial-enrollment phase frames, but no production
-backend is installed. These phases alone do not qualify an iPhone or Android
+exposes the bounded method-12 initial-enrollment phase frames and a path-only
+native installation call. These phases alone do not qualify an iPhone or Android
 device, an issuer configuration, a native release artifact, or an offline
 monetary operation. The method-12 backend hook defaults to `Unavailable`.
 
@@ -61,7 +61,47 @@ the independently governed owner, policies, authenticated release, native key,
 original raw platform evidence and trusted service time for the original live
 ticket. The delegate accepts the exact signed app certificate from the phase-2
 frame only after `begin_selected` binds it to that evidence. No context provider
-or global backend installer is supplied by the ordinary bridge.
+is supplied by the ordinary bridge. `register_kagemusha_native_enrollment_provisioner_v1`
+is the Rust-only install-once intake for the independently governed platform owner.
+It is not a C/JNI configuration parser. The app calls
+`connect_norito_kagemusha_core_coordinator_install_v1` with only its exact storage
+path before Open. The installer resolves the retained Rust provisioner, derives pins
+from the authenticated production release and independently selected policies, opens
+the actual rollback-checked journal, and composes the concrete kernel delegate and
+phase adapter. It rechecks original custody before and after selection and use. An
+exact successful same-path install retry is idempotent; a changed path, policy,
+unknown global owner or uncertain platform/store result is rejected. No native
+provisioner returns `Unavailable`. Callable ABI inventory is metadata and does not
+establish an installed backend.
+
+The installed adapter automatically consumes the one freshly verified admission
+after durable phase-5 publication and passes it to the provisioner's
+`retain_fresh_admission`. That owner must retain the original consuming value and
+perform the separate enrolled account/device open and actual paired-proof,
+hardware/journal bootstrap. A failed handoff cannot reconstruct the admission from
+the retained certificate. An exact successful phase-5 retry returns original bytes
+without another handoff. Post-handoff qualification reads go to the selected
+enrolled platform coordinator, never back to the pre-enrollment observer.
+
+`FreshIssuerAdmissionV1::into_current_bootstrap_evidence` consumes the original
+still-live native admission and reauthenticates its exact app assertion, issuer
+certificate and account/device proof at the same newly authenticated native time.
+It returns only the model's opaque certificate/possession evidence. The concrete
+`KagemushaAuthenticatedCoreOwnerV1::stage_enrolled_bootstrap` still requires the real
+paired authorization and device verifier. After actual initial checkpoint CAS and
+fresh hardware confirmation, `from_bootstrapped_wallet` consumes the completed
+production wallet and held transaction journal without releasing or reopening
+their descriptor locks. It checks the exact Guard storage binding and current
+checkpoint before returning an owner. Generic accepting verifiers cannot supply
+that constructor's concrete wallet type.
+
+The existing descriptor-locked operation and response WALs provide durable bytes;
+they are not external rollback protection for the earlier enrollment snapshot.
+The existing hardware transaction journal verifies actual signed monetary-lane
+checkpoint/capacity operations, and its current-checkpoint read requires an already
+initialized lane and journal prefixes. It cannot be used as an invented generic
+pre-enrollment revision CAS. A governed nonforking OEM journal service or independently
+authenticated monotonic external store must supply that physical boundary.
 
 `PendingIssuerEnrollmentV1::begin_selected` consumes the original live selection
 after verifying the issuer-signed 273-byte preparation, the independent verifier's
@@ -70,10 +110,13 @@ qualification. Raw evidence is bounded to 128 KiB to admit the verifier's Androi
 certificate-chain envelope; it is retained by the trusted Rust context provider,
 not carried as a coordinator frame field. The signed certificate's
 `attested_key_id` is SHA-256 of the raw platform-attested SEC1 point. For Apple it
-must equal the provisional App Attest key ID signed in preparation; for Android the
-preparation carries the zero sentinel
+must equal the provisional App Attest key ID signed in preparation; for ordinary
+Android KeyMint the preparation carries the zero sentinel
 and the later certificate signs the actual KeyMint point ID. The governed device
-reference must derive from that same point. The qualified backend supplies independently
+reference must derive from that same point. All four qualified custom hardware
+classes require the nonzero SHA-256 of the exact authenticated operation-1 eSE
+credential point in preparation and certificate; ordinary App Attest/KeyMint keys
+cannot be relabeled as a custom eSE credential. The qualified backend supplies independently
 authenticated issuer/release pins, the selected owner, trusted service time and native
 Core authorization key. The qualification body is checked against the authenticated
 release's complete enabled profile, governed credential, owner network/lane and native
@@ -129,6 +172,10 @@ the separate enrolled-wallet open under the same bounded, revocable registry
 handle and authenticated journal. The provider must independently retain raw
 platform evidence, authenticated issuer configuration, release and policy pins,
 and trusted service time. Exact current-source native artifacts are also required.
-The generic bridge supplies no C/JNI installer for an unqualified backend. Device
+The generic bridge supplies no C/JNI intake for an unqualified backend. The stock
+repository does not include an OEM implementation of the qualified inner coordinator,
+rollback-protected journal store and trusted native context provider. That governed
+platform component must register its Rust owner during native initialization; a
+Java/Swift raw-evidence provider does not replace it. Device
 setup, funding/finality, crash recovery and physical hardware qualification
 remain separate required outcomes.

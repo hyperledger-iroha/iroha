@@ -49,10 +49,12 @@ impl FamilyRowsV1 {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.cells.len() / self.width
     }
 
+    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }

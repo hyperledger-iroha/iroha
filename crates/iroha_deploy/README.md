@@ -1,7 +1,8 @@
 # iroha_deploy
 
-The deployment engine being built for `iroha network` and `iroha dataspace`.
-This crate owns definition parsing and finality verification. `iroha_cli` wires
+The shared deployment engine for Kagami and Mochi developer environments and
+operator network/dataspace workflows. This crate owns native localnet generation,
+persistent supervision, context selection, definition parsing and finality verification. `iroha_cli` wires
 `iroha dataspace plan/apply/status` to the existing native deployment engine;
 the broader network/host engine remains in the phase plan below.
 
@@ -10,6 +11,20 @@ The design, file formats and phase plan are in
 
 What exists so far:
 
+- `managed`: workspace-scoped private contexts, four-validator process ownership,
+  authenticated native control IPC, durable stop/restart/reset and signed readiness.
+  `ManagedStore::up` retains the same generation and signer across starts; readiness
+  requires one signed transaction to be applied by every validator. Kagami and
+  Mochi call this owner directly. Windows uses owner-restricted native named pipes;
+  native Windows lifecycle execution still requires qualification.
+- `localnet` and `genesis`: canonical configuration generation, independent private
+  authority seeds, profile policy and genuine core genesis execution. CLI parsing
+  stays in Kagami; generation and process ownership have no CLI or GUI dependency.
+- `bootstrap`: canonical release-signed native checkpoint verification against an
+  independently installed authority, with private durable release/clock rollback
+  protection and explicit network reset identity. Official Taira release-key
+  installation, artifact publication and parent provisioning remain outstanding.
+  See the [developer acceptance contract](../../specs/kagami_mochi_devex_goals.md).
 - `definition`: parsers and validation for network definitions
   (`networks/*.toml`, spec §3.2) and dataspace definitions
   (`dataspaces/*.toml`, spec §3.3). Definitions are read through

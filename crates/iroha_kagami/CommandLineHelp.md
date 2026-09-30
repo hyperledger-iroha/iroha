@@ -6,8 +6,19 @@ This document contains the help content for the `kagami` command-line program.
 
 * [`kagami`↴](#kagami)
 * [`kagami wizard`↴](#kagami-wizard)
-* [`kagami localnet-wizard`↴](#kagami-localnet-wizard)
 * [`kagami localnet`↴](#kagami-localnet)
+* [`kagami localnet up`↴](#kagami-localnet-up)
+* [`kagami localnet status`↴](#kagami-localnet-status)
+* [`kagami localnet logs`↴](#kagami-localnet-logs)
+* [`kagami localnet down`↴](#kagami-localnet-down)
+* [`kagami localnet reset`↴](#kagami-localnet-reset)
+* [`kagami localnet generate`↴](#kagami-localnet-generate)
+* [`kagami context`↴](#kagami-context)
+* [`kagami context list`↴](#kagami-context-list)
+* [`kagami context show`↴](#kagami-context-show)
+* [`kagami context use`↴](#kagami-context-use)
+* [`kagami contract`↴](#kagami-contract)
+* [`kagami contract deploy`↴](#kagami-contract-deploy)
 * [`kagami docker`↴](#kagami-docker)
 * [`kagami keys`↴](#kagami-keys)
 * [`kagami kagemusha`↴](#kagami-kagemusha)
@@ -57,9 +68,11 @@ Task-first Iroha operator tooling for guided setup, local devnets, genesis work,
 **Usage:** `kagami [OPTIONS] <COMMAND>`
 
 Common tasks:
-  kagami localnet-wizard
+  kagami localnet up
+  kagami contract deploy hello.ko
+  kagami context list
   kagami wizard
-  kagami localnet --out-dir ./localnet
+  kagami localnet generate --out-dir ./localnet
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
   kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
@@ -69,8 +82,9 @@ Common tasks:
 ###### **Subcommands:**
 
 * `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
-* `localnet-wizard` — Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
-* `localnet` — Generate a bare-metal local network: genesis, per-peer configs, client config, and scripts
+* `localnet` — Start and manage a persistent localnet without supplying configuration
+* `context` — Select and inspect managed developer environments
+* `contract` — Build and deploy native IVM contracts in one invocation
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `kagemusha` — Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
@@ -115,19 +129,133 @@ Guided onboarding flow for staging a Sora Nexus observer configuration
 
 
 
-## `kagami localnet-wizard`
-
-Guided disposable local devnet flow for generating peers, configs, genesis, and scripts
-
-**Usage:** `kagami localnet-wizard`
-
-
-
 ## `kagami localnet`
 
-Generate a bare-metal local network: genesis, per-peer configs, client config, and scripts
+Start and manage a persistent localnet without supplying configuration
 
-**Usage:** `kagami localnet [OPTIONS] --out-dir <DIR>`
+**Usage:** `kagami localnet <COMMAND>`
+
+###### **Subcommands:**
+
+* `up` — Generate, start, verify, and select a localnet without supplying configuration
+* `status` — Observe the live supervisor and its retained environment
+* `logs` — Read a bounded retained supervisor or validator log tail
+* `down` — Stop the owned validators, preserving their identities and ledger
+* `reset` — Explicitly retire one stopped generation so the next up creates a fresh ledger
+* `generate` — Generate an operator-owned network bundle without starting validators
+
+
+
+## `kagami localnet up`
+
+Generate, start, verify, and select a localnet without supplying configuration
+
+**Usage:** `kagami localnet up [OPTIONS] [NAME]`
+
+###### **Arguments:**
+
+* `<NAME>` — Managed environment name
+
+  Default value: `local`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+* `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds
+
+  Default value: `30`
+
+
+
+## `kagami localnet status`
+
+Observe the live supervisor and its retained environment
+
+**Usage:** `kagami localnet status [OPTIONS] [NAME]`
+
+###### **Arguments:**
+
+* `<NAME>` — Managed environment name
+
+  Default value: `local`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami localnet logs`
+
+Read a bounded retained supervisor or validator log tail
+
+**Usage:** `kagami localnet logs [OPTIONS] [NAME]`
+
+###### **Arguments:**
+
+* `<NAME>` — Managed environment name
+
+  Default value: `local`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+* `--peer <PEER>` — Validator index (0..3). Omit to read the supervisor log
+* `--bytes <BYTES>` — Maximum bytes returned from the end of the log
+
+  Default value: `16384`
+
+
+
+## `kagami localnet down`
+
+Stop the owned validators, preserving their identities and ledger
+
+**Usage:** `kagami localnet down [OPTIONS] [NAME]`
+
+###### **Arguments:**
+
+* `<NAME>` — Managed environment name
+
+  Default value: `local`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami localnet reset`
+
+Explicitly retire one stopped generation so the next up creates a fresh ledger
+
+**Usage:** `kagami localnet reset [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Exact environment to retire; required to make reset deliberate
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami localnet generate`
+
+Generate an operator-owned network bundle without starting validators
+
+**Usage:** `kagami localnet generate [OPTIONS] --out-dir <DIR>`
 
 ###### **Options:**
 
@@ -183,6 +311,107 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 
   Possible values: `permissioned`, `npos`
 
+
+
+
+## `kagami context`
+
+Select and inspect managed developer environments
+
+**Usage:** `kagami context <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List retained contexts in this workspace
+* `show` — Show the selected context, or one exact named context
+* `use` — Select an existing context for subsequent developer commands
+
+
+
+## `kagami context list`
+
+List retained contexts in this workspace
+
+**Usage:** `kagami context list [OPTIONS]`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami context show`
+
+Show the selected context, or one exact named context
+
+**Usage:** `kagami context show [OPTIONS] [NAME]`
+
+###### **Arguments:**
+
+* `<NAME>`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami context use`
+
+Select an existing context for subsequent developer commands
+
+**Usage:** `kagami context use [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>`
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+
+
+
+## `kagami contract`
+
+Build and deploy native IVM contracts in one invocation
+
+**Usage:** `kagami contract <COMMAND>`
+
+###### **Subcommands:**
+
+* `deploy` — Deploy source, bytecode, or a Musubi package; automatically start a default localnet if needed
+
+
+
+## `kagami contract deploy`
+
+Deploy source, bytecode, or a Musubi package; automatically start a default localnet if needed
+
+**Usage:** `kagami contract deploy [OPTIONS] [INPUT]`
+
+###### **Arguments:**
+
+* `<INPUT>` — .ko source, .to artifact, Musubi.toml, or package directory (defaults to the current directory)
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+* `--context <CONTEXT>` — Use an existing managed context without changing the workspace selection
+* `--alias <ALIAS>` — Exact authorized contract alias; otherwise derive the name in the context's dataspace
+* `--package <PACKAGE>` — Exact Musubi package when the input selects a workspace
+* `--contract <CONTRACT>` — Exact target when a package has more than one contract
+* `--locked` — Require an unchanged Musubi dependency lock
+* `--resume <RESUME>` — Recover this exact retained deployment without rebuilding or signing another plan
+* `--max-fee <MAX_FEE>` — Bound the aggregate quoted fees in their single fee asset before dispatch
 
 
 
@@ -539,15 +768,6 @@ Generate a genesis configuration and standard-output in JSON format
 ###### **Options:**
 
 * `--profile <PROFILE>` — Optional profile: picks Iroha3 chain, cadence, consensus, and VRF defaults for dev/taira/nexus
-
-  Possible values:
-  - `iroha3-dev`:
-    Local-only developer network
-  - `iroha3-taira`:
-    Public Sora test network
-  - `iroha3-nexus`:
-    Sora Nexus main network
-
 * `--chain-id <CHAIN_ID>` — Optional explicit chain id. With a profile, it must equal that profile's pinned chain id
 * `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for the public `iroha3-taira`/`iroha3-nexus` profiles
 * `--xor-asset-definition-id <BASE58>` — Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus` NPoS manifests; `iroha3-taira` defaults to its live XOR id
@@ -773,15 +993,6 @@ Verify a genesis manifest against a preset profile
 ###### **Options:**
 
 * `--profile <PROFILE>` — Profile to verify against (`iroha3-dev`, `iroha3-taira`, `iroha3-nexus`)
-
-  Possible values:
-  - `iroha3-dev`:
-    Local-only developer network
-  - `iroha3-taira`:
-    Public Sora test network
-  - `iroha3-nexus`:
-    Sora Nexus main network
-
 * `--genesis <PATH>` — Path to the genesis manifest (JSON)
 * `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for NPoS taira/nexus manifests
 
@@ -811,7 +1022,7 @@ Generate per-client CLI configs from a base client.toml
 
 ###### **Options:**
 
-* `--base-config <PATH>` — Base client config to copy `chain`, `torii_url`, and `basic_auth` from
+* `--base-config <PATH>` — Base client config to copy `chain`, `network_id`, `torii_url`, `api_token`, and `basic_auth` from
 * `--out-dir <DIR>` — Output directory for generated client configs (default: <base-config-dir>/clients)
 * `--domain <SCOPE>` — Account scope for generated client configs (`dataspace` or `domain.dataspace`)
 

@@ -238,13 +238,15 @@ use crate::privacy_engines::transparent_stark::GOLDILOCKS_GENERATOR_V1;
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::goldilocks_batch_invert_v1;
 #[cfg(test)]
+use crate::privacy_engines::transparent_stark::goldilocks_evaluate_coset_v1;
+#[cfg(test)]
 use crate::privacy_engines::transparent_stark::{
     PrivacyOuterMerkleTreeV1, masked_trace_lde_column_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
-    append_u64_v1, goldilocks_evaluate_coset_v1, goldilocks_fp4_evaluate_coset_v1,
-    goldilocks_fp4_ifft_v1, goldilocks_ifft_v1, grind_nonce_v1,
+    append_u64_v1, goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_ifft_v1,
+    grind_nonce_v1,
 };
 use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},
@@ -4653,7 +4655,7 @@ fn der_composition_material_from_polynomials_v1(
         coefficient_chunks,
     })
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn accumulate_base_deep_quotient_v1(
     coefficients: &[F],
     point: E,
@@ -5631,7 +5633,7 @@ fn quotient_value_v1(
         })
         .mul_base(inverse_vanishing))
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn accumulator_quotient_value_v1(
     layout: SegmentLayoutV1,
     x: F,
@@ -5842,7 +5844,7 @@ fn validate_projection_base_constraints_v1(
     }
     Ok(())
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn projection_quotient_value_v1(
     layout: SegmentLayoutV1,

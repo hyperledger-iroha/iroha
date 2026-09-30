@@ -1272,7 +1272,10 @@ impl<'s> Worker<'s> {
             .capture_original_world_cut(transition.world_state_root)
         {
             let reason = error.to_string();
-            if matches!(&error, crate::state::world_projection::world_state_accumulator::world_state_cut::CutError::Invalid(_)) {
+            if matches!(
+                &error,
+                crate::state::world_projection::world_state_accumulator::world_state_cut::CutError::Invalid(_)
+            ) {
                 self.recovery = Some(format!("original World cut requires recovery: {reason}"));
             }
             self.finishing.as_mut().unwrap().world_cut_refusal = Some(error);

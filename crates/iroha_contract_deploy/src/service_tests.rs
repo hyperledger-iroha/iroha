@@ -72,10 +72,15 @@ pub fn fixture() -> Result<(Config, PlanRecord)> {
         fee_payment: &fee,
         metadata: &metadata,
     };
-    let upload = build_native_upload_transaction_plan(&signing, verified.code_hash, &artifact)?;
+    let upload = build_native_upload_transaction_plan(
+        &signing,
+        ContractArtifactId::new(DataSpaceId::UNIVERSAL, verified.code_hash),
+        &artifact,
+    )?;
     let mut uploads = upload.pre_stage;
     uploads.push(upload.finalize);
     let register = signing.sign([InstructionBox::from(RegisterSmartContractCode {
+        artifact_id: ContractArtifactId::new(DataSpaceId::UNIVERSAL, verified.code_hash),
         manifest: verified.manifest.try_signed(&config.key_pair)?,
     })])?;
     let commit = build_commit_deployment_transaction(
@@ -366,6 +371,42 @@ fn prepared_persistence_and_completion_require_authenticated_plan_and_receipt() 
     assert!(verify_completed_record(&record, &journal, &rejected_history).is_err());
     assert!(rejected_history.waited.borrow().is_empty());
     assert!(rejected_history.submitted.borrow().is_empty());
+    Ok(())
+}
+
+#[test]
+fn retained_preflight_and_current_completion_require_original_authenticated_plan() -> Result<()> {
+    let (config, record) = fixture()?;
+    let service = DeploymentService::new(config.clone())?;
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("journal");
+    service.persist(
+        &PreparedDeployment {
+            record: record.clone(),
+        },
+        &path,
+    )?;
+    let retained = service.retained_preflight(&path)?;
+    assert_eq!(retained.code_hash, record.preflight.code_hash);
+    assert_eq!(retained.contract_alias, record.preflight.contract_alias);
+    assert_eq!(
+        retained.transaction_hashes,
+        record.preflight.transaction_hashes
+    );
+    assert!(service.current_completed_receipt(&path)?.is_none());
+
+    let mut other = config;
+    other.key_pair = KeyPair::try_from_seed(vec![0x78; 32], iroha_crypto::Algorithm::Ed25519)?;
+    other.account = AccountId::of(other.key_pair.public_key().clone());
+    let other = DeploymentService::new(other)?;
+    assert!(other.retained_preflight(&path).is_err());
+    assert!(other.current_completed_receipt(&path).is_err());
+
+    let mut substituted = record;
+    substituted.preflight.code_hash = Hash::new(b"substituted artifact");
+    std::fs::write(path.join("plan.json"), norito::json::to_vec(&substituted)?)?;
+    assert!(service.retained_preflight(&path).is_err());
+    assert!(service.current_completed_receipt(&path).is_err());
     Ok(())
 }
 

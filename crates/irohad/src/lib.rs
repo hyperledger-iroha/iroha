@@ -6,13 +6,13 @@
 /// Authenticated external software signer service and broker adapters.
 #[cfg(feature = "daemon")]
 pub mod external_software_signer;
-#[cfg(all(feature = "daemon", unix))]
+#[cfg(feature = "daemon")]
 mod runtime_credential;
 /// Software or optional hardware signing fenced by authenticated custody and completion.
 #[cfg(feature = "daemon")]
 pub mod signer_operation;
 use iroha_model_base::peer::PeerId;
-#[cfg(all(feature = "daemon", unix))]
+#[cfg(feature = "daemon")]
 pub use runtime_credential::RuntimeCredentialErrorV1;
 include!("main.rs");
 

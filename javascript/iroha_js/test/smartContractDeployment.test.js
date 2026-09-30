@@ -1,3 +1,4 @@
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -99,19 +100,19 @@ function deploymentState(overrides = {}) {
 test("current smart-contract deployment instructions round-trip through Norito", () => {
   const { codeHashHex } = deploymentFixture();
   const instructions = [
-    buildUploadSmartContractCodeChunkInstruction({
+    buildUploadSmartContractCodeChunkInstruction(universalArtifactInput({
       codeHash: codeHashHex,
       totalSize: 4,
       chunkIndex: 0,
       chunkCount: 1,
       chunk: Uint8Array.from([1, 2, 3, 4]),
-    }),
-    buildFinalizeSmartContractCodeUploadInstruction({
+    })),
+    buildFinalizeSmartContractCodeUploadInstruction(universalArtifactInput({
       codeHash: codeHashHex,
       totalSize: 4,
       chunkCount: 1,
-    }),
-    buildCancelSmartContractCodeUploadInstruction({ codeHash: codeHashHex }),
+    })),
+    buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({ codeHash: codeHashHex })),
     buildCommitContractDeploymentInstruction({
       expectedDeployNonce: 7,
       contractAddress: "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp",
@@ -132,6 +133,7 @@ test("current smart-contract deployment instructions round-trip through Norito",
 test("artifact preparation verifies the authenticated CNTR envelope before upload", () => {
   const fixture = deploymentFixture();
   const prepared = prepareBrowserContractArtifact({
+    dataspaceId: "0",
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -151,11 +153,12 @@ test("artifact preparation verifies the authenticated CNTR envelope before uploa
   malformed.artifactBytes[49] ^= 1;
   const malformedHash = computeIvmArtifactHashes(malformed.artifactBytes).codeHashHex;
   malformed.manifest.code_hash =
-    buildCancelSmartContractCodeUploadInstruction({ codeHash: malformedHash })
-      .CancelSmartContractCodeUpload.code_hash;
+    buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({ codeHash: malformedHash }))
+      .CancelSmartContractCodeUpload.artifact_id.code_hash;
   assert.throws(
     () =>
       prepareBrowserContractArtifact({
+    dataspaceId: "0",
         artifactBytes: malformed.artifactBytes,
         manifest: malformed.manifest,
         compilerCodeHash: malformedHash,
@@ -230,9 +233,9 @@ test("contract-address parsing rejects a checksum-valid legacy HRP", () => {
 
 test("deployment instruction transactions are locally signed and verified", async () => {
   const { codeHashHex } = deploymentFixture();
-  const instruction = buildCancelSmartContractCodeUploadInstruction({
+  const instruction = buildCancelSmartContractCodeUploadInstruction(universalArtifactInput({
     codeHash: codeHashHex,
-  });
+  }));
   const payloadBytes = buildBrowserInstructionTransactionPayload({
     networkId: NETWORK_ID,
     networkPrefix: 753,

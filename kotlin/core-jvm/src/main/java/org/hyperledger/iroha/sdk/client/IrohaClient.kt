@@ -415,8 +415,8 @@ interface IrohaClient {
         return future
     }
 
-    /** Fetches the complete Kotodama manifest registered for one code hash. */
-    fun getContractManifest(codeHash: String): CompletableFuture<ContractManifestRecord> {
+    /** Fetches the manifest in one exact dataspace with canonical account authentication. */
+    fun getContractManifest(artifactId: ContractArtifactId, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<ContractManifestRecord> {
         val future = CompletableFuture<ContractManifestRecord>()
         future.completeExceptionally(
             IllegalStateException("getContractManifest requires a concrete IrohaClient implementation")

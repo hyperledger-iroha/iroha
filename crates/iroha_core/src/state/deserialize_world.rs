@@ -7831,6 +7831,12 @@ fn decode_world_fields(
             field: "world.sumeragi_amx".to_owned(),
             message: error.to_string(),
         })?;
+    let private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> =
+        take_required(&mut map, "private_dataspaces")?;
+    private_dataspaces.view().get().validate().map_err(|error| json::Error::InvalidField {
+        field: "world.private_dataspaces".to_owned(),
+        message: error.to_string(),
+    })?;
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
@@ -8332,6 +8338,7 @@ fn decode_world_fields(
         consensus_keys_by_pk,
         sumeragi_lanes,
         sumeragi_amx,
+        private_dataspaces,
         pedersen_params,
         poseidon_params,
         runtime_upgrades,
@@ -9245,6 +9252,7 @@ fn build_state(
         nexus: parking_lot::RwLock::new(nexus),
         canonical_runtime,
         native_execution_tip,
+        // Decoded claims cannot recreate original pre-tail journal custody.
         native_world_cut: parking_lot::Mutex::new(None),
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
@@ -11097,26 +11105,21 @@ mod decode_tests {
         .map_err(crate::state::deserialize::snapshot_format_error_for_test)
         .expect("canonical World must decode while rebuilding skipped account indexes");
 
-        let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
-        map.remove("account_aliases")
-            .expect("canonical World contains account_aliases");
-
-        let error = match parse_world(
-            &iroha_allocation::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-            ),
-            map,
-            &seed,
-        )
-        .map_err(crate::state::deserialize::snapshot_format_error_for_test)
-        {
-            Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
-            Err(error) => error,
-        };
-        assert!(
-            error.to_string().contains("account_aliases"),
-            "unexpected missing-field diagnostic: {error}"
-        );
+        for required in ["account_aliases", "private_dataspaces"] {
+            let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
+            map.remove(required).expect("canonical World contains required field");
+            let error = match parse_world(
+                &iroha_allocation::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
+                map,
+                &seed,
+            ).map_err(crate::state::deserialize::snapshot_format_error_for_test) {
+                Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains(required), "unexpected missing-field diagnostic: {error}");
+        }
 
         let encoded_prefix = encoded
             .strip_suffix('}')

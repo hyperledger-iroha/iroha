@@ -148,9 +148,21 @@ fn world_refuses_publication_before_complete_original_preparation() {
 
 #[test]
 fn world_publication_handle_keeps_one_allocation_across_moves_and_phases() {
+    // The handle contains only the publication phase and the actual budgeted
+    // OriginalWorldFields control owner. That owner now retains its backing
+    // allocation charge and initialization cursor, rather than a bare Box.
+    // Account for exactly these two declared fields and their alignment; the
+    // complete World inventory must remain in the same external allocation.
+    let handle_layout =
+        std::alloc::Layout::new::<Option<world_acquisition::OriginalWorldFields<'_>>>()
+            .extend(std::alloc::Layout::new::<block_field::AggregatePublication>())
+            .expect("two-field original World handle layout")
+            .0
+            .pad_to_align();
+    assert_eq!(std::mem::size_of::<WorldBlock<'_>>(), handle_layout.size());
     assert_eq!(
-        std::mem::size_of::<WorldBlock<'_>>(),
-        2 * std::mem::size_of::<usize>()
+        std::mem::align_of::<WorldBlock<'_>>(),
+        handle_layout.align()
     );
     assert!(std::mem::size_of::<WorldBlockFields<'_>>() > std::mem::size_of::<WorldBlock<'_>>());
     let world = World::default();

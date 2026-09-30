@@ -141,6 +141,9 @@ impl Run for ManifestCommand {
 }
 #[derive(clap::Args, Debug)]
 pub struct CodeBytesGetArgs {
+    /// Exact artifact dataspace identifier (zero selects the universal dataspace).
+    #[arg(long)]
+    pub dataspace_id: u64,
     /// Hex-encoded 32-byte code hash (0x optional)
     #[arg(long, value_name = "HEX64")]
     pub code_hash: String,
@@ -151,8 +154,8 @@ pub struct CodeBytesGetArgs {
 impl Run for CodeBytesGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = BlockingClient::from_client(context.client_from_config()?)?;
-        let code_hash = self.code_hash.trim_start_matches("0x");
-        let bytes = client.client().get_contract_code_bytes(code_hash)?;
+        let artifact_id = contract_artifact_id(self.dataspace_id, &self.code_hash)?;
+        let bytes = client.client().get_contract_code_bytes(&artifact_id)?;
         std::fs::write(&self.out, &bytes)?;
         context.println(format_args!(
             "Wrote {} bytes to {}",
@@ -161,6 +164,25 @@ impl Run for CodeBytesGetArgs {
         ))?;
         Ok(())
     }
+}
+pub(crate) fn contract_artifact_id(
+    dataspace_id: u64,
+    code_hash: &str,
+) -> Result<iroha_data_model::smart_contract::ContractArtifactId> {
+    let mut bytes = [0; iroha_crypto::Hash::LENGTH];
+    hex::decode_to_slice(
+        code_hash.strip_prefix("0x").unwrap_or(code_hash),
+        &mut bytes,
+    )
+    .wrap_err("contract code hash must contain exactly 32 hexadecimal bytes")?;
+    let hash = iroha_crypto::Hash::prehashed(bytes);
+    if hash.as_ref() != &bytes {
+        return Err(eyre!("contract code hash is not canonical"));
+    }
+    Ok(iroha_data_model::smart_contract::ContractArtifactId::new(
+        iroha_model_base::topology::DataSpaceId::new(dataspace_id),
+        hash,
+    ))
 }
 #[derive(clap::Args, Debug)]
 pub struct ContractAliasLeaseArgs {
@@ -1748,6 +1770,42 @@ mod tests {
     use kotodama_lang::session::{CompileRequest, CompilerSession};
     use url::Url;
     #[test]
+    fn contract_artifact_identity_requires_exact_hash_and_keeps_full_dataspace() {
+        let hash = iroha_crypto::Hash::new(b"CLI artifact identity");
+        let literal = hex::encode(hash.as_ref());
+        let artifact = contract_artifact_id(u64::MAX, &literal).unwrap();
+        assert_eq!(artifact.dataspace_id.as_u64(), u64::MAX);
+        assert_eq!(artifact.code_hash, hash);
+        assert_eq!(
+            contract_artifact_id(u64::MAX, &format!("0x{literal}")).unwrap(),
+            artifact
+        );
+        assert_ne!(contract_artifact_id(0, &literal).unwrap(), artifact);
+        for invalid in ["", "00", "0x0x00", "not-hex"] {
+            assert!(contract_artifact_id(1, invalid).is_err());
+        }
+    }
+    #[test]
+    fn artifact_read_commands_require_an_explicit_dataspace() {
+        use clap::Parser as _;
+        let hash = hex::encode(iroha_crypto::Hash::new(b"CLI read").as_ref());
+        for command in ["code", "manifest"] {
+            let mut args = vec![
+                "iroha",
+                "contract",
+                command,
+                "get",
+                "--code-hash",
+                &hash,
+                "--out",
+                "artifact",
+            ];
+            assert!(crate::Args::try_parse_from(&args).is_err());
+            args.extend(["--dataspace-id", "18446744073709551615"]);
+            crate::Args::try_parse_from(&args).expect("explicit full-width artifact scope");
+        }
+    }
+    #[test]
     fn package_project_commands_are_owned_by_musubi() {
         use crate::Args;
         use clap::Parser;
@@ -2670,12 +2728,21 @@ mod tests {
             );
             let mut block = state.block(header.clone());
             let mut transaction = block.transaction();
-            let registered_hash =
-                code::register_code_bytes(&authority, program.clone(), &mut transaction)
-                    .expect("register contract bytecode");
+            let registered_hash = code::register_code_bytes(
+                &authority,
+                DataSpaceId::UNIVERSAL,
+                program.clone(),
+                &mut transaction,
+            )
+            .expect("register contract bytecode");
             assert_eq!(registered_hash, code_hash);
-            code::register_manifest(&authority, manifest, &mut transaction)
-                .expect("register contract manifest");
+            code::register_manifest(
+                &authority,
+                DataSpaceId::UNIVERSAL,
+                manifest,
+                &mut transaction,
+            )
+            .expect("register contract manifest");
             transaction
                 .world
                 .bind_inactive_contract_subject_for_testing(
@@ -2985,6 +3052,7 @@ mod tests {
                     iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
+                api_token: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
                 torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
@@ -3143,6 +3211,9 @@ impl Run for SimulateArgs {
 // Unified Manifest handling supersedes earlier subcommands
 #[derive(clap::Args, Debug)]
 pub struct ManifestArgs {
+    /// Exact artifact dataspace identifier (zero selects the universal dataspace).
+    #[arg(long)]
+    pub dataspace_id: u64,
     /// Hex-encoded 32-byte code hash (0x optional)
     #[arg(long, value_name = "HEX64")]
     pub code_hash: String,
@@ -3153,8 +3224,8 @@ pub struct ManifestArgs {
 impl Run for ManifestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config()?;
-        let code_hash = self.code_hash.trim_start_matches("0x");
-        let v = client.get_contract_manifest_json(code_hash)?;
+        let artifact_id = contract_artifact_id(self.dataspace_id, &self.code_hash)?;
+        let v = client.get_contract_manifest_json(&artifact_id)?;
         if let Some(p) = self.out {
             let s = norito::json::to_json_pretty(&v)?;
             std::fs::write(&p, s.as_bytes())?;

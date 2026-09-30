@@ -31,8 +31,7 @@ use iroha_data_model::{
     },
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
-#[cfg(unix)]
-use iroha_primitives::fs::secure_no_follow_nonblocking_flags;
+use iroha_fs::RetainedFile;
 use json_preflight::{JsonDomEnvelopeV1, preflight_json_dom};
 use rand::{TryRngCore, rngs::OsRng};
 use reqwest::{
@@ -53,6 +52,7 @@ use sorafs_manifest::{
     validate_manifest, validate_registered_chunker_profile,
 };
 use url::{Host, Url};
+use zeroize::Zeroizing;
 const CLIENT_HEADER: &str = "x-sorafs-client";
 const NONCE_HEADER: &str = "x-sorafs-nonce";
 const VERIFYING_KEY_HEADER: &str = "x-sorafs-verifying-key";
@@ -1634,17 +1634,30 @@ fn read_operator_key_pair(
     path: &Path,
     expected_public_key: &PublicKey,
 ) -> Result<KeyPair, MusubiArchiveRuntimeErrorV1> {
-    let (bytes, metadata) = read_bounded_regular(path, MAX_OPERATOR_PRIVATE_KEY_BYTES)
-        .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_INVALID"))?;
+    // Establish private native custody before reading any secret bytes. In particular, Windows
+    // checks the owner and protected DACL on this retained handle, rather than a mode-bit proxy.
+    let file = RetainedFile::open_private(path).map_err(|error| {
+        permanent(if error.kind() == io::ErrorKind::PermissionDenied {
+            "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_PERMISSIONS"
+        } else {
+            "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_INVALID"
+        })
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
+        let metadata = file
+            .file()
+            .metadata()
+            .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_INVALID"))?;
         if metadata.permissions().mode() & 0o7777 != 0o600 {
             return Err(permanent(
                 "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_PERMISSIONS",
             ));
         }
     }
+    let (bytes, _) = read_bounded_retained(file, MAX_OPERATOR_PRIVATE_KEY_BYTES)
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_INVALID"))?;
     let encoded = std::str::from_utf8(&bytes)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_INVALID"))?;
     let encoded = encoded.strip_suffix('\n').unwrap_or(encoded);
@@ -1665,85 +1678,43 @@ fn read_operator_key_pair(
     KeyPair::new(expected_public_key.clone(), private_key)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_MISMATCH"))
 }
-fn read_bounded_regular(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, fs::Metadata)> {
-    #[cfg(not(unix))]
-    {
-        let _ = (path, maximum);
+fn read_bounded_regular(
+    path: &Path,
+    maximum: u64,
+) -> io::Result<(Zeroizing<Vec<u8>>, fs::Metadata)> {
+    read_bounded_retained(RetainedFile::open_regular(path)?, maximum)
+}
+
+fn read_bounded_retained(
+    mut file: RetainedFile,
+    maximum: u64,
+) -> io::Result<(Zeroizing<Vec<u8>>, fs::Metadata)> {
+    let before = file.snapshot()?;
+    let metadata = file.file().metadata()?;
+    if metadata.len() == 0 || metadata.len() > maximum {
         return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "secure no-follow file reads are unavailable on this platform",
+            io::ErrorKind::InvalidData,
+            "input is not a bounded nonempty regular file",
         ));
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-        let mut options = fs::OpenOptions::new();
-        options
-            .read(true)
-            .custom_flags(secure_no_follow_nonblocking_flags());
-        let mut file = options.open(path)?;
-        let before = file.metadata()?;
-        if !before.is_file() || before.len() == 0 || before.len() > maximum || before.nlink() != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "input is not a bounded singly-linked regular file",
-            ));
-        }
-        let capacity = usize::try_from(before.len())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "input exceeds host width"))?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(capacity)
-            .map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "input allocation failed"))?;
-        Read::by_ref(&mut file)
-            .take(maximum.saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        let after = file.metadata()?;
-        if !after.is_file()
-            || after.nlink() != 1
-            || after.dev() != before.dev()
-            || after.ino() != before.ino()
-            || after.len() != before.len()
-            || after.mtime() != before.mtime()
-            || after.mtime_nsec() != before.mtime_nsec()
-            || after.ctime() != before.ctime()
-            || after.ctime_nsec() != before.ctime_nsec()
-            || u64::try_from(bytes.len()).ok() != Some(before.len())
-            || after.len() > maximum
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "input changed while being read",
-            ));
-        }
-        Ok((bytes, after))
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "input exceeds host width"))?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "input allocation failed"))?;
+    file.file_mut()
+        .take(metadata.len().saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if before != file.snapshot()? || u64::try_from(bytes.len()).ok() != Some(metadata.len()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "input changed while being read",
+        ));
     }
+    Ok((bytes, metadata))
 }
-#[cfg(all(
-    target_os = "android",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))
-))]
-compile_error!("Musubi secure fetch-file reads are not qualified for this Android architecture");
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("Musubi secure fetch-file reads are not qualified for this Unix target");
+
 fn read_json_response(
     response: HttpResponse,
     maximum: u64,
@@ -2306,25 +2277,25 @@ operator_private_key_file = "keys/provider.key"
             assert!(!debug.contains(redacted));
         }
     }
-    #[cfg(unix)]
     #[test]
     fn platform_loader_uses_only_the_fetch_operator_identity() {
-        use std::os::unix::fs::PermissionsExt as _;
         let temporary = tempfile::tempdir().expect("temporary platform directory");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("owned"))
+            .expect("private platform directory");
         let operator = KeyPair::try_random().expect("operator key");
-        let key_path = temporary.path().join("provider.key");
-        fs::write(
-            &key_path,
-            format!("{}\n", ExposedPrivateKey(operator.private_key().clone())),
-        )
-        .expect("write operator key");
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
-            .expect("secure operator key");
-        let config_path = temporary.path().join("client.toml");
-        fs::write(
-            &config_path,
-            format!(
-                r#"
+        directory
+            .write_atomic(
+                "provider.key",
+                format!("{}\n", ExposedPrivateKey(operator.private_key().clone())).as_bytes(),
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .expect("write private operator key");
+        let config_path = directory.path().join("client.toml");
+        directory
+            .write_atomic(
+                "client.toml",
+                format!(
+                    r#"
 [account]
 public_key = "deliberately-not-a-key"
 private_key = "deliberately-not-a-key"
@@ -2339,10 +2310,12 @@ url = "https://8.8.8.8/"
 operator_public_key = "{}"
 operator_private_key_file = "provider.key"
 "#,
-                operator.public_key(),
-            ),
-        )
-        .expect("write operator-authenticated platform config");
+                    operator.public_key(),
+                )
+                .as_bytes(),
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .expect("write operator-authenticated platform config");
         let client = AuthenticatedMusubiArchiveFetchClientV1::load_platform_file(&config_path)
             .expect("invalid account keys must be irrelevant to fetch configuration");
         assert_eq!(
@@ -2457,6 +2430,46 @@ operator_private_key_file = "provider.key"
             );
         }
         assert!(parse_gateway_base_url("https://8.8.8.8/").is_ok());
+    }
+    #[test]
+    fn native_files_are_bounded_private_and_single_linked() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("owned"))
+            .expect("private input directory");
+        directory
+            .write_atomic("empty", b"", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        directory
+            .write_atomic("input", b"input", iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        assert!(read_bounded_regular(&directory.path().join("empty"), 5).is_err());
+        assert!(read_bounded_regular(&directory.path().join("input"), 4).is_err());
+        assert!(read_bounded_regular(directory.path(), 5).is_err());
+        let (bytes, metadata) = read_bounded_regular(&directory.path().join("input"), 5).unwrap();
+        assert_eq!(bytes.as_slice(), b"input");
+        assert_eq!(metadata.len(), 5);
+        let operator = KeyPair::try_random().expect("operator key");
+        let encoded = ExposedPrivateKey(operator.private_key().clone()).to_string();
+        directory
+            .write_atomic(
+                "operator",
+                encoded.as_bytes(),
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let key_path = directory.path().join("operator");
+        assert_eq!(
+            read_operator_key_pair(&key_path, operator.public_key())
+                .unwrap()
+                .public_key(),
+            operator.public_key()
+        );
+        let foreign = KeyPair::try_random().expect("foreign key");
+        let error = read_operator_key_pair(&key_path, foreign.public_key()).expect_err("wrong key");
+        assert_eq!(error.code(), "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_MISMATCH");
+        assert!(!format!("{error:?}").contains(&encoded));
+        fs::hard_link(&key_path, directory.path().join("key-alias")).expect("hostile hard link");
+        assert!(read_operator_key_pair(&key_path, operator.public_key()).is_err());
     }
     #[cfg(unix)]
     #[test]

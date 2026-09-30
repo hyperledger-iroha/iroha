@@ -23,12 +23,14 @@ use super::transparent_stark::{
     privacy_outer_digest_frame_v1, privacy_outer_merkle_node_v1, random_goldilocks_fp4_v1,
 };
 #[cfg(test)]
-use super::transparent_stark::{ReplayableTraceMaskV1, masked_trace_lde_column_with_mask_v1};
+use super::transparent_stark::{
+    ReplayableTraceMaskV1, masked_trace_coefficients_on_coset_v1,
+    masked_trace_coefficients_with_mask_v1, masked_trace_lde_column_with_mask_v1,
+    sample_trace_mask_v1,
+};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::transparent_stark::{
-    goldilocks_ifft_v1, map_digest_stream_error_v1, masked_trace_coefficients_on_coset_v1,
-    masked_trace_coefficients_with_mask_v1, privacy_outer_last_field_stream_v1,
-    sample_trace_mask_v1,
+    goldilocks_ifft_v1, map_digest_stream_error_v1, privacy_outer_last_field_stream_v1,
 };
 use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
@@ -2280,13 +2282,13 @@ impl StreamingTraceMaskSetV1 {
 /// domain, a smaller quotient domain, and transcript-derived DEEP points
 /// without anonymous matrix scratch. The type implements neither `Clone` nor
 /// `Debug`; every coefficient is overwritten recursively on drop.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) struct MaskedTracePolynomialSetV1 {
     native_trace_log2: u8,
     commitment_lde_log2: u8,
     columns: Vec<ZeroizingFieldColumnV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl MaskedTracePolynomialSetV1 {
     /// Sample and retain native masked polynomials before their physical row
     /// commitment is chosen. The caller owns the immutable logical layout;
@@ -3200,7 +3202,7 @@ where
 /// The DEEP point must be canonical and outside the native trace subgroup.
 /// Evaluation is direct from the retained coefficients, so neither the native
 /// witness columns nor a commitment-domain codeword are reconstructed.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn evaluate_masked_trace_polynomial_columns_at_deep_v1(
     polynomials: &MaskedTracePolynomialSetV1,
     point: E,

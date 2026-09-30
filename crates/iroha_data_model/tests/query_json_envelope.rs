@@ -96,8 +96,8 @@ mod json_envelope {
     fn singular_contract_manifest_roundtrip() {
         let json = r#"{
             "singular": {
-                "type": "FindContractManifestByCodeHash",
-                "payload": {"code_hash": "0x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}
+                "type": "FindContractManifestByArtifactId",
+                "payload": {"artifact_id": {"dataspace_id": 18446744073709551615, "code_hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}}
             }
         }"#;
         let envelope: QueryEnvelopeJson = norito::json::from_str(json).expect("parse envelope");
@@ -107,7 +107,7 @@ mod json_envelope {
         };
         assert!(matches!(
             *query_box,
-            iroha_data_model::query::SingularQueryBox::FindContractManifestByCodeHash(_)
+            iroha_data_model::query::SingularQueryBox::FindContractManifestByArtifactId(_)
         ));
     }
 }

@@ -14,8 +14,11 @@ use iroha_allocation::{
 use std::alloc::Layout;
 
 #[derive(Debug)]
+/// Native cut refusal preserves semantic failure or the original finite pool.
 pub(crate) enum CutError {
+    /// The original native journal no longer proves its exact root/count.
     Invalid(String),
+    /// Local resource refusal; the same original owner may retry.
     Deferred(ExecutionDeferred),
 }
 impl From<String> for CutError {
@@ -135,6 +138,7 @@ struct JournalVisitor<'a> {
     index: &'a FieldIndex,
     visited: ChargedBuffer<bool>,
     count: usize,
+    include_before: bool,
     rows: Option<ChargedBuffer<JournalRow>>,
 }
 impl<'a> JournalVisitor<'a> {
@@ -142,6 +146,7 @@ impl<'a> JournalVisitor<'a> {
         index: &'a FieldIndex,
         budget: &AllocationBudget,
         rows: Option<ChargedBuffer<JournalRow>>,
+        include_before: bool,
     ) -> Result<Self, CutError> {
         let mut visited = ChargedBuffer::new(index.canonical, budget)?;
         for _ in 0..index.canonical {
@@ -151,6 +156,7 @@ impl<'a> JournalVisitor<'a> {
             index,
             visited,
             count: 0,
+            include_before,
             rows,
         })
     }
@@ -246,7 +252,7 @@ impl WorldProjection for JournalVisitor<'_> {
                 } else {
                     None
                 },
-                before: if hashing {
+                before: if hashing && self.include_before {
                     entry.before.map(&encode).transpose()?
                 } else {
                     None
@@ -276,7 +282,7 @@ impl WorldProjection for JournalVisitor<'_> {
                 id: self.index.ids[slot],
                 kind: CELL,
                 key: None,
-                before: if hashing {
+                before: if hashing && self.include_before {
                     Some(encode(value.before)?)
                 } else {
                     None
@@ -294,15 +300,16 @@ impl WorldProjection for JournalVisitor<'_> {
 fn journal(
     world: &WorldBlock<'_>,
     budget: &AllocationBudget,
+    include_before: bool,
 ) -> Result<ChargedBuffer<JournalRow>, CutError> {
     let index = field_index().as_ref().map_err(Clone::clone)?;
     let count = {
-        let mut visitor = JournalVisitor::new(index, budget, None)?;
+        let mut visitor = JournalVisitor::new(index, budget, None, include_before)?;
         world.project_world(&mut visitor)?;
         visitor.finish()?.0
     };
     let rows = ChargedBuffer::new(count, budget)?;
-    let mut visitor = JournalVisitor::new(index, budget, Some(rows))?;
+    let mut visitor = JournalVisitor::new(index, budget, Some(rows), include_before)?;
     world.project_world(&mut visitor)?;
     let (actual, rows) = visitor.finish()?;
     if actual != count {
@@ -324,7 +331,7 @@ fn journal(
 }
 
 impl JournalCapture {
-    fn capture(
+    pub(in crate::state) fn capture(
         world: &WorldBlock<'_>,
         genesis: bool,
         budget: &AllocationBudget,
@@ -346,7 +353,7 @@ impl JournalCapture {
         drop(post);
         drop(scratch);
         Ok(Self {
-            rows: journal(world, budget)?,
+            rows: journal(world, budget, false)?,
             root,
             entries,
         })
@@ -358,7 +365,7 @@ impl JournalCapture {
         generation: u64,
         budget: &AllocationBudget,
     ) -> Result<ChargedShared<CutCapsule>, CutError> {
-        let mut final_rows = journal(world, budget)?;
+        let mut final_rows = journal(world, budget, true)?;
         let mut old = 0;
         let mut changed = 0;
         for row in final_rows.as_mut_slice() {
@@ -435,12 +442,14 @@ impl JournalCapture {
         let mut reservation =
             budget.try_reserve(ChargedShared::<CutCapsule>::allocation_layout())?;
         ChargedShared::from_reservation(capsule, &mut reservation).map_err(|(_owner, error)| {
-            CutError::Deferred(match error {
+            match error {
                 iroha_allocation::PrepaidSharedError::Allocator { .. } => {
-                    ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into()
+                    CutError::Deferred(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
                 }
-                _ => ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into(),
-            })
+                iroha_allocation::PrepaidSharedError::Reservation(error) => CutError::Invalid(
+                    format!("World cut original control layout differs: {error}"),
+                ),
+            }
         })
     }
 }

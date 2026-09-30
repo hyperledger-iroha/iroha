@@ -24,9 +24,10 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 /// The Sumeragi wire protocol version peers bind in the handshake.
 pub use iroha_sumeragi::message::PROTOCOL_VERSION;
+#[cfg(test)]
+use iroha_sumeragi::preimage::{InstanceKind, instance_id};
 use iroha_sumeragi::{
     api::{CoreStatus, HaltReason, LocalParams},
-    preimage::{InstanceKind, instance_id},
     types::{Hash32, PublicKey},
 };
 
@@ -40,12 +41,14 @@ use super::{
         traits::{BlockStore, Net, Observer, SystemClock},
     },
     executor::{ExecutorContext, StateExecutor},
-    metrics::{InstanceMetrics, MetricsInstance},
     net::{FrameCaps, P2pNet, SumeragiIngress, spawn_ingress, subscribe},
     records::{FileRecordStore, FreshKeyAssertion, install},
     schedule,
     startup::{self, GENESIS_HEIGHT, GenesisTip, StartupError},
 };
+#[cfg(feature = "telemetry")]
+use crate::sumeragi::metrics::{InstanceMetrics, MetricsInstance};
+
 use crate::{
     EventsSender, IrohaNetwork,
     kura::Kura,
@@ -365,16 +368,21 @@ impl NodeHandle {
     }
 }
 
-/// The global instance id (`I`, §3.5) of the chain with this genesis block and chain id. Peers
-/// bind it in the handshake as the consensus fingerprint.
-pub fn global_instance(genesis: &SignedBlock, chain_id: &str) -> Hash32 {
-    instance_id(
-        &BlsCrypto::new(),
-        &startup::core_hash_of(genesis),
-        chain_id.as_bytes(),
-        InstanceKind::Global,
-        0,
-    )
+/// The root instance id (`I`, §1.8) selected by authenticated signed genesis and chain id.
+/// Peers bind this exact global or dataspace instance in their handshake.
+///
+/// # Errors
+/// Missing, duplicate or malformed signed scope metadata. No global fallback is permitted.
+pub fn root_instance(genesis: &SignedBlock, chain_id: &str) -> Result<Hash32, String> {
+    iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(genesis)?
+        .sumeragi_context
+        .root_scope
+        .instance_id(
+            &BlsCrypto::new(),
+            iroha_data_model::NetworkId::from_genesis_hash(genesis.hash()),
+            chain_id,
+        )
+        .map_err(|error| error.to_string())
 }
 
 /// Why the instance could not start.
@@ -500,7 +508,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         ));
     }
     // Genesis: re-execute the stored one, or apply the supplied one.
-    let (tip, config_fingerprint): (GenesisTip, iroha_crypto::Hash) =
+    let (tip, config_fingerprint, instance): (GenesisTip, iroha_crypto::Hash, Hash32) =
         match startup::stored_genesis(&state)? {
             Some((block, certificate, stored)) => {
                 if let Some(supplied) = &genesis
@@ -512,6 +520,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
                 }
                 let fingerprint =
                     consensus_configuration_fingerprint(&block).map_err(NodeError::Input)?;
+                let instance = root_instance(&block, &chain_id).map_err(NodeError::Input)?;
                 (
                     startup::apply_genesis(
                         &state,
@@ -521,12 +530,14 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
                         Some(&certificate),
                     )?,
                     fingerprint,
+                    instance,
                 )
             }
             None => {
                 let genesis = genesis.ok_or(NodeError::NoGenesis)?;
                 let fingerprint =
                     consensus_configuration_fingerprint(&genesis).map_err(NodeError::Input)?;
+                let instance = root_instance(&genesis, &chain_id).map_err(NodeError::Input)?;
                 (
                     startup::apply_genesis(
                         &state,
@@ -536,6 +547,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
                         None,
                     )?,
                     fingerprint,
+                    instance,
                 )
             }
         };
@@ -552,13 +564,6 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     };
     let crypto = Arc::new(BlsCrypto::new());
     let shared: SharedCrypto = crypto.clone();
-    let instance = instance_id(
-        &*crypto,
-        &tip.block_hash,
-        chain_id.as_bytes(),
-        InstanceKind::Global,
-        0,
-    );
     let availability = Arc::new(
         super::runtime_availability::NativeGlobalAvailability::new(
             Arc::clone(&state),
@@ -866,7 +871,7 @@ impl Prepared {
             .map_err(|error| NodeError::Driver(format!("sumeragi lane runner: {error}")))?;
         let (recovery_publisher, startup_recovery) = crate::snapshot::startup_recovery_channel();
         let recovery_publisher = Arc::new(parking_lot::Mutex::new(recovery_publisher));
-        let running = Driver::new(
+        let driver_owner = Driver::new(
             net,
             records,
             bodies,
@@ -878,25 +883,27 @@ impl Prepared {
                 downstream: observer,
                 recovery: Arc::clone(&recovery_publisher),
             }),
-        )
-        .with_metrics(InstanceMetrics::for_node(
+        );
+        #[cfg(feature = "telemetry")]
+        let driver_owner = driver_owner.with_metrics(InstanceMetrics::for_node(
             &state.telemetry,
             MetricsInstance::Global,
-        ))
-        .spawn(
-            driver,
-            DriverStart {
-                node_gate: state.view().kura().native_consensus_gate(),
-                allocation_budget: budget,
-                local: local_params(n, &config.local),
-                init,
-                signers: vec![Arc::new(signer)],
-                crypto: shared,
-                attestor: Box::new(attestor),
-                verifier: Box::new(verifier),
-            },
-        )
-        .map_err(|error| NodeError::Driver(error.to_string()))?;
+        ));
+        let running = driver_owner
+            .spawn(
+                driver,
+                DriverStart {
+                    node_gate: state.view().kura().native_consensus_gate(),
+                    allocation_budget: budget,
+                    local: local_params(n, &config.local),
+                    init,
+                    signers: vec![Arc::new(signer)],
+                    crypto: shared,
+                    attestor: Box::new(attestor),
+                    verifier: Box::new(verifier),
+                },
+            )
+            .map_err(|error| NodeError::Driver(error.to_string()))?;
         ingress.register(instance, Arc::new(running.handle()));
         recovery_publisher.lock().ready();
         Ok(RunningNode {

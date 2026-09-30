@@ -45,7 +45,7 @@ pub struct NativeGlobalAvailability {
 }
 impl NativeGlobalAvailability {
     /// Bind the supplied instance to State's authenticated signed genesis and configured chain.
-    /// Genesis must already be applied; the network identifier is not the signed genesis hash.
+    /// Genesis must already be applied; its hash is the exact network identifier.
     ///
     /// # Errors
     /// Genesis cannot be authenticated, or the supplied instance does not name that genesis.

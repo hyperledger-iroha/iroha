@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
-description = "Core supervisor library for the MOCHI local Iroha network GUI."
+description = "Shared-workspace desktop observations and transaction composition."
 
 [lib]
 path = "src/lib.rs"
@@ -17,17 +17,17 @@ test = []
 iroha_model_base = { workspace = true }
 iroha_config.workspace = true
 iroha = { workspace = true }
+iroha_deploy = { workspace = true }
+iroha_contract_deploy = { path = "../../crates/iroha_contract_deploy" }
+musubi = { path = "../../crates/musubi" }
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-halo2"] }
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_executor_data_model = { workspace = true }
-iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_torii_shared = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 thiserror = { workspace = true }
-toml = { workspace = true }
 color-eyre = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
@@ -35,12 +35,8 @@ tokio-stream = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
 url = { workspace = true }
 iroha_version = { workspace = true }
-once_cell = { workspace = true }
 base64 = { workspace = true }
-izanami = { path = "../../crates/izanami" }
-blake3 = { workspace = true }
 rand = { workspace = true }
-zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 
 [dev-dependencies]
 tokio-tungstenite = { workspace = true }

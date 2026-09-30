@@ -213,7 +213,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     let mut current = crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap();
     assert_eq!(current.authorization.last_height, 6);
     let network = NetworkId::from_genesis_hash(genesis.hash());
-    let instance = global_instance(&genesis, "sumeragi-certified-test-chain");
+    let instance = root_instance(&genesis, "sumeragi-certified-test-chain").unwrap();
     let world = State::new_with_chain_and_network_id_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),

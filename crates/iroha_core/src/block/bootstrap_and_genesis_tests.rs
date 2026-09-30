@@ -59,8 +59,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
                 let instructions: Vec<InstructionBox> = vec![
                     Register::account(account).into(),
                     Grant::account_permission(grant.clone(), authority.clone()).into(),
-                    iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
-                        code_hash,
+                    iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
                         total_size: 1,
                         chunk_index: 0,
                         chunk_count: 1,
@@ -144,8 +143,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([
-            iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
-                code_hash: accepted_hash,
+            iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, accepted_hash),
                 total_size: 1,
                 chunk_index: 0,
                 chunk_count: 1,
@@ -176,7 +174,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             state
                 .view()
                 .world()
-                .contract_code_upload_progress(&authority, &accepted_hash)
+                .contract_code_upload_progress(&authority,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, accepted_hash))
                 .is_some()
         );
         let existing_replay = make_bootstrap_transaction(
@@ -239,7 +237,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
                 state
                     .view()
                     .world()
-                    .contract_code_upload_progress(account, hash)
+                    .contract_code_upload_progress(account,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, *hash))
                     .is_none(),
                 "rejected self-grant must not stage contract bytes"
             );
@@ -248,14 +246,14 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             state
                 .view()
                 .world()
-                .contract_code_upload_progress(&authority, &existing_replay_hash)
+                .contract_code_upload_progress(&authority,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, existing_replay_hash))
                 .is_none()
         );
         assert!(
             state
                 .view()
                 .world()
-                .contract_code_upload_progress(&adversary, &decorated_hash)
+                .contract_code_upload_progress(&adversary,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, decorated_hash))
                 .is_none()
         );
         let mut replay = make_chain();
@@ -288,7 +286,7 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             );
             assert!(
                 replay_world
-                    .contract_code_upload_progress(account, hash)
+                    .contract_code_upload_progress(account,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, *hash))
                     .is_none()
             );
         }
@@ -300,17 +298,17 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
         );
         assert!(
             replay_world
-                .contract_code_upload_progress(&authority, &accepted_hash)
+                .contract_code_upload_progress(&authority,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, accepted_hash))
                 .is_some()
         );
         assert!(
             replay_world
-                .contract_code_upload_progress(&authority, &existing_replay_hash)
+                .contract_code_upload_progress(&authority,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, existing_replay_hash))
                 .is_none()
         );
         assert!(
             replay_world
-                .contract_code_upload_progress(&adversary, &decorated_hash)
+                .contract_code_upload_progress(&adversary,&iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, decorated_hash))
                 .is_none()
         );
     }

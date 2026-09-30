@@ -205,6 +205,7 @@ async function buildSignedManifestRegistrationStep({
     signature: signature.toString("hex").toUpperCase(),
   });
   const instruction = buildRegisterSmartContractCodeInstruction({
+    artifactId: prepared.artifactId,
     manifest: {
       ...prepared.manifest,
       provenance,
@@ -411,7 +412,7 @@ export async function continueDeploySmartContractBrowser({
   chainDiscriminant,
   authority,
   contractAlias,
-  prepared,
+  prepareArtifact,
   nodeCapabilities,
   deriveContractAddress,
 }) {
@@ -429,6 +430,7 @@ export async function continueDeploySmartContractBrowser({
       chainDiscriminant,
     },
   );
+  const prepared = prepareArtifact({ ...source, dataspaceId: state.dataspaceId });
   if (state.previousContractAddress !== null) {
     const previous = parseCanonicalContractAddress(
       state.previousContractAddress,

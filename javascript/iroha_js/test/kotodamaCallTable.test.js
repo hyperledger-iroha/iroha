@@ -1,3 +1,5 @@
+import { artifactReadContext, artifactReadOptions, withArtifactResponseIdentity } from "./contractArtifactReadTestHelpers.js";
+import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { analyzeEntrypointValueTypeV1 } from "../src/entrypointSchema.js";
@@ -31,16 +33,17 @@ function manifest(fields, returns = unit) {
 }
 
 function normalizeBuilder(value) {
-  return buildRegisterSmartContractCodeInstruction({ manifest: value }).RegisterSmartContractCode.manifest;
+  return buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest: value })).RegisterSmartContractCode.manifest;
 }
 
 async function normalizeTorii(value) {
-  const client = new ToriiClient("http://localhost:8080", {
-    fetchImpl: async () => new Response(JSON.stringify({
+  const client = new ToriiClient("https://localhost:8080", {
+    localSigningContext: artifactReadContext,
+    fetchImpl: async () => new Response(JSON.stringify(withArtifactResponseIdentity({
       manifest: value, code_hash: "11".repeat(32), abi_hash: null,
-    }), { headers: { "content-type": "application/json" } }),
+    }, "11".repeat(32))), { headers: { "content-type": "application/json" } }),
   });
-  return (await client.getContractManifest("11".repeat(32))).manifest;
+  return (await client.getContractManifest({ dataspaceId: "0", codeHash: "11".repeat(32) }, artifactReadOptions())).manifest;
 }
 
 for (const [label, normalize] of [["builder", normalizeBuilder], ["Torii", normalizeTorii]]) {
@@ -78,7 +81,7 @@ for (const [label, normalize] of [["builder", normalizeBuilder], ["Torii", norma
 test("Norito contract records roundtrip wide and empty named return schemas", () => {
   const empty = ["struct Empty", [{ kind: "Struct", value: { name: "Empty", fields: [] } }]];
   for (const returns of [tuple(64), empty]) {
-    const instruction = buildRegisterSmartContractCodeInstruction({ manifest: manifest([empty], returns) });
+    const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest: manifest([empty], returns) }));
     const encoded = noritoEncodeInstruction(instruction, 753);
     assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
   }

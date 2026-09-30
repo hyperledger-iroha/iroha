@@ -10,8 +10,8 @@ integration harness.
 Use the dedicated profiles to sign a 1s block cadence and throughput bounds
 into genesis while generating bounded peer configs:
 
-- Permissioned: `kagami localnet --perf-profile 10k-permissioned`
-- NPoS: `kagami localnet --perf-profile 10k-npos`
+- Permissioned: `kagami localnet generate --perf-profile 10k-permissioned`
+- NPoS: `kagami localnet generate --perf-profile 10k-npos`
 
 These profiles sign `block_cadence_ms = 1_000`, consensus mode, NPoS election
 context where applicable, and the on-chain block limit of 10,000 transactions.

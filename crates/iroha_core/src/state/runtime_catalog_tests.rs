@@ -196,8 +196,14 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
     nexus.dataspace_catalog = dataspaces;
     nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    let genesis_world = World::with([], accounts, []);
+    let mut parameters = genesis_world.parameters.block();
+    parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    ));
+    parameters.commit();
     let state = State::new_with_nexus_for_testing(
-        World::with([], accounts, []),
+        genesis_world,
         nexus.clone(),
         LiveQueryStore::start_test(),
     );
@@ -620,6 +626,7 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
                 instruction: None,
             });
         let inputs = RoutingInputs {
+            root_scope: crate::sumeragi::lanes::routing::committed_root_scope(&block.world),
             policy: Some(&policy),
             lanes: block.world.sumeragi_lanes(),
             dataspaces: &block.nexus.dataspace_catalog,

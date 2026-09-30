@@ -17,7 +17,8 @@ use iroha_data_model::{
     parameter::{CustomParameterId, Parameters},
     prelude::ValidationFail,
     smart_contract::{
-        ContractAddress, ContractAlias, ContractLifecycleControlV1, ContractLifecycleOwnerV1,
+        ContractAddress, ContractAlias, ContractArtifactId, ContractLifecycleControlV1,
+        ContractLifecycleOwnerV1,
         manifest::{ContractManifest, EntryPointKind},
     },
 };
@@ -694,6 +695,7 @@ pub struct ContractCodeRecord {
 /// the underlying `RegisterSmartContractCode` instruction fails during execution.
 pub fn register_manifest(
     authority: &AccountId,
+    dataspace_id: iroha_model_base::topology::DataSpaceId,
     manifest: ContractManifest,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), RegistryError> {
@@ -703,7 +705,14 @@ pub fn register_manifest(
     if manifest.abi_hash.is_none() {
         return Err(RegistryError::MissingAbiHash);
     }
-    RegisterSmartContractCode { manifest }.execute(authority, state_transaction)?;
+    RegisterSmartContractCode {
+        artifact_id: ContractArtifactId::new(
+            dataspace_id,
+            manifest.code_hash.ok_or(RegistryError::MissingCodeHash)?,
+        ),
+        manifest,
+    }
+    .execute(authority, state_transaction)?;
     Ok(())
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -719,13 +728,18 @@ pub fn register_manifest(
 /// underlying instruction execution fails.
 pub fn register_code_bytes(
     authority: &AccountId,
+    dataspace_id: iroha_model_base::topology::DataSpaceId,
     code: Vec<u8>,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<Hash, RegistryError> {
     let verified = ivm::verify_contract_artifact(&code)
         .map_err(|err| RegistryError::InvalidCode(err.to_string()))?;
     let code_hash = verified.code_hash;
-    RegisterSmartContractBytes { code_hash, code }.execute(authority, state_transaction)?;
+    RegisterSmartContractBytes {
+        artifact_id: ContractArtifactId::new(dataspace_id, code_hash),
+        code,
+    }
+    .execute(authority, state_transaction)?;
     Ok(code_hash)
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -753,18 +767,31 @@ pub fn activate_instance(
     .execute(authority, state_transaction)?;
     Ok(())
 }
-/// Fetch the manifest stored for `code_hash`, if any.
-pub fn fetch_manifest(state: &impl StateReadOnly, code_hash: &Hash) -> Option<ContractManifest> {
-    state.world().contract_manifests().get(code_hash).cloned()
+/// Fetch the manifest stored for `artifact_id`, if any.
+pub fn fetch_manifest(
+    state: &impl StateReadOnly,
+    artifact_id: &ContractArtifactId,
+) -> Option<ContractManifest> {
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)
+        .ok()?;
+    state.world().contract_manifests().get(artifact_id).cloned()
 }
-/// Fetch the stored bytecode for `code_hash`, if any.
-pub fn fetch_code_bytes(state: &impl StateReadOnly, code_hash: &Hash) -> Option<Vec<u8>> {
-    state.world().contract_code().get(code_hash).cloned()
+/// Fetch the stored bytecode for `artifact_id`, if any.
+pub fn fetch_code_bytes(
+    state: &impl StateReadOnly,
+    artifact_id: &ContractArtifactId,
+) -> Option<Vec<u8>> {
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)
+        .ok()?;
+    state.world().contract_code().get(artifact_id).cloned()
 }
-/// Retrieve a combined record (manifest + optional bytecode) for `code_hash`.
-pub fn fetch_record(state: &impl StateReadOnly, code_hash: &Hash) -> Option<ContractCodeRecord> {
-    let manifest = fetch_manifest(state, code_hash)?;
-    let code_bytes = fetch_code_bytes(state, code_hash);
+/// Retrieve a combined record (manifest + optional bytecode) for `artifact_id`.
+pub fn fetch_record(
+    state: &impl StateReadOnly,
+    artifact_id: &ContractArtifactId,
+) -> Option<ContractCodeRecord> {
+    let manifest = fetch_manifest(state, artifact_id)?;
+    let code_bytes = fetch_code_bytes(state, artifact_id);
     Some(ContractCodeRecord {
         manifest,
         code_bytes,
@@ -814,18 +841,20 @@ pub struct BoundContractIdentity {
 #[must_use]
 pub fn fetch_artifacts(
     state: &impl StateReadOnly,
-    code_hash: &Hash,
+    artifact_id: &ContractArtifactId,
     binding: Option<&ContractAddress>,
 ) -> ContractArtifacts {
-    let manifest = fetch_manifest(state, code_hash);
-    let code_bytes = fetch_code_bytes(state, code_hash);
-    let bound_code_hash = binding.and_then(|contract_address| {
-        state
-            .world()
-            .contract_instances()
-            .get(contract_address)
-            .copied()
-    });
+    let manifest = fetch_manifest(state, artifact_id);
+    let code_bytes = fetch_code_bytes(state, artifact_id);
+    let bound_code_hash = binding
+        .filter(|address| address.dataspace_id().ok() == Some(artifact_id.dataspace_id))
+        .and_then(|contract_address| {
+            state
+                .world()
+                .contract_instances()
+                .get(contract_address)
+                .copied()
+        });
     ContractArtifacts {
         manifest,
         code_bytes,
@@ -837,11 +866,15 @@ pub fn fetch_instance_binding(
     state: &impl StateReadOnly,
     contract_address: &ContractAddress,
 ) -> Option<Hash> {
-    state
+    let hash = state
         .world()
         .contract_instances()
         .get(contract_address)
-        .copied()
+        .copied()?;
+    let artifact_id = ContractArtifactId::for_address(contract_address, hash).ok()?;
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), &artifact_id)
+        .ok()?;
+    Some(hash)
 }
 /// Resolve the consensus-persisted runtime authority for an active contract instance.
 #[must_use]
@@ -884,6 +917,9 @@ pub fn fetch_bound_contract_identity(
     contract_address: &ContractAddress,
 ) -> Option<BoundContractIdentity> {
     let code_hash = fetch_instance_binding(state, contract_address)?;
+    let artifact_id = ContractArtifactId::for_address(contract_address, code_hash).ok()?;
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), &artifact_id)
+        .ok()?;
     fetch_bound_contract_subject(state, contract_address)?;
     let contract_alias_binding = state
         .world()
@@ -911,13 +947,15 @@ pub fn fetch_bound_contract_identity(
 /// without first cloning the complete deployable image.
 pub fn with_code_bytes<T>(
     state: &impl StateReadOnly,
-    code_hash: &Hash,
+    artifact_id: &ContractArtifactId,
     use_bytes: impl FnOnce(&[u8]) -> T,
 ) -> Option<T> {
+    crate::executor::root_scope::ensure_committed_artifact_scope(state.world(), artifact_id)
+        .ok()?;
     state
         .world()
         .contract_code()
-        .get(code_hash)
+        .get(artifact_id)
         .map(|bytes| use_bytes(bytes.as_ref()))
 }
 /// Resolve the fully bound contract instance record for `contract_address`.
@@ -929,8 +967,9 @@ pub fn fetch_bound_contract_record(
     let code_hash = fetch_instance_binding(state, contract_address)?;
     let contract_subject =
         borrow_bound_contract_subject_from_world(state.world(), contract_address)?;
-    let manifest = fetch_manifest(state, &code_hash)?;
-    let code_bytes = fetch_code_bytes(state, &code_hash)?;
+    let artifact_id = ContractArtifactId::for_address(contract_address, code_hash).ok()?;
+    let manifest = fetch_manifest(state, &artifact_id)?;
+    let code_bytes = fetch_code_bytes(state, &artifact_id)?;
     let contract_alias_binding = state
         .world()
         .contract_alias_bindings()
@@ -1170,6 +1209,11 @@ mod tests {
         let domain = Domain::new(dom.clone()).build(&auth);
         let account = Account::new(auth.clone()).build(&auth);
         let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
         let mut permissions = permission::Permissions::new();
         assert!(
             permissions.insert(
@@ -1193,16 +1237,63 @@ mod tests {
         )
     }
     #[test]
+    fn artifact_reads_reject_foreign_private_scope_even_when_storage_contains_it() {
+        let (state, _, _) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut transaction = block.transaction();
+        let dataspace_id = iroha_model_base::topology::DataSpaceId::new(u64::MAX);
+        transaction.world.parameters.set_parameter(
+            crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
+                    parent_network_id: state.network_id,
+                    dataspace_id,
+                },
+            ),
+        );
+        let (bytes, manifest) = minimal_contract_artifact(1);
+        let hash = ivm::contract_code_hash(&bytes);
+        let owned = ContractArtifactId::new(dataspace_id, hash);
+        let foreign =
+            ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, hash);
+        for artifact in [owned, foreign] {
+            transaction
+                .world
+                .contract_code
+                .insert(artifact, bytes.clone());
+            transaction
+                .world
+                .contract_manifests
+                .insert(artifact, manifest.clone());
+        }
+        assert_eq!(fetch_code_bytes(&transaction, &owned), Some(bytes));
+        assert_eq!(fetch_manifest(&transaction, &owned), Some(manifest));
+        assert!(fetch_code_bytes(&transaction, &foreign).is_none());
+        assert!(fetch_manifest(&transaction, &foreign).is_none());
+        assert!(with_code_bytes(&transaction, &foreign, <[u8]>::len).is_none());
+        assert!(fetch_record(&transaction, &foreign).is_none());
+    }
+    #[test]
     fn registry_roundtrip_manifest_and_code() {
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
         // Register bytecode and manifest, then activate an authorized namespace binding.
         let (code, manifest) = minimal_contract_artifact(1);
-        let code_hash =
-            register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
+        let code_hash = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code.clone(),
+            &mut stx,
+        )
+        .expect("register bytecode");
         let manifest = manifest.signed(&kp);
-        register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
+        register_manifest(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            manifest.clone(),
+            &mut stx,
+        )
+        .expect("register manifest");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -1250,13 +1341,34 @@ mod tests {
             .expect("commit block");
         let view = state.view();
         // Manifest fetch
-        let got_manifest = fetch_manifest(&view, &code_hash).expect("manifest stored");
+        let got_manifest = fetch_manifest(
+            &view,
+            &iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+        )
+        .expect("manifest stored");
         assert_eq!(got_manifest, manifest);
         // Bytecode fetch
-        let got_code = fetch_code_bytes(&view, &code_hash).expect("code stored");
+        let got_code = fetch_code_bytes(
+            &view,
+            &iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+        )
+        .expect("code stored");
         assert_eq!(got_code, code);
         // Combined record fetch
-        let record = fetch_record(&view, &code_hash).expect("record exists");
+        let record = fetch_record(
+            &view,
+            &iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+        )
+        .expect("record exists");
         assert_eq!(record.manifest, manifest);
         assert_eq!(record.code_bytes.as_deref(), Some(code.as_slice()));
         // Instance binding fetch
@@ -1273,7 +1385,10 @@ mod tests {
         let stored_ptr = view
             .world()
             .contract_code()
-            .get(&code_hash)
+            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ))
             .expect("stored bytes")
             .as_ptr();
         assert_eq!(borrowed.0, stored_ptr, "borrow helper must not clone bytes");
@@ -1300,10 +1415,21 @@ mod tests {
             .expect("set protected namespaces");
         // Register code + manifest and activate under governance protection.
         let (code, manifest) = minimal_contract_artifact(1);
-        let code_hash =
-            register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
+        let code_hash = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code.clone(),
+            &mut stx,
+        )
+        .expect("register bytecode");
         let manifest = manifest.signed(&kp);
-        register_manifest(&authority, manifest, &mut stx).expect("register manifest");
+        register_manifest(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            manifest,
+            &mut stx,
+        )
+        .expect("register manifest");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -1356,10 +1482,20 @@ seiyaku LifecycleOne {
 }
 "#,
         );
-        let v1_hash = register_code_bytes(&authority, v1_code, &mut transaction)
-            .expect("register v1 bytecode");
-        register_manifest(&authority, v1_manifest.signed(&keypair), &mut transaction)
-            .expect("register v1 manifest");
+        let v1_hash = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            v1_code,
+            &mut transaction,
+        )
+        .expect("register v1 bytecode");
+        register_manifest(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            v1_manifest.signed(&keypair),
+            &mut transaction,
+        )
+        .expect("register v1 manifest");
         activate_instance(
             &authority,
             contract_address.clone(),
@@ -1448,10 +1584,20 @@ seiyaku LifecycleTwo {
 }
 "#,
         );
-        let v2_hash = register_code_bytes(&authority, v2_code, &mut transaction)
-            .expect("register v2 bytecode");
-        register_manifest(&authority, v2_manifest.signed(&keypair), &mut transaction)
-            .expect("register v2 manifest");
+        let v2_hash = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            v2_code,
+            &mut transaction,
+        )
+        .expect("register v2 bytecode");
+        register_manifest(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            v2_manifest.signed(&keypair),
+            &mut transaction,
+        )
+        .expect("register v2 manifest");
         activate_instance(
             &authority,
             contract_address.clone(),
@@ -1581,10 +1727,16 @@ seiyaku LifecycleAba {
                 contract_address.clone(),
                 authority.clone(),
             );
-        let code_hash = register_code_bytes(&authority, code, &mut first_transaction)
-            .expect("register lifecycle bytecode");
+        let code_hash = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code,
+            &mut first_transaction,
+        )
+        .expect("register lifecycle bytecode");
         register_manifest(
             &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             manifest.signed(&keypair),
             &mut first_transaction,
         )
@@ -1769,7 +1921,13 @@ seiyaku LifecycleAba {
             .execute(&authority, &mut stx)
             .expect("set cap");
         let code = minimal_ivm_program(1);
-        let err = register_code_bytes(&authority, code, &mut stx).unwrap_err();
+        let err = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code,
+            &mut stx,
+        )
+        .unwrap_err();
         match err {
             RegistryError::Instruction(inner) => {
                 let msg = inner.to_string();
@@ -1789,8 +1947,13 @@ seiyaku LifecycleAba {
         let (mut code, _) = minimal_contract_artifact(1);
         code[8..16].copy_from_slice(&0_u64.to_le_bytes());
         let code_hash = ivm::contract_code_hash(&code);
-        let error = register_code_bytes(&authority, code, &mut stx)
-            .expect_err("zero-cycle artifact registration must fail closed");
+        let error = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code,
+            &mut stx,
+        )
+        .expect_err("zero-cycle artifact registration must fail closed");
         assert!(
             matches!(
                 &error,
@@ -1803,7 +1966,13 @@ seiyaku LifecycleAba {
             "unexpected registration error: {error:?}"
         );
         assert!(
-            stx.world.contract_code.get(&code_hash).is_none(),
+            stx.world
+                .contract_code
+                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                ))
+                .is_none(),
             "rejected artifact must not enter world state"
         );
     }
@@ -1819,8 +1988,13 @@ seiyaku LifecycleAba {
         let (mut code, _) = minimal_contract_artifact(1);
         code[8..16].copy_from_slice(&2_u64.to_le_bytes());
         let code_hash = ivm::contract_code_hash(&code);
-        let error = register_code_bytes(&authority, code, &mut stx)
-            .expect_err("over-ceiling artifact registration must fail closed");
+        let error = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code,
+            &mut stx,
+        )
+        .expect_err("over-ceiling artifact registration must fail closed");
         assert!(
             matches!(
                 &error,
@@ -1833,7 +2007,13 @@ seiyaku LifecycleAba {
             "unexpected registration error: {error:?}"
         );
         assert!(
-            stx.world.contract_code.get(&code_hash).is_none(),
+            stx.world
+                .contract_code
+                .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash
+                ))
+                .is_none(),
             "rejected artifact must not enter world state"
         );
     }
@@ -1856,7 +2036,13 @@ seiyaku LifecycleAba {
             error_types: None,
             provenance: None,
         };
-        let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();
+        let err = register_manifest(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            manifest,
+            &mut stx,
+        )
+        .unwrap_err();
         assert!(matches!(err, RegistryError::MissingCodeHash));
     }
     #[test]
@@ -1878,7 +2064,13 @@ seiyaku LifecycleAba {
             error_types: None,
             provenance: None,
         };
-        let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();
+        let err = register_manifest(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            manifest,
+            &mut stx,
+        )
+        .unwrap_err();
         assert!(matches!(err, RegistryError::MissingAbiHash));
     }
     #[test]
@@ -1979,10 +2171,20 @@ seiyaku LifecycleAba {
         let mut block = state.block(default_header(1));
         let mut transaction = block.transaction();
         let (code, manifest) = minimal_contract_artifact(1);
-        let code_hash = register_code_bytes(&authority, code, &mut transaction)
-            .expect("register contract bytecode");
-        register_manifest(&authority, manifest.signed(&keypair), &mut transaction)
-            .expect("register contract manifest");
+        let code_hash = register_code_bytes(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code,
+            &mut transaction,
+        )
+        .expect("register contract bytecode");
+        register_manifest(
+            &authority,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            manifest.signed(&keypair),
+            &mut transaction,
+        )
+        .expect("register contract manifest");
         let address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()

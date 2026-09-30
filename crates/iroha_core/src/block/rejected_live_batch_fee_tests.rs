@@ -228,10 +228,10 @@ ledger::account::set_detail(
         [payer_asset, sink_asset],
         [],
     );
-    world.contract_code.insert(code_hash, program);
+    world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), program);
     world
         .contract_manifests
-        .insert(code_hash, manifest.signed(&payer_keypair));
+        .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), manifest.signed(&payer_keypair));
     world
         .contract_instances
         .insert(contract_address.clone(), code_hash);

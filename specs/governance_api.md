@@ -591,8 +591,8 @@ Contracts API (locally signed deployment)
 - The commit instruction atomically checks the expected deployment nonce and
   previous alias target before activation or rotation.
 - Related reads:
-  - GET `/v1/contracts/code/{code_hash}` → stored manifest
-  - GET `/v1/contracts/code-bytes/{code_hash}` → `{ code_b64 }`
+  - GET `/v1/contracts/artifacts/{dataspace_id}/{code_hash}` → stored manifest
+  - GET `/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes` → `{ network_id, artifact_id, code_b64 }`
 
 Alias Service
 - POST `/v1/aliases/resolve`
@@ -950,7 +950,7 @@ CLI Helpers
     - Torii stores bytecode for the active `code_hash`, and its canonical
       `contract_code_hash` matches: the domain-separated Blake2b-32 digest
       covers the complete deployable artifact, including its execution header.
-    - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
+    - The manifest stored under `/v1/contracts/artifacts/{dataspace_id}/{code_hash}` reports matching `code_hash` and `abi_hash` values.
     - An enacted governance proposal exists for `(contract_address, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
 - `iroha app gov deploy meta --contract-address irohac1... [--approver <i105-account-id> --approver <i105-account-id>]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including `gov_contract_address` and optional `gov_manifest_approvers` for satisfying manifest quorum rules.

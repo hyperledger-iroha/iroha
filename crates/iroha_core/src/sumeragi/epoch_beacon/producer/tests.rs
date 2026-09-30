@@ -327,6 +327,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
     assert!(control::verify_result(&witness, None).is_err());
     let current = &source.world().consensus_schedule().ready(9).unwrap().epoch;
     super::super::capture(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         source.world(),
         source.block_hashes(),
         current,
@@ -337,6 +338,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
     .unwrap();
     assert!(
         super::super::capture(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
             source.world(),
             source.block_hashes(),
             current,
@@ -365,6 +367,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
         }
         assert!(
             super::super::capture(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
                 source.world(),
                 source.block_hashes(),
                 current,
@@ -544,6 +547,7 @@ fn explicitly_anchored_no_demand_needs_neither_session_nor_fake_observer_key() {
     control::verify_result(&witness, None).unwrap();
     let current = &source.world().consensus_schedule().ready(9).unwrap().epoch;
     super::super::capture(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         source.world(),
         source.block_hashes(),
         current,

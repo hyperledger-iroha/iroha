@@ -113,7 +113,7 @@ fn validate_contents(record: &PlanRecord, reader: &DeploymentReadContext) -> Res
         };
         let (name, expected) = match index.cmp(&chunks) {
             Ordering::Less => upload_stage(context, &artifact, index, chunks)?,
-            Ordering::Equal => manifest_stage(actual, &verified, signer)?,
+            Ordering::Equal => manifest_stage(context, actual, &verified, signer)?,
             Ordering::Greater => commit_stage(context),
         };
         if step.name != name || actual.as_ref() != expected.as_slice() {
@@ -173,7 +173,7 @@ fn upload_stage(
     let chunk_count =
         u32::try_from(chunks).wrap_err("contract upload chunk count does not fit u32")?;
     let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
-        code_hash: context.code_hash,
+        artifact_id: ContractArtifactId::new(context.dataspace_id, context.code_hash),
         total_size: artifact.len() as u64,
         chunk_index,
         chunk_count,
@@ -183,7 +183,7 @@ fn upload_stage(
     })];
     if final_chunk {
         instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
-            code_hash: context.code_hash,
+            artifact_id: ContractArtifactId::new(context.dataspace_id, context.code_hash),
             total_size: artifact.len() as u64,
             chunk_count,
         }));
@@ -198,6 +198,7 @@ fn upload_stage(
 
 /// Expected manifest-registration stage, bound to the verified artifact and retained signer.
 fn manifest_stage(
+    context: &DeploymentPreflight,
     actual: &[InstructionBox],
     verified: &ivm_artifact_admission::VerifiedContractArtifact,
     signer: &iroha_crypto::PublicKey,
@@ -211,6 +212,12 @@ fn manifest_stage(
         .as_any()
         .downcast_ref::<RegisterSmartContractCode>()
         .ok_or_else(|| eyre!("manifest stage is not native registration"))?;
+    if registration.artifact_id != ContractArtifactId::new(context.dataspace_id, context.code_hash)
+    {
+        return Err(eyre!(
+            "retained manifest artifact scope differs from the deployment context"
+        ));
+    }
     let mut manifest = registration.manifest.clone();
     let provenance = manifest
         .provenance
