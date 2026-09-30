@@ -852,11 +852,11 @@ public final class NoritoCodecAdapterTests {
         new NoritoJavaCodecAdapter(TairaTestnetProfile.I105_DISCRIMINANT);
     final byte[] canonical = adapter.encodeTransaction(payload);
     final NoritoDecoder decoder = canonicalDecoder(canonical);
-    final byte[][] fields = new byte[10][];
+    final byte[][] fields = new byte[9][];
     for (int index = 0; index < fields.length; index++) {
       fields[index] = readField(decoder, "payload[" + index + "]");
     }
-    assert decoder.remaining() == 0 : "Canonical payload must contain exactly ten fields";
+    assert decoder.remaining() == 0 : "Canonical payload must contain exactly nine fields";
 
     final NoritoEncoder legacyChainId = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     NoritoAdapters.stringAdapter().encode(legacyChainId, TEST_NETWORK_ID.literal());

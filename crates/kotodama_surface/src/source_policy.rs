@@ -74,6 +74,7 @@ pub const V1_DECLARATION_RESERVED_EXTRA_NAMES: &[&str] = &[
     "is_err",
     "unwrap_or",
     "unwrap_err_or",
+    "expect",
 ];
 /// Exact identifier spellings forbidden in every source position.
 pub const V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];

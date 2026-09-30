@@ -878,6 +878,11 @@ mod tests {
             ratchet.state.state_commitment_components.ep,
             counter.state.state_commitment_components.ep
         );
+        assert_ne!(
+            ratchet.statement.proof_statement_digest().unwrap(),
+            counter.statement.proof_statement_digest().unwrap(),
+            "bootstrap proof authorization must bind the initial prepared key"
+        );
     }
 
     #[test]

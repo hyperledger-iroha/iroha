@@ -2104,6 +2104,41 @@ fn transaction_builder_exports_signable_payload_and_accepts_external_signature()
     assert!(signed.verify_signature().is_ok());
 }
 #[test]
+fn prepared_external_identity_matches_signed_identity_and_binds_exact_intent() {
+    let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+    let mut builder = TransactionBuilder::new(
+        test_network_id(0x26),
+        AccountId::new(key_pair.public_key().clone()),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "prepared external identity".into())]);
+    builder.set_creation_time(Duration::from_millis(42));
+    builder.set_nonce(NonZeroU32::new(7).unwrap());
+    let prepared_hash = builder.hash_as_entrypoint();
+    let decoded = TransactionBuilder::decode_payload(&builder.encode_payload()).unwrap();
+    assert_eq!(decoded.hash_as_entrypoint(), prepared_hash);
+    assert_ne!(Hash::from(prepared_hash), builder.payload_hash());
+    let signed = builder.clone().sign(key_pair.private_key());
+    assert_eq!(signed.hash_as_entrypoint(), prepared_hash);
+    assert_eq!(
+        TransactionEntrypoint::External(signed.clone()).hash(),
+        prepared_hash
+    );
+    let mut replaced_authorization = signed;
+    replaced_authorization.signature = sample_signed_transaction().signature().clone();
+    assert_eq!(replaced_authorization.hash_as_entrypoint(), prepared_hash);
+    let mut different_nonce = builder.clone();
+    different_nonce.set_nonce(NonZeroU32::new(8).unwrap());
+    assert_ne!(different_nonce.hash_as_entrypoint(), prepared_hash);
+    let mut different_lifetime = builder.clone();
+    different_lifetime.set_ttl(Duration::from_secs(10));
+    assert_ne!(different_lifetime.hash_as_entrypoint(), prepared_hash);
+    let different_action =
+        builder.with_instructions([Log::new(Level::INFO, "another action".into())]);
+    assert_ne!(different_action.hash_as_entrypoint(), prepared_hash);
+}
+
+#[test]
 fn transaction_builder_decodes_exact_external_signing_payload() {
     let chain = test_network_id(0x17);
     let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);

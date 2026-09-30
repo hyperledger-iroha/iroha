@@ -151,6 +151,8 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
     State Bank of Pakistan dataspace (id 10, lane 3)
   - `cbuae`:
     Central Bank of the UAE dataspace (id 12, lane 4)
+  - `bpng`:
+    Bank of Papua New Guinea local dataspace (id 8648377547929788715, lane 5)
 
 * `--perf-profile <PROFILE>` — Apply a localnet performance profile (10k TPS / 1s finality presets)
 

@@ -382,7 +382,7 @@ public final class MusubiInstructionsV1FixtureTests {
         () -> digest(Collections.<Object>singletonList(invalidDigestOctets)));
 
     final List<Object> cases = array(fixture.get("cases"));
-    assertEquals(19, cases.size());
+    assertEquals(20, cases.size());
     final List<String> caseIds = new ArrayList<>();
     for (final Object rawCase : cases) {
       caseIds.add(string(object(rawCase).get("id")));
@@ -403,6 +403,7 @@ public final class MusubiInstructionsV1FixtureTests {
             "retarget-one-character-alias-high-revision",
             "takedown-max-major-prerelease",
             "register-archive-max-bounds-signed-receipt",
+            "advance-signed-pin-outbox-inventory",
             "register-provider-bundle-attestation",
             "add-location-three-signed-providers",
             "publish-delegated-domain-release",
@@ -411,7 +412,7 @@ public final class MusubiInstructionsV1FixtureTests {
         caseIds);
     for (final Object rawCase : cases) {
       final Map<String, Object> fixtureCase = object(rawCase);
-      final TypedInstructionV1 instruction = instruction(fixtureCase);
+      final FixtureEncoding instruction = fixtureEncoding(fixtureCase);
 
       assertEquals(fixtureCase.get("wire_id"), instruction.wireId());
       assertEquals(fixtureCase.get("concrete_schema_name"), instruction.concreteSchemaName());
@@ -459,7 +460,7 @@ public final class MusubiInstructionsV1FixtureTests {
     final List<Object> fixtureCases = array(fixture().get("cases"));
     final List<ExecutableBatchItem> items = new ArrayList<>();
     for (final Object rawCase : fixtureCases) {
-      items.add(ExecutableBatchItem.instruction(instruction(object(rawCase)).toInstructionBox()));
+      items.add(ExecutableBatchItem.instruction(fixtureEncoding(object(rawCase)).toInstructionBox()));
     }
     final String authority =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x5a), "ed25519")
@@ -814,6 +815,38 @@ public final class MusubiInstructionsV1FixtureTests {
         }) {
       assertThrows(IllegalArgumentException.class, () -> new Reason(invalid));
     }
+  }
+
+  // Observation-only fixture tuple: protocol encoding remains in the actual SDK owners.
+  private record FixtureEncoding(
+      String wireId, String concreteSchemaName, byte[] barePayload,
+      byte[] concreteFrame, InstructionBox toInstructionBox) {}
+
+  private static FixtureEncoding fixtureEncoding(final Map<String, Object> fixtureCase) {
+    if ("advance-signed-pin-outbox-inventory".equals(string(fixtureCase.get("id")))) {
+      final Map<String, Object> semantic = object(fixtureCase.get("semantic"));
+      assertSemanticKeys(
+          semantic, "network_id", "pin_authority", "session_id", "expected_revision",
+          "expected_inventory_digest", "inventory_digest");
+      final org.hyperledger.iroha.sdk.musubi.MusubiInstructionsV1.AdvanceMusubiPinOutboxV1 owner =
+          new org.hyperledger.iroha.sdk.musubi.MusubiInstructionsV1.AdvanceMusubiPinOutboxV1(
+              org.hyperledger.iroha.sdk.core.model.NetworkId.parse(string(semantic.get("network_id"))),
+              string(semantic.get("pin_authority")),
+              rawBytes(array(semantic.get("session_id")), 32),
+              unsigned(semantic.get("expected_revision")),
+              rawBytes(array(semantic.get("expected_inventory_digest")), 32),
+              rawBytes(array(semantic.get("inventory_digest")), 32));
+      final String wireId =
+          org.hyperledger.iroha.sdk.musubi.MusubiInstructionsV1.AdvanceMusubiPinOutboxV1.WIRE_ID;
+      return new FixtureEncoding(
+          wireId,
+          org.hyperledger.iroha.sdk.musubi.MusubiInstructionsV1.AdvanceMusubiPinOutboxV1.SCHEMA_NAME,
+          owner.barePayload(), owner.concreteFrame(),
+          InstructionBox.fromWirePayload(wireId, owner.concreteFrame()));
+    }
+    final TypedInstructionV1 owner = instruction(fixtureCase);
+    return new FixtureEncoding(owner.wireId(), owner.concreteSchemaName(), owner.barePayload(),
+        owner.concreteFrame(), owner.toInstructionBox());
   }
 
   private static TypedInstructionV1 instruction(final Map<String, Object> fixtureCase) {

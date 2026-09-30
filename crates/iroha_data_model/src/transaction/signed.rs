@@ -1595,7 +1595,7 @@ impl SignedTransaction {
     /// This matches the canonical transaction hash returned by [`Self::hash`].
     #[inline]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
-        let entry_hash = HashOf::new(&ExternalEntrypointRef(self));
+        let entry_hash = HashOf::new(&ExternalEntrypointRef(self.payload()));
         HashOf::from_untyped_unchecked(Hash::from(entry_hash))
     }
     /// Injects a set of fictitious instructions into the transaction payload for testing.
@@ -2210,22 +2210,21 @@ impl norito::json::JsonDeserialize for ExecutionStep {
         ConstVec::<InstructionBox>::json_deserialize(parser).map(ExecutionStep)
     }
 }
-struct ExternalEntrypointRef<'a>(&'a SignedTransaction);
+struct ExternalEntrypointRef<'a>(&'a TransactionPayload);
 
 impl norito::core::SerializePayload for ExternalEntrypointRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&0_u32, writer)?;
-        norito::core::write_len_prefixed(writer, self.0.payload())?;
+        norito::core::write_len_prefixed(writer, self.0)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0
-            .payload()
             .encoded_len_hint()
             .map(|len| 4_usize.saturating_add(8).saturating_add(len))
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        let len = self.0.payload().encoded_len_exact()?;
+        let len = self.0.encoded_len_exact()?;
         Some(
             4_usize
                 .saturating_add(norito::core::len_prefix_len(len))
@@ -2431,6 +2430,17 @@ impl TransactionBuilder {
     #[must_use]
     pub fn payload_hash_bytes(&self) -> [u8; Hash::LENGTH] {
         *HashOf::new(&self.payload).as_ref()
+    }
+    /// Canonical external transaction identifier for this exact unsigned intent.
+    ///
+    /// This matches [`SignedTransaction::hash_as_entrypoint`] after signing.
+    /// Authorization proofs are excluded from transaction identity, so callers
+    /// can reconcile a prepared input before receiving a signature. This is
+    /// distinct from [`Self::payload_hash`], the prehash signed by the authority.
+    #[must_use]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        let entry_hash = HashOf::new(&ExternalEntrypointRef(&self.payload));
+        HashOf::from_untyped_unchecked(Hash::from(entry_hash))
     }
     /// Build a signed transaction from a signature produced by an external signer.
     ///

@@ -11889,6 +11889,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     ]
     private static let retiredNumericTypeNames: Set<String> = [
         "i8",

@@ -384,6 +384,24 @@ impl NativeFinalityFixture {
         self.certify_result(block, result)
     }
 
+    /// Certify an explicitly synthetic complete-World root for portable reader tests.
+    /// This helper executes no World transition and grants no monetary authority.
+    ///
+    /// # Panics
+    /// Panics if the block is not the exact fixture successor or violates proof rules.
+    pub fn certify_with_world_root(
+        &mut self,
+        block: SignedBlock,
+        world_root: Hash,
+    ) -> SumeragiFinalityProof {
+        let parent = self.verifier.verify_retained_decision(&self.tip).unwrap();
+        let mut result = Self::result(&block, &self.epoch);
+        result.execution.parent_world_state_root = parent.execution().world_state_root;
+        result.execution.world_state_root = world_root;
+        result.validate().unwrap();
+        self.certify_result(block, result)
+    }
+
     /// Certify explicit synthetic ordinary writes with their mandatory native lane-state proof.
     /// The complete witness is checked and its exact scratch capacity admitted before signing.
     /// This helper executes no World transition and grants no monetary authority.

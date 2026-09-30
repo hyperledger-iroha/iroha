@@ -86,9 +86,11 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         val endpoint = Endpoint().apply { wrongPreparationNonce = true }
         val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint).initialEnrollment()
         val selected = phases.begin(account)
-        assertFailsWith<IllegalStateException> { phases.verifySignedPreparation(selected, preparation(selected)) }
+        assertFailsWith<IllegalArgumentException> { phases.verifySignedPreparation(selected, preparation(selected)) }
         assertEquals(1, endpoint.closeCalls)
-        assertNull(phases.recoverExactSelection(account))
+        val calls = endpoint.calls
+        repeat(2) { assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) } }
+        assertEquals(calls, endpoint.calls)
     }
 
     @Test
@@ -330,7 +332,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         var changedSelectionField: Int? = null
         var rejectSelectionRead = false
         private var challengeId = ByteArray(32) { 7 }
-        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         override fun open(storagePath: String) = 31L
         override fun close(handle: Long): Int { closeCalls++; return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {

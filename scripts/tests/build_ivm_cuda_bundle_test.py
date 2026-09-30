@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -293,27 +294,64 @@ def test_non_ed25519_signer_cannot_publish_candidate(tmp_path: Path) -> None:
     assert not output.exists()
 
 
-def test_no_follow_read_keeps_open_inode_when_path_is_swapped(
+def test_no_follow_read_retains_inode_and_refuses_replaced_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Hashing uses the admitted descriptor even if its path changes after open."""
+    """The original descriptor stays intact, but a replaced logical source is refused."""
     source = tmp_path / "source.cu"
     source.write_bytes(b"original source")
     replacement = tmp_path / "replacement.cu"
     replacement.write_bytes(b"different source")
     original_open = bundle.os.open
+    retained = []
 
     def swap_after_open(path: Path, flags: int) -> int:
         descriptor = original_open(path, flags)
         if Path(path) == source:
+            retained.append(os.dup(descriptor))
             source.rename(tmp_path / "old-source.cu")
             source.symlink_to(replacement)
         return descriptor
 
     monkeypatch.setattr(bundle.os, "open", swap_after_open)
-    assert bundle.read_regular_bounded(source, 1024) == b"original source"
+    with pytest.raises(bundle.BundleError, match="changed while"):
+        bundle.read_regular_file(source, 1024)
+    try:
+        assert os.pread(retained[0], 1024, 0) == b"original source"
+    finally:
+        os.close(retained[0])
     with pytest.raises(bundle.BundleError, match="regular file"):
-        bundle.read_regular_bounded(source, 1024)
+        bundle.read_regular_file(source, 1024)
+
+
+def test_large_source_trivia_retains_signed_exact_candidate(tmp_path: Path) -> None:
+    """Source comments do not change admission; exact source hashes remain signed."""
+    source_dir, nvcc, key = _fixture(tmp_path)
+    original = (source_dir / "vector.cu").read_bytes()
+    source = original + b"//" + b"x" * (1024 * 1024) + b"\n"
+    (source_dir / "vector.cu").write_bytes(source)
+    candidate = tmp_path / "candidate"
+    _, generation = bundle.build_candidate(
+        source_dir=source_dir, output_dir=candidate, nvcc=nvcc,
+        openssl=Path(OPENSSL), signing_key=key,
+        image_digest=hashlib.sha256(b"image").hexdigest(),
+        target_profile="arch=compute_86,code=sm_86",
+    )
+    assert (candidate / "vector.cu").read_bytes() == source
+    manifest = (candidate / "provenance.v1").read_text()
+    assert f"artifact.vector.source_sha256={hashlib.sha256(source).hexdigest()}" in manifest
+    assert generation == _independent_generation(candidate)
+    public_der = tmp_path / "independent-public.der"
+    public_der.write_bytes(bytes.fromhex("302a300506032b6570032100") + (candidate / "provenance.v1.pub").read_bytes())
+    assert _verify_signature(candidate, public_der).returncode == 0
+
+
+def test_explicit_artifact_bound_still_refuses_large_regular_file(tmp_path: Path) -> None:
+    """Artifact admission remains bounded independently of implementation size."""
+    path = tmp_path / "artifact.ptx"
+    path.write_bytes(b"x" * 65)
+    with pytest.raises(bundle.BundleError, match="regular file"):
+        bundle.read_regular_file(path, 64)
 
 
 def test_signing_key_symlink_into_repository_is_rejected(

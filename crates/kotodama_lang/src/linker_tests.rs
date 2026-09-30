@@ -566,7 +566,7 @@ fn links_explicit_export_after_independent_type_analysis() {
     assert_eq!(name, &module.name);
 }
 #[test]
-fn imported_parameters_preserve_declared_named_call_mode() {
+fn imported_parameters_accept_positional_and_named_calls() {
     let dependency = || {
         package(
             vec![source(
@@ -584,16 +584,8 @@ fn imported_parameters_preserve_declared_named_call_mode() {
             ),
             dependency(),
         ))
-        .expect_err("an imported named parameter requires its declaration label");
-    assert_eq!(positional.diagnostic_code(), "E_NAMED_ARGUMENTS_REQUIRED");
-    let positional = positional.into_diagnostics();
-    assert_eq!(
-        positional.diagnostics[0]
-            .primary_span
-            .as_ref()
-            .and_then(|span| span.source.as_deref()),
-        Some("app.ko"),
-    );
+        .expect("imported ordinary parameters accept positional arguments");
+    assert_eq!(positional.items.len(), 2);
     let linked = TypedLinker::default()
         .link(request(
             source(

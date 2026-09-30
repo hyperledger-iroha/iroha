@@ -1,9 +1,8 @@
 //! Deterministic formatter for the canonical Kotodama V1 token stream.
 use crate::{
-    ast::Item,
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile},
-    syntax::{GreenToken, SyntaxKind},
+    syntax::{GreenElement, GreenToken, SyntaxKind},
 };
 const INDENT: &str = "    ";
 const TARGET_COLUMNS: usize = 100;
@@ -23,6 +22,27 @@ pub fn format_source(
         diagnostics,
         ..
     } = parsed;
+    // Formatting is syntax-only: imported record types need not be declared in
+    // this file. Classify their braces from the parser instead of guessing from
+    // locally known type names (which also confuses function return types).
+    let mut product_braces = std::collections::BTreeSet::new();
+    let mut nodes = vec![tree.root()];
+    while let Some(node) = nodes.pop() {
+        for child in &node.children {
+            match child {
+                GreenElement::Node(child) => nodes.push(child.as_ref()),
+                GreenElement::Token(token)
+                    if matches!(
+                        node.kind,
+                        SyntaxKind::StructLiteral | SyntaxKind::StructPattern
+                    ) && token.kind == SyntaxKind::LBrace =>
+                {
+                    product_braces.insert(token.range.start);
+                }
+                GreenElement::Token(_) => {}
+            }
+        }
+    }
     let tokens = tree
         .into_tokens()
         .into_iter()
@@ -37,16 +57,8 @@ pub fn format_source(
         return Err(diagnostics);
     };
     debug_assert!(diagnostics.diagnostics.is_empty());
-    let struct_names = program
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Struct(definition) => Some(definition.name.clone()),
-            _ => None,
-        })
-        .collect::<std::collections::BTreeSet<_>>();
     crate::ast::drop_program_iterative(program);
-    TokenFormatter::new(source, &tokens, &struct_names)
+    TokenFormatter::new(source, &tokens, &product_braces)
         .format()
         .ok_or_else(|| formatted_source_too_large(source))
 }
@@ -82,7 +94,7 @@ struct TokenFormatter<'source, 'tokens> {
     output: String,
     indent: usize,
     at_line_start: bool,
-    struct_names: &'tokens std::collections::BTreeSet<String>,
+    product_braces: &'tokens std::collections::BTreeSet<u32>,
     parens: Vec<ParenFormat>,
     braces: Vec<BraceFormat>,
     generic_depth: usize,
@@ -120,7 +132,7 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
     fn new(
         source: &'source SourceFile,
         tokens: &'tokens [GreenToken],
-        struct_names: &'tokens std::collections::BTreeSet<String>,
+        product_braces: &'tokens std::collections::BTreeSet<u32>,
     ) -> Self {
         Self {
             source,
@@ -128,7 +140,7 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             output: String::with_capacity(source.text().len()),
             indent: 0,
             at_line_start: true,
-            struct_names,
+            product_braces,
             parens: Vec::new(),
             braces: Vec::new(),
             generic_depth: 0,
@@ -161,31 +173,8 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
                             )
                         })
                         .and_then(|token| self.source.slice(token.range));
-                    let declaration_brace = index.checked_sub(2).is_some_and(|before_name| {
-                        matches!(
-                            self.tokens[before_name].kind,
-                            SyntaxKind::KwStruct
-                                | SyntaxKind::KwSeiyaku
-                                | SyntaxKind::KwModule
-                                | SyntaxKind::KwIf
-                                | SyntaxKind::KwFor
-                        )
-                    });
-                    let function_body_brace = self.tokens[..index]
-                        .iter()
-                        .rev()
-                        .take_while(|token| {
-                            !matches!(
-                                token.kind,
-                                SyntaxKind::Semicolon | SyntaxKind::LBrace | SyntaxKind::RBrace
-                            )
-                        })
-                        .any(|token| token.kind == SyntaxKind::Arrow);
                     let json_object = previous_significant_text == Some("json");
-                    let struct_literal = !json_object
-                        && !declaration_brace
-                        && !function_body_brace
-                        && previous_text.is_some_and(|name| self.struct_names.contains(name));
+                    let struct_literal = self.product_braces.contains(&token.range.start);
                     let match_body = !struct_literal
                         && self.tokens[..index]
                             .iter()
@@ -1123,6 +1112,23 @@ mod tests {
             )),
             "{formatted}"
         );
+        assert_eq!(format(&formatted), formatted);
+    }
+    #[test]
+    fn formats_imported_record_literals_and_patterns_from_syntax() {
+        let formatted = format(
+            "module Tests{koto_test{target:\"target.ko\"}fn make(int count)->Remote::Record{return Remote::Record{count,active:true};}fn read(Remote::Record record)->int{let Remote::Record{count,active:_}=record;count}}",
+        );
+        assert!(
+            formatted.contains(concat!(
+                "return Remote::Record {\n",
+                "            count,\n",
+                "            active: true,\n",
+                "        };",
+            )),
+            "{formatted}"
+        );
+        assert!(formatted.contains("let Remote::Record {\n"), "{formatted}");
         assert_eq!(format(&formatted), formatted);
     }
     #[test]

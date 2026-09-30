@@ -1,12 +1,9 @@
 //! Initial recovery material is created only by the opaque, verified bootstrap owner.
 
 use super::*;
-#[cfg(test)]
 use iroha_data_model::kagemusha::KagemushaHardwareCredentialV1;
-#[cfg(test)]
 use std::{fs::File, os::unix::fs::MetadataExt as _, path::Path};
 
-#[cfg(test)]
 const BOOTSTRAP_FORMAT: private_journal::PrivateJournalFormat =
     private_journal::PrivateJournalFormat {
         filename: "bootstrap.norito.wal",
@@ -18,7 +15,6 @@ const BOOTSTRAP_FORMAT: private_journal::PrivateJournalFormat =
 // One canonical first-release manifest binds the exact initialized resource policy as well
 // as the complete initial snapshot. Resume must never reinterpret the same bundle under a
 // different coordinator reservation budget.
-#[cfg(test)]
 #[derive(norito::Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::bootstrap_checkpoint::BootstrapJournalManifestV1"
@@ -28,7 +24,6 @@ struct BootstrapJournalManifestV1 {
     snapshot: KagemushaStateSnapshotV1,
 }
 
-#[cfg(test)]
 fn bootstrap_manifest_bytes(
     snapshot: &KagemushaStateSnapshotV1,
     coordinator_live_capacity_bytes: u64,
@@ -40,7 +35,6 @@ fn bootstrap_manifest_bytes(
     .map_err(material_error)
 }
 
-#[cfg(test)]
 /// Verified initial state and credential awaiting creation of actual native journals.
 /// This owner cannot expose a usable machine or accept host-provided journal prefixes.
 pub struct KagemushaBootstrapJournalStageV1<R, G, H> {
@@ -56,14 +50,12 @@ pub struct KagemushaBootstrapJournalStageV1<R, G, H> {
     pub(super) initialization_failure: Option<BootstrapJournalFailure>,
 }
 
-#[cfg(test)]
 impl<R, G, H> KagemushaBootstrapJournalStageV1<R, G, H>
 where
     R: KagemushaRecursiveVerifierV1,
     G: KagemushaGuardBundleVerifierV1,
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
-    #[cfg(test)]
     pub(super) fn new(
         state: KagemushaStateV1,
         proof_release: KagemushaStateProofReleaseV1,
@@ -94,7 +86,6 @@ where
         })
     }
 
-    #[cfg(test)]
     /// Atomically publish one complete, descriptor-owned journal bundle on the same filesystem.
     /// Partial private staging directories never occupy the final path. Existing bundles are never
     /// replaced or reset; initial hardware CAS still must compare the canonical zero predecessor.
@@ -223,7 +214,6 @@ where
         })
     }
 
-    #[cfg(test)]
     /// Resume only a complete final initializer-only bundle for the exact verified bootstrap.
     /// Missing, changed or advanced journals fail; recovery never creates a missing child.
     pub fn resume_initialized_journals(
@@ -347,7 +337,6 @@ where
     }
 }
 
-#[cfg(test)]
 /// Initial full snapshot plus held native journals awaiting actual hardware CAS publication.
 pub struct KagemushaBootstrapCheckpointV1<R, G, H> {
     machine: KagemushaStateMachineV1<R, G, H>,
@@ -357,7 +346,6 @@ pub struct KagemushaBootstrapCheckpointV1<R, G, H> {
     manifest: private_journal::PrivateJournal,
 }
 
-#[cfg(test)]
 impl<R, G, H> KagemushaBootstrapCheckpointV1<R, G, H>
 where
     R: KagemushaRecursiveVerifierV1,
@@ -431,7 +419,6 @@ impl<R, G, H> KagemushaBootstrappedWalletV1<R, G, H> {
     }
 }
 
-#[cfg(test)]
 fn open_bootstrap_manifest(
     bundle: &Path,
     expected: &KagemushaStateSnapshotV1,
@@ -451,7 +438,6 @@ fn open_bootstrap_manifest(
     Ok(manifest)
 }
 
-#[cfg(test)]
 fn empty_response_history_root() -> DigestV1 {
     const DOMAIN: &[u8] = b"iroha:kagemusha:device:v1:response-history\0";
     let mut hasher = Sha256::new();
@@ -469,12 +455,10 @@ fn empty_response_history_root() -> DigestV1 {
     node
 }
 
-#[cfg(test)]
 fn material_error(error: impl core::fmt::Display) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::RecoveryMaterial(error.to_string())
 }
 
-#[cfg(test)]
 fn require_same_directory(directory: &File, path: &Path) -> Result<(), KagemushaStateErrorV1> {
     let current = private_journal::open_directory(path).map_err(material_error)?;
     let expected = directory.metadata().map_err(material_error)?;
@@ -485,7 +469,6 @@ fn require_same_directory(directory: &File, path: &Path) -> Result<(), Kagemusha
     Ok(())
 }
 
-#[cfg(test)]
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -507,7 +490,6 @@ fn publish_bundle_noreplace(
     .map_err(material_error)
 }
 
-#[cfg(test)]
 #[cfg(not(any(
     target_vendor = "apple",
     target_os = "linux",

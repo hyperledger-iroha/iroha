@@ -332,6 +332,10 @@ class KagemushaWalletV1 private constructor(
     /** Return the current authenticated compact hardware credential. */
     fun hardwareCredential(): KagemushaHardwareCredentialV1 = currentQualification.credential
 
+    /** Return the qualification admitted with the latest complete native-authoritative snapshot.
+     * A provider-side change becomes visible only after wallet recovery or a validated transition. */
+    fun qualification(): KagemushaHardwareQualificationV1 = currentQualification
+
     /** Return the latest native-authoritative aggregate-state commitment. */
     fun aggregateState(): KagemushaAggregateStateCommitmentV1 = currentAggregateState
 

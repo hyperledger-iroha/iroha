@@ -476,7 +476,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:b6e7a3ecc822601bcd4eec76b7a95131d0793a72ba31e3b2bc84f4bc8fd9e76f",
+    "manifest_fingerprint": "sha256:421476a5ebb1b31cb60f46425a021a0bc0cb88686d78b65d134f085e584d2ff4",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -583,13 +583,13 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1031,
+        "declared_dependency_edges": 1032,
         "declared_external_dependency_edges": 639,
         "declared_external_packages": 184,
         "declared_local_packages": 74,
         "declared_path_packages": 4,
         "declared_workspace_packages": 70,
-        "required_dependency_edges": 852,
+        "required_dependency_edges": 853,
         "required_external_dependency_edges": 510,
         "required_external_packages": 135,
         "required_local_packages": 68,
@@ -603,13 +603,13 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 1950,
+        "declared_dependency_edges": 1951,
         "declared_external_dependency_edges": 1095,
         "declared_external_packages": 231,
         "declared_local_packages": 114,
         "declared_path_packages": 4,
         "declared_workspace_packages": 110,
-        "required_dependency_edges": 1781,
+        "required_dependency_edges": 1782,
         "required_external_dependency_edges": 963,
         "required_external_packages": 183,
         "required_local_packages": 114,

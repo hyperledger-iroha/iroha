@@ -302,6 +302,8 @@ pub enum SoraProfile {
     PrivateSbp,
     /// Central Bank of the UAE restricted dataspace defaults.
     PrivateCbuae,
+    /// Bank of Papua New Guinea restricted local dataspace defaults.
+    PrivateBpng,
     /// Public dataspace (Nexus) defaults.
     Nexus,
 }
@@ -311,6 +313,7 @@ impl SoraProfile {
             SoraProfile::Dataspace
             | SoraProfile::PrivateSbp
             | SoraProfile::PrivateCbuae
+            | SoraProfile::PrivateBpng
             | SoraProfile::Nexus => ConsensusPolicy::PublicDataspace,
         }
     }
@@ -359,6 +362,8 @@ pub(crate) enum PrivateDataspaceArg {
     Sbp,
     /// Central Bank of the UAE dataspace (id 12, lane 4).
     Cbuae,
+    /// Bank of Papua New Guinea local dataspace (id 8648377547929788715, lane 5).
+    Bpng,
 }
 impl From<SoraProfileArg> for SoraProfile {
     fn from(value: SoraProfileArg) -> Self {
@@ -380,6 +385,9 @@ fn resolve_sora_profile(
         }
         (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Cbuae)) => {
             Ok(Some(SoraProfile::PrivateCbuae))
+        }
+        (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Bpng)) => {
+            Ok(Some(SoraProfile::PrivateBpng))
         }
         (Some(SoraProfileArg::Nexus) | None, Some(_)) => Err(eyre!(
             "`--private-dataspace` requires `--sora-profile dataspace`"
@@ -590,6 +598,9 @@ const TAIRA_DIGITAL_SHEKEL_ASSET_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 const TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS: &str = "ds#boi.is";
 const TAIRA_IS_DATASPACE_ID: u64 = 6_647_857_470_246_403_404;
 const TAIRA_IS_LANE_INDEX: u32 = 7;
+const LOCALNET_BPNG_DATASPACE_ID: u64 = 8_648_377_547_929_788_715;
+/// Explicit isolated-localnet placement; public Taira still needs its own allocation.
+const LOCALNET_BPNG_LANE_INDEX: u32 = 5;
 /// Sparse first-release namespace: lanes 5 and 6 remain reserved for BPNG and DPN.
 const TAIRA_LANE_COUNT: i64 = 8;
 /// Match the canonical Taira template reserve while assigning it to the fresh generated operator.
@@ -699,7 +710,28 @@ const CBUAE_TRANSFER_ROUTES: &[PrivateDataspaceRoute] = &[PrivateDataspaceRoute 
     matcher: "transfer::asset@cbuae",
     description: "Route transfer destination alias scope cbuae to the CBUAE lane",
 }];
+const BPNG_ACCOUNT_ROUTES: &[PrivateDataspaceRoute] = &[
+    PrivateDataspaceRoute {
+        matcher: "*@bpng",
+        description: "Route BPNG authority traffic to the BPNG lane",
+    },
+    PrivateDataspaceRoute {
+        matcher: "*@mibank.bpng",
+        description: "Route MiBank alias-scope traffic inside the BPNG dataspace to the BPNG lane",
+    },
+];
+const BPNG_TRANSFER_ROUTES: &[PrivateDataspaceRoute] = &[
+    PrivateDataspaceRoute {
+        matcher: "transfer::asset@bpng",
+        description: "Route transfer destination alias scope bpng to the BPNG lane",
+    },
+    PrivateDataspaceRoute {
+        matcher: "transfer::asset@mibank.bpng",
+        description: "Route transfer destination alias scope mibank.bpng inside the BPNG dataspace to the BPNG lane",
+    },
+];
 const SBP_BOOTSTRAP_DOMAINS: &[&str] = &["hbl.sbp", "ubl.sbp"];
+const BPNG_BOOTSTRAP_DOMAINS: &[&str] = &["mibank.bpng"];
 fn private_dataspace_spec(sora_profile: Option<SoraProfile>) -> Option<PrivateDataspaceSpec> {
     match sora_profile? {
         SoraProfile::Dataspace => Some(PrivateDataspaceSpec {
@@ -729,6 +761,15 @@ fn private_dataspace_spec(sora_profile: Option<SoraProfile>) -> Option<PrivateDa
             account_routes: CBUAE_ACCOUNT_ROUTES,
             transfer_routes: CBUAE_TRANSFER_ROUTES,
         }),
+        SoraProfile::PrivateBpng => Some(PrivateDataspaceSpec {
+            alias: "bpng",
+            id: LOCALNET_BPNG_DATASPACE_ID,
+            lane_index: LOCALNET_BPNG_LANE_INDEX,
+            dataspace_description: "Bank of Papua New Guinea dataspace",
+            lane_description: "Bank of Papua New Guinea private lane",
+            account_routes: BPNG_ACCOUNT_ROUTES,
+            transfer_routes: BPNG_TRANSFER_ROUTES,
+        }),
         SoraProfile::Nexus => None,
     }
 }
@@ -740,6 +781,7 @@ fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> b
                 | SoraProfile::Dataspace
                 | SoraProfile::PrivateSbp
                 | SoraProfile::PrivateCbuae
+                | SoraProfile::PrivateBpng
         )
     )
 }
@@ -1433,7 +1475,7 @@ fn generate_localnet_inner<T: Write>(
     let append_alias_setup_to_current_transaction = npos_bootstrap
         && matches!(
             opts.sora_profile,
-            Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+            Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae | SoraProfile::PrivateBpng)
         );
     genesis = append_localnet_alias_setup(
         genesis,
@@ -1847,7 +1889,12 @@ fn localnet_dataspace_catalog(
                 "Nexus service alias dataspace",
             ),
         ],
-        Some(SoraProfile::Dataspace | SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+        Some(
+            SoraProfile::Dataspace
+            | SoraProfile::PrivateSbp
+            | SoraProfile::PrivateCbuae
+            | SoraProfile::PrivateBpng,
+        )
         | None => Vec::new(),
     };
     if taira {
@@ -1977,7 +2024,7 @@ fn localnet_lane_catalog(
     }
     let private_profile = matches!(
         sora_profile,
-        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae | SoraProfile::PrivateBpng)
     );
     let mut lane_specs = if private_profile {
         vec![
@@ -2068,7 +2115,12 @@ fn localnet_lane_catalog(
                 LOCALNET_NEXUS_ALIAS_LANE_COUNT
             }
         }
-        Some(SoraProfile::Dataspace | SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae) => {
+        Some(
+            SoraProfile::Dataspace
+            | SoraProfile::PrivateSbp
+            | SoraProfile::PrivateCbuae
+            | SoraProfile::PrivateBpng,
+        ) => {
             let spec = private_dataspace_spec(sora_profile)
                 .expect("private dataspace profile must have a typed specification");
             lane_specs.push((
@@ -2180,7 +2232,7 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>, taira: bool) -> Op
             }));
             rules
         }
-        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae) => {
+        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae | SoraProfile::PrivateBpng) => {
             let spec = private_dataspace_spec(sora_profile)
                 .expect("private dataspace profile must have a typed specification");
             let mut rules = spec
@@ -2255,7 +2307,12 @@ fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<Lan
             lanes.push(LaneId::new(LOCALNET_PAYNET_ALIAS_LANE_INDEX));
             lanes.push(LaneId::new(LOCALNET_CBUAE_ALIAS_LANE_INDEX));
         }
-        Some(SoraProfile::Dataspace | SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+        Some(
+            SoraProfile::Dataspace
+            | SoraProfile::PrivateSbp
+            | SoraProfile::PrivateCbuae
+            | SoraProfile::PrivateBpng,
+        )
         | None => {}
     }
     lanes
@@ -4296,6 +4353,7 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
     let domains: &[&str] = match sora_profile {
         Some(SoraProfile::PrivateSbp) => SBP_BOOTSTRAP_DOMAINS,
         Some(SoraProfile::PrivateCbuae) => &[],
+        Some(SoraProfile::PrivateBpng) => BPNG_BOOTSTRAP_DOMAINS,
         _ => return Ok(genesis),
     };
     let spec = private_dataspace_spec(sora_profile)

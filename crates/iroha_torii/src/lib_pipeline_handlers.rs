@@ -1520,11 +1520,11 @@ fn execute_pipeline_status_local_read(
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
-    let local_entry = if matches!(read_scope, PipelineStatusReadScope::Local) {
-        pipeline_status_local_entry_checked(app, &hash)?
-    } else {
-        pipeline_status_terminal_or_state_entry(app, &hash)?
-    };
+    // A pending input is an existence hint for both scopes. Global fanout
+    // must not report exact absence while one routed coordinator still owns
+    // the accepted input or its block-pipeline cache entry. The checked
+    // lookup keeps canonical committed outcomes ahead of all such hints.
+    let local_entry = pipeline_status_local_entry_checked(app, &hash)?;
     if let Some((entry, resolved_from)) = local_entry {
         return Ok(pipeline_status_response_with_route(
             &hash,
@@ -1596,6 +1596,40 @@ async fn pipeline_status_hinted_global_response(
     let response = Response::from_parts(parts, Body::from(bytes));
     Ok(is_terminal.then_some(response))
 }
+#[cfg(feature = "app_api")]
+async fn pipeline_status_global_response_with_local_hint(
+    response: Response,
+    local_hint: Option<(PipelineStatusEntry, &'static str)>,
+    hash: &HashOf<SignedTransaction>,
+    format: ResponseFormat,
+    max_response_bytes: usize,
+) -> Response {
+    // Routed committed outcomes take precedence over a lagging ingress
+    // queue. Keep a local existence hint only after complete exact absence
+    // across the routed coordinators; failed fanout cannot establish absence.
+    if response.status() != StatusCode::NOT_FOUND || local_hint.is_none() {
+        return response;
+    }
+    if let Err(response) = validate_pipeline_status_absence_response(
+        response,
+        hash,
+        PipelineStatusReadScope::Global,
+        max_response_bytes,
+    )
+    .await
+    {
+        return response;
+    }
+    let (entry, source) = local_hint.expect("local hint presence checked");
+    pipeline_status_response_with_route(
+        hash,
+        &entry,
+        PipelineStatusReadScope::Global,
+        source,
+        format,
+        None,
+    )
+}
 async fn handler_pipeline_transaction_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -1623,14 +1657,18 @@ async fn handler_pipeline_transaction_status(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
-    let local = execute_pipeline_status_local_read(&app, &query, format, None)?;
-    if local.status() != StatusCode::NOT_FOUND
-        || matches!(read_scope, PipelineStatusReadScope::Local)
-    {
-        return Ok(local);
+    let local_hint = pipeline_status_local_entry_checked(&app, &hash)?;
+    if let Some((entry, source)) = local_hint.as_ref() {
+        if matches!(read_scope, PipelineStatusReadScope::Local) || *source == "state" {
+            return Ok(pipeline_status_response_with_route(
+                &hash, entry, read_scope, source, format, None,
+            ));
+        }
+    } else if matches!(read_scope, PipelineStatusReadScope::Local) {
+        return Ok(pipeline_status_not_found_response(
+            &hash, read_scope, format,
+        ));
     }
-    // This helper emits only exact scoped absence. Global absence still needs all routes.
-    drop(local);
     #[cfg(feature = "app_api")]
     {
         let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
@@ -1662,7 +1700,15 @@ async fn handler_pipeline_transaction_status(
                 Err(response) => return Ok(response),
             }
         }
-        Ok(execute_torii_public_pipeline_status_fanout(&app, query_string).await)
+        let routed = execute_torii_public_pipeline_status_fanout(&app, query_string).await;
+        Ok(pipeline_status_global_response_with_local_hint(
+            routed,
+            local_hint,
+            &hash,
+            format,
+            app.torii_proxy_max_response_bytes,
+        )
+        .await)
     }
     #[cfg(not(feature = "app_api"))]
     {

@@ -66,7 +66,7 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
     }
 
     companion object {
-        private val expectedContract = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        private val expectedContract = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
 
         /** Open the exact native ABI. Missing JNI/backend or a mismatched contract fails closed. */
         @JvmStatic

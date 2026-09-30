@@ -30,6 +30,8 @@ compiler checks. Successful patch generation does not prove trait-impl uniquenes
 Every file and mapping is verified before any patch is printed. Sources remain
 untouched; apply the complete reviewed diff with the existing patch tool. No
 multi-file filesystem transaction or automatic capture qualification is claimed.
+JSON mapping inputs have a 32 MiB resource limit. Source reads verify the held
+descriptor's observed length and identity before and after reading.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-MAX_BYTES = 32 * 1024 * 1024
+MAX_MAPPING_BYTES = 32 * 1024 * 1024
 IDENTIFIER = re.compile(r"(?:r#)?[A-Za-z_][A-Za-z_0-9]*\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 RAW_STRING = re.compile(r'(?:br|cr|r)(#*)"')
@@ -119,8 +121,9 @@ def literal(value: object) -> str:
 
 
 def load_mapping(path: Path) -> list[dict]:
-    raw = path.read_bytes()
-    if len(raw) > MAX_BYTES:
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_MAPPING_BYTES + 1)
+    if len(raw) > MAX_MAPPING_BYTES:
         raise MappingError("mapping exceeds the size limit")
     document = fields(json.loads(raw, object_pairs_hook=strict_object), {"schema", "files"})
     if type(document["schema"]) is not int or document["schema"] != 1:
@@ -178,14 +181,14 @@ def read_source(root: Path, name: str) -> bytes:
     descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_BYTES:
-            raise MappingError(f"source must be a bounded regular file: {name}")
+        if not stat.S_ISREG(before.st_mode):
+            raise MappingError(f"source must be a regular file: {name}")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            data = stream.read(MAX_BYTES + 1)
+            data = stream.read(before.st_size + 1)
         after = os.fstat(descriptor)
         current = path.lstat()
         identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
-        if len(data) > MAX_BYTES or identity(before) != identity(after) or identity(after) != identity(current):
+        if len(data) != before.st_size or identity(before) != identity(after) or identity(after) != identity(current):
             raise MappingError(f"source changed while reading: {name}")
         data.decode("utf-8")
         if b"\x00" in data:
@@ -198,11 +201,10 @@ def read_source(root: Path, name: str) -> bytes:
 def tokenize(source: bytes) -> list[Token]:
     """Lex the bounded Rust subset, excluding comments and treating literals atomically."""
     text = source.decode("utf-8")
-    offsets = [0]
-    for char in text:
-        offsets.append(offsets[-1] + len(char.encode("utf-8")))
     tokens: list[Token] = []
     index = 0
+    previous_index = 0
+    byte_offset = 0
     while index < len(text):
         start = index
         char = text[index]
@@ -259,7 +261,13 @@ def tokenize(source: bytes) -> list[Token]:
                 index += 2
             else:
                 index += 1
-        tokens.append(Token(text[start:index], offsets[start], offsets[index]))
+        # Byte positions advance over skipped trivia and tokens once; large
+        # comments need no separate integer offset for every character.
+        byte_offset += len(text[previous_index:start].encode("utf-8"))
+        end_byte = byte_offset + len(text[start:index].encode("utf-8"))
+        tokens.append(Token(text[start:index], byte_offset, end_byte))
+        previous_index = index
+        byte_offset = end_byte
     return tokens
 
 

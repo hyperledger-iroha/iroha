@@ -4222,7 +4222,7 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
             Some("`get_blob_hex(...)` was removed as a free helper; use `json.get_blob_hex(key)`")
         }
         "state_map_get" => Some("`state_map_get(...)` is compiler-internal; use `map.get(key)`"),
-        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or" => {
+        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or" | "expect" => {
             Some("Option/Result inspection is method-only; call the method on the value")
         }
         "option_some" | "option_none" | "result_ok" | "result_err" => Some(

@@ -25,6 +25,9 @@ class KagemushaReserveFinalityV1Test {
         val bytes = checkpoint()
         val anchor = KagemushaFinalityTrustAnchorV1(network, bytes)
         assertArrayEquals(bytes, anchor.checkpoint())
+        assertEquals(bytes.size, anchor.checkpointByteCount())
+        anchor.checkpoint().fill(0)
+        assertEquals(bytes.size, anchor.checkpointByteCount())
         assertTrue(bytes.size > 32)
     }
     @Test fun anchorRejectsEmptyAndOversizedCheckpoints() {

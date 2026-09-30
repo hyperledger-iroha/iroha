@@ -230,6 +230,8 @@ fn every_pass_visits_exactly_the_canonical_fields() {
         accumulator: WorldStateAccumulator::empty(),
         direction: Direction::Capture,
         visited: vec![false; index.canonical],
+        snapshot: None,
+        snapshot_field: None,
     };
     assert!(
         builder
@@ -383,6 +385,8 @@ fn incremental_encoding_is_limited_to_touched_values() {
         accumulator,
         direction,
         visited: vec![false; index.canonical],
+        snapshot: None,
+        snapshot_field: None,
     };
     let mut initial = builder(WorldStateAccumulator::empty(), Direction::Capture);
     initial
@@ -430,6 +434,8 @@ fn field_identity_and_kind_are_bound_into_each_entry() {
             accumulator: WorldStateAccumulator::empty(),
             direction: Direction::Capture,
             visited: vec![false; index.canonical],
+            snapshot: None,
+            snapshot_field: None,
         };
         builder
             .append_storage_with(name, &block, hash_value)
@@ -446,6 +452,8 @@ fn field_identity_and_kind_are_bound_into_each_entry() {
         accumulator: WorldStateAccumulator::empty(),
         direction: Direction::Capture,
         visited: vec![false; index.canonical],
+        snapshot: None,
+        snapshot_field: None,
     };
     assert!(
         builder

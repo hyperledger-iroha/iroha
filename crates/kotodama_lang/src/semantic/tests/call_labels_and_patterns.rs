@@ -139,12 +139,8 @@ fn mixed_source_call_evaluates_in_source_order() {
 }
 
 #[test]
-fn explicit_call_modes_reject_the_other_source_spelling() {
+fn positional_only_call_modes_reject_names() {
     for (source, code) in [
-        (
-            "fn target(int value) -> int { value } fn main() -> int { target(1) }",
-            "E_NAMED_ARGUMENTS_REQUIRED",
-        ),
         (
             "fn target(int _ value) -> int { value } fn main() -> int { target(value: 1) }",
             "E_POSITIONAL_ARGUMENT_REQUIRED",

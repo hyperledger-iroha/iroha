@@ -394,6 +394,11 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
                 Ok(response)
             }
             phase if phase == 2_u32.to_le_bytes() => {
+                // The same original preparation must have passed phase 8 before the platform
+                // attestation action. A later valid token cannot replace that retained attempt.
+                if owner.app_preparation.as_deref() != Some(fields[2].as_slice()) {
+                    return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+                }
                 let qualified = self
                     .qualified_enrollment
                     .as_ref()

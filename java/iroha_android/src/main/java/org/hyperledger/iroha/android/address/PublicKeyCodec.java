@@ -2,7 +2,7 @@ package org.hyperledger.iroha.android.address;
 
 import java.util.Arrays;
 import java.util.Locale;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 import org.hyperledger.iroha.norito.Varint;
 

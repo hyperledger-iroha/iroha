@@ -1183,6 +1183,8 @@ pub mod kagemusha {
     pub const REDEEM_PATH: &str = "/v1/kagemusha/redeem";
     /// Fetch one KAGEMUSHA operation by its canonical operation ID.
     pub const OPERATION_PATH: &str = "/v1/kagemusha/operations/{operation_id}";
+    /// Read challenged complete native World content for one current asset definition.
+    pub const AUTHORITY_STATE_PATH: &str = "/v1/kagemusha/authority-state/{asset_definition_id}";
     /// Descriptor for universal KAGEMUSHA readiness discovery.
     pub const READINESS: RouteDescriptor = RouteDescriptor::new(
         "kagemusha.readiness",
@@ -1237,8 +1239,16 @@ pub mod kagemusha {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
+    /// Data-only complete World publication; clients independently select finality authority.
+    pub const AUTHORITY_STATE: RouteDescriptor = RouteDescriptor::new(
+        "kagemusha.authority_state", HttpMethod::Get, AUTHORITY_STATE_PATH,
+        ApiSurface::Public, Listener::Torii, RouteEffect::ReadOnly, AdmissionPolicy::Public,
+    )
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::OPENAPI)
+    .with_cors_options(true);
     /// Canonical first-release KAGEMUSHA API catalog.
-    pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];
+    pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION, AUTHORITY_STATE];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {

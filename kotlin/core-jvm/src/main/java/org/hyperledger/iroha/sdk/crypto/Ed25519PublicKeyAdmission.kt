@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.crypto
 
 import java.math.BigInteger
+import java.util.LinkedHashMap
 import org.bouncycastle.math.ec.rfc8032.Ed25519
 
 /** Strict admission checks for canonical prime-order Ed25519 public keys. */
@@ -25,12 +26,21 @@ object Ed25519PublicKeyAdmission {
     private val EXTENDED_IDENTITY =
         ExtendedPoint(BigInteger.ZERO, BigInteger.ONE, BigInteger.ONE, BigInteger.ZERO)
 
+    // A key is cached only after the complete canonical/subgroup check. These are
+    // public points, not signatures, account ownership, policy or release authority.
+    private val admittedPoints = PositivePublicKeyAdmissionCache(256, ::isValidUncached)
+
     /** Returns `true` only for canonical points in the prime-order Ed25519 subgroup. */
     @JvmStatic
     fun isValid(publicKey: ByteArray?): Boolean {
         if (publicKey == null || publicKey.size != PUBLIC_KEY_LENGTH) return false
 
-        val encoded = publicKey.copyOf()
+        return admittedPoints.isValid(publicKey)
+    }
+
+    // Kept separate so cache tests and timing samples exercise the unchanged full check.
+    internal fun isValidUncached(encoded: ByteArray): Boolean {
+        if (encoded.size != PUBLIC_KEY_LENGTH) return false
         // Bouncy Castle's partial validator is only a curve/decompression
         // prefilter. Prime-order admission is enforced explicitly below so
         // mixed-torsion points cannot pass through provider-specific behavior.
@@ -137,4 +147,39 @@ object Ed25519PublicKeyAdmission {
         val z: BigInteger,
         val t: BigInteger,
     )
+}
+
+
+/** Bounded positive-only memoization, private to each owner's immutable byte snapshots. */
+internal class PositivePublicKeyAdmissionCache(
+    private val maximumEntries: Int,
+    private val validate: (ByteArray) -> Boolean,
+) {
+    init { require(maximumEntries > 0) }
+
+    private val admitted = object : LinkedHashMap<PublicPoint, Boolean>(maximumEntries, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<PublicPoint, Boolean>): Boolean =
+            size > maximumEntries
+    }
+
+    fun isValid(publicKey: ByteArray): Boolean {
+        if (publicKey.size != Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH) return false
+        // Both lookup and full validation use this one owned snapshot. Caller mutation
+        // cannot replace a cache key between admission and insertion.
+        val snapshot = publicKey.copyOf()
+        val point = PublicPoint(snapshot)
+        synchronized(admitted) { if (admitted[point] == true) return true }
+        // Expensive arithmetic does not hold the cache lock. Concurrent misses can
+        // redundantly validate a point; each insertion still requires its full check.
+        if (!validate(snapshot)) return false
+        synchronized(admitted) { admitted[point] = true }
+        return true
+    }
+
+    private class PublicPoint(private val encoded: ByteArray) {
+        private val contentHash = encoded.contentHashCode()
+        override fun hashCode(): Int = contentHash
+        override fun equals(other: Any?): Boolean =
+            other is PublicPoint && encoded.contentEquals(other.encoded)
+    }
 }

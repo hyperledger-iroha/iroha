@@ -966,10 +966,21 @@ fn fresh_admission_rechecks_original_deadline_at_handoff() {
         )
         .unwrap();
 
+    use crate::kagemusha_core_coordinator_v1::startup_qualification::{
+        NativeStartupQualificationOwnerV1, ObservationErrorV1,
+    };
+
     assert_eq!(admission.require_live(), Ok(()));
+    // Startup pinning consumes the same admission freshness contract, without projecting
+    // or renewing its original ticket or native deadline.
+    assert!(NativeStartupQualificationOwnerV1::from_fresh_issuer_admission(&admission).is_ok());
     admission.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         admission.require_live(),
         Err(InitialEnrollmentErrorV1::Expired)
+    );
+    assert_eq!(
+        NativeStartupQualificationOwnerV1::from_fresh_issuer_admission(&admission).err(),
+        Some(ObservationErrorV1::Expired)
     );
 }

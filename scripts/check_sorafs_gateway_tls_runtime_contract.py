@@ -20,7 +20,6 @@ from sorafs_evidence_paths import (  # noqa: E402
 )
 
 REQUIRED_RUNTIME_NOTICE = "> **Runtime ACME boundary (V1):**"
-MAX_CONTRACT_SOURCE_BYTES = 8 * 1024 * 1024
 FORBIDDEN_DOC_CLAIMS = (
     "sorafs-gateway tls renew",
     "fall back to stored cert",
@@ -223,7 +222,7 @@ def _read(
     relative: str,
     failures: list[str],
 ) -> str | None:
-    """Read one bounded, regular, repository-contained UTF-8 source file."""
+    """Read one stable, regular, repository-contained UTF-8 source file."""
 
     path = root_identity / relative
     identity_errors: list[str] = []
@@ -242,7 +241,9 @@ def _read(
         failures.append(f"{relative}:unsafe-or-unresolvable-source")
         return None
     try:
-        raw = read_evidence_bytes(path, MAX_CONTRACT_SOURCE_BYTES)
+        # The reader bounds allocation to this exact observed inode size and
+        # rejects growth or replacement; implementation size is not policy.
+        raw = read_evidence_bytes(path, max(1, path.stat().st_size))
         return raw.decode("utf-8")
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
         failures.append(f"{relative}:unreadable-or-oversized-source")

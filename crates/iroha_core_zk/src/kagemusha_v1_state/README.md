@@ -145,11 +145,18 @@ Checkpoint responses remain in the hardware terminal slot before appending them
 to the response archive, avoiding a commitment that includes its own signature.
 
 
-No production bootstrap staging entry point is wired yet: the only owner entry is the
-synthetic `stage_bootstrap_for_test`, compiled for Unix unit tests. A production entry must
-derive the immutable retail account/FI/dataspace/asset/lane binding and original credential
-from an opaque verified enrollment certificate whose verification instant equals the
-hardware-bound bootstrap time. Historical restore instead compares the
+`KagemushaAuthenticatedCoreOwnerV1::stage_enrolled_bootstrap` is the concrete production
+fresh-lane entry. It consumes opaque verified retail enrollment and account/device possession,
+compares their complete owner, credential, issuer, app assertion and proof commitment, and
+requires the same current verification instant. It derives the exact lane, asset incarnation,
+profile, epoch, provider-policy root and credential from these originals and the actual
+production recursive verifier. Both the paired Bootstrap proof and Guard proof must verify
+before a new private history directory is created. Its opaque pending result retains the real
+verifiers and journal owners; a machine becomes usable only after no-replace journal publication,
+the original INITIAL hardware checkpoint CAS, and a fresh current hardware selection.
+The generic `stage_bootstrap_for_test` remains absent from non-test artifacts. Service integration
+must independently authenticate current ledger asset/release state and consume the retained
+one-use enrollment challenge; this native stage does not supply either authority. Historical restore instead compares the
 exact caller-selected owner with the hardware-selected complete snapshot; it does not
 require current KYC or a renewed enrollment certificate to recover committed work.
 

@@ -355,6 +355,7 @@ object ContractManifestJsonParser {
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     )
     private val retiredNumericTypeNames = setOf(
         "i8",

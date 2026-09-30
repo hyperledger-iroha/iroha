@@ -71,6 +71,13 @@ class KagemushaCoreCoordinatorBridgeV1Test {
 
     @Test
     fun `missing backend or drifted ABI never opens the coordinator`() {
+        for (retiredAbi in listOf(23, 24)) {
+            val retired = Endpoint().apply { contractWords[1] = retiredAbi }
+            assertFailsWith<IllegalStateException> {
+                KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", retired)
+            }
+            assertEquals(0, retired.openCalls)
+        }
         val mismatch = Endpoint().apply { contractWords[0] = 1 }
         assertFailsWith<IllegalStateException> { KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", mismatch) }
         assertEquals(0, mismatch.openCalls)
@@ -144,7 +151,7 @@ class KagemushaCoreCoordinatorBridgeV1Test {
     }
 
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
-        val contractWords = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        val contractWords = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         var openCalls = 0
         var invokeCalls = 0
         var closeCalls = 0

@@ -67,6 +67,8 @@ mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_commands;
+#[cfg(feature = "app_api")]
+mod kagemusha_state;
 mod ledger_state_finality;
 mod nft_market;
 mod operator_auth;
@@ -38716,6 +38718,7 @@ impl Torii {
             TOP_UP => limited_canonical_signed_post(handler_kagemusha_top_up, kagemusha_top_up_body_limit_bytes);
             REDEEM => limited_canonical_signed_post(handler_kagemusha_redeem, kagemusha_redeem_body_limit_bytes);
             OPERATION => public_get(handler_kagemusha_operation_status);
+            AUTHORITY_STATE => public_get(kagemusha_state::handler);
         );
         mount_catalog_route_rows!(
             builder, application_api;

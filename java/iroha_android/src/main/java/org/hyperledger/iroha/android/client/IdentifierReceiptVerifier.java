@@ -4,7 +4,7 @@ import java.util.Objects;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;

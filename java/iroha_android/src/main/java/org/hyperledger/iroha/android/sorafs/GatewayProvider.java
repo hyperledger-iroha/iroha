@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.sorafs;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 
 /**
  * Descriptor for a SoraFS gateway provider.

@@ -9,7 +9,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
-import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKeyAdmission;
 
 public final class AccountAddress {

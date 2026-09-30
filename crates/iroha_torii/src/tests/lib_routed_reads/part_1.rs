@@ -2900,6 +2900,87 @@ async fn merged_space_directory_bindings_response_unions_accounts_and_omits_sing
 }
 
 #[tokio::test]
+async fn pipeline_status_global_resolution_prefers_routed_terminal_over_local_queue() {
+    let hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    for kind in ["Applied", "Rejected"] {
+        let response = pipeline_status_global_response_with_local_hint(
+            pipeline_status_hint_response(kind, "state"),
+            Some((
+                PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+                "queue",
+            )),
+            &hash,
+            ResponseFormat::Json,
+            ROUTED_READ_TEST_BODY_BYTES,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = response_json(response).await;
+        assert_eq!(payload["status"]["kind"].as_str(), Some(kind));
+        assert_eq!(payload["resolved_from"].as_str(), Some("state"));
+    }
+}
+#[tokio::test]
+async fn pipeline_status_global_resolution_preserves_pending_and_refuses_unavailable_absence() {
+    let hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    let remote_pending = pipeline_status_global_response_with_local_hint(
+        pipeline_status_hint_response("Queued", "queue"),
+        None,
+        &hash,
+        ResponseFormat::Json,
+        ROUTED_READ_TEST_BODY_BYTES,
+    )
+    .await;
+    assert_eq!(remote_pending.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(remote_pending).await["status"]["kind"].as_str(),
+        Some("Queued")
+    );
+    let ingress_pending = pipeline_status_global_response_with_local_hint(
+        pipeline_status_not_found_response(
+            &hash,
+            PipelineStatusReadScope::Global,
+            ResponseFormat::Json,
+        ),
+        Some((
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+            "queue",
+        )),
+        &hash,
+        ResponseFormat::Json,
+        ROUTED_READ_TEST_BODY_BYTES,
+    )
+    .await;
+    assert_eq!(ingress_pending.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(ingress_pending).await["status"]["kind"].as_str(),
+        Some("Queued")
+    );
+    for local_hint in [
+        None,
+        Some((
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+            "queue",
+        )),
+    ] {
+        let unavailable = pipeline_status_global_response_with_local_hint(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "peer offline",
+            ),
+            local_hint,
+            &hash,
+            ResponseFormat::Json,
+            ROUTED_READ_TEST_BODY_BYTES,
+        )
+        .await;
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+#[tokio::test]
 async fn pipeline_status_fanout_requires_exact_scoped_absence() {
     let routes = [
         RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),

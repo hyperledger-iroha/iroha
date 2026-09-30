@@ -174,7 +174,7 @@ impl Clone for TypeExpr {
 /// Explicit source-call spelling of a parameter.
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 pub enum ParameterCallMode {
-    /// `Type name`: callers supply the parameter name.
+    /// `Type name`: callers may use the parameter name or its positional slot.
     #[default]
     Named,
     /// `Type _ name`: callers supply an unlabeled positional argument.

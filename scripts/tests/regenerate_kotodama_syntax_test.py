@@ -227,6 +227,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     ):
         assert f'"{intrinsic}",' in semantic_policy
 
@@ -242,6 +243,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     ):
         assert f'"{intrinsic}",' in rust_policy
     assert '"__kotodama_link_"' in rust_policy

@@ -12,6 +12,43 @@ fn graph(root: &Path) -> ContextGraph {
     inventory_contexts(root, &["src/entry.rs".into()]).unwrap()
 }
 
+#[test]
+fn large_comments_preserve_root_and_included_file_ownership() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let mut source = String::from("/*");
+    source.extend(std::iter::repeat_n(' ', 32 * 1024 * 1024 + 1));
+    source.push_str("*/\ninclude!(\"large.inc\");\n");
+    put(root, "src/entry.rs", &source);
+    let included = source.replace("include!(\"large.inc\");", "pub struct Included;");
+    put(root, "src/large.inc", &included);
+    let report = graph(root);
+    assert!(!report.invalid_sources);
+    assert_eq!(report.files.len(), 2);
+    assert_eq!(report.contexts.len(), 2);
+    assert_eq!(report.edges.len(), 1);
+    assert!(report.edges[0].to.is_some());
+    for (name, expected) in [("src/entry.rs", &source), ("src/large.inc", &included)] {
+        let file = report.files.iter().find(|file| file.path == name).unwrap();
+        assert_eq!(file.bytes, expected.len());
+        assert_eq!(
+            file.sha256,
+            hex::encode(Sha256::digest(expected.as_bytes()))
+        );
+    }
+    let included_file = report
+        .files
+        .iter()
+        .find(|file| file.path == "src/large.inc")
+        .unwrap();
+    assert_eq!(included_file.declarations[0].identifier, "Included");
+    assert_eq!(
+        included_file.declarations[0].span.source,
+        "pub struct Included;"
+    );
+    assert_eq!(report.contexts[1].file, "src/large.inc");
+}
+
 fn compile(root: &Path) {
     let output =
         std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))

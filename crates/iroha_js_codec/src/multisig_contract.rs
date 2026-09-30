@@ -10,7 +10,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::json;
-use std::str::FromStr;
+use std::{num::NonZeroU64, str::FromStr};
 
 /// Produce exact native instruction JSON, metadata and proposal hash.
 /// Inputs must come from the caller's independently pinned contract release and
@@ -41,6 +41,7 @@ pub fn build_canonical_multisig_contract_call_json(
             "payload",
             "arguments_hex",
             "code_hash_hex",
+            "creation_time_ms",
         ],
         "contract multisig input",
     )?;
@@ -73,6 +74,11 @@ pub fn build_canonical_multisig_contract_call_json(
         return Err(CodecError::failure("noncanonical contract alias"));
     }
     let code_hash = parse_code_hash_hex(string("code_hash_hex")?)?;
+    let attempt_created_at_ms = object
+        .get("creation_time_ms")
+        .and_then(json::Value::as_u64)
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| CodecError::failure("exact positive creation_time_ms required"))?;
     let arguments = parse_arguments_hex(object.get("arguments_hex"))?;
     let payload = match object.get("payload") {
         Some(value @ json::Value::Object(_)) => Json::new(value.clone()),
@@ -88,6 +94,7 @@ pub fn build_canonical_multisig_contract_call_json(
         &payload,
         arguments,
         &code_hash,
+        attempt_created_at_ms,
     )
     .map_err(codec_error)?;
     let instructions = call
@@ -175,6 +182,7 @@ mod tests {
             "payload": {"proposal_id": "case-1"},
             "arguments_hex": null,
             "code_hash_hex": (hex::encode(code_hash.as_ref())),
+            "creation_time_ms": 1,
         });
         let input = json::to_json(&input).expect("input JSON");
         let result = build_canonical_multisig_contract_call_json(&input, 369)
@@ -188,6 +196,7 @@ mod tests {
             &payload,
             None,
             &code_hash,
+            NonZeroU64::new(1).unwrap(),
         )
         .expect("expected call");
         let expected_instructions = expected
@@ -208,6 +217,34 @@ mod tests {
             value["metadata"],
             json::to_value(&expected.metadata).expect("native metadata"),
         );
+        let mut refreshed: json::Value = json::from_json(&input).unwrap();
+        refreshed
+            .as_object_mut()
+            .unwrap()
+            .insert("creation_time_ms".into(), json::Value::from(2_u64));
+        let retry: json::Value = json::from_json(
+            &build_canonical_multisig_contract_call_json(&json::to_json(&refreshed).unwrap(), 369)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_ne!(value["instructions_hash"], retry["instructions_hash"]);
+        for invalid in [
+            json::Value::from(0_u64),
+            json::Value::Null,
+            json::Value::String("1".into()),
+        ] {
+            refreshed
+                .as_object_mut()
+                .unwrap()
+                .insert("creation_time_ms".into(), invalid);
+            assert!(
+                build_canonical_multisig_contract_call_json(
+                    &json::to_json(&refreshed).unwrap(),
+                    369
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

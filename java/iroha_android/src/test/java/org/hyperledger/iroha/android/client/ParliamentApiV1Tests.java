@@ -62,7 +62,7 @@ public final class ParliamentApiV1Tests {
     final Map<String, Object> wireIds = objectValue(fixture.get("wire_ids"));
     assertEquals(ParliamentApiV1.ATTEMPT_CREATE_WIRE_ID, wireIds.get("attempt_create"));
     assertEquals(ParliamentApiV1.TRANSITION_SUBMIT_WIRE_ID, wireIds.get("transition_submit"));
-    assertEquals(ParliamentApiV1.PROPOSAL_KINDS, fixture.get("proposal_kinds"));
+    assertEquals(org.hyperledger.iroha.sdk.client.ParliamentApiV1.PROPOSAL_KINDS, fixture.get("proposal_kinds"));
     assertEquals(
         ParliamentApiV1.CONTRACT_LIFECYCLE_ACTIONS,
         fixture.get("contract_lifecycle_actions"));
@@ -231,15 +231,15 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
-  public void attemptBuilderAdmitsExactlyTheTenFirstReleaseProposalKinds() {
-    for (final String kind : ParliamentApiV1.PROPOSAL_KINDS) {
+  public void attemptBuilderAdmitsExactlyTheThirteenFirstReleaseProposalKinds() throws Exception {
+    for (final String kind : org.hyperledger.iroha.sdk.client.ParliamentApiV1.PROPOSAL_KINDS) {
       final Map<String, Object> request =
           objectValue(
-              ParliamentApiV1.attemptDraftRequestJson(
+              org.hyperledger.iroha.sdk.client.ParliamentApiV1.attemptDraftRequestJson(
                   proposal(kind), 0));
       assertEquals(kind, objectValue(request.get("proposal")).get("kind"));
     }
-    assertEquals(10, ParliamentApiV1.PROPOSAL_KINDS.size());
+    assertEquals(13, org.hyperledger.iroha.sdk.client.ParliamentApiV1.PROPOSAL_KINDS.size());
 
     final Map<String, Object> fullU64Policy = validProposal("ValidationFeePolicy");
     final Map<String, Object> fullU64PolicyValue =
@@ -247,7 +247,7 @@ public final class ParliamentApiV1Tests {
     fullU64PolicyValue.put("policy_version", "18446744073709551615");
     fullU64PolicyValue.put("previous_policy_hash", repeatedNumbers(32, 1));
     fullU64PolicyValue.put("effective_from_height", "18446744073709551615");
-    ParliamentApiV1.Proposal.fromJson(encode(fullU64Policy));
+    org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(fullU64Policy));
 
     for (final String kind :
         List.of(
@@ -260,15 +260,15 @@ public final class ParliamentApiV1Tests {
       assertThrows(
           IllegalArgumentException.class,
           () ->
-              ParliamentApiV1.attemptDraftRequestJson(
-                  ParliamentApiV1.Proposal.fromJson(
+              org.hyperledger.iroha.sdk.client.ParliamentApiV1.attemptDraftRequestJson(
+                  org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(
                       bytes("{\"kind\":\"" + kind + "\",\"payload\":{}}")),
                   0));
     }
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            ParliamentApiV1.Proposal.fromJson(
+            org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(
                 bytes("{\"proposal_kind\":\"RuntimeUpgrade\",\"payload\":{}}")));
   }
 
@@ -300,7 +300,7 @@ public final class ParliamentApiV1Tests {
       }
       objectValue(proposal.get("payload"))
           .put("action", map("action", action, "payload", actionPayload));
-      ParliamentApiV1.Proposal.fromJson(encode(proposal));
+      org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(proposal));
     }
 
     final Map<String, Object> proposal = validProposal("ContractLifecycleGovernance");
@@ -308,7 +308,7 @@ public final class ParliamentApiV1Tests {
         .put("action", map("action", "Unknown", "payload", null));
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(proposal)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(proposal)));
   }
 
   @Test
@@ -318,7 +318,7 @@ public final class ParliamentApiV1Tests {
             sccpSubject("parameters", null),
             sccpSubject("light_client", bscMainnet()),
             sccpSubject("bridge_key_fault", "ea0130" + "AB".repeat(48)))) {
-      ParliamentApiV1.Proposal.fromJson(
+      org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(
           sccpProposal(proposal -> proposal.put("base_revisions", List.of(subject))));
     }
 
@@ -356,7 +356,7 @@ public final class ParliamentApiV1Tests {
     for (final Consumer<Map<String, Object>> edit : rejected) {
       final byte[] encoded = sccpProposal(edit);
       assertThrows(
-          IllegalArgumentException.class, () -> ParliamentApiV1.Proposal.fromJson(encoded));
+          IllegalArgumentException.class, () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encoded));
     }
 
     final Map<String, Object> anchorProposal = validProposal("SccpRouteGovernance");
@@ -364,7 +364,7 @@ public final class ParliamentApiV1Tests {
         "payload", map("anchor", map("network_id", networkId(), "action", map())));
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(anchorProposal)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(anchorProposal)));
   }
 
   @Test
@@ -372,17 +372,17 @@ public final class ParliamentApiV1Tests {
     for (final String kind :
         List.of("DeployContract", "RuntimeUpgrade", "ContractLifecycleGovernance")) {
       final Map<String, Object> valid = validProposal(kind);
-      ParliamentApiV1.Proposal.fromJson(encode(valid));
+      org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(valid));
 
       final Map<String, Object> payload = objectValue(valid.get("payload"));
       payload.remove("proposal_operator");
       assertThrows(
           IllegalArgumentException.class,
-          () -> ParliamentApiV1.Proposal.fromJson(encode(valid)));
+          () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(valid)));
       payload.put("proposal_operator", "not-an-account");
       assertThrows(
           IllegalArgumentException.class,
-          () -> ParliamentApiV1.Proposal.fromJson(encode(valid)));
+          () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(valid)));
     }
   }
 
@@ -393,12 +393,12 @@ public final class ParliamentApiV1Tests {
       final Map<String, Object> proposal = validProposal("ContractLifecycleGovernance");
       final Map<String, Object> payload = objectValue(proposal.get("payload"));
       payload.put("action", map("action", action, "payload", null));
-      ParliamentApiV1.Proposal.fromJson(encode(proposal));
+      org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(proposal));
 
       objectValue(payload.get("action")).remove("payload");
       assertThrows(
           IllegalArgumentException.class,
-          () -> ParliamentApiV1.Proposal.fromJson(encode(proposal)));
+          () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(proposal)));
     }
   }
 
@@ -409,7 +409,7 @@ public final class ParliamentApiV1Tests {
           validProposal("GlobalDataTriggerPermissionGovernance");
       objectValue(proposal.get("payload"))
           .put("action", map("action", action, "value", null));
-      ParliamentApiV1.Proposal.fromJson(encode(proposal));
+      org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(proposal));
     }
 
     final Map<String, Object> malformed =
@@ -419,19 +419,19 @@ public final class ParliamentApiV1Tests {
     action.put("value", new java.util.LinkedHashMap<String, Object>());
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(malformed)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(malformed)));
     action.put("value", null);
     action.put("action", "delegate");
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(malformed)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(malformed)));
   }
 
   @Test
   public void attemptDraftSequenceAcceptsSixteenAndRejectsSeventeen() {
     final Map<String, Object> accepted =
         objectValue(
-            ParliamentApiV1.attemptDraftRequestJson(
+            org.hyperledger.iroha.sdk.client.ParliamentApiV1.attemptDraftRequestJson(
                 proposal("RuntimeUpgrade"),
                 ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES));
     assertEquals(
@@ -440,7 +440,7 @@ public final class ParliamentApiV1Tests {
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            ParliamentApiV1.attemptDraftRequestJson(
+            org.hyperledger.iroha.sdk.client.ParliamentApiV1.attemptDraftRequestJson(
                 proposal("RuntimeUpgrade"),
                 (long) ParliamentApiV1.MAX_GOVERNANCE_ATTEMPT_RETRIES + 1L));
   }
@@ -451,14 +451,14 @@ public final class ParliamentApiV1Tests {
     objectValue(objectValue(runtime.get("payload")).get("manifest")).remove("provenance");
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(runtime)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(runtime)));
 
     final Map<String, Object> provider = validProposal("SorafsProviderGovernance");
     objectValue(objectValue(provider.get("payload")).get("action"))
         .put("legacy_owner", account(9));
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(provider)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(provider)));
 
     final Map<String, Object> malformedProvider =
         validProposal("SorafsProviderGovernance");
@@ -468,7 +468,7 @@ public final class ParliamentApiV1Tests {
         .put("provider_id", repeatedNumbers(32, 1));
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(malformedProvider)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(malformedProvider)));
 
     final Map<String, Object> malformedAccount =
         validProposal("MusubiRegistryGovernance");
@@ -476,7 +476,7 @@ public final class ParliamentApiV1Tests {
         .put("owners", Arrays.asList("alice@legacy"));
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(malformedAccount)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(malformedAccount)));
 
     final Map<String, Object> zeroRetrospective =
         validProposal("ContractLifecycleGovernance");
@@ -486,20 +486,20 @@ public final class ParliamentApiV1Tests {
         .put("retrospective_finding_root", repeatedNumbers(32, 0));
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(zeroRetrospective)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(zeroRetrospective)));
 
     final Map<String, Object> excessiveHold = validProposal("ContractEmergencyHold");
     objectValue(excessiveHold.get("payload")).put("duration_blocks", 3_601);
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(excessiveHold)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(excessiveHold)));
 
     final Map<String, Object> impreciseHeight = validProposal("RuntimeUpgrade");
     objectValue(objectValue(impreciseHeight.get("payload")).get("manifest"))
         .put("start_height", new BigInteger("9007199254740992"));
     assertThrows(
         IllegalArgumentException.class,
-        () -> ParliamentApiV1.Proposal.fromJson(encode(impreciseHeight)));
+        () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(impreciseHeight)));
   }
 
   @Test
@@ -562,7 +562,7 @@ public final class ParliamentApiV1Tests {
   public void requestBuildersExposeOnlyCanonicalFieldsAndRoutes() {
     final Map<String, Object> attempt =
         objectValue(
-            ParliamentApiV1.attemptDraftRequestJson(
+            org.hyperledger.iroha.sdk.client.ParliamentApiV1.attemptDraftRequestJson(
                 proposal("RuntimeUpgrade"), 7));
     assertEquals(Set.of("version", "proposal", "attempt_sequence"), attempt.keySet());
     assertEquals(1L, attempt.get("version"));
@@ -639,7 +639,7 @@ public final class ParliamentApiV1Tests {
             NoritoHeader.COMPRESSION_NONE);
     final byte[] canonical = concat(header.encode(), payload);
     final ParliamentTimedOvnCastingProofResponseV1 parsed =
-        ParliamentApiV1.parseTimedOvnCastingProofResponse(canonical);
+        org.hyperledger.iroha.sdk.client.ParliamentApiV1.parseTimedOvnCastingProofResponse(canonical);
     assertArrayEquals(canonical, parsed.canonicalNorito());
     assertArrayEquals(payload, parsed.payload());
     parsed.canonicalNorito()[0] = 0;
@@ -677,12 +677,12 @@ public final class ParliamentApiV1Tests {
         Arrays.asList(wrongSchema, badChecksum, compressed, padded, wrongFlags)) {
       assertThrows(
           IllegalArgumentException.class,
-          () -> ParliamentApiV1.parseTimedOvnCastingProofResponse(hostile));
+          () -> org.hyperledger.iroha.sdk.client.ParliamentApiV1.parseTimedOvnCastingProofResponse(hostile));
     }
     assertThrows(
         IllegalArgumentException.class,
         () ->
-            ParliamentApiV1.parseTimedOvnCastingProofResponse(
+            org.hyperledger.iroha.sdk.client.ParliamentApiV1.parseTimedOvnCastingProofResponse(
                 new byte[ParliamentApiV1.MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES + 1]));
   }
 
@@ -1747,8 +1747,8 @@ public final class ParliamentApiV1Tests {
     return value;
   }
 
-  private static ParliamentApiV1.Proposal proposal(final String kind) {
-    return ParliamentApiV1.Proposal.fromJson(encode(validProposal(kind)));
+  private static org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal proposal(final String kind) {
+    return org.hyperledger.iroha.sdk.client.ParliamentApiV1.Proposal.fromJson(encode(validProposal(kind)));
   }
 
   private static Map<String, Object> validProposal(final String kind) {
@@ -1859,9 +1859,38 @@ public final class ParliamentApiV1Tests {
               map(
                   "authority", account(4),
                   "action", map("action", "grant", "value", null));
+      case "KagemushaVerifierPolicyInstall" ->
+          payload =
+              map(
+                  "proposal_operator", account(1),
+                  "network_id", networkId(),
+                  "expected_predecessor",
+                  map(
+                      "version", 1,
+                      "authority_policy", null,
+                      "active_release_id", null,
+                      "releases", List.of()),
+                  "authority_policy",
+                  map(
+                      "version", 1,
+                      "authority_set_id", repeatedNumbers(32, 0x41),
+                      "threshold", 1,
+                      "authorized_signers", List.of("ed0120" + toHex(TestEd25519Keys.publicKey(8)).toUpperCase(java.util.Locale.ROOT))));
+      case "KagemushaVerifierReleaseInstall" ->
+          payload = releaseProposalPayload("kagemusha_verifier_release_install_v1.json");
+      case "KagemushaVerifierReleaseActivate" ->
+          payload = releaseProposalPayload("kagemusha_verifier_release_activate_v1.json");
       default -> throw new AssertionError("unsupported fixture kind " + kind);
     }
     return map("kind", kind, "payload", payload);
+  }
+
+  private static Map<String, Object> releaseProposalPayload(final String name) {
+    try {
+      return objectValue(objectValue(Files.readAllBytes(fixturePath().resolveSibling(name))).get("payload"));
+    } catch (final java.io.IOException ex) {
+      throw new AssertionError("canonical governance release fixture is unavailable", ex);
+    }
   }
 
   private static Map<String, Object> disabledFeePolicy() {

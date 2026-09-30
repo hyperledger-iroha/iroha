@@ -22,6 +22,7 @@ use iroha_data_model::musubi::{
 use mv::{Key, Value};
 use norito::codec::Encode;
 
+#[cfg(test)]
 const VALUE_DOMAIN: &[u8] = b"iroha:world-net-delta:value:bare-v1\0";
 const START_DOMAIN: &[u8] = b"iroha:world-net-delta:start:v1\0";
 const PUBLICATION_START_DOMAIN: &[u8] = b"iroha:world-publication-journal:start:v1\0";
@@ -66,15 +67,8 @@ pub(crate) struct WorldDeltaBuilder {
 /// Hash one canonical semantic value without allocating its encoded payload.
 /// The domain fixes the bare Norito V1 layout and binds its exact encoded length.
 pub(crate) fn hash_value<T: Encode>(value: &T) -> Result<Hash, String> {
-    Hash::new_from_writer(|mut writer| {
-        writer.write_all(VALUE_DOMAIN)?;
-        let len = norito::codec::encode_adaptive_into(value, &mut writer)
-            .map_err(std::io::Error::other)?;
-        let len = u64::try_from(len)
-            .map_err(|_| std::io::Error::other("canonical value length exceeds u64"))?;
-        writer.write_all(&len.to_le_bytes())
-    })
-    .map_err(|error| format!("World net-delta value encoding failed: {error}"))
+    iroha_data_model::sumeragi_finality::world_state_value_hash_v1(value)
+        .map_err(|error| error.to_string())
 }
 
 impl WorldDeltaBuilder {

@@ -100,6 +100,7 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "is_err",
   "unwrap_or",
   "unwrap_err_or",
+  "expect",
 ]);
 
 /** Retired numeric spellings reserved only for types and source units. */

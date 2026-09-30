@@ -483,10 +483,7 @@ pub(super) fn run_pq_masp_stage_v1(
 mod tests {
     use super::*;
     use crate::privacy_engines::{
-        ivm_private_note::{
-            IvmPrivateNoteRelationErrorV1, PrivateNoteRelationProfileV1,
-            preflight_private_note_relation_with_profile_v1,
-        },
+        ivm_private_note::IvmPrivateNoteRelationErrorV1,
         pq_masp::relation::{PqMaspRelationErrorV1, validate_pq_masp_relation_v1},
     };
     use iroha_data_model::privacy::PrivacyNativeConsensusBindingValidationErrorV1;
@@ -529,14 +526,7 @@ mod tests {
             )
             .expect("canonical release fixture");
             assert_release_fixture_consensus_binding(&fixture.statement.context);
-            assert_eq!(
-                preflight_private_note_relation_with_profile_v1(
-                    &fixture.statement,
-                    &fixture.witness,
-                    PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
-                ),
-                Ok(())
-            );
+            assert_eq!(fixture.preflight_relation(), Ok(()));
         }
         let fixture_seed = stage_purpose_seed_v1(
             protocol_id,
@@ -549,11 +539,7 @@ mod tests {
             .expect("invalid-path release fixture");
         assert_release_fixture_consensus_binding(&invalid.statement.context);
         assert_eq!(
-            preflight_private_note_relation_with_profile_v1(
-                &invalid.statement,
-                &invalid.witness,
-                PrivateNoteRelationProfileV1::IVM_PRIVATE_NOTE,
-            ),
+            invalid.preflight_relation(),
             Err(IvmPrivateNoteRelationErrorV1::Membership)
         );
     }

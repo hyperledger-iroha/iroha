@@ -6121,6 +6121,7 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "expect",
     }
 )
 

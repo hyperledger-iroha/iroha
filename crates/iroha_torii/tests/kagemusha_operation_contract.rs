@@ -47,7 +47,7 @@ fn operation_status_is_the_only_pollable_v1_resource() {
 }
 
 #[test]
-fn openapi_exposes_only_four_generic_routes_and_exact_operation_ids() {
+fn openapi_exposes_five_exact_resources_and_operation_ids() {
     const OPERATION_ID_PATTERN: &str = "^(?!0{64}$)[0-9a-f]{64}$";
     const LOCATION_PATTERN: &str = "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$";
 
@@ -65,6 +65,7 @@ fn openapi_exposes_only_four_generic_routes_and_exact_operation_ids() {
     assert_eq!(
         kagemusha_paths,
         [
+            "/v1/kagemusha/authority-state/{asset_definition_id}",
             "/v1/kagemusha/operations/{operation_id}",
             "/v1/kagemusha/readiness",
             "/v1/kagemusha/redeem",

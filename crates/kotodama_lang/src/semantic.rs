@@ -171,7 +171,7 @@ fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
     }
     if matches!(
         name,
-        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
+        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or" | "expect"
     ) {
         return Some(CompilerIntrinsicKind::Sum);
     }
@@ -4325,6 +4325,77 @@ fn bind_tuple_fields_rec(
         }
     }
 }
+/// Rebuild each enclosing product around one changed field, retaining value
+/// semantics instead of mutating storage shared by copies of the original.
+fn rebuild_assigned_product(
+    target: &TypedExpr,
+    replacement: TypedExpr,
+) -> Result<(String, TypedExpr), SemanticError> {
+    match target.kind() {
+        ExprKind::Ident(name) => Ok((name.clone(), replacement)),
+        ExprKind::Member { object, field } => {
+            let fields = match resolve_struct_type(&object.ty) {
+                Type::Struct { name, fields } => {
+                    let fields = fields
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (name, ty))| {
+                            let value = if index.to_string() == *field {
+                                replacement.clone()
+                            } else {
+                                TypedExpr {
+                                    expr: ExprKind::Member {
+                                        object: object.clone(),
+                                        field: index.to_string(),
+                                    },
+                                    ty: ty.clone(),
+                                }
+                            };
+                            (name.clone(), value)
+                        })
+                        .collect();
+                    ExprKind::StructLiteral { name, fields }
+                }
+                Type::Tuple(types) => ExprKind::Tuple(
+                    types
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, ty)| {
+                            if index.to_string() == *field {
+                                replacement.clone()
+                            } else {
+                                TypedExpr {
+                                    expr: ExprKind::Member {
+                                        object: object.clone(),
+                                        field: index.to_string(),
+                                    },
+                                    ty,
+                                }
+                            }
+                        })
+                        .collect(),
+                ),
+                _ => {
+                    return Err(SemanticError {
+                        code: "E_INVALID_ASSIGNMENT_TARGET",
+                        message: "field assignment requires a struct or tuple binding".into(),
+                    });
+                }
+            };
+            rebuild_assigned_product(
+                object,
+                TypedExpr {
+                    expr: fields,
+                    ty: object.ty.clone(),
+                },
+            )
+        }
+        _ => Err(SemanticError {
+            code: "E_INVALID_ASSIGNMENT_TARGET",
+            message: "field assignment must be rooted in a mutable binding".into(),
+        }),
+    }
+}
 fn analyze_function(
     context: &SemanticContext,
     func: &Function,
@@ -5455,12 +5526,83 @@ fn analyze_statement_inner(
                 name: name.clone(),
                 value: expr.clone(),
             });
-            bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+            if !is_state_binding(context, name) {
+                bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                bind_struct_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+            }
             Ok(out)
         }
         Statement::AssignExpr { target, op, value } => {
             // support map indexing and simple variable rebinding
             match target.kind() {
+                Expr::Member { .. } => {
+                    let mut root = target;
+                    while let Expr::Member { object, .. } = root.kind() {
+                        root = object;
+                    }
+                    let Expr::Ident(root_name) = root.kind() else {
+                        return Err(SemanticError {
+                            code: "E_INVALID_ASSIGNMENT_TARGET",
+                            message: "field assignment must be rooted in a mutable binding".into(),
+                        });
+                    };
+                    ensure_mutable_assignment_target(context, root_name, mutable_bindings)?;
+                    let target = analyze_expr(context, target, vars)?;
+                    let mut replacement =
+                        analyze_expr_expected(context, value, vars, Some(&target.ty))?;
+                    if let Some(binary) = assign_op_to_binary(*op) {
+                        let mut left = target.clone();
+                        coerce_contextual_numeric_literals(
+                            binary,
+                            Some(&target.ty),
+                            &mut left,
+                            &mut replacement,
+                        )?;
+                        reject_implicit_int_decimal_mix(&left.ty, &replacement.ty)?;
+                        let ty = arithmetic_result_type(binary, &left.ty, &replacement.ty)
+                            .ok_or_else(|| SemanticError {
+                                code: "K2003",
+                                message: format!(
+                                    "compound operator {op:?} is not defined for {} and {}",
+                                    type_name(&left.ty),
+                                    type_name(&replacement.ty)
+                                ),
+                            })?;
+                        replacement = TypedExpr {
+                            expr: ExprKind::Binary {
+                                op: binary,
+                                left: Box::new(left),
+                                right: Box::new(replacement),
+                            },
+                            ty,
+                        };
+                    }
+                    ensure_assignable_and_coerce(&target.ty, &mut replacement)?;
+                    if is_state_binding(context, root_name) {
+                        crate::secret::reject_secret_state_value(&replacement)?;
+                    }
+                    let capture = context.fresh_aggregate_capture();
+                    let captured = TypedExpr {
+                        expr: ExprKind::Ident(capture.clone()),
+                        ty: replacement.ty.clone(),
+                    };
+                    let (name, rebuilt) = rebuild_assigned_product(&target, captured)?;
+                    let mut out = vec![
+                        TypedStatement::Let {
+                            name: capture,
+                            value: replacement,
+                        },
+                        TypedStatement::Let {
+                            name: name.clone(),
+                            value: rebuilt.clone(),
+                        },
+                    ];
+                    if !is_state_binding(context, &name) {
+                        bind_tuple_fields_rec(&mut out, vars, &name, &rebuilt, &rebuilt.ty);
+                        bind_struct_fields_rec(&mut out, vars, &name, &rebuilt, &rebuilt.ty);
+                    }
+                    Ok(out)
+                }
                 Expr::Index { target: map, index } => {
                     let map_t = analyze_expr(context, map, vars)?;
                     let mut key_t = analyze_expr(context, index, vars)?;
@@ -5567,7 +5709,10 @@ fn analyze_statement_inner(
                             name: name.clone(),
                             value: expr.clone(),
                         });
-                        bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                        if !is_state_binding(context, name) {
+                            bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                            bind_struct_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                        }
                         return Ok(out);
                     }
                     let bin_op = assign_op_to_binary(*op).expect("compound op maps to binary op");
@@ -5621,7 +5766,8 @@ fn analyze_statement_inner(
                 }
                 _ => Err(SemanticError {
                     code: "E_INVALID_ASSIGNMENT_TARGET",
-                    message: "assignment target must be a variable or map index".into(),
+                    message: "assignment target must be a variable, product field, or map index"
+                        .into(),
                 }),
             }
         }
@@ -9954,6 +10100,17 @@ fn analyze_expr_expected_inner(
                 )?;
             } else if let Some(signature) = context.function_params.borrow().get(&name).cloned() {
                 let receiver_count = usize::from(*implicit_receiver);
+                if argument_names
+                    .as_ref()
+                    .is_some_and(|names| names.len() != args.len().saturating_sub(receiver_count))
+                {
+                    return Err(SemanticError {
+                        code: "E_MALFORMED_CALL",
+                        message: format!(
+                            "call `{source_name}` has inconsistent source argument metadata"
+                        ),
+                    });
+                }
                 let user_signature = signature.get(receiver_count..).unwrap_or_default();
                 let parameter_names = user_signature
                     .iter()
@@ -9964,15 +10121,35 @@ fn analyze_expr_expected_inner(
                     .iter()
                     .take_while(|parameter| parameter.call_mode == ParameterCallMode::Positional)
                     .count();
+                // Ordinary function parameters accept either a positional value or
+                // their declared label. Normalize only unlabeled non-`_` arguments
+                // before using the same duplicate, arity and evaluation-order checks.
+                let first_named = argument_names
+                    .as_ref()
+                    .and_then(|names| names.iter().position(Option::is_some))
+                    .unwrap_or(usize::MAX);
+                let optional_labels = (0..args.len().saturating_sub(receiver_count))
+                    .map(|index| {
+                        argument_names
+                            .as_ref()
+                            .and_then(|names| names[index].clone())
+                            .or_else(|| {
+                                (index >= positional_prefix && index < first_named)
+                                    .then(|| parameter_names.get(index).cloned())
+                                    .flatten()
+                            })
+                    })
+                    .collect::<Vec<_>>();
                 argument_plan = reorder_call_arguments(
                     &source_name,
                     args,
-                    argument_names.as_deref(),
+                    Some(&optional_labels),
                     *implicit_receiver,
                     &parameter_names,
                     &required,
                     positional_prefix,
                 )?;
+                argument_plan.is_named = first_named != usize::MAX;
             } else if argument_names.is_some() {
                 let intrinsic_names: &[&str] = match name.as_str() {
                     "option::some"
@@ -9985,6 +10162,7 @@ fn analyze_expr_expected_inner(
                     | "decimal::from_quantity" => &["value"],
                     "result::err" => &["error"],
                     "unwrap_or" | "unwrap_err_or" => &["default"],
+                    "expect" => &["error"],
                     _ => &[],
                 };
                 if !intrinsic_names.is_empty() {
@@ -10294,6 +10472,18 @@ fn analyze_sum_type_call(
             }
             call("unwrap_err_or", args, *error_ty)
         }
+        "expect" => {
+            if args.len() != 2 {
+                return Some(error("Option.expect expects one nominal error argument"));
+            }
+            let Type::Option(value_ty) = resolve_struct_type(&args[0].ty) else {
+                return Some(error("Option.expect receiver must be Option<T>"));
+            };
+            if !matches!(resolve_struct_type(&args[1].ty), Type::ErrorEnum(_)) {
+                return Some(error("Option.expect requires a nominal error enum value"));
+            }
+            call("expect", args, *value_ty)
+        }
         _ => return None,
     })
 }
@@ -10358,6 +10548,9 @@ fn analyze_const_expr_inner(
             expr: ExprKind::Bytes(value.clone()),
             ty: Type::Bytes,
         }),
+        Expr::Ident(name) if context.error_codes.borrow().contains_key(name) => {
+            analyze_expr_expected(context, expr, &mut HashMap::new(), expected)
+        }
         Expr::Ident(name) => {
             if let Some((target, _)) = context.validate_value_target(expr, name, &HashMap::new())?
                 && !matches!(
@@ -10410,7 +10603,8 @@ fn analyze_const_expr_inner(
         } if Builtin::from_source_name(name).is_some_and(|builtin| {
             matches!(
                 builtin,
-                Builtin::Isqrt
+                Builtin::PointerConstructor(_)
+                    | Builtin::Isqrt
                     | Builtin::Abs
                     | Builtin::Min
                     | Builtin::Max
@@ -10442,14 +10636,37 @@ fn analyze_const_expr_inner(
                     context,
                     &plan.ordered[*index],
                     consts,
-                    Some(&Type::Int),
+                    if matches!(builtin, Builtin::PointerConstructor(_)) {
+                        Some(&Type::String)
+                    } else {
+                        Some(&Type::Int)
+                    },
                 )?);
             }
-            let arguments = arguments
+            let arguments: Vec<TypedExpr> = arguments
                 .into_iter()
                 .map(|argument| argument.expect("call plan covers every argument"))
                 .collect();
-            analyze_fixed_builtin_call(builtin, arguments)
+            if builtin == Builtin::PointerConstructor(PointerConstructor::AccountId)
+                && arguments.first().is_some_and(|argument| {
+                    matches!(argument.kind(), ExprKind::String(value)
+                        if value.contains('@')
+                            && iroha_data_model::account::AccountId::parse_encoded(value).is_err())
+                })
+            {
+                return Err(sem_err(
+                    "E_CONST_INITIALIZER",
+                    "const account identifiers cannot resolve live aliases; store the alias as bytes and resolve it explicitly".into(),
+                ));
+            }
+            if matches!(builtin, Builtin::PointerConstructor(_)) {
+                canonicalize_builtin_result(
+                    builtin,
+                    analyze_surface_builtin_call(context, builtin, arguments, expected),
+                )
+            } else {
+                analyze_fixed_builtin_call(builtin, arguments)
+            }
         }
         Expr::Binary { op, left, right }
             if matches!(
@@ -10493,8 +10710,9 @@ fn analyze_const_expr_inner(
         }
         _ => Err(SemanticError {
             code: "E_CONST_INITIALIZER",
-            message: "const initializers must be literal values or previously declared constants"
-                .into(),
+            message:
+                "const initializers require constant values or canonical typed literal constructors"
+                    .into(),
         }),
     }
 }
@@ -13256,6 +13474,7 @@ mod tests {
             "is_err",
             "unwrap_or",
             "unwrap_err_or",
+            "expect",
         ];
         for name in registered {
             assert!(
@@ -14098,7 +14317,7 @@ mod tests {
         assert_eq!(evaluation_order, &[1, 0]);
     }
     #[test]
-    fn named_user_calls_reject_unknown_missing_and_ambiguous_positional_arguments() {
+    fn named_user_calls_reject_unknown_and_missing_arguments() {
         for (source, code) in [
             (
                 "fn target(int first, string second) {} fn main() { target(first: 1, third: \"three\"); }",
@@ -14107,10 +14326,6 @@ mod tests {
             (
                 "fn target(int first, string second) {} fn main() { target(first: 1); }",
                 "E_MISSING_NAMED_ARGUMENT",
-            ),
-            (
-                "fn target(int left, int right) {} fn main() { target(1, 2); }",
-                "E_NAMED_ARGUMENTS_REQUIRED",
             ),
         ] {
             let error = analyze_error(source);
@@ -14192,9 +14407,9 @@ mod tests {
     }
     analyze_error_code_cases! {
         declared_call_labels_are_independent_of_effects:
-        privileged = "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }" => "E_NAMED_ARGUMENTS_REQUIRED";
+        privileged = "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }" => "K2004";
         effectful = "fn main(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
-        transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
+        transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key); }" => "E_MISSING_NAMED_ARGUMENT";
     }
     analyze_ok_tests! { named_method_arguments_do_not_mix_with_the_receiver: "state StateMap<int, int> values; fn lookup(int key) -> int { return values.get_or(default: 0, key: key); }" => "parse named method call", "implicit receiver must not count as a positional argument"; }
     #[test]
@@ -15063,7 +15278,7 @@ mod tests {
             );
         }
     }
-    analyze_reject_contains_tests! { field_assignment_is_rejected: "fn f() { let t = (1, 2); t.0 = 3; }" => "parse field assignment", err = "field assignment should error", "assignment target must be"; }
+    analyze_reject_contains_tests! { immutable_field_assignment_is_rejected: "fn f() { let t = (1, 2); t.0 = 3; }" => "parse field assignment", err = "field assignment should error", "cannot assign to immutable binding"; }
     analyze_ok_tests! { info_accepts_int: "fn f() { debug::info(42); }" => "parse info", "info should accept int"; }
     #[test]
     fn view_entrypoints_reject_observable_debug_logging() {

@@ -26,6 +26,113 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 /** Scripted endpoints test mapping and rejection, never manufacture qualified native evidence. */
 @Tag("host-native")
 class KagemushaNativeCoreCoordinatorAdapterV1Test {
+    @Test fun `pre enrollment op1 retains original framed qualification and exact authenticated native fields`() {
+        exercisePreEnrollmentQualification()
+    }
+
+    @Test fun `pre enrollment op1 rejects another selected release before native qualification admission`() {
+        exercisePreEnrollmentQualification(substituteRelease = true)
+    }
+
+    @Test fun `retired enrollment guard stops op1 before device observation`() {
+        val f = Fixture()
+        val endpoint = Endpoint()
+        val core = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/enrollment", endpoint)
+        val selected = KagemushaNativeEnrollmentPhasesV1.Selection("unused", u64(1), digest(1),
+            f.q.releaseId(), f.q.profile.hardwareProfileId(), f.credential.laneCommitment(), digest(2), u64(100))
+        assertFailsWith<IllegalStateException> {
+            core.prepareInitialEnrollmentQualification(selected, KagemushaDeviceLifecycleBridgeV1.onlineOnly()) {
+                error("retired owner")
+            }
+        }
+        assertEquals(0, endpoint.calls)
+    }
+
+    /** Scripted signatures/native callbacks exercise mapping only, not release/hardware authority. */
+    private fun exercisePreEnrollmentQualification(substituteRelease: Boolean = false) {
+        val f = Fixture()
+        val account = org.hyperledger.iroha.sdk.address.AccountAddress.fromAccount(
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".chunked(2)
+                .map { it.toInt(16).toByte() }.toByteArray(), "ed25519").toI105(0)
+        val control = testArchive("iroha.kagemusha.device.v1.active-hardware-credential-reply",
+            testFields(byteArrayOf(1, 0), byteArrayOf(1), f.q.releaseId(), f.q.hardwarePolicyDigest(),
+                f.q.coreAuthorizationKeyReference(), NoritoHeader.decode(f.qFields[2], null).payload,
+                NoritoHeader.decode(f.qFields[3], null).payload))
+        val authenticator = ByteArray(64).also { it[31] = 1; it[63] = 2 }
+        val nonce = digest(97)
+        val command = KagemushaDeviceOperationCodecV1.encodeControlCommand(KagemushaDeviceControlCommandV1.ReadActiveHardwareCredential)
+        val selection = arrayOf(u64(17), digest(1), if (substituteRelease) digest(99) else f.q.releaseId(),
+            f.q.profile.hardwareProfileId(), f.credential.laneCommitment(), digest(2), u64(120_007))
+        val methods = mutableListOf<Int>()
+        val native = object : KagemushaCoreCoordinatorEndpointV1 {
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun open(storagePath: String) = 1L
+            override fun close(handle: Long) = 0
+            override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> {
+                methods += method
+                return when (method) {
+                    12 -> {
+                        assertTrue(fields[0].contentEquals(u32(1)) || fields[0].contentEquals(u32(7)))
+                        assertContentEquals(account.toByteArray(), fields[1])
+                        selection.map { it.copyOf() }.toTypedArray()
+                    }
+                    11 -> { assertContentEquals(u32(1), fields[0]); assertContentEquals(command, fields[1]); arrayOf(nonce.copyOf()) }
+                    2 -> {
+                        val expected = f.qFields + listOf(f.q.hardwarePolicyDigest())
+                        assertEquals(6, fields.size)
+                        fields.indices.forEach { assertContentEquals(expected[it], fields[it]) }
+                        emptyArray()
+                    }
+                    3 -> {
+                        val expected = listOf(u32(1), nonce, command, control, authenticator) + f.qFields
+                        assertEquals(10, fields.size)
+                        fields.indices.forEach { assertContentEquals(expected[it], fields[it]) }
+                        emptyArray()
+                    }
+                    else -> error("unexpected native method $method")
+                }
+            }
+        }
+        var deviceCalls = 0
+        val device = KagemushaDeviceLifecycleBridgeV1.withEndpointForTests(object : KagemushaDeviceLifecycleBridgeV1.Endpoint {
+            override fun capabilities() = KagemushaDeviceLifecycleBridgeV1.Codec.encodeCapabilitiesForTests(
+                1, f.q.hardwarePolicyDigest(), f.q.profile.qualificationReportDigest())
+            override fun execute(commandFrame: ByteArray): ByteArray {
+                deviceCalls++
+                return KagemushaDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+                    KagemushaDeviceLifecycleBridgeV1.Operation.READ_ACTIVE_HARDWARE_CREDENTIAL,
+                    KagemushaDeviceLifecycleBridgeV1.Status.SUCCESS, nonce, control, authenticator)
+            }
+            override fun verifyCommandResponse(response: ByteArray, canonicalCommand: ByteArray,
+                operation: KagemushaDeviceLifecycleBridgeV1.Operation, requestId: ByteArray,
+                hardwarePolicyId: ByteArray, qualificationReportDigest: ByteArray,
+                acceptedDevicePublicKey: ByteArray?): Boolean {
+                assertEquals(KagemushaDeviceLifecycleBridgeV1.Operation.READ_ACTIVE_HARDWARE_CREDENTIAL, operation)
+                assertContentEquals(command, canonicalCommand); assertContentEquals(nonce, requestId)
+                assertNull(acceptedDevicePublicKey)
+                return true // Mapping fixture only; no native cryptographic authority is claimed.
+            }
+        })
+        val core = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/pre-enrollment", native)
+        val selected = core.initialEnrollment().begin(account)
+        var guardCalls = 0
+        if (substituteRelease) {
+            assertFailsWith<IllegalArgumentException> { core.prepareInitialEnrollmentQualification(selected, device) { guardCalls++ } }
+            assertEquals(listOf(12, 12, 11), methods)
+        } else {
+            val report = core.prepareInitialEnrollmentQualification(selected, device) { guardCalls++ }
+            assertContentEquals(control, report.canonicalPayload())
+            assertContentEquals(control, report.canonicalControlReply())
+            assertContentEquals(authenticator, report.authenticator())
+            report.canonicalPayload().fill(0); report.authenticator().fill(0)
+            assertContentEquals(control, report.canonicalPayload())
+            assertContentEquals(authenticator, report.authenticator())
+            assertEquals(listOf(12, 12, 11, 2, 3), methods)
+            assertEquals(6, guardCalls)
+        }
+        assertEquals(1, deviceCalls)
+    }
+
     @Test fun `typed adapter close revokes native handle`() {
         val endpoint = Endpoint()
         val core = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint)
@@ -210,7 +317,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(f.requestBytes.size.toLong()).array() + f.requestBytes))
         val admitted = mutableListOf<Pair<Int, ByteArray>>()
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
@@ -307,7 +414,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 active.coreAuthorizationKeyReference(), NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareProfileShape(active.profile), null).payload,
                 NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareCredentialShape(active.credential), null).payload))
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
@@ -365,7 +472,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         fun expect(method: Int, request: List<ByteArray>?, response: List<ByteArray>) {
             this.method = method; this.request = request; this.response = response
         }
-        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         override fun open(storagePath: String) = 1L
         override fun close(handle: Long): Int { closeCalls++; assertEquals(1L, handle); return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> {
@@ -454,6 +561,24 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         assertTrue(lane.store.pendingInternal().isEmpty())
         assertEquals(1, lane.historicalRotationAdmissions)
         assertTrue(lane.successorSnapshotReads > 0)
+    }
+
+    @Test fun `wallet qualification follows admitted recovery rather than mutable provider state`() {
+        val lane = InternalTransitionLane(19, initiallyInstalled = true)
+        val provider = lane.provider()
+        val wallet = KagemushaWalletV1.open(provider) { error("must recover existing state") }
+        assertEquals(lane.initial.credential.hardwareEpochGeneration,
+            wallet.qualification().credential.hardwareEpochGeneration)
+        provider.rotateHardwareEpoch()
+        assertEquals(lane.initial.credential.hardwareEpochGeneration,
+            wallet.qualification().credential.hardwareEpochGeneration)
+        wallet.recover()
+        assertEquals(lane.active.credential.hardwareEpochGeneration,
+            wallet.qualification().credential.hardwareEpochGeneration)
+        assertContentEquals(wallet.aggregateState().releaseId(), wallet.qualification().releaseId())
+        val exposed = wallet.qualification().hardwarePolicyDigest()
+        exposed.fill(0)
+        assertContentEquals(lane.active.hardwarePolicyDigest(), wallet.qualification().hardwarePolicyDigest())
     }
 
     @Test fun `Core accepted fold with interrupted host reply sync recovers the same operation before acknowledging`() {
@@ -546,7 +671,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         private var outstandingObservation: Triple<Int, ByteArray, ByteArray>? = null
         private var terminalReply: ByteArray? = null
         private val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
             override fun open(storagePath: String): Long { outstandingObservation = null; return 1L }
             override fun close(handle: Long) = 0
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
@@ -739,6 +864,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
 
     companion object {
         private fun digest(value: Int) = ByteArray(32) { value.toByte() }
+        private fun u64(value: Long) = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array()
         private fun u32(value: Int) = KagemushaCoreCoordinatorFrameV1.u32(value)
         private fun testFields(vararg values: ByteArray): ByteArray = values.fold(byteArrayOf()) { result, value ->
             var size = value.size

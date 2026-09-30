@@ -15,6 +15,20 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
+/// Canonical reference of the independently selected Core-to-hardware P-256 key.
+/// This computes an identity only and does not authenticate the selected key or custody.
+pub fn kagemusha_core_authorization_key_reference_v1(
+    public_key: &KagemushaDevicePublicKeyV1,
+) -> [u8; 32] {
+    let bytes = public_key.as_sec1_bytes();
+    let mut hash = Sha256::new();
+    hash.update(b"iroha:kagemusha:device:v1:hardware-authorization-key");
+    hash.update([0]);
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    hash.finalize().into()
+}
+
 /// Exact fixed success-response header length.
 pub const KAGEMUSHA_DEVICE_RESPONSE_HEADER_BYTES_V1: usize = 116;
 /// Maximum body in either direction for this first release.

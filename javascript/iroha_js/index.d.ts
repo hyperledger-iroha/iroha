@@ -13589,6 +13589,8 @@ export interface CanonicalMultisigContractCallInput {
   payload: Record<string, unknown>;
   arguments_hex: string | null;
   code_hash_hex: string;
+  /** Positive creation_time_ms of the exact frozen native Propose attempt. */
+  creation_time_ms: number;
 }
 /** Construction only; never evidence of deployment, permission or finality. */
 export function buildCanonicalMultisigContractCall(

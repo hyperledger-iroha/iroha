@@ -155,6 +155,12 @@ into the output directory.
 - Defaults to `permissioned` unless a Sora profile or perf preset requires
   `npos`
 - `--sora-profile nexus` enforces public-dataspace rules and requires `npos`
+- `--sora-profile dataspace --private-dataspace bpng --consensus-mode npos`
+  generates the isolated BPNG physical dataspace `8648377547929788715` on local
+  lane `5`, its four-validator restricted manifest, and paid `bpng` and
+  `mibank.bpng` namespaces in genesis before signing. The preset assigns no
+  public Taira allocation. BPNG application contracts, fee sponsorship and
+  application service provisioning remain separate unfinished work.
 
 `kagami docker`
 - Docker Compose generator for an authoritative prepared bundle from

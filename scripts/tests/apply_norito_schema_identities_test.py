@@ -125,6 +125,32 @@ class IdentityPatchTests(unittest.TestCase):
         patch, = self.plan(entry)
         self.assertIn(b'name = "captured::Example", frame = "alloc::string::String"', patch.result)
 
+    def test_large_source_trivia_preserves_exact_utf8_spans_and_patch(self):
+        source = b"//" + b"x" * (32 * 1024 * 1024) + "\n// café\nstruct Example;\n".encode()
+        entry = self.entry(source, "struct Example;")
+        patch, = self.plan(entry)
+        expected = source.replace(
+            b"struct Example;",
+            b'#[derive(norito::NoritoSchema)]\n#[norito_schema(name = "captured::Example")]\nstruct Example;',
+        )
+        self.assertEqual(patch.original, source)
+        self.assertEqual(patch.current, source)
+        self.assertEqual(patch.result, expected)
+        self.assertEqual((self.root / "source.rs").read_bytes(), source)
+        tokens = helper.tokenize(source)
+        self.assertEqual(tokens[0].start, entry["declarations"][0]["start_byte"])
+        for token in tokens:
+            self.assertEqual(source[token.start:token.end], token.value.encode())
+
+    def test_oversized_json_mapping_remains_rejected(self):
+        entry = self.entry("struct Example;\n", "struct Example;")
+        self.save(entry)
+        with self.mapping.open("ab") as stream:
+            stream.write(b" " * (helper.MAX_MAPPING_BYTES + 1))
+        with self.assertRaisesRegex(helper.MappingError, "mapping exceeds the size limit"):
+            helper.load_mapping(self.mapping)
+        self.assertEqual((self.root / "source.rs").read_text(), "struct Example;\n")
+
     def test_entire_batch_validates_before_any_output_or_source_writes(self):
         first = self.entry("struct Example;\n", "struct Example;", path="a.rs")
         second = self.entry("struct Other;\n", "struct Other;", path="b.rs", identifier="Other", nominal="captured::Other")

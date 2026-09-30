@@ -185,7 +185,7 @@ impl NativeStartupQualificationOwnerV1 {
     /// This grants no current device observation, hardware clock or monetary authority.
     pub(super) fn from_fresh_issuer_admission(admission: &FreshIssuerAdmissionV1) -> Result<Self> {
         admission
-            .deadline()
+            .require_live()
             .map_err(|_| ObservationErrorV1::Expired)?;
         let subject = &admission.evidence().certificate().subject;
         let mut owner = Self::new(
@@ -195,7 +195,7 @@ impl NativeStartupQualificationOwnerV1 {
         )?;
         owner.pin_verified_enrollment_issuance(&subject.issuance)?;
         admission
-            .deadline()
+            .require_live()
             .map_err(|_| ObservationErrorV1::Expired)?;
         Ok(owner)
     }

@@ -3748,25 +3748,7 @@ fn acquire_sidecar_store_lease_v1(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::privacy_engines::atomic_private_settlement::audit::{
-        private_settlement_audit_plaintext_commitment_v1,
-        seal_private_settlement_audit_capsule_v1_with_rng,
-    };
     use crate::privacy_engines::atomic_private_settlement::test_fixtures::*;
-
-    use crate::privacy_engines::{
-        atomic_private_settlement::{
-            atomic_private_settlement_dummy_input_memo_digest_v1,
-            atomic_private_settlement_output_memo_digests_v1,
-            atomic_private_settlement_program_id_v1,
-        },
-        ivm_private_note::{
-            PrivateNotePlaintextV1, PrivateNoteRelationProfileV1, derive_note_authority_v1,
-            derive_profiled_input_commitment_v1, derive_profiled_output_commitment_v1,
-            encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1,
-            ivm_private_recipient_public_key_v1,
-        },
-    };
     use crate::private_settlement::protocol::{
         private_settlement_prepare_barrier_v1, private_settlement_prepared_bundle_digest_v1,
     };
@@ -3783,37 +3765,17 @@ pub(crate) mod tests {
             validated_private_settlement_leg_for_sidecar_test_v1,
         },
     };
-    use iroha_crypto::{Algorithm, HashOf, HybridKeyPair, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair, Signature};
     use iroha_data_model::{
-        NetworkId,
-        asset::AssetDefinitionId,
-        block::BlockHeader,
         nexus::{
-            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAuditAadV1,
-            PrivateSettlementAuditEncryptionOpeningV1, PrivateSettlementAuditNoteOpeningV1,
-            PrivateSettlementAuditOutputRoleV1, PrivateSettlementAuditOutputV1,
-            PrivateSettlementAuditPayerAuthorizationBodyV1,
-            PrivateSettlementAuditPayerAuthorizationV1, PrivateSettlementAuditPayerInputV1,
-            PrivateSettlementAuditPayerSignatureV1, PrivateSettlementAuditPlaintextV1,
-            PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditViewKeyAuthorizationBodyV1,
-            PrivateSettlementAuditViewKeyAuthorizationV1, PrivateSettlementAuditViewKeySignatureV1,
-            PrivateSettlementAuditorV1, PrivateSettlementAuthorityCatalogV1,
-            PrivateSettlementCapsulePaddingV1, PrivateSettlementHybridPublicKeyV1,
-            PrivateSettlementLegCommitmentV1, PrivateSettlementLegReceiptV1,
-            PrivateSettlementPoolGovernanceLifecycleV1, PrivateSettlementPoolGovernanceV1,
-            PrivateSettlementProofProfileV1, PrivateSettlementRouteV1,
-            PrivateSettlementSidecarAvailabilityBodyV1,
+            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAuditPlaintextV1,
+            PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
+            PrivateSettlementAuthorityCatalogV1, PrivateSettlementHybridPublicKeyV1,
+            PrivateSettlementLegReceiptV1, PrivateSettlementPoolGovernanceLifecycleV1,
+            PrivateSettlementPoolGovernanceV1,
         },
-        privacy::{
-            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
-            PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
-            PrivacyRecipientIdV1, PrivacyRootV1,
-        },
-        transaction::FeePaymentIntent,
+        privacy::{PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyRootV1},
     };
-    use iroha_model_base::domain::DomainId;
-    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    use rand_08::{SeedableRng as _, rngs::StdRng};
 
     pub(crate) struct SidecarFixtureV1 {
         pub(crate) sidecar: PrivateSettlementRestrictedSidecarV1,
