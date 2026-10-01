@@ -445,6 +445,14 @@ CORE_MUTATIONS = [
       ["sumeragi::certified_chain::tests::durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm"]),
     m("HC12", "beacon: reconstruct prepared beacon proofs without original-pool admission",
       ["beacon::validation::tests::beacon_verification_reserves_exact_buffers_and_refuses_before_unfunded_work"]),
+    m("HC13", "certificate query: construct aggregate pairing scratch without original request admission",
+      ["sumeragi::certified_chain::tests::state_certificate::state_certificate_pairing_constructor_refusal_preserves_original_source_for_retry"]),
+    m("HC14", "certificate reader: reuse an original decoded result for different witness bytes",
+      ["sumeragi::certified_chain::artifacts::tests::original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph"]),
+    m("HC15", "committed body reader: duplicate the original decoded quorum certificate at handoff",
+      ["sumeragi::block_store::committed_read::tests::committed_read_returns_original_qc_backing_after_projection_refusal_and_retry"]),
+    m("HC17", "native control: accept an execution tip from another published hash journal",
+      ["sumeragi::epoch_beacon::producer::tests::control_requires_original_tip_and_matching_published_hash_journal"]),
 ]
 
 

@@ -264,6 +264,26 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                         with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
                             gate.require_tests(missing, stages)
 
+    def test_deployment_engine_controls_follow_their_current_library_owner(self):
+        expected = (
+            "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
+            "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
+        )
+        self.assertEqual(gate.HARNESS_TARGETS["deploy"][3], ["-p", "iroha_deploy", "--lib"])
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            deploy = tuple(name for _, tests in selected["deploy"] for name in tests)
+            kagami = tuple(name for _, tests in selected["kagami"] for name in tests)
+            gate.validate_selected_source_test_inventory(SCRIPT.parents[1], {"deploy": selected["deploy"]})
+            for name in expected:
+                self.assertEqual(deploy.count(name), 1)
+                self.assertNotIn(name, kagami)
+                focused = gate.focused_regression_stages(scope, ("deploy=" + name,))
+                self.assertEqual(tuple(focused), ("deploy",))
+                missing = "\n".join(case + ": test" for case in deploy if case != name)
+                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                    gate.require_tests(missing, selected["deploy"])
+
     def test_cli_seating_selectors_follow_actual_module_aliases_and_entrypoint(self):
         sources = {
             "Cargo.toml": '[package]\nname = "iroha_cli_lib"\n[lib]\nname = "iroha_cli"\npath = "src/main_shared.rs"\n',

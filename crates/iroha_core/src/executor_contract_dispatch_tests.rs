@@ -276,8 +276,13 @@ fn execute_instruction_with_ivm() {
     let world = World::with([domain], [alice_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = State::new_with_chain(
+        component_world_for_testing(world),
+        kura,
+        query_handle,
+        ChainId::from("test-chain"),
+    );
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
@@ -317,11 +322,17 @@ fn loaded_executor_stack_limit_tracks_gas_limit() {
 }
 #[test]
 fn loaded_executor_runtime_tracks_governed_heap_limit() {
+    if executor_cache_test_in_child("loaded_executor_runtime_tracks_governed_heap_limit") {
+        return;
+    }
     const GAS_LIMIT: u64 = 10_000;
     const SMALL_HEAP_LIMIT: u64 = 64;
     const LARGE_HEAP_LIMIT: u64 = 128;
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
+    // This fixture measures two small governed variants. The constructor's unused
+    // default geometry is outside that comparison and consumes the same fixed pool.
+    loaded.runtime_pool.lock().unwrap().clear_storage();
     {
         let mut runtime = loaded
             .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
@@ -349,6 +360,10 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
 }
 #[test]
 fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
+    if executor_cache_test_in_child("loaded_executor_reuses_and_resets_runtime_after_error_return")
+    {
+        return;
+    }
     const GAS_LIMIT: u64 = 10_000;
     fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
         let mut runtime = loaded
@@ -368,10 +383,24 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     }
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
+    // This test measures reset/reuse of one geometry. The constructor's default
+    // stack has not been selected by this invocation; remove only that local variant,
+    // without increasing or changing the process-wide retention budget.
+    loaded.runtime_pool.lock().unwrap().clear_storage();
+    assert_eq!(loaded.runtime_pool_snapshot().1, 0);
     let (before, _) = loaded.runtime_pool_snapshot();
     let allocation = dirty_then_fail(&loaded).expect_err("synthetic validation failure");
-    let (after_error, _) = loaded.runtime_pool_snapshot();
-    assert_eq!(after_error.dirty_resets, before.dirty_resets + 1);
+    let (after_error, variants) = loaded.runtime_pool_snapshot();
+    assert_eq!(
+        variants, 1,
+        "only the measured runtime geometry is retained"
+    );
+    assert_eq!(
+        after_error.dirty_resets,
+        before.dirty_resets + 1,
+        "runtime retention: {:?}",
+        ivm::cache_memory::memory_stats()
+    );
     let runtime = loaded
         .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
         .expect("warm checkout");
@@ -436,12 +465,12 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
         [],
     );
     let state = State::new_with_chain(
-        world,
+        component_world_for_testing(world),
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
         ChainId::from("authority-binding"),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let transaction = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),
@@ -451,6 +480,8 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
     .sign(ALICE_KEYPAIR.private_key());
     let mut state_transaction = block
         .transaction_for_fastpq_testing(iroha_crypto::Hash::from(transaction.hash_as_entrypoint()));
+    state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = IvmCache::new();
     let error = super::Executor::Initial
         .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
@@ -480,8 +511,13 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let state = State::new_with_chain(
+            component_world_for_testing(world),
+            kura,
+            query_handle,
+            ChainId::from("test-chain"),
+        );
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -498,6 +534,8 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         .sign(ALICE_KEYPAIR.private_key());
         let mut state_tx =
             block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         *state_tx.world.executor.get_mut() = executor;
         let governed_fuel = state_tx.world.parameters.get().executor().fuel.get();
         assert_eq!(
@@ -528,8 +566,13 @@ fn executor_validation_consumes_fuel_budget() {
     let world = World::with([domain], [alice_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = State::new_with_chain(
+        component_world_for_testing(world),
+        kura,
+        query_handle,
+        ChainId::from("test-chain"),
+    );
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
@@ -551,8 +594,13 @@ fn executor_validation_rejects_when_budget_exhausted() {
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = State::new_with_chain(
+        component_world_for_testing(world),
+        kura,
+        query_handle,
+        ChainId::from("test-chain"),
+    );
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.executor_fuel_remaining = 0;
@@ -1550,20 +1598,58 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
         iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::PARAMETER_ID_STR,
         iroha_data_model::validation_fee::RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID,
     ];
-    let state = state_for_testing(world);
+    let state = component_state_for_testing(world);
     {
+        // Check the genesis permission predicate directly; this component overlay
+        // intentionally cannot authenticate or execute a genesis source.
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut genesis = block.transaction();
+        let genesis = block.transaction();
         assert!(is_initial_genesis_context(&genesis));
         for id in reserved {
-            let error = super::Executor::Initial
-                .execute_instruction(&mut genesis, &genesis_authority, set_custom(id))
-                .expect_err("reserved parameters must stay closed during genesis");
+            let error = validate_initial_native_instruction_authority(
+                &genesis,
+                &genesis_authority,
+                &set_custom(id),
+                true,
+            )
+            .expect_err("reserved governance remains closed in the genesis permission predicate");
             assert!(
-                matches!(error, ValidationFail::NotPermitted(_)),
-                "{id}: {error:?}"
+                matches!(&error, ValidationFail::NotPermitted(reason)
+                    if reason.contains("only be changed by an enacted SORA Parliament proposal")),
+                "{id}: {error:?}",
             );
         }
+    }
+    {
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
+            crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000),
+        )
+        .expect("the unmodified signed genesis must execute and publish");
+        assert_eq!(chain.height(), 1);
+    }
+    for id in reserved {
+        // Exercise the signed pipeline as well: the only change from the positive
+        // control is one forbidden parameter. Startup's public diagnostic hides the
+        // detailed validation reason, so the exact policy assertion is above.
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
+        config
+            .genesis_parameters
+            .push(iroha_data_model::parameter::Parameter::Custom(
+                CustomParameter::new(id.parse().unwrap(), Json::new(())),
+            ));
+        let error = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .err()
+            .expect("reserved parameters must stay closed during authenticated genesis");
+        assert!(
+            matches!(&error.error, crate::sumeragi::test_chain::TestChainError::Genesis(reason)
+                if reason.starts_with("original native genesis execution: Invalid genesis block: Genesis execution output rejected:")),
+            "{id}: {error:?}",
+        );
+        assert_eq!(
+            crate::state::StateReadOnly::height(&error.state.view()),
+            0,
+            "rejected genesis must not publish a block"
+        );
     }
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_transaction = block.transaction();
@@ -1619,9 +1705,11 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
         .execute_instruction(&mut state_transaction, &generic_admin, propose())
         .expect_err("generic parameter authority must not authorize SCCP proposals");
     assert!(
-        error
-            .to_string()
-            .contains("CanProposeSccpRouteGovernance required"),
+        matches!(
+            &error,
+            ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(reason))
+                if reason.contains("CanProposeSccpRouteGovernance required")
+        ),
         "unexpected SCCP proposer rejection: {error:?}"
     );
     assert_eq!(
@@ -1660,60 +1748,337 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
 /// genesis grants them.
 #[test]
 fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
-    let bootstrap = checked_account_id();
+    let key = checked_keypair();
+    let bootstrap = AccountId::new(key.public_key().clone());
     let destination = checked_account_id();
-    let world = World::with(
-        [],
-        [
-            Account::new(bootstrap.clone()).build(&bootstrap),
-            Account::new(destination.clone()).build(&destination),
-        ],
-        [],
-    );
-    let state = state_for_testing(world);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut genesis = block.transaction();
-    assert!(is_initial_genesis_context(&genesis));
-    for name in [
+    let config = || {
+        let world = World::with(
+            [],
+            [Account::new(destination.clone()).build(&destination)],
+            [],
+        );
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.genesis_key = key.clone();
+        config
+    };
+    let names = [
         "DpnAdmin",
         "DpnUser",
         "DpnInori",
         "DpnSettlement",
         "DpnEprGuard",
-    ] {
+    ];
+    let mut positive = config();
+    for name in names {
+        positive.genesis_instructions.push(
+            Grant::account_permission(
+                Permission::new(name.to_owned(), Json::new(())),
+                destination.clone(),
+            )
+            .into(),
+        );
+    }
+    let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(positive)
+        .expect("signed genesis grants all exact DPN markers");
+    assert_eq!(chain.height(), 1);
+    crate::block::authenticate_genesis_block_intents(chain.genesis(), &bootstrap).unwrap();
+    for name in names {
+        let exact = Permission::new(name.to_owned(), Json::new(()));
+        assert!(
+            authority_has_permission(&chain.state().view().world, &destination, &exact).unwrap()
+        );
+    }
+    drop(chain);
+    for name in names {
         for payload in ["{}", "[]", "true", "\"unexpected\""] {
             let malformed = Permission::new(
                 name.to_owned(),
-                Json::from_raw_json(payload.to_owned()).expect("valid JSON fixture"),
+                Json::from_raw_json(payload.to_owned()).expect("JSON fixture"),
             );
-            let error = super::Executor::Initial
-                .execute_instruction(
-                    &mut genesis,
+            let error = {
+                let state = component_state_for_testing(World::with(
+                    [],
+                    [
+                        Account::new(bootstrap.clone()).build(&bootstrap),
+                        Account::new(destination.clone()).build(&destination),
+                    ],
+                    [],
+                ));
+                let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+                let tx = block.transaction();
+                validate_initial_permission_or_role_mutation(
+                    &tx,
                     &bootstrap,
-                    Grant::account_permission(malformed.clone(), destination.clone()).into(),
+                    &Grant::account_permission(malformed.clone(), destination.clone()).into(),
+                    true,
                 )
-                .expect_err("malformed DPN payload must be rejected even at genesis");
+                .expect_err("the genesis permission predicate rejects malformed marker")
+            };
             assert!(
-                matches!(&error, ValidationFail::NotPermitted(message)
-                    if message.contains(name) && message.contains("Invalid permission payload")),
-                "unexpected {name} {payload} rejection: {error:?}"
+                matches!(&error, ValidationFail::NotPermitted(reason)
+                if reason.contains(name) && reason.contains("Invalid permission payload")),
+                "{error:?}"
             );
+            let mut negative = config();
+            negative
+                .genesis_instructions
+                .push(Grant::account_permission(malformed.clone(), destination.clone()).into());
+            let error = crate::sumeragi::test_chain::CertifiedTestChain::start(negative)
+                .err()
+                .expect("malformed DPN signed genesis rejects");
             assert!(
-                !genesis
-                    .world
-                    .account_permissions_iter(&destination)
-                    .expect("destination permissions")
-                    .any(|stored| stored == &malformed),
-                "malformed {name} permission reached account storage"
+                matches!(&error.error, crate::sumeragi::test_chain::TestChainError::Genesis(reason)
+                if reason.starts_with("original native genesis execution: Invalid genesis block: Genesis execution output rejected:")),
+                "{name} {payload}: {error:?}"
+            );
+            let view = error.state.view();
+            assert_eq!(crate::state::StateReadOnly::height(&view), 0);
+            assert!(
+                !authority_has_permission(&view.world, &destination, &malformed).unwrap(),
+                "malformed {name} reached storage"
             );
         }
-        let exact = Permission::new(name.to_owned(), Json::new(()));
-        super::Executor::Initial
-            .execute_instruction(
-                &mut genesis,
-                &bootstrap,
-                Grant::account_permission(exact, destination.clone()).into(),
-            )
-            .unwrap_or_else(|error| panic!("genesis must grant the exact {name} marker: {error}"));
     }
+}
+
+// Cache residency is process-global. Run only the selected test in a fresh copy of
+// this same harness so unrelated parallel tests cannot change its original budget.
+fn executor_cache_test_in_child(name: &str) -> bool {
+    const CHILD: &str = "IROHA_CORE_EXECUTOR_CACHE_TEST_CHILD";
+    let exact_name = format!("executor::tests::{name}");
+    if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new(&exact_name)) {
+        return false;
+    }
+    let output = std::process::Command::new(
+        std::env::current_exe().expect("resolve Core cache-test executable"),
+    )
+    .arg(&exact_name)
+    .args(["--exact", "--nocapture", "--test-threads=1"])
+    .env(CHILD, &exact_name)
+    .output()
+    .expect("execute exact cache-test child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "{exact_name} failed in its isolated harness\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains(&format!("test {exact_name} ... ok"))
+            && stdout.contains("test result: ok. 1 passed; 0 failed;"),
+        "{exact_name} did not complete exactly once\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    true
+}
+
+#[test]
+fn loaded_executor_reclaims_unused_default_for_governed_runtime() {
+    if executor_cache_test_in_child("loaded_executor_reclaims_unused_default_for_governed_runtime")
+    {
+        return;
+    }
+    const GAS_LIMIT: u64 = 10_000;
+    let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
+    let loaded = super::LoadedExecutor::load(raw).expect("load constructor geometry");
+    let defaults = iroha_data_model::parameter::SmartContractParameters::default();
+    let constructor =
+        super::ExecutorRuntimeKey::for_limits(defaults.fuel().get(), defaults.memory().get());
+    let governed = super::ExecutorRuntimeKey::for_limits(GAS_LIMIT, Memory::HEAP_MAX_SIZE);
+    assert_ne!(constructor, governed);
+    assert!(
+        loaded
+            .runtime_pool
+            .lock()
+            .unwrap()
+            .variants
+            .get(&constructor)
+            .unwrap()
+            .available
+            .is_some(),
+        "the original constructor runtime must remain retained for the regression"
+    );
+    let limit_before = ivm::cache_memory::memory_stats().limit_bytes;
+    let mut runtime = loaded
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .unwrap();
+    let allocation = runtime.memory.load_region(0, 1).unwrap().as_ptr();
+    runtime.set_register(7, 99);
+    runtime.memory.preload_input(0, &[0xA5]).unwrap();
+    drop(runtime);
+    let (before_reuse, _) = loaded.runtime_pool_snapshot();
+    let runtime = loaded
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .unwrap();
+    let (after_reuse, _) = loaded.runtime_pool_snapshot();
+    assert_eq!(
+        after_reuse.hits,
+        before_reuse.hits + 1,
+        "an unused local default must not force every governed checkout to load cold"
+    );
+    assert_eq!(after_reuse.program_loads, before_reuse.program_loads);
+    assert_eq!(after_reuse.template_builds, before_reuse.template_builds);
+    assert_eq!(
+        runtime.memory.load_region(0, 1).unwrap().as_ptr(),
+        allocation
+    );
+    assert_eq!(runtime.register(7), 0);
+    assert_eq!(
+        runtime.memory.load_region(Memory::INPUT_START, 1).unwrap(),
+        &[0]
+    );
+    assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
+    assert_eq!(ivm::cache_memory::memory_stats().limit_bytes, limit_before);
+}
+
+#[test]
+fn executor_idle_retention_reclamation_preserves_lru_identity_and_original_owners() {
+    if executor_cache_test_in_child(
+        "executor_idle_retention_reclamation_preserves_lru_identity_and_original_owners",
+    ) {
+        return;
+    }
+    const GAS: u64 = 10_000;
+    let loaded = super::LoadedExecutor::load(data_model_executor::Executor::new(
+        IvmBytecode::from_compiled(generate_ok_program()),
+    ))
+    .unwrap();
+    loaded.runtime_pool.lock().unwrap().clear_storage();
+    for heap in [64, 128] {
+        drop(loaded.checkout_runtime_for_gas_limit(GAS, heap).unwrap());
+    }
+    let first = super::ExecutorRuntimeKey::for_limits(GAS, 64);
+    let second = super::ExecutorRuntimeKey::for_limits(GAS, 128);
+    let active = super::ExecutorRuntimeKey::for_limits(GAS, 256);
+    let returning = super::ExecutorRuntimeKey::for_limits(GAS, 512);
+    let (identity, idle, retained_index, rows, evictions_before) = {
+        let mut pool = loaded.runtime_pool.lock().unwrap();
+        assert!(pool.variants.get(&first).unwrap().available.is_some());
+        assert!(pool.variants.get(&second).unwrap().available.is_some());
+        // These empty rows stand for an active borrower and the returning owner.
+        pool.insert_variant(active);
+        let identity = pool.insert_variant(returning);
+        pool.touch(first);
+        let expected = pool
+            .variants
+            .get(&second)
+            .unwrap()
+            .available
+            .as_ref()
+            .unwrap()
+            .1
+            .memory
+            .load_region(0, 1)
+            .unwrap()
+            .as_ptr();
+        let retained_index = pool.index_memory.bytes();
+        let rows = pool.variants.len();
+        let evictions_before = pool.stats.evictions;
+        let resident = ivm::cache_memory::memory_stats().measured_resident_bytes();
+        let idle = pool
+            .take_idle_runtime_for_retention(returning, &identity)
+            .unwrap();
+        assert_eq!(idle.1.memory.load_region(0, 1).unwrap().as_ptr(), expected);
+        assert_eq!(
+            ivm::cache_memory::memory_stats().measured_resident_bytes(),
+            resident,
+            "moving the original owner must not refund live storage"
+        );
+        assert_eq!(pool.index_memory.bytes(), retained_index);
+        assert_eq!(pool.variants.len(), rows);
+        assert!(pool.variants.get(&first).unwrap().available.is_some());
+        assert!(pool.variants.get(&second).unwrap().available.is_none());
+        assert!(pool.variants.get(&active).unwrap().available.is_none());
+        assert!(pool.variants.get(&returning).unwrap().available.is_none());
+        (identity, idle, retained_index, rows, evictions_before)
+    };
+    assert!(
+        loaded.runtime_pool.try_lock().is_ok(),
+        "destruction runs outside the pool lock"
+    );
+    let resident = ivm::cache_memory::memory_stats().measured_resident_bytes();
+    let original_baseline = idle.0.clone();
+    assert_eq!(
+        ivm::cache_memory::memory_stats().measured_resident_bytes(),
+        resident,
+        "a borrower shares the original allocation charges"
+    );
+    drop(idle);
+    let while_borrowed = ivm::cache_memory::memory_stats().measured_resident_bytes();
+    assert!(
+        while_borrowed < resident,
+        "the original idle VM refunds when destroyed"
+    );
+    drop(original_baseline);
+    assert!(
+        ivm::cache_memory::memory_stats().measured_resident_bytes() < while_borrowed,
+        "the shared baseline refunds only after its final borrower drops"
+    );
+    let last_idle = {
+        let mut pool = loaded.runtime_pool.lock().unwrap();
+        let idle = pool
+            .take_idle_runtime_for_retention(returning, &identity)
+            .unwrap();
+        assert!(
+            pool.take_idle_runtime_for_retention(returning, &identity)
+                .is_none()
+        );
+        assert_eq!(pool.stats.evictions, evictions_before + 2);
+        assert_eq!(pool.index_memory.bytes(), retained_index);
+        assert_eq!(pool.variants.len(), rows);
+        idle
+    };
+    drop(last_idle);
+}
+
+#[test]
+fn executor_idle_retention_reclamation_rejects_replaced_or_filled_returning_slot() {
+    if executor_cache_test_in_child(
+        "executor_idle_retention_reclamation_rejects_replaced_or_filled_returning_slot",
+    ) {
+        return;
+    }
+    const GAS: u64 = 10_000;
+    let loaded = super::LoadedExecutor::load(data_model_executor::Executor::new(
+        IvmBytecode::from_compiled(generate_ok_program()),
+    ))
+    .unwrap();
+    loaded.runtime_pool.lock().unwrap().clear_storage();
+    for heap in [64, 256] {
+        drop(loaded.checkout_runtime_for_gas_limit(GAS, heap).unwrap());
+    }
+    let idle_key = super::ExecutorRuntimeKey::for_limits(GAS, 64);
+    let competing_idle = super::ExecutorRuntimeKey::for_limits(GAS, 256);
+    let returning = super::ExecutorRuntimeKey::for_limits(GAS, 128);
+    let mut pool = loaded.runtime_pool.lock().unwrap();
+    let old_identity = pool.insert_variant(returning);
+    let new_identity = ivm::cache_memory::SharedValue::new((), Some(0));
+    pool.variants.get_mut(&returning).unwrap().identity = new_identity.clone();
+    let evictions = pool.stats.evictions;
+    assert!(
+        pool.take_idle_runtime_for_retention(returning, &old_identity)
+            .is_none()
+    );
+    assert!(pool.variants.get(&idle_key).unwrap().available.is_some());
+    assert_eq!(pool.stats.evictions, evictions);
+    let original = pool
+        .variants
+        .get_mut(&idle_key)
+        .unwrap()
+        .available
+        .take()
+        .unwrap();
+    pool.variants.get_mut(&returning).unwrap().available = Some(original);
+    assert!(
+        pool.take_idle_runtime_for_retention(returning, &new_identity)
+            .is_none()
+    );
+    assert!(pool.variants.get(&returning).unwrap().available.is_some());
+    assert!(
+        pool.variants
+            .get(&competing_idle)
+            .unwrap()
+            .available
+            .is_some()
+    );
+    assert_eq!(pool.stats.evictions, evictions);
 }

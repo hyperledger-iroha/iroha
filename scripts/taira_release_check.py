@@ -18,7 +18,8 @@ Native checks retain incremental compilation unless CARGO_INCREMENTAL=0 is
 explicitly selected. This preference never changes Linux release compilation.
 Cargo and native test children create owner-private locks, directories and
 outputs independently of the caller's umask; existing unsafe artifacts still
-fail custody admission. Test fixtures retain the production custody guards.
+fail custody admission. Test fixtures retain the production custody guards. Localnet/genesis engine
+checks run in the owning iroha_deploy library; Kagami retains CLI/signing checks.
 Temporary executable copies are released after their last subprocess exits,
 including non-CLI native network binaries and failed checks; observations and logs
 remain. The published native `iroha` CLI is retained for operator consumers; the
@@ -1203,6 +1204,7 @@ HARNESS_TARGETS = {
     "cli": ("native CLI", "iroha_cli", "lib", ["-p", "iroha_cli_lib", "--lib"]),
     "cli-bin": ("native shipping CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
     "kagami": ("native Kagami", "kagami", "bin", ["-p", "iroha_kagami", "--bin", "kagami"]),
+    "deploy": ("native deployment engine", "iroha_deploy", "lib", ["-p", "iroha_deploy", "--lib"]),
     "sorafs-bin": ("native SoraFS shipping target", "sorafs-node", "bin", ["-p", "sorafs_node", "--bin", "sorafs-node"]),
     "taira-launcher": ("native Taira shipping launcher", "iroha3d_taira", "bin", ["-p", "irohad", "--bin", "iroha3d_taira"]),
     "crypto": ("native puzzle cryptography", "iroha_crypto", "lib", ["-p", "iroha_crypto", "--lib"]),
@@ -1223,11 +1225,8 @@ HARNESS_TARGETS = {
 }
 
 
-KAGAMI_STAGES = (("native Taira genesis and independent localnet profiles", (
-    "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
-    "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
-    "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
-    "genesis::sign::tests::private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize",
+DEPLOY_STAGES = (("native Taira genesis and independent localnet profiles", (
+    "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
     "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
@@ -1238,7 +1237,13 @@ KAGAMI_STAGES = (("native Taira genesis and independent localnet profiles", (
     "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
     "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
     "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
-)),)
+)), )
+
+KAGAMI_STAGES = (("native Kagami bootstrap signing and key custody", (
+    "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
+    "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
+    "genesis::sign::tests::private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize",
+)), )
 
 
 KAGAMI_STAGES += (("retired epoch key derivation commands are rejected", (
@@ -2324,7 +2329,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
         "mv-admitted-map": MV_ADMITTED_MAP_STAGES, "concread": CONCREAD_STAGES,
         "config": CONFIG_STAGES, "config-fixtures": CONFIG_FIXTURE_STAGES, "config-unit": CONFIG_UNIT_STAGES, "genesis": GENESIS_STAGES, "data-model": DATA_MODEL_STAGES,
-        "kagami": KAGAMI_STAGES,
+        "kagami": KAGAMI_STAGES, "deploy": DEPLOY_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES, "core-zk": CORE_ZK_STAGES,
         "sumeragi": CURRENT_CONSENSUS_STAGES, "schema": SCHEMA_STAGES,

@@ -8536,6 +8536,31 @@ impl ExecutorRuntimePool {
         #[cfg(not(test))]
         let _ = event;
     }
+    // Move at most one original idle owner out for destruction after unlocking. Keep
+    // its bounded key/identity row: active borrowers and the index high-water charge
+    // are independent owners and are never reclaimed by this retention retry.
+    fn take_idle_runtime_for_retention(
+        &mut self,
+        returning_key: ExecutorRuntimeKey,
+        returning_identity: &ivm::cache_memory::SharedValue<()>,
+    ) -> Option<(RuntimeTemplate, IVM)> {
+        let returning = self.variants.get(&returning_key)?;
+        if !ivm::cache_memory::SharedValue::ptr_eq(&returning.identity, returning_identity)
+            || returning.available.is_some()
+        {
+            return None;
+        }
+        let idle_key = self.order.iter().copied().find(|key| {
+            *key != returning_key
+                && self
+                    .variants
+                    .get(key)
+                    .is_some_and(|variant| variant.available.is_some())
+        })?;
+        let idle = self.variants.get_mut(&idle_key)?.available.take()?;
+        self.record(ExecutorRuntimePoolEvent::Eviction);
+        Some(idle)
+    }
     fn touch(&mut self, key: ExecutorRuntimeKey) {
         if let Some(position) = self.order.iter().position(|candidate| *candidate == key) {
             self.order.remove(position);
@@ -8595,12 +8620,17 @@ impl Drop for ExecutorRuntimeLease {
         let Some(mut vm) = self.vm.take() else {
             return;
         };
-        let can_return = {
+        let (can_return, mut idle_reclaims_left) = {
             let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
-            pool.variants.get(&self.key).is_some_and(|variant| {
-                ivm::cache_memory::SharedValue::ptr_eq(&variant.identity, &self.variant_identity)
-                    && variant.available.is_none()
-            })
+            (
+                pool.variants.get(&self.key).is_some_and(|variant| {
+                    ivm::cache_memory::SharedValue::ptr_eq(
+                        &variant.identity,
+                        &self.variant_identity,
+                    ) && variant.available.is_none()
+                }),
+                pool.capacity,
+            )
         };
         if !can_return {
             return;
@@ -8608,8 +8638,22 @@ impl Drop for ExecutorRuntimeLease {
         if vm.reset_from_runtime_template(&self.baseline).is_err() {
             return;
         }
-        if !self.baseline.try_retain_cache_allocations() || !vm.try_retain_cache_allocations() {
-            return;
+        while !self.baseline.try_retain_cache_allocations() || !vm.try_retain_cache_allocations() {
+            if idle_reclaims_left == 0 {
+                return;
+            }
+            idle_reclaims_left -= 1;
+            let idle = {
+                let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+                pool.take_idle_runtime_for_retention(self.key, &self.variant_identity)
+            };
+            let Some(idle) = idle else {
+                return;
+            };
+            // A fresh governance geometry may need the room held by an unused
+            // constructor geometry. Refund only this original idle owner's actual
+            // lifetime; shared allocations still held by borrowers stay charged.
+            drop(idle);
         }
         let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
         let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
@@ -9011,6 +9055,25 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         )
     }
+    /// Structural post-genesis fixture with an explicit committed Global root.
+    /// This metadata grants no authenticated genesis or block-publication capability.
+    fn component_world_for_testing(world: World) -> World {
+        let mut parameters = world.parameters.block();
+        assert!(
+            !parameters.custom().contains_key(
+                &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
+            ),
+            "component root must be selected before State construction"
+        );
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+        world
+    }
+    fn component_state_for_testing(world: World) -> State {
+        state_for_testing(component_world_for_testing(world))
+    }
     fn bind_executor_test_contract(
         world: &mut World,
         address: &ContractAddress,
@@ -9033,12 +9096,10 @@ mod tests {
                 .with_active_code_hash(code_hash),
         );
     }
-    fn state_after_genesis(world: World) -> State {
-        let state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+    // Structural height progression for component policy tests only. The helper
+    // selects Global explicitly and does not authenticate genesis or native history.
+    fn component_state_after_genesis(world: World) -> State {
+        let state = component_state_for_testing(world);
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
             .commit_empty_block_for_testing()
@@ -9056,7 +9117,7 @@ mod tests {
         assert!(expected_gas > 0);
         let execute_rejected = |executable: Executable| {
             let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let state = state_for_testing(World::with([], [account], []));
+            let state = component_state_for_testing(World::with([], [account], []));
             let signed = TransactionBuilder::new(
                 *state.network_id_ref(),
                 ALICE_ID.clone(),
@@ -9064,9 +9125,11 @@ mod tests {
             )
             .with_executable(executable)
             .sign(ALICE_KEYPAIR.private_key());
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let mut transaction =
                 block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
+            transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let mut cache = IvmCache::new();
             crate::executor::Executor::Initial
                 .execute_transaction(&mut transaction, &ALICE_ID, signed, &mut cache)
@@ -9085,7 +9148,7 @@ mod tests {
     #[test]
     fn successful_live_batch_settlement_retains_nested_execute_trigger_ivm_gas() {
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let state = state_after_genesis(World::with([], [account], []));
+        let state = component_state_after_genesis(World::with([], [account], []));
         let trigger_id: TriggerId = "live_batch_ivm_gas".parse().expect("trigger id");
         let mut program = ivm::ProgramMetadata {
             max_cycles: 100,
@@ -9126,6 +9189,8 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, 0, 0));
         let nested_ivm_gas = {
             let mut baseline_tx = block.transaction_for_callback_testing();
+            baseline_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            baseline_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             baseline_tx
                 .execute_called_trigger(
                     &trigger_id,
@@ -9152,6 +9217,8 @@ mod tests {
         .sign(ALICE_KEYPAIR.private_key());
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -9165,7 +9232,7 @@ mod tests {
     #[test]
     fn rejected_live_batch_retains_nested_execute_trigger_gas() {
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let state = state_after_genesis(World::with([], [account], []));
+        let state = component_state_after_genesis(World::with([], [account], []));
         let trigger_id: TriggerId = "rejected_live_batch_gas".parse().expect("trigger id");
         let trigger_body = vec![
             InstructionBox::from(Log::new(Level::INFO, "meter rejected trigger".to_owned())),
@@ -9200,6 +9267,8 @@ mod tests {
         .sign(ALICE_KEYPAIR.private_key());
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut state_tx)
             .expect("register failing trigger");
@@ -9660,37 +9729,51 @@ mod tests {
     include!("executor_contract_owner_permission_tests.rs");
     #[test]
     fn initial_executor_genesis_rejects_unclassified_oracle_instruction() {
-        let authority = checked_account_id();
-        let account = Account::new(authority.clone()).build(&authority);
-        let state = State::new_for_testing(
-            World::with([], [account], []),
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
-        assert!(
-            state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty(),
-            "the regression must exercise the authenticated genesis context"
-        );
-        let instruction = iroha_data_model::isi::oracle::AggregateOracleFeed {
+        let key = checked_keypair();
+        let authority = AccountId::new(key.public_key().clone());
+        let instruction: InstructionBox = iroha_data_model::isi::oracle::AggregateOracleFeed {
             feed_id: "genesis_oracle".parse().expect("feed id"),
             slot: 0,
             request_hash: Hash::new(b"genesis oracle request"),
             evidence_hashes: Vec::new(),
         }
         .into();
-        let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction)
-            .expect_err("genesis must not bypass the native instruction allowlist");
+        let state = component_state_for_testing(World::with(
+            [],
+            [Account::new(authority.clone()).build(&authority)],
+            [],
+        ));
+        {
+            // The predicate is tested directly; this component overlay has no genesis capability.
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let tx = block.transaction();
+            let error =
+                validate_initial_native_instruction_authority(&tx, &authority, &instruction, true)
+                    .expect_err("genesis must not bypass the native instruction allowlist");
+            assert!(
+                matches!(&error, ValidationFail::NotPermitted(reason)
+                if reason.contains("does not admit unclassified native instruction")),
+                "{error:?}"
+            );
+        }
+        let mut positive = crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
+        positive.genesis_key = key.clone();
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(positive)
+            .expect("signed positive genesis");
+        assert_eq!(chain.height(), 1);
+        drop(chain);
+        let mut negative = crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
+        negative.genesis_key = key;
+        negative.genesis_instructions.push(instruction);
+        let error = crate::sumeragi::test_chain::CertifiedTestChain::start(negative)
+            .err()
+            .expect("signed unclassified instruction rejects");
         assert!(
-            matches!(
-                error,
-                ValidationFail::NotPermitted(ref message)
-                    if message.contains("does not admit unclassified native instruction")
-            ),
-            "unexpected genesis oracle rejection: {error:?}"
+            matches!(&error.error, crate::sumeragi::test_chain::TestChainError::Genesis(reason)
+            if reason.starts_with("original native genesis execution: Invalid genesis block: Genesis execution output rejected:")),
+            "{error:?}"
         );
+        assert_eq!(crate::state::StateReadOnly::height(&error.state.view()), 0);
     }
     #[test]
     fn initial_executor_admits_the_complete_kaigi_surface() {
@@ -9805,7 +9888,7 @@ mod tests {
             [Account::new(host.clone()).build(&host)],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction: InstructionBox = CreateKaigi {
@@ -9851,7 +9934,7 @@ mod tests {
             ],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction: InstructionBox = CreateKaigi {
@@ -9898,7 +9981,7 @@ mod tests {
             [Account::new(authority.clone()).build(&authority)],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction = SetKeyValue::domain(domain_id, key, Json::new("forged record")).into();
@@ -10141,7 +10224,7 @@ mod tests {
             ],
             [],
         );
-        let mut governance = state_after_genesis(World::new()).gov.clone();
+        let mut governance = component_state_after_genesis(World::new()).gov.clone();
         governance.citizenship_asset_id = definition;
         governance.citizenship_bond_amount = Quantity::from(50_u32);
         governance.citizenship_escrow_account = escrow.clone();
@@ -10366,7 +10449,7 @@ mod tests {
 
         let authority = checked_account_id();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction: InstructionBox = ApplyThresholdKeyLifecycleCertificateV1 {
@@ -10404,7 +10487,7 @@ mod tests {
     fn initial_executor_cannot_bypass_native_asset_transfer_control_metadata() {
         let authority = checked_account_id();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let key: Name = iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY
@@ -10434,7 +10517,7 @@ mod tests {
     fn initial_executor_rejects_reserved_native_metadata_during_account_registration() {
         let authority = checked_account_id();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         for key in [
@@ -10484,7 +10567,7 @@ mod tests {
                 .build(&target)],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let error = super::Executor::Initial
@@ -10529,7 +10612,7 @@ mod tests {
         let authority = checked_account_id();
         let intruder = checked_account_id();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let stx = block.transaction();
         let lane = iroha_model_base::topology::LaneId::SINGLE;
@@ -10827,7 +10910,7 @@ mod tests {
             ]),
         );
         let state = State::new_with_chain_and_network_id_for_testing(
-            world,
+            component_world_for_testing(world),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             iroha_model_base::chain::ChainId::from("00000000-0000-0000-0000-000000000000"),
@@ -11080,7 +11163,7 @@ mod tests {
             hijiri_admin.clone(),
             BTreeSet::from([executor_permission::parameter::CanSetHijiriParameters.into()]),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let parameters = HijiriParametersV1::try_new(
@@ -11238,7 +11321,7 @@ mod tests {
                 restitute_permission.clone(),
             ]),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         Register::trigger(Trigger::new(
@@ -11796,7 +11879,7 @@ mod tests {
             authority.clone(),
             invalid_permissions.iter().cloned().collect(),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let role_id: RoleId = "governance_selector_sink".parse().expect("role id");
@@ -11870,7 +11953,7 @@ mod tests {
             authority.clone(),
             canonical_permissions.iter().cloned().collect(),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let role_id: RoleId = "operational_governance_sink".parse().expect("role id");
@@ -11960,7 +12043,7 @@ mod tests {
         world
             .account_permissions
             .insert(issuer.clone(), BTreeSet::from([issuer_permission.clone()]));
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         assert!(
@@ -12027,7 +12110,7 @@ mod tests {
             leaf_holder.clone(),
             leaf_permissions.iter().cloned().collect(),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let admin_role: RoleId = "initial_dpn_role_admin".parse().expect("role id");
@@ -12147,7 +12230,7 @@ mod tests {
             asset_owner.clone(),
             BTreeSet::from([account_alias_permission]),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 10_000, 0));
         let mut state_transaction = block.transaction();
         let malformed_permission =
@@ -12337,7 +12420,7 @@ mod tests {
             administrator.clone(),
             BTreeSet::from([ordinary_permission.clone(), kagemusha_permission.clone()]),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let ordinary_role: RoleId = "initial_executor_ordinary_role".parse().expect("role id");
@@ -12440,7 +12523,7 @@ mod tests {
             holder.clone(),
             BTreeSet::from([exact.clone(), can_manage_roles]),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let reader_role: RoleId = "restricted_reader_role".parse().expect("role id");
@@ -12651,7 +12734,7 @@ mod tests {
             ],
             [],
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.tx_call_hash = Some(Hash::prehashed([0xD8; Hash::LENGTH]));
@@ -12944,7 +13027,7 @@ mod tests {
         let code_hash = Hash::new(b"proved durable-state contract");
         let mut world = World::with([domain], [account], []);
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let tx = supplied_replay_fixture_source(&state, &authority, &keypair, Vec::new());
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
@@ -13192,7 +13275,7 @@ mod tests {
                 )),
             ),
         ] {
-            let state = state_for_testing(World::with(
+            let state = component_state_for_testing(World::with(
                 [],
                 [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
                 [],
@@ -13222,7 +13305,7 @@ mod tests {
                 access_log: None,
                 gas_used: replay_gas,
             };
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
             let mut transaction = block.transaction();
             transaction.pipeline.overlay_max_instructions = count_cap;
@@ -13336,6 +13419,27 @@ mod tests {
         AssetDefinitionId,
         AssetDefinitionId,
     ) {
+        let (world, keypair, authority, initial_tech, updated_tech, fee_asset, alternate) =
+            pipeline_fee_world_fixture();
+        (
+            component_state_for_testing(world),
+            keypair,
+            authority,
+            initial_tech,
+            updated_tech,
+            fee_asset,
+            alternate,
+        )
+    }
+    fn pipeline_fee_world_fixture() -> (
+        World,
+        KeyPair,
+        AccountId,
+        AccountId,
+        AccountId,
+        AssetDefinitionId,
+        AssetDefinitionId,
+    ) {
         let (authority, authority_keypair) = gen_account_in("pipeline_fee");
         let (initial_tech, _) = gen_account_in("pipeline_fee");
         let (updated_tech, _) = gen_account_in("pipeline_fee");
@@ -13384,9 +13488,8 @@ mod tests {
             authority.clone(),
             BTreeSet::from([executor_permission::parameter::CanSetParameters.into()]),
         );
-        let state = state_for_testing(world);
         (
-            state,
+            world,
             authority_keypair,
             authority,
             initial_tech,
@@ -13539,7 +13642,7 @@ mod tests {
                 ),
             );
         }
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             beneficiary.clone(),
@@ -13575,7 +13678,6 @@ mod tests {
         settlement_mode: iroha_config::parameters::actual::NexusFeeSettlementMode,
     ) {
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-        state_transaction.tx_call_hash = Some(Hash::new(b"sponsored-pipeline-fee-call"));
         state_transaction.nexus.fees.per_gas_unit_fee = Quantity::zero();
         state_transaction
             .nexus
@@ -13670,33 +13772,56 @@ mod tests {
     }
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_fee_free() {
-        let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
-        let transaction = TransactionBuilder::new_genesis(
-            authority.clone(),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "fee-free genesis execution".to_owned(),
-        )])
-        .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_transaction =
-            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
-        configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
-        let mut ivm_cache = IvmCache::new();
-        super::Executor::Initial
-            .execute_transaction(
-                &mut state_transaction,
-                &authority,
-                transaction,
-                &mut ivm_cache,
-            )
-            .map_err(crate::execution_attempt::expect_completed_rejection)
-            .expect("authenticated genesis execution must not require Nexus fee limits");
+        let (world, keypair, authority, _, _, fee_asset, _) = pipeline_fee_world_fixture();
+        let payer = AssetId::new(fee_asset.clone(), authority.clone());
+        let payer_before = world.assets.view().get(&payer).unwrap().as_ref().clone();
+        let supply_before = world
+            .asset_definitions
+            .view()
+            .get(&fee_asset)
+            .unwrap()
+            .total_quantity()
+            .clone();
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.fees.settlement_mode =
+            iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+        nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        nexus.fees.base_fee = Quantity::from(2_u32);
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.genesis_key = keypair;
+        config.nexus = Some(nexus);
+        config
+            .genesis_instructions
+            .push(Log::new(Level::INFO, "fee-free signed genesis execution".to_owned()).into());
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("original signed instruction genesis executes without signed fee limits");
+        assert_eq!(chain.height(), 1);
+        crate::block::authenticate_genesis_block_intents(chain.genesis(), &authority).unwrap();
+        assert!(
+            chain
+                .genesis()
+                .external_transactions()
+                .all(|transaction| transaction.fee_payment_intent().charge_limits().is_empty())
+        );
+        let view = chain.state().view();
+        assert_eq!(
+            view.world.assets.get(&payer).unwrap().as_ref(),
+            &payer_before
+        );
+        assert_eq!(
+            view.world
+                .asset_definitions
+                .get(&fee_asset)
+                .unwrap()
+                .total_quantity(),
+            &supply_before
+        );
     }
     #[test]
-    fn transaction_execution_keeps_authenticated_genesis_generic_ivm_fee_free() {
+    fn genesis_generic_ivm_rejects_before_debit_or_supply_change() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
         let mut program = ivm::ProgramMetadata {
             max_cycles: 100,
@@ -13717,6 +13842,16 @@ mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(keypair.private_key());
+        let original = iroha_data_model::block::SignedBlock::genesis(
+            vec![transaction.clone()],
+            keypair.private_key(),
+            None,
+            None,
+        );
+        assert_eq!(
+            crate::block::authenticate_genesis_block_intents(&original, &authority).unwrap_err(),
+            crate::block::InvalidGenesisError::NotInstructions
+        );
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
@@ -13727,7 +13862,7 @@ mod tests {
                 &fee_asset,
             );
         let mut ivm_cache = IvmCache::new();
-        super::Executor::Initial
+        let error = super::Executor::Initial
             .execute_transaction(
                 &mut state_transaction,
                 &authority,
@@ -13735,7 +13870,11 @@ mod tests {
                 &mut ivm_cache,
             )
             .map_err(crate::execution_attempt::expect_completed_rejection)
-            .expect("authenticated genesis generic IVM execution must remain fee-free");
+            .expect_err("unsupported genesis executable has no authenticated input capability");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(reason) if reason == "genesis instruction execution requires its authenticated source capability")
+        );
+        assert_eq!(state_transaction.last_tx_gas_used, 0);
         assert_eq!(
             test_asset_balance(&state_transaction, &payer_asset_id),
             payer_before,
@@ -13764,7 +13903,8 @@ mod tests {
                 .to_le_bytes(),
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let transaction = TransactionBuilder::new_genesis(
+        let transaction = TransactionBuilder::new(
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -13777,14 +13917,17 @@ mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let (payer_asset_id, payer_before, supply_before) =
             configure_direct_genesis_ivm_fee_fixture(
                 &mut state_transaction,
                 &authority,
                 &fee_asset,
             );
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let retry_transaction = transaction.clone();
         let mut ivm_cache = IvmCache::new();
         let shared_cache = ivm_cache.prepared_contract_cache();
@@ -13813,7 +13956,7 @@ mod tests {
         assert_eq!(
             test_asset_balance(&state_transaction, &payer_asset_id),
             payer_before,
-            "generic IVM genesis execution must not debit its payer"
+            "deferred generic IVM execution must not debit its payer"
         );
         assert_eq!(
             state_transaction
@@ -13822,11 +13965,14 @@ mod tests {
                 .expect("direct-fee asset definition")
                 .total_quantity(),
             &supply_before,
-            "generic IVM genesis execution must not burn fee-asset supply"
+            "deferred generic IVM execution must not burn fee-asset supply"
         );
         drop(state_transaction);
-        let mut retry = block.transaction();
+        let mut retry = block
+            .transaction_for_fastpq_testing(Hash::from(retry_transaction.hash_as_entrypoint()));
         configure_direct_genesis_ivm_fee_fixture(&mut retry, &authority, &fee_asset);
+        retry.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        retry.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         super::Executor::Initial
             .execute_transaction(
                 &mut retry,
@@ -13838,8 +13984,11 @@ mod tests {
         let retry_gas = retry.last_tx_gas_used;
         let retry_balance = test_asset_balance(&retry, &payer_asset_id);
         drop(retry);
-        let mut cold = block.transaction();
+        let mut cold = block
+            .transaction_for_fastpq_testing(Hash::from(retry_transaction.hash_as_entrypoint()));
         configure_direct_genesis_ivm_fee_fixture(&mut cold, &authority, &fee_asset);
+        cold.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        cold.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         super::Executor::Initial
             .execute_transaction(
                 &mut cold,
@@ -13856,7 +14005,7 @@ mod tests {
         assert_eq!(test_asset_balance(&cold, &payer_asset_id), retry_balance);
     }
     #[test]
-    fn transaction_execution_keeps_authenticated_genesis_prepared_contract_ivm_fee_free() {
+    fn genesis_prepared_contract_ivm_rejects_before_debit_or_supply_change() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
         const ENTRYPOINT_PERMISSION: &str = "CanRunGenesisPreparedContract";
         let (program, _) = contract_program_with_entrypoint("run", Some(ENTRYPOINT_PERMISSION));
@@ -13895,6 +14044,16 @@ mod tests {
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
         .sign(keypair.private_key());
+        let original = iroha_data_model::block::SignedBlock::genesis(
+            vec![transaction.clone()],
+            keypair.private_key(),
+            None,
+            None,
+        );
+        assert_eq!(
+            crate::block::authenticate_genesis_block_intents(&original, &authority).unwrap_err(),
+            crate::block::InvalidGenesisError::NotInstructions
+        );
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
@@ -13949,7 +14108,7 @@ mod tests {
             .contract_instances
             .insert(contract_address, code_hash);
         let mut ivm_cache = IvmCache::new();
-        super::Executor::Initial
+        let error = super::Executor::Initial
             .execute_transaction(
                 &mut state_transaction,
                 &authority,
@@ -13957,7 +14116,11 @@ mod tests {
                 &mut ivm_cache,
             )
             .map_err(crate::execution_attempt::expect_completed_rejection)
-            .expect("authenticated genesis prepared-contract IVM execution must remain fee-free");
+            .expect_err("unsupported genesis executable has no authenticated input capability");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(reason) if reason == "genesis instruction execution requires its authenticated source capability")
+        );
+        assert_eq!(state_transaction.last_tx_gas_used, 0);
         assert_eq!(
             test_asset_balance(&state_transaction, &payer_asset_id),
             payer_before,
@@ -14132,7 +14295,8 @@ mod tests {
             lease_id,
         ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(10_u32)));
         let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         configure_sponsored_pipeline_fee_transaction(
             &mut state_transaction,
             &custody,
@@ -14208,7 +14372,8 @@ mod tests {
             lease_id,
         ) = sponsored_pipeline_fee_fixture(None);
         let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         configure_sponsored_pipeline_fee_transaction(
             &mut state_transaction,
             &custody,
@@ -14281,7 +14446,8 @@ mod tests {
                 lease_id,
             ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(allocation)));
             let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
-            let mut state_transaction = block.transaction();
+            let mut state_transaction =
+                block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
             configure_sponsored_pipeline_fee_transaction(
                 &mut state_transaction,
                 &custody,
@@ -14299,7 +14465,7 @@ mod tests {
             )
             .expect_err("retired receipt mode rejects even a fully funded spend lease");
             assert!(
-                matches!(error, ValidationFail::NotPermitted(reason) if reason.contains("retired lane-relay-burn fee settlement"))
+                matches!(error, ValidationFail::InternalError(reason) if reason.contains("retired lane-relay-burn fee settlement"))
             );
             let vault_key = FeeSponsorVaultKey {
                 program_id,
@@ -14487,9 +14653,9 @@ mod tests {
         .sign(keypair.private_key());
         let overlay = crate::pipeline::overlay::TxOverlay::from_instructions(instructions);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         configure_pipeline_fee_snapshot(&mut state_transaction, &initial_tech, &gas_asset, 1);
-        state_transaction.tx_call_hash = Some(Hash::from(transaction.hash_as_entrypoint()));
         state_transaction.current_tx_hash = Some(transaction.hash());
         validate_transaction_fee_admission(&mut state_transaction, &transaction)
             .expect("pre-effect policy accepts its exact signed limit");
@@ -14860,7 +15026,7 @@ mod tests {
             [],
         );
         seed_test_asset_supply(&mut world, &fee_asset);
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -14890,7 +15056,7 @@ mod tests {
         .expect_err("execution must defensively reject an authority-paid receipt");
         assert!(matches!(
             error,
-            ValidationFail::NotPermitted(reason)
+            ValidationFail::InternalError(reason)
                 if reason.contains("retired lane-relay-burn fee settlement")
         ));
         assert_eq!(
@@ -15715,8 +15881,13 @@ mod tests {
         world.verifying_keys.insert(vk_id.clone(), vk_record);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let state = State::new_with_chain(
+            component_world_for_testing(world),
+            kura,
+            query_handle,
+            ChainId::from("test-chain"),
+        );
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
@@ -15746,6 +15917,8 @@ mod tests {
         {
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::from(tx1.hash_as_entrypoint()));
+            state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx1, &mut ivm_cache)
                 .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -15755,6 +15928,8 @@ mod tests {
         {
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::from(tx2.hash_as_entrypoint()));
+            state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let res = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx2, &mut ivm_cache)
                 .map_err(crate::execution_attempt::expect_completed_rejection);
@@ -15809,7 +15984,7 @@ mod tests {
             let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
             attachment.vk_commitment = Some(vk_commitment);
             let state = State::new_with_chain(
-                world,
+                component_world_for_testing(world),
                 Kura::blank_kura_for_testing(),
                 query::store::LiveQueryStore::start_test(),
                 ChainId::from("test-chain"),
@@ -15835,6 +16010,8 @@ mod tests {
             let mut block = state.block(block_header);
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
+            state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let executor = super::Executor::Initial;
             let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
             executor
@@ -15842,9 +16019,9 @@ mod tests {
                 .map_err(crate::execution_attempt::expect_completed_rejection)
         }
         for (label, activation_height, withdraw_height, block_height) in [
-            ("future", Some(2), None, 1),
-            ("withdrawn", Some(1), Some(1), 1),
-            ("expired", Some(1), Some(2), 2),
+            ("future", Some(3), None, 2),
+            ("withdrawn", Some(2), Some(2), 2),
+            ("expired", Some(2), Some(3), 3),
         ] {
             let err = execute_with_window(activation_height, withdraw_height, block_height)
                 .expect_err("out-of-window verifying key must reject");
@@ -15856,7 +16033,7 @@ mod tests {
                 other => panic!("case {label}: unexpected error: {other:?}"),
             }
         }
-        execute_with_window(Some(1), Some(2), 1)
+        execute_with_window(Some(2), Some(3), 2)
             .expect("in-window active verifying key must preverify");
     }
     #[cfg(feature = "zk-preverify")]
@@ -15874,8 +16051,13 @@ mod tests {
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let state = State::new_with_chain(
+            component_world_for_testing(world),
+            kura,
+            query_handle,
+            ChainId::from("test-chain"),
+        );
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -15914,6 +16096,8 @@ mod tests {
             .sign(ALICE_KEYPAIR.private_key());
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
+            state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
                 .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -15947,8 +16131,13 @@ mod tests {
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let state = State::new_with_chain(
+            component_world_for_testing(world),
+            kura,
+            query_handle,
+            ChainId::from("test-chain"),
+        );
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -16038,6 +16227,8 @@ mod tests {
             .sign(ALICE_KEYPAIR.private_key());
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
+            state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
                 .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -16106,39 +16297,81 @@ mod tests {
     }
     #[test]
     fn borrowed_overlay_apply_matches_owned_initial_executor_for_register_domain() {
-        fn test_state() -> State {
-            let wonderland_domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(wonderland_domain_id).build(&ALICE_ID);
-            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let world = World::with([domain], [alice_account], []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = query::store::LiveQueryStore::start_test();
-            State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"))
+        let world = || World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+        let domain_id = DomainId::try_new("borrowed-overlay", "universal").unwrap();
+        let instruction: InstructionBox = Register::domain(Domain::new(domain_id.clone())).into();
+        // Height-only component overlays cannot execute genesis through either API.
+        for borrowed in [false, true] {
+            let state = component_state_for_testing(world());
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut tx = block.transaction();
+            let error = if borrowed {
+                super::Executor::Initial.execute_borrowed_overlay_instruction(
+                    &mut tx,
+                    &ALICE_ID,
+                    &instruction,
+                    None,
+                )
+            } else {
+                super::Executor::Initial.execute_instruction(
+                    &mut tx,
+                    &ALICE_ID,
+                    instruction.clone(),
+                )
+            }
+            .expect_err("missing original genesis capability rejects");
+            assert!(
+                matches!(&error, ValidationFail::NotPermitted(reason)
+                if reason == "genesis instruction execution requires its authenticated source capability"),
+                "{error:?}"
+            );
+            assert!(tx.world.domains.get(&domain_id).is_none());
+            drop(tx);
+            assert_eq!(block.committed_fragment_count(), 0);
         }
-        let executor = super::Executor::Initial;
-        let domain_id: DomainId =
-            DomainId::try_new("borrowed-overlay", "universal").expect("domain id");
-        let owned_state = test_state();
-        let mut owned_block =
-            owned_state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut owned_tx = owned_block.transaction();
-        let owned_instruction = Register::domain(Domain::new(domain_id.clone())).into();
-        executor
-            .execute_instruction(&mut owned_tx, &ALICE_ID.clone(), owned_instruction)
-            .expect("owned initial executor applies instruction");
-        assert!(owned_tx.world.domains.get(&domain_id).is_some());
-        let overlay_state = test_state();
-        let mut overlay_block =
-            overlay_state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut overlay_tx = overlay_block.transaction();
-        let overlay_instruction = Register::domain(Domain::new(domain_id.clone())).into();
-        let overlay =
-            crate::pipeline::overlay::TxOverlay::from_instructions(vec![overlay_instruction]);
-        overlay
-            .apply_with_chunk(&mut overlay_tx, &ALICE_ID.clone(), 1)
-            .expect("borrowed overlay applies instruction");
-        assert!(overlay_tx.world.domains.get(&domain_id).is_some());
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
+        config.genesis_key = ALICE_KEYPAIR.clone();
+        config.genesis_instructions.push(instruction);
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("exact signed Instructions genesis may register a domain");
+        assert_eq!(chain.height(), 1);
+        assert!(chain.state().view().world.domains.get(&domain_id).is_some());
+    }
+
+    #[test]
+    fn borrowed_overlay_apply_matches_owned_initial_executor_for_register_account() {
+        let account = checked_account_id();
+        let instruction: InstructionBox = Register::account(Account::new(account.clone())).into();
+        let mut outcomes = Vec::new();
+        for borrowed in [false, true] {
+            let state = component_state_for_testing(World::with(
+                [],
+                [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+                [],
+            ));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+            let mut tx = block
+                .transaction_for_fastpq_testing(Hash::new(b"owned-borrowed account registration"));
+            if borrowed {
+                let overlay = crate::pipeline::overlay::TxOverlay::from_instructions(vec![
+                    instruction.clone(),
+                ]);
+                overlay
+                    .apply_with_chunk(&mut tx, &ALICE_ID, 1)
+                    .expect("borrowed account registration");
+            } else {
+                super::Executor::Initial
+                    .execute_instruction(&mut tx, &ALICE_ID, instruction.clone())
+                    .expect("owned account registration");
+            }
+            assert!(tx.world.accounts.get(&account).is_some());
+            let account_value = tx.world.accounts.get(&account).unwrap().clone();
+            tx.apply();
+            outcomes.push((account_value, block.world.take_external_events()));
+            assert_eq!(block.committed_fragment_count(), 1);
+            assert!(block.world.accounts.get(&account).is_some());
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
     }
     #[test]
     fn initial_executor_rejects_raw_domain_registration_after_genesis() {
@@ -16151,7 +16384,7 @@ mod tests {
             [],
         );
         let state = State::new_with_chain(
-            world,
+            component_world_for_testing(world),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             ChainId::from("raw-domain-registration"),
@@ -16199,13 +16432,10 @@ mod tests {
             [seller_asset],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let state = component_state_for_testing(world);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
-        stx.tx_call_hash = Some(Hash::prehashed([0xE5; Hash::LENGTH]));
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xE5; Hash::LENGTH]));
         let escrow_id = EscrowId::new(Hash::new("executor-native-escrow-open"));
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
@@ -16277,7 +16507,7 @@ mod tests {
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
+        let state = State::new(component_world_for_testing(world), kura, query_handle);
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
             .commit_empty_block_for_testing()
@@ -16325,7 +16555,7 @@ mod tests {
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let registration = Register::asset_definition(AssetDefinition::numeric(
             projected_id,
             "coin".to_owned(),
@@ -16357,7 +16587,7 @@ mod tests {
         let owned_domain = DomainId::try_new("owned", "universal").expect("owned domain");
         let foreign_domain = DomainId::try_new("foreign", "universal").expect("foreign domain");
         let foreign_owner = checked_account_id();
-        let state = state_after_genesis(World::with(
+        let state = component_state_after_genesis(World::with(
             [
                 Domain::new(owned_domain.clone()).build(&ALICE_ID),
                 Domain::new(foreign_domain.clone()).build(&foreign_owner),
@@ -16443,7 +16673,7 @@ mod tests {
             )
             .build(&owner)],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut stx = block.transaction();
         let executor = super::Executor::Initial;
@@ -16610,7 +16840,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -16683,7 +16913,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_quantity(
@@ -16784,7 +17014,7 @@ mod tests {
                 .expect("active alias-domain ownership check"),
             "fixture must prove that the attacker owns an active alias domain for the source"
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 50, 0));
         let mut transaction = block.transaction();
         let transfer = Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
@@ -16883,7 +17113,7 @@ mod tests {
             "fixture must expose the retired authorization shortcut",
         );
 
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 50, 0));
         let mut transaction = block.transaction();
         let trigger_id: TriggerId = "initial_exact_trigger_owner".parse().expect("trigger id");
@@ -17004,23 +17234,22 @@ mod tests {
                     entrypoint: "execute_batch".to_owned(),
                 };
                 let state = State::new_with_chain_and_network_id_for_testing(
-                    world,
+                    component_world_for_testing(world),
                     Kura::blank_kura_for_testing(),
                     query::store::LiveQueryStore::start_test(),
                     iroha_model_base::chain::ChainId::from("00000000-0000-0000-0000-000000000000"),
                     network_id,
                 );
                 let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-                let mut transaction = block.transaction();
+                let mut transaction = block.transaction_for_fastpq_testing(Hash::new(
+                    format!("contract-batch-{independent}-{provenance:?}").as_bytes(),
+                ));
                 if matches!(provenance, Provenance::MissingReverse) {
                     transaction
                         .world
                         .contract_subject_addresses
                         .remove(contract_subject.clone());
                 }
-                transaction.tx_call_hash = Some(Hash::new(
-                    format!("contract-batch-{independent}-{provenance:?}").as_bytes(),
-                ));
                 let entries = vec![TransferAssetBatchEntry::with_leg_id(
                     "contract-owned",
                     contract_subject.clone(),
@@ -17116,10 +17345,10 @@ mod tests {
         world
             .contract_subject_addresses
             .insert(contract_subject.clone(), contract_address.clone());
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-        let mut transaction = block.transaction();
-        transaction.tx_call_hash = Some(Hash::new(b"contract-transfer-test"));
+        let mut transaction =
+            block.transaction_for_fastpq_testing(Hash::new(b"contract-transfer-test"));
         let context = ContractRuntimeExecutionContext {
             contract_address: contract_address.clone(),
             contract_subject: contract_subject.clone(),
@@ -17236,7 +17465,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17314,7 +17543,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17364,7 +17593,7 @@ mod tests {
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let beneficiary_account = Account::new(beneficiary.clone()).build(&beneficiary);
         let world = World::with([domain], [alice_account, beneficiary_account], []);
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
@@ -17429,7 +17658,7 @@ mod tests {
                 ],
                 [],
             );
-            let state = state_after_genesis(world);
+            let state = component_state_after_genesis(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let contract_address = ContractAddress::derive(
                 &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -17525,7 +17754,7 @@ mod tests {
                 )
                 .build(&owner)],
             );
-            let state = state_after_genesis(world);
+            let state = component_state_after_genesis(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let instruction = match instruction_kind {
                 "availability" => InstructionBox::from(SetAssetTransferAvailability::new(
@@ -17657,7 +17886,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [asset_definition],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17719,7 +17948,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [asset_definition],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_definition(
@@ -17770,7 +17999,7 @@ mod tests {
             [],
             [nft],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17819,7 +18048,7 @@ mod tests {
             [],
             [nft],
         );
-        let state = state_after_genesis(world);
+        let state = component_state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let instruction =
@@ -17880,8 +18109,8 @@ mod tests {
         let world = World::with([], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let state = State::new(component_world_for_testing(world), kura, query_handle);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
         let executor = super::Executor::default();
         let instr: InstructionBox = Log::new(Level::INFO, "bench profile".to_owned()).into();
@@ -17908,8 +18137,8 @@ mod tests {
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let state = State::new(component_world_for_testing(world), kura, query_handle);
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let builder = TransactionBuilder::new(
             state.network_id,
@@ -17923,6 +18152,8 @@ mod tests {
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut stx = block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
+        stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let res = executor
             .execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache)
             .map_err(crate::execution_attempt::expect_completed_rejection);
@@ -18076,6 +18307,11 @@ mod tests {
     }
     #[test]
     fn overlapping_executor_runtimes_return_with_their_own_baselines() {
+        if executor_cache_test_in_child(
+            "overlapping_executor_runtimes_return_with_their_own_baselines",
+        ) {
+            return;
+        }
         let verdict: Result<(), ValidationFail> = Ok(());
         let encoded = verdict.encode();
         let loaded = loaded_executor_with_result_prefix(
@@ -18550,8 +18786,16 @@ seiyaku GuardedValue {
             manifest.signed(&ALICE_KEYPAIR),
         );
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
+        // The invoked contract's subject needs its own exact grant for caller metadata.
+        world.account_permissions.insert(
+            contract_address.subject_id(),
+            BTreeSet::from([executor_permission::account::CanModifyAccountMetadata {
+                account: authority.clone(),
+            }
+            .into()]),
+        );
         let state = State::new_with_chain(
-            world,
+            component_world_for_testing(world),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             chain_id,
@@ -18601,9 +18845,11 @@ seiyaku GuardedValue {
         .with_metadata(raw_metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let mut ivm_cache = IvmCache::new();
         ivm::reset_argument_record_decode_count();
         let error = super::Executor::Initial
@@ -18648,6 +18894,8 @@ seiyaku GuardedValue {
         state_tx.apply();
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         super::Executor::Initial
             .execute_transaction(
@@ -18684,8 +18932,8 @@ seiyaku GuardedValue {
                 proposal_content_id: [0xA2; 32],
                 governance_attempt_id: [0xA3; 32],
                 reason: "contain direct contract execution".to_owned(),
-                imposed_at_height: 1,
-                expires_at_height: 2,
+                imposed_at_height: 2,
+                expires_at_height: 3,
             });
             binding.lifecycle.revision = binding
                 .lifecycle
@@ -18712,13 +18960,15 @@ seiyaku GuardedValue {
             &authority,
             &raw_transaction,
             &mut ivm_cache,
-            2,
+            3,
             contract_address.dataspace_id().unwrap(),
         )
         .expect("the half-open hold must not deny raw-IVM admission at its expiry height");
         state_tx.apply();
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         let held = super::Executor::Initial
             .execute_transaction(
@@ -18752,6 +19002,8 @@ seiyaku GuardedValue {
         drop(state_tx);
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(raw_transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         let held_raw = super::Executor::Initial
             .execute_transaction(
@@ -18808,6 +19060,8 @@ seiyaku GuardedValue {
         state_tx.apply();
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         let missing_code = super::Executor::Initial
             .execute_transaction(
@@ -18850,6 +19104,8 @@ seiyaku GuardedValue {
         state_tx.apply();
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         let missing_manifest = super::Executor::Initial
             .execute_transaction(
@@ -18887,6 +19143,8 @@ seiyaku GuardedValue {
         state_tx.apply();
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         let revoked = super::Executor::Initial
             .execute_transaction(
@@ -18964,6 +19222,8 @@ seiyaku GuardedValueRebound {
         state_tx.apply();
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         let rebound = super::Executor::Initial
             .execute_transaction(
@@ -19043,6 +19303,8 @@ seiyaku GuardedValueRebound {
         state_tx.apply();
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         ivm::reset_argument_record_decode_count();
         let deactivated = super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
@@ -19154,8 +19416,16 @@ seiyaku OrderedBatchGuard {
             manifest.signed(&ALICE_KEYPAIR),
         );
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
+        // The invoked contract's subject needs its own exact grant for caller metadata.
+        world.account_permissions.insert(
+            contract_address.subject_id(),
+            BTreeSet::from([executor_permission::account::CanModifyAccountMetadata {
+                account: authority.clone(),
+            }
+            .into()]),
+        );
         let state = State::new_with_chain(
-            world,
+            component_world_for_testing(world),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             chain_id,
@@ -19196,9 +19466,11 @@ seiyaku OrderedBatchGuard {
             .into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
@@ -19243,6 +19515,8 @@ seiyaku OrderedBatchGuard {
         .sign(ALICE_KEYPAIR.private_key());
         let mut instruction_capped_state_tx = block
             .transaction_for_fastpq_testing(Hash::from(capped_transaction.hash_as_entrypoint()));
+        instruction_capped_state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        instruction_capped_state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         instruction_capped_state_tx
             .pipeline
             .overlay_max_instructions = 1;
@@ -19270,6 +19544,8 @@ seiyaku OrderedBatchGuard {
             super::live_batch_overlay_byte_size(&explicit_instructions[..1]);
         let mut byte_capped_state_tx = block
             .transaction_for_fastpq_testing(Hash::from(capped_transaction.hash_as_entrypoint()));
+        byte_capped_state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        byte_capped_state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         byte_capped_state_tx.pipeline.overlay_max_instructions = 0;
         byte_capped_state_tx.pipeline.overlay_max_bytes = explicit_overlay_bytes;
         let byte_cap_error = super::Executor::Initial
@@ -19320,6 +19596,8 @@ seiyaku OrderedBatchGuard {
         .sign(ALICE_KEYPAIR.private_key());
         let mut failed_state_tx = block
             .transaction_for_fastpq_testing(Hash::from(failing_transaction.hash_as_entrypoint()));
+        failed_state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        failed_state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = super::Executor::Initial
             .execute_transaction(
                 &mut failed_state_tx,
@@ -19393,11 +19671,11 @@ seiyaku MeteredFailure {
         );
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = State::new(
-            world,
+            component_world_for_testing(world),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let entrypoint_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
@@ -19487,7 +19765,7 @@ seiyaku IdentityRequired {
             .build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let state = State::new_with_chain(
-            World::with([domain], [account], []),
+            component_world_for_testing(World::with([domain], [account], [])),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             chain_id,
@@ -19540,9 +19818,11 @@ seiyaku IdentityRequired {
                 .collect::<Vec<_>>()
         };
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+            state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let mut ivm_cache = IvmCache::new();
             ivm::reset_argument_record_decode_count();
             let error = super::Executor::Initial
@@ -20012,7 +20292,7 @@ seiyaku ReviewedValue {
             .build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let state = State::new_with_chain(
-            World::with([domain], [account], []),
+            component_world_for_testing(World::with([domain], [account], [])),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             chain_id,
@@ -20039,10 +20319,12 @@ seiyaku ReviewedValue {
             .sign(ALICE_KEYPAIR.private_key())
         };
         let generic_metadata = Metadata::default();
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let signed = transaction(generic_metadata.clone());
         let mut state_transaction =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
@@ -20059,6 +20341,8 @@ seiyaku ReviewedValue {
         let signed = transaction(reserved_metadata);
         let mut state_transaction =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -20095,6 +20379,8 @@ seiyaku ReviewedValue {
         let signed = transaction(Metadata::default());
         let mut state_transaction =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -20112,6 +20398,8 @@ seiyaku ReviewedValue {
         let signed = transaction(Metadata::default());
         let mut state_transaction =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
         let error = super::Executor::Initial
             .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)

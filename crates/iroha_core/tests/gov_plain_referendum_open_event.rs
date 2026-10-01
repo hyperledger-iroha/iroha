@@ -38,7 +38,7 @@ fn plain_ballot_emits_open_event_with_window() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     {
         let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
+        let mut stx = sblock.transaction_for_fastpq_protocol_testing();
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
             referendum_id: rid.clone(),
         }
@@ -74,7 +74,7 @@ fn plain_ballot_emits_open_event_with_window() {
 
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut sblock = state.block(header);
-    let mut stx = sblock.transaction();
+    let mut stx = sblock.transaction_for_fastpq_protocol_testing();
     CastPlainBallot {
         referendum_id: rid.clone(),
         direction: 0,

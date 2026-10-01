@@ -160,7 +160,7 @@ mod final_promotion_permission_tests {
                 .into_iter()
                 .collect(),
         );
-        state_after_genesis(world)
+        component_state_after_genesis(world)
     }
     fn assert_delegated_action_matrix(
         transaction: &StateTransaction<'_, '_>,

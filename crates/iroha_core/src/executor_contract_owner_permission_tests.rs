@@ -39,7 +39,7 @@ fn current_contract_owner_originates_and_revokes_exact_tokens_without_code_manag
         let owner = checked_account_id();
         let recipient = checked_account_id();
         let (world, address) = owner_permission_world(&owner, &recipient);
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
         let permission = owner_entrypoint_permission(&address, "write");
@@ -115,7 +115,7 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
                 .add_permission(permission.clone())
                 .build(&owner),
         );
-        let state = state_for_testing(world);
+        let state = component_state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
         if scenario == 4 {
@@ -221,7 +221,7 @@ seiyaku OwnerPermission {
         manifest.signed(&ALICE_KEYPAIR),
     );
     bind_executor_test_contract(&mut world, &address, &authority, code_hash);
-    let state = state_for_testing(world);
+    let state = component_state_for_testing(world);
     let permission = owner_entrypoint_permission(&address, "write");
     let call = TransactionBuilder::new(
         state.network_id,
@@ -238,6 +238,8 @@ seiyaku OwnerPermission {
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut cache = IvmCache::new();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     assert!(
         !authority_has_permission(&tx.world, &authority, &contract_deployment_permission())
             .unwrap()
@@ -258,11 +260,15 @@ seiyaku OwnerPermission {
     )])
     .sign(ALICE_KEYPAIR.private_key());
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(grant.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     super::Executor::Initial
         .execute_transaction(&mut tx, &authority, grant, &mut cache)
         .expect("ordinary owner self-grant executes without global permission");
     tx.apply();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     super::Executor::Initial
         .execute_transaction(&mut tx, &authority, call.clone(), &mut cache)
         .expect("exact self-grant authorizes guarded mutable call");
@@ -311,6 +317,8 @@ seiyaku OwnerPermission {
         .sign(ALICE_KEYPAIR.private_key());
     let mut tx =
         block.transaction_for_fastpq_testing(Hash::from(forbidden_body.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let denied = super::Executor::Initial
         .execute_transaction(&mut tx, &authority, forbidden_body, &mut cache)
         .expect_err("scoped invocation does not grant caller metadata authority");
@@ -330,6 +338,8 @@ seiyaku OwnerPermission {
         .expect("owner revokes exact invocation grant");
     tx.apply();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     assert!(
         super::Executor::Initial
             .execute_transaction(&mut tx, &authority, call, &mut cache)

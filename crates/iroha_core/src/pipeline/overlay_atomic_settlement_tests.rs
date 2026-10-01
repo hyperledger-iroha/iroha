@@ -36,6 +36,41 @@ fn owner(index: u16) -> AccountId {
     )
 }
 
+/// Freeze a finite component corpus bound through the same governed source policy.
+fn set_source_delta_limit(world: &World, max_deltas: u32) {
+    use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
+
+    let mut parameters = world.parameters.block();
+    let previous = parameters.get().block().fastpq_source();
+    let mut intrinsic = FastpqSourcePolicyV1::bootstrap().intrinsic;
+    // Every complete transcript also owns its canonical input and statement bytes.
+    // Scale those finite corpus bounds together; changing only D leaves I/M/S at
+    // the sixteen-transfer bootstrap size. Both 254 and 255 use the same byte
+    // envelope, so the one-delta-short regression isolates the D limit.
+    let chunks = u64::from(max_deltas.div_ceil(intrinsic.max_deltas).max(1));
+    intrinsic.max_deltas = max_deltas;
+    intrinsic.max_input_transcript_bytes = intrinsic
+        .max_input_transcript_bytes
+        .checked_mul(chunks)
+        .expect("bounded input corpus");
+    intrinsic.max_statement_bytes = intrinsic
+        .max_statement_bytes
+        .checked_mul(chunks)
+        .expect("bounded statement corpus");
+    intrinsic.max_total_statement_bytes = intrinsic.max_statement_bytes;
+    let profile = FastpqSourcePolicyV1::from_sizing(
+        parameters.get().block().execution_output(),
+        intrinsic,
+        previous.mandatory,
+        FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
+    )
+    .expect("explicit finite source profile fits the component corpus");
+    parameters
+        .get_mut()
+        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
+    parameters.commit();
+}
+
 fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, AccountId) {
     let sponsor = owner(u16::MAX);
     let domain_id = DomainId::try_new("atomic_overlay", "universal").expect("domain");
@@ -93,6 +128,21 @@ fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, Ac
         assets,
         [],
     );
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
+    // The 255-movement corpus exceeds bootstrap's sixteen transfer deltas.
+    // Reserve its deltas and complete framing before StateBlock freezes its source owner.
+    set_source_delta_limit(
+        &world,
+        u32::try_from(count)
+            .expect("bounded movement count")
+            .max(16),
+    );
     let state = State::new(
         world,
         Kura::blank_kura_for_testing(),
@@ -130,7 +180,7 @@ fn grant_consents(
         if Some(index) == omit {
             continue;
         }
-        let mut grant_tx = block.transaction();
+        let mut grant_tx = block.transaction_for_fastpq_testing(Hash::new(index.to_le_bytes()));
         assert!(matches!(
             grant_tx.world.executor.clone(),
             crate::executor::Executor::Initial
@@ -139,7 +189,6 @@ fn grant_consents(
             !crate::executor::is_initial_genesis_context(&grant_tx),
             "actual issuer policy must execute without genesis exceptions"
         );
-        grant_tx.tx_call_hash = Some(Hash::new(index.to_le_bytes()));
         let permission: Permission = CanExecuteSettlement {
             debited_asset: movement.source.clone(),
             settlement_id: instruction.settlement_id().clone(),
@@ -216,8 +265,8 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
             let (state, instruction, sponsor) = fixture(count, false);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             grant_consents(&mut block, &instruction, &sponsor, None);
-            let mut state_tx = block.transaction();
-            state_tx.tx_call_hash = Some(Hash::new(b"atomic-overlay-carrier"));
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::new(b"atomic-overlay-carrier"));
             assert_eq!(state_tx.pending_transfer_transcript_count_for_testing(), 0);
             let event_count = state_tx.world.internal_event_buf.len();
             overlay(instruction.clone(), direct)
@@ -283,8 +332,8 @@ fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
         let (state, instruction, sponsor) = fixture(255, false);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         grant_consents(&mut block, &instruction, &sponsor, Some(254));
-        let mut state_tx = block.transaction();
-        state_tx.tx_call_hash = Some(Hash::new(b"missing-final-consent"));
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::new(b"missing-final-consent"));
         let before = observable(&state_tx);
         assert_eq!(
             before.1, 0,
@@ -307,8 +356,7 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
         let (state, instruction, sponsor) = fixture(255, true);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         grant_consents(&mut block, &instruction, &sponsor, None);
-        let mut state_tx = block.transaction();
-        state_tx.tx_call_hash = Some(Hash::new(b"final-scope-policy"));
+        let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"final-scope-policy"));
         let before = observable(&state_tx);
         assert_eq!(before.1, 0);
         let error = overlay(instruction, direct)
@@ -326,7 +374,7 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
 fn atomic_overlay_nonowner_cannot_issue_the_final_owner_consent() {
     let (state, instruction, sponsor) = fixture(3, false);
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-    let mut state_tx = block.transaction();
+    let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"nonowner-consent"));
     assert!(!crate::executor::is_initial_genesis_context(&state_tx));
     let source = &instruction.movements().as_slice()[2].source;
     let grant = TxOverlay::from_instructions(vec![
@@ -339,4 +387,26 @@ fn atomic_overlay_nonowner_cannot_issue_the_final_owner_consent() {
         .expect_err("carrier cannot grant itself a foreign owner's exact consent");
     assert!(matches!(error, ValidationFail::NotPermitted(_)));
     assert_eq!(observable(&state_tx), before);
+}
+
+#[test]
+fn atomic_overlay_intrinsic_capacity_rejects_without_partial_execution() {
+    for direct in [false, true] {
+        let (state, instruction, sponsor) = fixture(255, false);
+        set_source_delta_limit(&state.world, 254);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        grant_consents(&mut block, &instruction, &sponsor, None);
+        let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-delta-limit"));
+        let before = observable(&state_tx);
+        assert_eq!(before.1, 0);
+        let error = overlay(instruction, direct)
+            .apply(&mut state_tx, &sponsor)
+            .expect_err("all 255 deltas must fit the original source owner");
+        assert!(
+            matches!(&error, ValidationFail::InstructionFailed(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message))
+                if message.as_ref() == crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION),
+            "{error:?}"
+        );
+        assert_eq!(observable(&state_tx), before);
+    }
 }

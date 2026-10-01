@@ -1274,6 +1274,14 @@ async fn sign_rotation_draft(
     Ok(())
 }
 
+/// Open the existing private record with the access required by the native loader.
+fn open_pending_custody_descriptor(path: &Path) -> std::io::Result<fs::File> {
+    // The native loader reopens inherited descriptors read-write, and consumes a
+    // pending share after import. On macOS /dev/fd cannot widen read-only access.
+    // Opening an existing record must neither create it nor truncate its contents.
+    fs::OpenOptions::new().read(true).write(true).open(path)
+}
+
 /// Verify exact incumbent authorization, then import one seat's pending share
 /// with the stock native current-plus-pending custody command.
 ///
@@ -1335,10 +1343,10 @@ pub async fn prepare_disposable_pending_custody(
     let root = super::disposable_runtime_provider_broker::new_disposable_owner_private_root()?;
     let evidence_path = root.path().join("custody-evidence.norito");
     fs::write(&evidence_path, norito::encode_canonical(evidence)?)?;
-    let share = fs::File::open(pending_share_path)?;
+    let share = open_pending_custody_descriptor(pending_share_path)?;
     let current = retained
         .as_ref()
-        .map(|retained| fs::File::open(retained.credential_path))
+        .map(|retained| open_pending_custody_descriptor(retained.credential_path))
         .transpose()?;
     let catalog_path = retained
         .as_ref()
@@ -1375,7 +1383,9 @@ pub async fn prepare_disposable_pending_custody(
         .current_dir(root.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // The pinned provisioning command emits static rejection categories only;
+        // inherited private descriptors never enter its diagnostics or arguments.
+        .stderr(Stdio::inherit())
         .kill_on_drop(true);
     if let Some(path) = &catalog_path {
         command.arg("--current-catalog").arg(path);
@@ -2014,6 +2024,61 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pending_custody_descriptor_preserves_record_and_supports_native_consumption() {
+        use nix::fcntl::{FcntlArg, OFlag, fcntl};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("pending-share.bin");
+        let bytes = [0x51; 96];
+        let mut record = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        record.write_all(&bytes).unwrap();
+        record.sync_all().unwrap();
+        let original = record.metadata().unwrap();
+        drop(record);
+
+        let inherited = open_pending_custody_descriptor(&path).unwrap();
+        let opened = inherited.metadata().unwrap();
+        assert_eq!(
+            (opened.dev(), opened.ino()),
+            (original.dev(), original.ino())
+        );
+        assert_eq!(opened.mode() & 0o7777, 0o600);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let flags = OFlag::from_bits_retain(fcntl(&inherited, FcntlArg::F_GETFL).unwrap());
+        assert_eq!(flags & OFlag::O_ACCMODE, OFlag::O_RDWR);
+
+        // Match the native loader's kernel-descriptor reopen. macOS refuses this
+        // for a read-only inherited descriptor even when its file is writable.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let descriptor_path = format!("/proc/self/fd/{}", inherited.as_raw_fd());
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        let descriptor_path = format!("/dev/fd/{}", inherited.as_raw_fd());
+        let mut consumed = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(descriptor_path)
+            .unwrap();
+        let mut loaded = [0; 96];
+        consumed.read_exact(&mut loaded).unwrap();
+        assert_eq!(loaded, bytes);
+        consumed.seek(SeekFrom::Start(0)).unwrap();
+        consumed.write_all(&[0; 96]).unwrap();
+        consumed.set_len(0).unwrap();
+        assert_eq!(inherited.metadata().unwrap().len(), 0);
+        assert_eq!(fs::metadata(&path).unwrap().ino(), original.ino());
+
+        let missing = root.path().join("missing");
+        assert!(open_pending_custody_descriptor(&missing).is_err());
+        assert!(!missing.exists());
+    }
+
     #[test]
     fn native_phase_bounds_are_forwarded_without_context_hash_fallback() {
         let limits = NativeFinalityLimits {

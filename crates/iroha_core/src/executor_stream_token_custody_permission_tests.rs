@@ -55,7 +55,7 @@ mod stream_token_custody_permission_tests {
         world
             .provider_owners
             .insert(ProviderId::new([1; 32]), BOB_ID.clone());
-        state_after_genesis(world)
+        component_state_after_genesis(world)
     }
 
     #[test]

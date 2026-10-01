@@ -1163,8 +1163,25 @@ mod tests {
         asset_definition_record
             .metadata_mut()
             .insert("issuer".parse::<Name>().expect("metadata key"), "alice");
-        asset_definition_record.total_quantity = Quantity::from(37_u32);
         let asset_record = Asset::new(asset.clone(), 11_u32);
+        // The canonical total is derived from actual balances, not a supplied total.
+        // Keep it distinct from the observed account's balance and keep Bob absent.
+        let supply_holder = AccountId::new(
+            iroha_crypto::KeyPair::try_from_seed(
+                b"execution-witness-supply-holder".to_vec(),
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .expect("deterministic supply holder")
+            .public_key()
+            .clone(),
+        );
+        assert_ne!(supply_holder, account);
+        assert_ne!(supply_holder, missing_account);
+        let supply_account = Account::new(supply_holder.clone()).build(&account);
+        let other_balance = Asset::new(
+            AssetId::new(asset_definition.clone(), supply_holder),
+            26_u32,
+        );
         let nft_record = Nft::new(nft.clone(), metadata_entry("artist", "carroll")).build(&account);
         let role_record = Role::new(role.clone(), account.clone())
             .add_permission(Permission::new(role_perm.into(), Json::new(true)))
@@ -1174,9 +1191,9 @@ mod tests {
             .build(&account);
         let mut world = World::with_assets_and_roles(
             [domain_record],
-            [account_record],
+            [account_record, supply_account],
             [asset_definition_record],
-            [asset_record],
+            [asset_record, other_balance],
             [nft_record],
             [role_record, unicode_role_record],
         );

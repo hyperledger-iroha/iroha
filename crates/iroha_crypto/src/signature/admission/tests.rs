@@ -345,3 +345,167 @@ fn every_enabled_algorithm_has_cold_process_valid_key_and_signature_controls() {
         }
     }
 }
+
+#[cfg(feature = "bls")]
+#[test]
+fn borrowed_pop_keeps_no_cache_owner_on_cold_or_warm_verification() {
+    let pair = KeyPair::from_seed(
+        b"borrowed-pop-cold-cache-owner-case".to_vec(),
+        Algorithm::BlsNormal,
+    );
+    let proof = crate::bls_normal_pop_prove(pair.private_key()).unwrap();
+    let public_key = pair.public_key();
+    let (_, payload) = public_key.borrowed_parts().unwrap();
+    assert!(!crate::bls_pop_cache().lock().unwrap().contains(
+        Algorithm::BlsNormal,
+        payload,
+        &proof
+    ));
+    without_allocations(|| verify_bls_normal_pop_borrowed(public_key, &proof)).unwrap();
+    assert!(!crate::bls_pop_cache().lock().unwrap().contains(
+        Algorithm::BlsNormal,
+        payload,
+        &proof
+    ));
+    // Warm the ordinary cache deliberately, then verify the same relation without
+    // allocating or depending on that separately owned cache entry.
+    crate::bls_normal_pop_verify(public_key, &proof).unwrap();
+    assert!(
+        crate::bls_pop_cache()
+            .lock()
+            .unwrap()
+            .contains(Algorithm::BlsNormal, payload, &proof)
+    );
+    without_allocations(|| verify_bls_normal_pop_borrowed(public_key, &proof)).unwrap();
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn borrowed_pop_preserves_exact_typed_diagnostics_for_malformed_inputs() {
+    let pair = KeyPair::from_seed(
+        b"borrowed-pop-parser-parity-case".to_vec(),
+        Algorithm::BlsNormal,
+    );
+    let proof = crate::bls_normal_pop_prove(pair.private_key()).unwrap();
+    let mut identity = vec![0_u8; 96];
+    identity[0] = 0xc0;
+    let mut extended = proof.clone();
+    extended.push(0);
+    let mut changed = proof.clone();
+    changed[20] ^= 1;
+    let proofs = [
+        proof.clone(),
+        vec![],
+        proof[..95].to_vec(),
+        vec![0; 96],
+        vec![0xff; 96],
+        identity,
+        extended,
+        changed,
+    ];
+    let wrong_algorithm =
+        KeyPair::from_seed(b"borrowed-pop-wrong-algorithm".to_vec(), Algorithm::Ed25519);
+    let keys = [
+        pair.public_key().clone(),
+        compact(Algorithm::BlsNormal, &[]),
+        compact(Algorithm::BlsNormal, &[0; 48]),
+        compact(Algorithm::BlsNormal, &[0xff; 48]),
+        envelope(vec![]),
+        envelope(vec![0xff]),
+        wrong_algorithm.public_key().clone(),
+    ];
+    for key in &keys {
+        for proof in &proofs {
+            let expected =
+                crate::bls_normal_pop_verify(key, proof).map_err(|error| error.to_string());
+            let observed = without_allocations(|| verify_bls_normal_pop_borrowed(key, proof))
+                .map_err(|error| error.into_error().to_string());
+            assert_eq!(observed, expected);
+        }
+    }
+    let foreign = KeyPair::from_seed(
+        b"borrowed-pop-foreign-identity".to_vec(),
+        Algorithm::BlsNormal,
+    );
+    let rejected =
+        without_allocations(|| verify_bls_normal_pop_borrowed(foreign.public_key(), &proof));
+    assert_eq!(
+        rejected.unwrap_err().into_error().to_string(),
+        crate::Error::BadSignature.to_string()
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn owned_pop_credential_moves_original_backing_and_returns_it_on_rejection() {
+    let pair = KeyPair::from_seed(
+        b"owned-pop-credential-source-case".to_vec(),
+        Algorithm::BlsNormal,
+    );
+    let proof = crate::bls_normal_pop_prove(pair.private_key()).unwrap();
+    let owned = pair.public_key().clone();
+    let original = owned.borrowed_parts().unwrap().1.as_ptr();
+    let credential =
+        without_allocations(|| crate::BlsNormalPopVerifiedKey::from_owned_uncached(owned, &proof))
+            .unwrap();
+    assert_eq!(credential.payload().as_ptr(), original);
+    assert_eq!(credential.public_key(), pair.public_key());
+    let ordinary = crate::BlsNormalPopVerifiedKey::new(pair.public_key(), &proof).unwrap();
+    assert_eq!(credential, ordinary);
+
+    let owned = pair.public_key().clone();
+    let original = owned.borrowed_parts().unwrap().1.as_ptr();
+    let (returned, rejection) =
+        without_allocations(|| crate::BlsNormalPopVerifiedKey::from_owned_uncached(owned, &[]))
+            .unwrap_err();
+    assert_eq!(returned.borrowed_parts().unwrap().1.as_ptr(), original);
+    assert_eq!(&returned, pair.public_key());
+    let expected = crate::bls_normal_pop_verify(&returned, &[])
+        .unwrap_err()
+        .to_string();
+    drop(returned);
+    assert_eq!(rejection.into_error().to_string(), expected);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn borrowed_normal_wire_signature_preserves_facade_verdicts_without_owners_or_caches() {
+    let pair = KeyPair::from_seed(
+        b"borrowed-normal-wire-verdict".to_vec(),
+        Algorithm::BlsNormal,
+    );
+    let message = b"original normal contextual message";
+    let signature = Signature::new(pair.private_key(), message);
+    let valid = pair.public_key().borrowed_parts().unwrap().1;
+    let mut identity = [0; 48];
+    identity[0] = 0xc0;
+    for key in [
+        valid,
+        &valid[..47],
+        &[][..],
+        &[0; 48],
+        &[0xff; 48],
+        &identity,
+    ] {
+        let key_owner = compact(Algorithm::BlsNormal, key);
+        for proof in [
+            signature.payload(),
+            &signature.payload()[..95],
+            &[][..],
+            &[0; 96],
+            &[0xff; 96],
+        ] {
+            let signature_owner = Signature::from_bytes(proof);
+            for message in [message.as_slice(), b"substituted".as_slice()] {
+                let expected = signature_owner
+                    .verify(&key_owner, message)
+                    .map_err(|error| error.to_string());
+                let actual = without_allocations(|| {
+                    verify_bls_normal_signature_borrowed(key, proof, message)
+                })
+                .map_err(|error| error.into_error().to_string());
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+}

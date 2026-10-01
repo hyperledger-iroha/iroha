@@ -513,3 +513,32 @@ fn state_certificate_native_qc_decode_refusal_is_capacity_and_retries_original_s
     assert_eq!(certified.id(), current.id());
     assert!(Arc::ptr_eq(certified.block(), current.block()));
 }
+
+#[test]
+fn state_certificate_pairing_constructor_refusal_preserves_original_source_for_retry() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let parent = chain.committed(2);
+    let current = chain.committed(3);
+    let backing = iroha_crypto::BlsNormalAggregateScratch::<()>::backing_bytes();
+    let check = |limit| {
+        norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 128),
+            || reader.verify_executed_successor(&parent, current.clone()),
+        )
+    };
+    for _ in 0..2 {
+        assert!(matches!(
+            check(backing - 1),
+            Err(VerificationReadError::Resource(
+                norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit }
+            )) if attempted == backing as u64 && limit == (backing - 1) as u64
+        ));
+    }
+    let certified =
+        check(1 << 26).expect("same authenticated body and parent retry after local refusal");
+    assert_eq!(certified.id(), current.id());
+    assert!(Arc::ptr_eq(certified.block(), current.block()));
+    assert_eq!(parent.id(), chain.committed(2).id());
+}

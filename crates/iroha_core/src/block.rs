@@ -6967,8 +6967,9 @@ pub(crate) mod valid {
                 "a missing authenticated route must refuse the source before policy routing",
             );
             assert!(
-                matches!(error, BlockValidationError::ExecutionContextInvalid(reason)
-                if reason == "Network source lacks its authenticated execution route")
+                matches!(&error, BlockValidationError::ExecutionContextInvalid(reason)
+                if reason == "Network source has an invalid execution context"),
+                "contextless source must fail before routing or execution: {error:?}"
             );
             assert_eq!(
                 state_block.transactions.get(&entrypoint_hash),

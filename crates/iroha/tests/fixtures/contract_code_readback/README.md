@@ -16,6 +16,8 @@ owner in `scripts/regenerate_kotodama_goldens.py`. Its `--write --output-root`
 workflow creates an external sealed tree after two independent compilations,
 compiler verification, and native CLI admission. Apply the reviewed fixture
 from that tree, then run the owner's `--check` mode against the repository.
+Compiler and CLI staging files remain private (mode `0600`); publication creates
+separate public fixture files (mode `0644`) without changing the caller's umask.
 
 Update the provenance and the SDK/IVM hash goldens together. Run the IVM
 `contract_artifact` suite and the SDK `contract_code_artifact` route tests on the

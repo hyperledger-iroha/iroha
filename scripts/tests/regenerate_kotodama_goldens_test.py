@@ -304,6 +304,7 @@ class StagedPublicationTests(unittest.TestCase):
             sentinel = source_root / "sentinel"
             sentinel.write_bytes(b"source remains untouched")
             (stage / "release/example.to").write_bytes(b"canonical artifact")
+            (stage / "release/example.to").chmod(0o600)
             rows = [
                 MODULE.Golden(
                     mode="standard",
@@ -347,6 +348,7 @@ class StagedPublicationTests(unittest.TestCase):
             outside.mkdir()
             (stage / "release").mkdir(parents=True)
             (stage / "release/example.to").write_bytes(b"canonical artifact")
+            (stage / "release/example.to").chmod(0o600)
             try:
                 (output_root / "artifacts").symlink_to(
                     outside,

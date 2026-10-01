@@ -363,3 +363,47 @@ def test_hc12_selects_only_the_original_beacon_scratch_owner():
     assert not rule.scenarios
     assert gate.has_switch("HC12", core=True)
     assert not gate.has_switch("HC12")
+
+
+def test_hc13_selects_only_the_original_query_pairing_constructor_owner():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC13"]
+    assert rule.tests == (
+        "sumeragi::certified_chain::tests::state_certificate::"
+        "state_certificate_pairing_constructor_refusal_preserves_original_source_for_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC13", core=True)
+    assert not gate.has_switch("HC13")
+
+
+def test_hc14_selects_only_the_original_result_witness_binding():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC14"]
+    assert rule.tests == (
+        "sumeragi::certified_chain::artifacts::tests::"
+        "original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC14", core=True)
+    assert not gate.has_switch("HC14")
+
+
+def test_hc15_selects_only_the_original_committed_quorum_owner():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC15"]
+    assert rule.tests == (
+        "sumeragi::block_store::committed_read::tests::"
+        "committed_read_returns_original_qc_backing_after_projection_refusal_and_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC15", core=True)
+    assert not gate.has_switch("HC15")
+
+
+def test_hc17_selects_only_current_tip_control_publication_binding():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC17"]
+    assert rule.tests == (
+        "sumeragi::epoch_beacon::producer::tests::"
+        "control_requires_original_tip_and_matching_published_hash_journal",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC17", core=True)
+    assert not gate.has_switch("HC17")

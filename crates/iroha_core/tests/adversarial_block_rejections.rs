@@ -284,9 +284,8 @@ fn block_history_tamper_rejected_without_mutation() {
     let reason = native_validation::validate(&chain, signed_rewind)
         .expect_err("native validation rejects foreign parent hash");
     assert!(
-        matches!(reason.as_ref(), BlockValidationError::PrevBlockHashMismatch {
-            expected, actual,
-        } if *expected == expected_prev && *actual == actual_prev),
+        matches!(reason.as_ref(), BlockValidationError::ExecutionContextInvalid(message)
+            if message == "invalid native epoch: native successor differs from its original committed header/parent cut"),
         "unexpected rejection: {reason}"
     );
     // State stays on the canonical head.

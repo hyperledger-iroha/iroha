@@ -4258,7 +4258,11 @@ mod tests_overlay_manifest {
         let summary = cache
             .summarize_program_with_hash(code_hash, &[])
             .expect("warm summary lookup without artifact bytes");
-        enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata)
+        assert!(
+            enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata).is_err(),
+            "a warm summary still rejects an insufficient live cycle ceiling"
+        );
+        enforce_pre_execution_policy(nonzero!(4_u64), &summary.metadata)
             .expect("prepared metadata remains within the live cycle ceiling");
         let warm_stats = cache.stats();
         assert_eq!(warm_stats.metadata_hits, cold_stats.metadata_hits + 1);

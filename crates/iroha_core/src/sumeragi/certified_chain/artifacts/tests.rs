@@ -338,3 +338,365 @@ fn physical_metadata_refusal_is_retryable_but_format_limits_are_not() {
         );
     }
 }
+
+#[test]
+fn funded_original_result_witness_is_borrowed_without_redecoding() {
+    use crate::sumeragi::{
+        certified_chain::{CertifiedChain, VerifiedAuthority, read_frame},
+        schedule,
+    };
+
+    let _epoch = crossbeam_epoch::pin();
+    let mut chain = CertifiedTestChain::npos_boundary_fixture();
+    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let original = frame(&chain, 10);
+    let preimage = original.commit_certificate().unwrap().result_preimage();
+    let original_preimage = preimage.as_ptr();
+    let current = read_frame(Arc::clone(&original), 10).unwrap();
+    let original_committee = current.commitment().schedule.current.committee.as_ptr();
+    let parent = chain.committed(9);
+    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
+        panic!("actual authenticated parent authorizes the boundary");
+    };
+    let config = scheduled.height_config().unwrap();
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 10).unwrap();
+    let budget = AllocationBudget::new(1 << 26);
+    let artifacts = read(Arc::clone(&original), &budget);
+    let witness = artifacts
+        .decoded
+        .commit_qc
+        .attestation_witness
+        .as_ref()
+        .unwrap();
+    assert!(witness.admitted_to(&budget));
+    assert_eq!(witness.as_slice(), preimage);
+    let original_witness = witness.as_slice().as_ptr();
+    let retained = budget.reserved_bytes();
+    assert!(retained > witness.as_slice().len());
+
+    let certified =
+        norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, 1 << 26, 128),
+            || {
+                reader.verification_context().verify_certificate_with_scratch_admission(
+            current,
+            &authority,
+            Some(&config),
+            Some(artifacts),
+            &mut crate::sumeragi::certified_chain::state_certificate::query_scratch_admission,
+        )
+            },
+        )
+        .expect("already decoded exact source must not decode the ResultWitness again");
+    assert_eq!(certified.verification(), QcVerification::Verified);
+    assert!(Arc::ptr_eq(certified.block(), &original));
+    assert_eq!(
+        certified.commitment().schedule.current.committee.as_ptr(),
+        original_committee
+    );
+    assert_eq!(
+        original
+            .commit_certificate()
+            .unwrap()
+            .result_preimage()
+            .as_ptr(),
+        original_preimage
+    );
+    let witness = certified
+        .commit_qc()
+        .unwrap()
+        .attestation_witness
+        .as_ref()
+        .unwrap();
+    assert!(witness.admitted_to(&budget));
+    assert_eq!(witness.as_slice().as_ptr(), original_witness);
+    assert_eq!(witness.as_slice(), preimage);
+    assert!(budget.reserved_bytes() > witness.as_slice().len());
+    assert!(budget.reserved_bytes() <= retained);
+    drop(certified);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph() {
+    use crate::sumeragi::certified_chain::{CertifiedChain, VerifiedAuthority, read_frame};
+    use crate::sumeragi::schedule;
+
+    let _epoch = crossbeam_epoch::pin();
+    let mut chain = CertifiedTestChain::npos_boundary_fixture();
+    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let original = frame(&chain, 10);
+    let older = frame(&chain, 9);
+    let foreign_bytes = older.commit_certificate().unwrap().result_preimage();
+    // Genuine canonical bytes from another original execution, not an invented graph.
+    crate::sumeragi::commitment::ExecutionResultCommitment::decode(foreign_bytes).unwrap();
+    assert_ne!(
+        foreign_bytes,
+        original.commit_certificate().unwrap().result_preimage()
+    );
+    let changed = changed_qc(&original, |qc| {
+        qc.attestation_witness =
+            Some(ResultWitness::from_untrusted(foreign_bytes.to_vec()).unwrap());
+    });
+    let parent = chain.committed(9);
+    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
+        panic!("authenticated predecessor authorizes H10");
+    };
+    let config = scheduled.height_config().unwrap();
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 10).unwrap();
+    let budget = AllocationBudget::new(1 << 26);
+    let outcome = reader
+        .verification_context()
+        .verify_certificate_with_scratch_admission(
+            read_frame(Arc::clone(&changed), 10).unwrap(),
+            &authority,
+            Some(&config),
+            Some(read(Arc::clone(&changed), &budget)),
+            &mut crate::sumeragi::certified_chain::state_certificate::query_scratch_admission,
+        );
+    assert!(
+        matches!(
+            outcome,
+            Err(
+                crate::sumeragi::certified_chain::VerificationReadError::Source(
+                    ChainReadError::Certificate {
+                        height: 10,
+                        error: iroha_sumeragi::crypto::CertError::BadAttestation
+                    }
+                )
+            )
+        ),
+        "foreign witness cannot authorize the already-decoded original graph"
+    );
+    assert_eq!(
+        budget.reserved_bytes(),
+        0,
+        "rejection releases the original partial reader owners"
+    );
+    let receipt = reader
+        .verification_context()
+        .verify_certificate_with_scratch_admission(
+            read_frame(Arc::clone(&original), 10).unwrap(),
+            &authority,
+            Some(&config),
+            Some(read(Arc::clone(&original), &budget)),
+            &mut crate::sumeragi::certified_chain::state_certificate::query_scratch_admission,
+        )
+        .unwrap();
+    assert_eq!(receipt.verification(), QcVerification::Verified);
+    assert!(Arc::ptr_eq(receipt.block(), &original));
+    assert!(
+        receipt
+            .commit_qc()
+            .unwrap()
+            .attestation_witness
+            .as_ref()
+            .unwrap()
+            .admitted_to(&budget)
+    );
+    drop(receipt);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn original_result_witness_and_untrusted_decoder_share_every_native_seal_predicate() {
+    use crate::sumeragi::attestation::NativePastaVerifier;
+    use crate::sumeragi::certified_chain::{OriginalResultVerifier, read_frame};
+    use crate::sumeragi::crypto::core_key;
+    use iroha_sumeragi::{
+        crypto::AttestationVerifier,
+        preimage::{AttestationStatement, att_preimage},
+        types::Hash32,
+    };
+
+    let mut chain = CertifiedTestChain::npos_boundary_fixture();
+    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
+    let original = frame(&chain, 10);
+    let current = read_frame(Arc::clone(&original), 10).unwrap();
+    let standalone = NativePastaVerifier::new(chain.instance(), chain.network_id());
+    let borrowed = OriginalResultVerifier {
+        source: &current,
+        native: standalone,
+    };
+    let actual: Qc =
+        norito::decode_canonical(original.commit_certificate().unwrap().commit_qc()).unwrap();
+    let alternative = chain.commit_qc(
+        10,
+        current.core_hash(),
+        current.result(),
+        true,
+        Signers::Quorum,
+    );
+    assert_ne!(actual.signers, alternative.signers);
+    for qc in [&actual, &alternative] {
+        let statement = qc.statement();
+        let witness = qc.attestation_witness.as_ref().unwrap();
+        let parsed = AttestationStatement::parse(&statement).unwrap();
+        for (signer, signature) in qc.signers.ones().zip(&qc.attestations) {
+            let key = core_key(
+                current.commitment().schedule.current.committee[signer as usize]
+                    .validator
+                    .public_key(),
+            )
+            .unwrap();
+            let check =
+                |height, signer, key, statement: &[u8], witness, signature: &[u8], expected| {
+                    assert_eq!(
+                        standalone.verify(height, signer, key, statement, witness, signature),
+                        expected
+                    );
+                    assert_eq!(
+                        borrowed.verify(height, signer, key, statement, witness, signature),
+                        expected
+                    );
+                };
+            check(
+                10,
+                signer,
+                &key,
+                &statement,
+                witness,
+                signature.as_slice(),
+                true,
+            );
+            check(
+                11,
+                signer,
+                &key,
+                &statement,
+                witness,
+                signature.as_slice(),
+                false,
+            );
+            check(
+                10,
+                signer + 1,
+                &key,
+                &statement,
+                witness,
+                signature.as_slice(),
+                false,
+            );
+            let wrong_key = core_key(
+                current.commitment().schedule.current.committee[(signer as usize + 1) % 4]
+                    .validator
+                    .public_key(),
+            )
+            .unwrap();
+            check(
+                10,
+                signer,
+                &wrong_key,
+                &statement,
+                witness,
+                signature.as_slice(),
+                false,
+            );
+            for index in [0, 4, 36, 68, 100] {
+                let mut changed = signature.as_slice().to_vec();
+                changed[index] ^= 1;
+                check(10, signer, &key, &statement, witness, &changed, false);
+            }
+            let changes: [fn(&mut AttestationStatement); 6] = [
+                |source: &mut AttestationStatement| source.instance.0[0] ^= 1,
+                |source: &mut AttestationStatement| source.epoch.epoch += 1,
+                |source: &mut AttestationStatement| source.epoch.context.0[31] ^= 1,
+                |source: &mut AttestationStatement| source.height += 1,
+                |source: &mut AttestationStatement| source.block_hash.0[0] ^= 1,
+                |source: &mut AttestationStatement| source.result.0[0] ^= 1,
+            ];
+            for change in changes {
+                let mut altered = parsed;
+                change(&mut altered);
+                let changed = att_preimage(
+                    &altered.instance,
+                    &altered.epoch,
+                    altered.height,
+                    &altered.block_hash,
+                    &altered.result,
+                );
+                check(
+                    10,
+                    signer,
+                    &key,
+                    &changed,
+                    witness,
+                    signature.as_slice(),
+                    false,
+                );
+            }
+            let mut bytes = witness.as_slice().to_vec();
+            let last = bytes.len() - 1;
+            bytes[last] ^= 1;
+            let altered = ResultWitness::from_untrusted(bytes).unwrap();
+            check(
+                10,
+                signer,
+                &key,
+                &statement,
+                &altered,
+                signature.as_slice(),
+                false,
+            );
+            // The standalone decoder still refuses untrusted input under this scope;
+            // only the certificate-local capability can borrow its original decoded graph.
+            norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, 1 << 26, 128),
+                || {
+                    assert!(!standalone.verify(
+                        10,
+                        signer,
+                        &key,
+                        &statement,
+                        witness,
+                        signature.as_slice()
+                    ));
+                    assert!(borrowed.verify(
+                        10,
+                        signer,
+                        &key,
+                        &statement,
+                        witness,
+                        signature.as_slice()
+                    ));
+                },
+            );
+            for native in [
+                NativePastaVerifier::new(Hash32([0xA7; 32]), chain.network_id()),
+                NativePastaVerifier::new(
+                    chain.instance(),
+                    iroha_data_model::NetworkId::from_genesis_hash(
+                        iroha_crypto::HashOf::from_untyped_unchecked(
+                            iroha_crypto::Hash::prehashed([0xB7; 32]),
+                        ),
+                    ),
+                ),
+            ] {
+                let foreign = OriginalResultVerifier {
+                    source: &current,
+                    native,
+                };
+                assert!(!native.verify(
+                    10,
+                    signer,
+                    &key,
+                    &statement,
+                    witness,
+                    signature.as_slice()
+                ));
+                assert!(!foreign.verify(
+                    10,
+                    signer,
+                    &key,
+                    &statement,
+                    witness,
+                    signature.as_slice()
+                ));
+            }
+        }
+    }
+}

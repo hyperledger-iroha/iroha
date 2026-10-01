@@ -1364,6 +1364,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("original signed genesis policies derived from node execution configuration");
         Chain {

@@ -37,6 +37,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'native_context_archive_preparation_refuses_foreign_pool_without_reexecuting',
         'availability_encoding_refusal_retains_original_header_qc_and_execution',
         'canonical_replay_origin_retains_transition_idempotence_through_publication_retry',
+        'malformed_available_payload_remains_invalid_and_negatively_cached',
+        'payload_decode_refusal_retains_available_owner_without_negative_cache',
     )),
     ('native durable archive recovery', 'sumeragi/executor.rs', 'sumeragi/executor/archive_tests.rs', 'archive_tests', 'sumeragi::executor::archive_tests', (
         'partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications',
@@ -74,6 +76,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'borrowed_native_frames_use_the_same_verifier_and_exact_cut',
         'borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash',
         'certified_reader_rejects_missing_foreign_and_corrupt_signed_availability',
+        'durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm',
     )),
     ('native certified history boundaries', 'sumeragi/certified_chain/tests.rs', 'sumeragi/certified_chain/boundary_tests.rs', 'boundaries', 'sumeragi::certified_chain::tests::boundaries', (
         'rotated_away_committee_verifies_from_authenticated_boundaries_with_bounded_authority',

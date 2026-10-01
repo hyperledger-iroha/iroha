@@ -84,60 +84,58 @@ fn governance_state_with_accounts(
     let query_handle = LiveQueryStore::start_test();
     State::new_for_testing(world, kura, query_handle)
 }
-/// Configure exact fixture policy and the real four-validator public-lane manifest.
-fn configure_retained_governance_state(
-    state: &mut State,
-    voting_asset: &AssetDefinitionId,
-    escrow: &iroha_data_model::account::AccountId,
-    slash: &iroha_data_model::account::AccountId,
+/// Materialize the exact four-validator manifest before genesis binds its policy.
+fn governance_lane_manifests(
+    nexus: &iroha_config::parameters::actual::Nexus,
     validators: &[(iroha_model_base::peer::PeerId, Vec<u8>)],
-) {
-    let mut governance = state.gov.clone();
-    governance.plain_voting_enabled = true;
-    governance.voting_asset_id = voting_asset.clone();
-    governance.min_bond_amount = 10_u64.into();
-    governance.bond_escrow_account = escrow.clone();
-    governance.slash_receiver_account = slash.clone();
-    governance.slash_double_vote_bps = 2_000;
-    state.set_gov(governance);
-    let lane = state.nexus_snapshot().lane_catalog.lanes()[0].clone();
-    let accounts = validators
-        .iter()
-        .map(|(peer, _)| iroha_data_model::account::AccountId::new(peer.public_key().clone()))
-        .collect::<Vec<_>>();
-    let bindings = accounts
-        .iter()
-        .zip(validators)
-        .map(
-            |(account, (peer, _))| crate::governance::manifest::ManifestValidatorBinding {
-                validator: account.clone(),
-                peer_id: peer.clone(),
-                torii_url: None,
-            },
-        )
-        .collect();
-    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-        std::collections::BTreeMap::from([(
-            lane.id,
-            crate::governance::manifest::LaneManifestStatus {
-                lane: lane.id,
-                alias: lane.alias,
-                dataspace: lane.dataspace_id,
-                visibility: lane.visibility,
-                storage: lane.storage,
-                governance: lane.governance,
-                manifest_path: Some(std::path::PathBuf::from(
-                    "fixtures/governance-retained-manifest.json",
-                )),
-                governance_rules: Some(crate::governance::manifest::GovernanceRules {
-                    validators: accounts,
-                    validator_bindings: bindings,
-                    ..crate::governance::manifest::GovernanceRules::default()
-                }),
-                privacy_commitments: Vec::new(),
-            },
-        )]),
-    )));
+) -> Arc<LaneManifestRegistry> {
+    let lane = nexus.lane_catalog.lanes()[0].clone();
+    let manifest = iroha_data_model::nexus::NativeLaneManifestV1 {
+        lane: Some(lane.alias.clone()),
+        governance: lane.governance.clone(),
+        version: Some(iroha_data_model::nexus::NativeLaneManifestV1::VERSION),
+        validators: Some(
+            validators
+                .iter()
+                .map(
+                    |(peer, _)| iroha_data_model::nexus::NativeLaneValidatorBindingV1 {
+                        validator: Some(
+                            iroha_data_model::account::AccountId::new(peer.public_key().clone())
+                                .to_string(),
+                        ),
+                        peer_id: Some(peer.to_string()),
+                        torii_url: None,
+                    },
+                )
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    let directory = tempfile::tempdir().expect("retained governance manifest directory");
+    std::fs::write(
+        directory
+            .path()
+            .join(format!("{}.manifest.json", lane.alias)),
+        norito::json::to_vec(&manifest).expect("canonical lane manifest JSON"),
+    )
+    .expect("write exact governance committee source");
+    let registry = LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &iroha_config::parameters::actual::LaneRegistry {
+            manifest_directory: Some(directory.path().to_path_buf()),
+            ..Default::default()
+        },
+    );
+    let rules = registry
+        .lane_rules(lane.id)
+        .expect("materialized four-validator governance rules");
+    assert_eq!(rules.validator_bindings.len(), validators.len());
+    for (binding, (peer, _)) in rules.validator_bindings.iter().zip(validators) {
+        assert_eq!(&binding.peer_id, peer);
+    }
+    // State retains the immutable parsed source, so the temporary pathname is no authority.
+    Arc::new(registry)
 }
 
 fn seed_slash_snapshot(
@@ -147,7 +145,7 @@ fn seed_slash_snapshot(
     slash_asset_id: &AssetId,
 ) {
     let mut seed_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut seed_tx = seed_block.transaction();
+    let mut seed_tx = seed_block.transaction_for_fastpq_protocol_testing();
     iroha_core::query::standalone_plain_test_fixture::fund_voter(
         &mut seed_tx,
         &ALICE_ID,
@@ -234,19 +232,19 @@ fn double_vote_slashes_plain_lock() {
     let mut governance = iroha_config::parameters::actual::Governance::default();
     governance.plain_voting_enabled = true;
     governance.voting_asset_id = def_id.clone();
+    governance.citizenship_asset_id = def_id.clone();
+    governance.citizenship_bond_amount = 10_u64.into();
+    governance.citizenship_escrow_account = iroha_test_samples::BOB_ID.clone();
     governance.min_bond_amount = 10_u64.into();
     governance.bond_escrow_account = escrow_id.clone();
     governance.slash_receiver_account = slash_id.clone();
     governance.slash_double_vote_bps = 2_000;
     config.governance = Some(governance);
-    let mut original = CertifiedTestChain::prepare(config).expect("original signed genesis");
-    configure_retained_governance_state(
-        Arc::get_mut(&mut original.state).expect("unpublished fixture owns its State"),
-        &def_id,
-        &escrow_id,
-        &slash_id,
+    config.lane_manifests = Some(governance_lane_manifests(
+        &iroha_config::parameters::actual::Nexus::default(),
         &fixture_validators(),
-    );
+    ));
+    let original = CertifiedTestChain::prepare(config).expect("original signed genesis");
     let state = Arc::clone(&original.state);
     let alice = ALICE_ID.clone();
     // Explicit pre-genesis World fixture: fund and cast the initial ballot.
@@ -258,7 +256,30 @@ fn double_vote_slashes_plain_lock() {
         // This is explicit test world setup, not a finalized genesis output.
         // Signed genesis executes separately against the resulting funded world.
         let mut sblock1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut stx1 = sblock1.transaction();
+        let mut citizen_setup = sblock1.transaction_for_fastpq_testing(iroha_crypto::Hash::new(
+            b"plain-ballot-citizenship-setup",
+        ));
+        // Citizenship has its own exact ten-unit bond in separate custody. Top up
+        // that amount through the real mint so the ballot still starts with 1,000.
+        iroha_data_model::isi::Register::account(iroha_data_model::account::Account::new(
+            iroha_test_samples::BOB_ID.clone(),
+        ))
+        .execute(&ALICE_ID, &mut citizen_setup)
+        .expect("register separate citizenship custody");
+        iroha_data_model::isi::Mint::asset_quantity(
+            10_u64,
+            AssetId::new(def_id.clone(), ALICE_ID.clone()),
+        )
+        .execute(&ALICE_ID, &mut citizen_setup)
+        .expect("fund the exact citizenship bond");
+        iroha_data_model::isi::governance::RegisterCitizen {
+            owner: ALICE_ID.clone(),
+            amount: 10_u64.into(),
+        }
+        .execute(&ALICE_ID, &mut citizen_setup)
+        .expect("bond citizenship before the first ballot");
+        citizen_setup.apply();
+        let mut stx1 = sblock1.transaction_for_fastpq_protocol_testing();
         iroha_core::query::standalone_plain_test_fixture::fund_voter(
             &mut stx1,
             &iroha_test_samples::ALICE_ID,
@@ -440,10 +461,37 @@ fn double_vote_slashes_plain_lock() {
         &Quantity::from(980_u64),
         "voter 980 + escrow 16 + slash 4 conserve the original 1,000 units"
     );
+    assert_eq!(
+        view.world()
+            .asset(&AssetId::new(
+                def_id.clone(),
+                iroha_test_samples::BOB_ID.clone()
+            ))
+            .expect("citizenship custody survives ballot slashing")
+            .as_ref(),
+        &Quantity::from(10_u64)
+    );
+    assert_eq!(
+        view.world()
+            .citizens()
+            .get(&alice)
+            .expect("bonded citizen")
+            .amount,
+        Quantity::from(10_u64)
+    );
+    assert_eq!(
+        view.world()
+            .asset_definitions()
+            .get(&def_id)
+            .expect("voting asset")
+            .total_quantity(),
+        &Quantity::from(1_010_u64),
+        "ballot balances and separate citizenship custody conserve all minted units"
+    );
     drop(view);
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, 0, 0);
     let mut sblock4 = state.block(header4);
-    let mut stx4 = sblock4.transaction();
+    let mut stx4 = sblock4.transaction_for_fastpq_protocol_testing();
     let unresolved_update = iroha_data_model::isi::governance::UpdatePlainConviction {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
@@ -511,7 +559,7 @@ fn restitution_restores_slashed_balance() {
     {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
         let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
+        let mut stx = sblock.transaction_for_fastpq_protocol_testing();
         // Grant restitution permission to ALICE.
         let perm: Permission = CanRestituteGovernanceLock {
             referendum_id: rid.clone(),
@@ -591,7 +639,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut state_transaction = block.transaction();
+        let mut state_transaction = block.transaction_for_fastpq_protocol_testing();
         state_transaction
             .world
             .governance_slashes_mut()
@@ -611,7 +659,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
     }
     let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut state_transaction = block.transaction();
+    let mut state_transaction = block.transaction_for_fastpq_protocol_testing();
     let error = iroha_data_model::isi::governance::RestituteGovernanceLock {
         referendum_id: referendum_id.to_owned(),
         owner: ALICE_ID.clone(),
@@ -723,7 +771,7 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     iroha_core::query::standalone_plain_test_fixture::fund_voter(
         &mut tx,
         &iroha_test_samples::ALICE_ID,
@@ -908,4 +956,37 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
         GovernanceSlashReason::Restitution
     );
     assert_eq!(ledger_after_restitution.last_height, 1);
+}
+
+#[test]
+fn signed_genesis_rejects_lane_manifest_replacement() {
+    use iroha_core::{
+        block::BlockValidationError,
+        sumeragi::{startup::StartupError, test_chain::TestChainError},
+    };
+
+    let nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.lane_manifests = Some(governance_lane_manifests(&nexus, &fixture_validators()));
+    let original = CertifiedTestChain::prepare(config).expect("signed configured lane policy");
+    let original_policy = original.state.execution_policy_digest_v1().unwrap();
+    let kura = Arc::clone(&original.kura);
+    original.state.install_lane_manifests_for_testing(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
+    assert_ne!(
+        original.state.execution_policy_digest_v1().unwrap(),
+        original_policy
+    );
+    let failure = CertifiedTestChain::from_prepared(original)
+        .expect_err("a new lane manifest cannot reinterpret the originally signed genesis");
+    assert!(
+        matches!(&failure.error,
+        TestChainError::Startup(StartupError::InvalidGenesis(error))
+            if matches!(error.as_ref(), BlockValidationError::GenesisPolicyMismatch { .. })),
+        "{:?}",
+        failure.error
+    );
+    assert!(failure.state.view().block_hashes().is_empty());
+    assert_eq!(kura.blocks_count(), 0);
 }

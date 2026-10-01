@@ -6,7 +6,7 @@ mod effect_budget {
     const GAS: u64 = 50_000_000;
 
     fn fixture() -> State {
-        state_for_testing(World::with(
+        component_state_for_testing(World::with(
             [],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
@@ -45,10 +45,12 @@ mod effect_budget {
         for cap in [0, 2, 1] {
             let state = fixture();
             let source = signed(&state, Executable::Instructions(writes().into()));
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
             let result = Executor::Initial
@@ -112,10 +114,12 @@ mod effect_budget {
                 &state,
                 Executable::Instructions(instructions.clone().into()),
             );
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.overlay_max_instructions = 0;
             tx.pipeline.overlay_max_bytes = cap;
             let result = Executor::Initial
@@ -201,7 +205,16 @@ seiyaku ActualEffectGroups {
             manifest.signed(&ALICE_KEYPAIR),
         );
         bind_executor_test_contract(&mut world, &address, &ALICE_ID, hash);
-        (state_for_testing(world), program, address, hash)
+        // Contract execution retains its own subject; its authored writes to the caller's
+        // account need the exact account-scoped grant even though the caller owns it.
+        world.account_permissions.insert(
+            address.subject_id(),
+            BTreeSet::from([executor_permission::account::CanModifyAccountMetadata {
+                account: ALICE_ID.clone(),
+            }
+            .into()]),
+        );
+        (component_state_for_testing(world), program, address, hash)
     }
 
     fn grant_entrypoints(block: &mut crate::state::StateBlock<'_>, address: &ContractAddress) {
@@ -241,11 +254,13 @@ seiyaku ActualEffectGroups {
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(ALICE_KEYPAIR.private_key());
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
             let result = Executor::Initial
@@ -319,11 +334,13 @@ seiyaku ActualEffectGroups {
                 })
             }));
             let source = signed(&state, Executable::Batch(items.into()));
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
             let result = Executor::Initial
@@ -392,14 +409,84 @@ seiyaku ActualEffectGroups {
         }
     }
 
+    // Independently execute the compiled callable to identify the exact refused work.
+    // This host queues the native write but does not apply it to State.
+    fn second_entrypoint_return_work(program: &[u8]) -> (u64, u64, u64) {
+        let mut completed = None;
+        for limited in [false, true] {
+            let mut vm = ivm::IVM::new(GAS);
+            vm.load_program(program).unwrap();
+            vm.select_entrypoint("second").unwrap();
+            vm.set_trace_mode(ivm::TraceMode::PcOnly);
+            let interface = vm.contract_interface().unwrap();
+            let entry = interface
+                .entrypoints
+                .iter()
+                .find(|entry| entry.name == "second")
+                .unwrap();
+            let callable = interface
+                .callables
+                .iter()
+                .find(|callable| callable.entry_pc == entry.entry_pc)
+                .unwrap();
+            assert_eq!(callable.result_words, [ivm::call::CallWordV1::Unit]);
+            let mut host = crate::smartcontracts::ivm::host::CoreHost::new(ALICE_ID.clone());
+            if limited {
+                let (cycles, gas, trace): (u64, u64, Vec<u64>) = completed.take().unwrap();
+                let budget =
+                    ivm::VmCycleBudget::new(core::num::NonZeroU64::new(cycles - 1).unwrap());
+                assert_eq!(
+                    vm.run_with_host_and_cycle_budget(&mut host, &budget),
+                    Err(ivm::VMError::ExceededMaxCycles)
+                );
+                assert_eq!(vm.get_cycle_count(), cycles - 1);
+                assert_eq!(budget.consumed(), cycles - 1);
+                assert!(budget.exhausted());
+                // Tracing records the fetched instruction before the cycle reservation.
+                assert_eq!(vm.trace_pcs(), trace);
+                assert_eq!(Some(&vm.pc()), trace.last());
+                let refused = vm.memory.load_u32(vm.pc()).unwrap();
+                assert_eq!(
+                    refused,
+                    ivm::encoding::wide::encode_ri(ivm::instruction::wide::control::JALR, 0, 1, 0)
+                );
+                let refused_gas = gas - (GAS - vm.remaining_gas());
+                assert_eq!(
+                    refused_gas,
+                    ivm::gas::cost_of(refused).unwrap()
+                        + u64::try_from(ivm::call::CALL_WORD_BYTES_V1).unwrap(),
+                    "return dispatch includes validation of its single Unit result word"
+                );
+                return (cycles, gas, refused_gas);
+            }
+            vm.run_with_host(&mut host).unwrap();
+            assert_eq!(vm.call_result_word_count(), Ok(1));
+            assert_eq!(vm.public_call_result_word(0), Ok(0));
+            completed = Some((
+                vm.get_cycle_count(),
+                GAS - vm.remaining_gas(),
+                vm.trace_pcs().to_vec(),
+            ));
+        }
+        unreachable!("the second run checks the exact return boundary")
+    }
+
     #[test]
     fn signed_mixed_batch_contract_runs_share_one_exact_cycle_allowance() {
         let mut cache = IvmCache::new();
         let mut segment_cycles = Vec::new();
         let mut segment_gas = Vec::new();
         let mut successful_batch_gas = None;
+        let authored_gas = isi_gas::meter_instructions(&[SetKeyValue::account(
+            ALICE_ID.clone(),
+            "effect_authored".parse().unwrap(),
+            Json::new(true),
+        )
+        .into()]);
+        assert!(authored_gas > 0);
+        let mut refused_return_gas = None;
         for case in 0..5 {
-            let (state, _program, address, hash) = contract_fixture();
+            let (state, program, address, hash) = contract_fixture();
             let call = |entrypoint: &str| ContractInvocation {
                 contract_address: address.clone(),
                 expected_code_hash: hash,
@@ -444,22 +531,33 @@ seiyaku ActualEffectGroups {
             .with_metadata(metadata)
             .with_executable(executable)
             .sign(ALICE_KEYPAIR.private_key());
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.quarantine_tx_max_cycles = cap;
             tx.pipeline.overlay_max_instructions = 0;
             tx.pipeline.overlay_max_bytes = 0;
             let result = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
                 .map_err(crate::execution_attempt::expect_completed_rejection);
-            let cycles = tx.completed_execution_cycles_for_tests().unwrap();
+            let cycles = tx
+                .completed_execution_cycles_for_tests()
+                .unwrap_or_else(|| panic!("signed contract execution did not finish: {result:?}"));
             assert!(!tx.execution_effect_limit_exceeded());
             if case < 2 {
                 result.unwrap();
                 assert!(cycles > 1);
+                if case == 1 {
+                    let (independent_cycles, independent_gas, return_gas) =
+                        second_entrypoint_return_work(&program);
+                    assert_eq!(cycles, independent_cycles);
+                    assert_eq!(tx.last_tx_gas_used, independent_gas);
+                    refused_return_gas = Some(return_gas);
+                }
                 segment_cycles.push(cycles);
                 segment_gas.push(tx.last_tx_gas_used);
                 drop(tx);
@@ -488,9 +586,18 @@ seiyaku ActualEffectGroups {
                 );
                 assert_eq!(cycles, cap);
                 assert!(tx.last_tx_gas_used > segment_gas[0]);
-                // The exhausted cycle allowance refuses the final HALT, whose
-                // canonical gas cost is zero; all metered work is retained.
-                assert_eq!(Some(tx.last_tx_gas_used), successful_batch_gas);
+                // The final JALR and its Unit-result validation were refused before
+                // dispatch. All earlier VM work remains charged; the queued second
+                // native write never becomes an applied State effect.
+                assert_eq!(
+                    tx.last_tx_gas_used.checked_add(refused_return_gas.unwrap()),
+                    successful_batch_gas
+                );
+                assert_eq!(
+                    tx.last_tx_gas_used.checked_sub(authored_gas),
+                    Some(segment_gas.iter().sum::<u64>() - refused_return_gas.unwrap()),
+                    "failed batch retains exactly the independently completed VM work"
+                );
                 assert!(
                     tx.world
                         .account(&ALICE_ID)
@@ -511,6 +618,11 @@ seiyaku ActualEffectGroups {
                     successful_batch_gas = Some(tx.last_tx_gas_used);
                 }
                 assert_eq!(Some(tx.last_tx_gas_used), successful_batch_gas);
+                assert_eq!(
+                    tx.last_tx_gas_used.checked_sub(authored_gas),
+                    Some(segment_gas.iter().sum()),
+                    "successful batch adds only the authored native instruction gas to its two VM runs"
+                );
                 tx.apply();
             }
             assert_eq!(

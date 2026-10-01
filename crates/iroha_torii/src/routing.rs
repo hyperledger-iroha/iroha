@@ -29525,8 +29525,14 @@ mod sorafs_pin_tests {
     {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let key = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
+        let account = dm::AccountId::new(key.public_key().clone());
         let mut state = iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
+            iroha_core::state::World::with(
+                [],
+                [dm::Account::new(account.clone()).build(&account)],
+                [],
+            ),
             kura,
             query,
         );
@@ -29872,10 +29878,7 @@ mod sorafs_pin_tests {
         );
     }
     routing_test! { async register_manifest_accepts_alias_binding
-        use crate::mk_app_state_for_tests;
-        let app = mk_app_state_for_tests();
-        let queue = Arc::clone(&app.queue);
-        let state = Arc::clone(&app.state);
+        let (queue, state, telemetry) = handler_context(|_| {});
         let manifest = default_manifest();
         let proof_bytes = b"alias-proof";
         let transaction = transaction_from_instructions(
@@ -29894,40 +29897,30 @@ mod sorafs_pin_tests {
                 ),
             )],
         );
-        #[cfg(feature = "telemetry")]
-        let telemetry = app.telemetry.clone();
-        #[cfg(not(feature = "telemetry"))]
-        let telemetry = app.telemetry.clone();
-        let resp = handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
+        let expected_hash = transaction.hash();
+        let expected_transaction = transaction.clone();
+        let resp = handle_post_sorafs_register_manifest(queue.clone(), state.clone(), telemetry, transaction)
             .await
             .expect("handler ok")
             .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
         let bytes = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .unwrap()
             .to_bytes();
         let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        let alias = v
-            .get("alias")
-            .and_then(|value| value.as_object())
-            .expect("alias response present");
-        assert_eq!(
-            alias.get("namespace").and_then(norito::json::Value::as_str),
-            Some("sora")
-        );
-        assert_eq!(
-            alias.get("name").and_then(norito::json::Value::as_str),
-            Some("docs")
-        );
-        let expected_proof_b64 =
-            base64::engine::general_purpose::STANDARD.encode(proof_bytes.as_slice());
-        assert_eq!(
-            alias
-                .get("proof_base64")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_proof_b64.as_str())
-        );
+        assert_eq!(v.get("status").and_then(norito::json::Value::as_str), Some("submitted"));
+        assert_eq!(v.get("tx_hash_hex").and_then(norito::json::Value::as_str), Some(hex::encode(expected_hash.as_ref()).as_str()));
+        let state_view = state.view();
+        let queued = queue.all_transactions(&state_view).collect::<Vec<_>>();
+        assert_eq!(queued.len(), 1, "one original signed registration must remain pending");
+        assert_eq!(queued[0].as_ref(), &expected_transaction);
+        let register = validate_sorafs_pin_register_transaction(state.network_id_ref(), queued[0].as_ref())
+            .expect("queued signature and registration remain valid");
+        let alias = register.alias.as_ref().expect("queued registration retains alias");
+        assert_eq!(alias.namespace, "sora");
+        assert_eq!(alias.name, "docs");
+        assert_eq!(alias.proof, proof_bytes);
     }
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -30023,13 +30016,21 @@ mod sorafs_capacity_tests {
         signing_key: &iroha_crypto::KeyPair,
         instructions: impl IntoIterator<Item = dm::InstructionBox>,
     ) -> SignedTransaction {
-        dm::TransactionBuilder::new(
+        let mut transaction = dm::TransactionBuilder::new(
             network_id,
             dm::AccountId::new(authority_key.public_key().clone()).into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
-        .sign(signing_key.private_key())
+        .sign(authority_key.private_key());
+        // Construct the hostile envelope explicitly: the signing builder correctly
+        // refuses to sign an authority using a different private key.
+        if signing_key.public_key() != authority_key.public_key() {
+            transaction.set_signature(iroha_data_model::transaction::TransactionSignature(
+                iroha_crypto::SignatureOf::new(signing_key.private_key(), transaction.payload()),
+            ));
+        }
+        transaction
     }
     fn signed_capacity_declaration_transaction(
         network_id: NetworkId,
@@ -30201,7 +30202,9 @@ mod sorafs_capacity_tests {
             deadline_at: issued_at + 600,
         }
     }
-    fn test_state_components() -> (
+    fn test_state_components(
+        accounts: impl IntoIterator<Item = dm::AccountId>,
+    ) -> (
         Arc<CoreState>,
         Arc<iroha_core::queue::Queue>,
         MaybeTelemetry,
@@ -30209,7 +30212,13 @@ mod sorafs_capacity_tests {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
+            iroha_core::state::World::with(
+                [],
+                accounts
+                    .into_iter()
+                    .map(|account| dm::Account::new(account.clone()).build(&account)),
+                [],
+            ),
             kura,
             query,
         ));
@@ -30250,12 +30259,18 @@ mod sorafs_capacity_tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(
+                temp_dir
+                    .path()
+                    .canonicalize()
+                    .expect("canonical storage parent")
+                    .join("storage"),
+            )
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
     }
     routing_test! { async transaction_signature_limit_rejects_and_records_metrics
-        let (state, queue, telemetry) = test_state_components();
+        let (state, queue, telemetry) = test_state_components([]);
         #[cfg(feature = "telemetry")]
         let before = telemetry.metrics().await.torii_signature_limit_total.get();
         // Build a multisig transaction with more signatures than the default cap (16).
@@ -30310,8 +30325,9 @@ mod sorafs_capacity_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn capacity_declaration_handler_queues_caller_signed_transaction() {
-        let (state, queue, telemetry) = test_state_components();
         let kp = checked_capacity_keypair(0x91, "derive capacity declaration fixture key");
+        let (state, queue, telemetry) =
+            test_state_components([dm::AccountId::new(kp.public_key().clone())]);
         let transaction = signed_capacity_declaration_transaction(
             *state.network_id_ref(),
             &kp,
@@ -30517,10 +30533,11 @@ mod sorafs_capacity_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn capacity_telemetry_handler_queues_caller_signed_record() {
-        let (state, queue, telemetry) = test_state_components();
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
         let kp = checked_capacity_keypair(0x95, "derive capacity telemetry fixture key");
+        let (state, queue, telemetry) =
+            test_state_components([dm::AccountId::new(kp.public_key().clone())]);
         let transaction = signed_capacity_telemetry_transaction(
             *state.network_id_ref(),
             &kp,
@@ -30554,8 +30571,8 @@ mod sorafs_capacity_tests {
         );
     }
     routing_test! { async capacity_mutation_replay_is_rejected_by_the_transaction_queue
-        let (state, queue, telemetry) = test_state_components();
         let key_pair = checked_capacity_keypair(0x97, "derive capacity replay fixture key");
+        let (state, queue, telemetry) = test_state_components([dm::AccountId::new(key_pair.public_key().clone())]);
         let transaction = signed_capacity_telemetry_transaction(
             *state.network_id_ref(),
             &key_pair,
@@ -30647,7 +30664,7 @@ mod sorafs_capacity_tests {
                 Ok(intent.repair_task_id())
             }
         }
-        let (_state, _queue, telemetry) = test_state_components();
+        let (_state, _queue, telemetry) = test_state_components([]);
         let (node, _dir) = sorafs_node_with_temp_storage();
         let por_coordinator = Arc::new(sorafs::PorCoordinator::new());
         seed_capacity_declaration(&node);
@@ -30863,10 +30880,16 @@ mod sorafs_capacity_tests {
         padded
             .auditor_signatures
             .push(padded.auditor_signatures[0].clone());
-        expect_por_forbidden_code(
-            verify_authenticated_por_verdict(&padded, &auditor_signer, &trusted, 1)
-                .expect_err("duplicate auditor signer padding must fail"),
-            "sorafs_por_verdict_signature_invalid",
+        let error = verify_authenticated_por_verdict(&padded, &auditor_signer, &trusted, 1)
+            .expect_err("duplicate auditor signer padding must fail structural validation");
+        assert!(
+            matches!(
+                error,
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)
+                )) if message.contains("repeats an earlier signer")
+            ),
+            "{error:?}"
         );
     }
     #[tokio::test]

@@ -18,8 +18,8 @@ use crate::{
         authenticated_global_threshold_beacon_roster_hash_v1,
         validate_global_threshold_beacon_session_v1,
     },
-    state::{StateReadOnly, WorldReadOnly},
-    sumeragi::{certified_chain::committed_block, schedule},
+    state::{NativeExecutionTip, StateReadOnly, WorldReadOnly},
+    sumeragi::schedule,
 };
 use iroha_data_model::{
     consensus::{
@@ -239,12 +239,15 @@ impl NativeBeaconProducer {
         Ok((control::encode(pulse)?, self.mandatory_attestation))
     }
 
-    fn ensure_source(
-        &mut self,
+    /// Bind only the current parent to the opaque authority retained by this State
+    /// publication. The original worker (or authenticated replay) issued this tip;
+    /// local frame decoding grants no additional authority for these fixed fields.
+    fn parent_source(
+        &self,
         state: &impl StateReadOnly,
         context: &ApplicationControlContext,
         applied: (u64, Hash32),
-    ) -> Result<(), NativeBeaconError> {
+    ) -> Result<NativeExecutionTip, NativeBeaconError> {
         if context.instance != self.instance
             || applied.0.checked_add(1) != Some(context.height)
             || applied.1 != context.parent_hash
@@ -252,12 +255,37 @@ impl NativeBeaconProducer {
         {
             return Err(NativeBeaconError::Context);
         }
-        // No local CommitQC signer subset or mutable aggregator output is an execution input.
-        let parent = committed_block(state, applied.0)
-            .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
+        let parent = state.native_execution_tip().ok_or_else(|| {
+            NativeBeaconError::Source("published State has no original execution tip".into())
+        })?;
+        let journal_matches = {
+            #[cfg(all(test, sumeragi_core_mutation = "HC17"))]
+            {
+                true
+            }
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC17")))]
+            {
+                state.block_hashes().last() == Some(&parent.iroha_hash())
+            }
+        };
+        if parent.height() != applied.0 || !journal_matches {
+            return Err(NativeBeaconError::Source(
+                "original execution tip differs from the published State hash journal".into(),
+            ));
+        }
         if parent.core_hash() != context.parent_hash || parent.result() != context.parent_result {
             return Err(NativeBeaconError::Context);
         }
+        Ok(parent)
+    }
+
+    fn ensure_source(
+        &mut self,
+        state: &impl StateReadOnly,
+        context: &ApplicationControlContext,
+        applied: (u64, Hash32),
+    ) -> Result<(), NativeBeaconError> {
+        let parent = self.parent_source(state, context, applied)?;
         let retained = state.world().consensus_schedule();
         let scheduled = retained
             .ready(context.height)
@@ -289,7 +317,7 @@ impl NativeBeaconProducer {
                 context.height,
                 GlobalThresholdBeaconChainAnchorV1 {
                     height: applied.0,
-                    block_hash: parent.block_hash(),
+                    block_hash: parent.iroha_hash(),
                 },
                 self.local_bls,
                 pulse_context(context),

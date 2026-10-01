@@ -48,7 +48,7 @@ mod sorafs_pop_registry_admission {
     };
 
     fn fixture() -> State {
-        state_after_genesis(World::with(
+        component_state_after_genesis(World::with(
             [],
             [
                 Account::new(ALICE_ID.clone()).build(&ALICE_ID),

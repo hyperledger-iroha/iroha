@@ -102,11 +102,10 @@ pub enum NativeFinalityArtifactError {
 }
 
 impl NativeFinalityArtifactError {
-    fn codec(error: norito::Error) -> Self {
-        match error.decode_resource_error() {
-            Some(resource) => Self::Resource(resource),
-            None => Self::Invalid(error.to_string()),
-        }
+    fn codec(error: &norito::Error) -> Self {
+        error
+            .decode_resource_error()
+            .map_or_else(|| Self::Invalid(error.to_string()), Self::Resource)
     }
 }
 
@@ -127,7 +126,7 @@ impl NativeFinalityArtifact {
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
             norito::core::encoded_payload_len(block)
-                .map_err(NativeFinalityArtifactError::codec)?
+                .map_err(|error| NativeFinalityArtifactError::codec(&error))?
                 .checked_add(1 + norito::core::Header::SIZE)
                 .ok_or_else(|| {
                     NativeFinalityArtifactError::Invalid(
@@ -149,7 +148,7 @@ impl NativeFinalityArtifact {
                 .map_err(NativeFinalityArtifactError::Invalid)?,
             || {
                 norito::core::reserve_decode_allocation(len)
-                    .map_err(NativeFinalityArtifactError::codec)?;
+                    .map_err(|error| NativeFinalityArtifactError::codec(&error))?;
                 let mut block_wire = Vec::new();
                 block_wire.try_reserve_exact(len).map_err(|_| {
                     NativeFinalityArtifactError::Resource(
@@ -160,7 +159,7 @@ impl NativeFinalityArtifact {
                 block_wire[0] = block.version();
                 let mut writer = std::io::Cursor::new(&mut block_wire[1..]);
                 norito::core::write_canonical_to_writer(block, &mut writer)
-                    .map_err(NativeFinalityArtifactError::codec)?;
+                    .map_err(|error| NativeFinalityArtifactError::codec(&error))?;
                 if writer.position()
                     != u64::try_from(len - 1).map_err(|_| {
                         NativeFinalityArtifactError::Invalid("native frame length overflow".into())
@@ -283,6 +282,19 @@ mod tests {
         ))
         .build(std::collections::BTreeSet::default())
     }
+    #[test]
+    fn codec_error_keeps_resource_refusal_distinct_from_malformed_source() {
+        let resource = norito::core::DecodeResourceError::AllocationFailed { bytes: 123 };
+        assert_eq!(
+            NativeFinalityArtifactError::codec(&norito::Error::from(resource)),
+            NativeFinalityArtifactError::Resource(resource)
+        );
+        assert_eq!(
+            NativeFinalityArtifactError::codec(&norito::Error::InvalidMagic),
+            NativeFinalityArtifactError::Invalid("invalid magic header".into())
+        );
+    }
+
     #[test]
     fn exact_native_source_roundtrips_binary_and_json() {
         let artifact = NativeFinalityArtifact::from_block(&source(), limits()).unwrap();
