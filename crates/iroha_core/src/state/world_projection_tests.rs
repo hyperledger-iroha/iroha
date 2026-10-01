@@ -38,8 +38,9 @@ fn world_delta_ignores_noop_touch_history_and_aborted_changes() {
     assert_eq!(actual.changed_values(), 2);
     assert_eq!(actual, sequenced.net_state_delta().unwrap());
     assert_eq!(
-        actual.fields, 321,
-        "312 World overlay fields, with ten stores replacing TriggerSet"
+        actual.fields,
+        313 - 1 + 10,
+        "313 World overlay fields, including private_dataspaces, with ten stores replacing TriggerSet"
     );
 }
 

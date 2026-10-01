@@ -444,6 +444,8 @@ pub(in crate::state) fn execute_network_attempt(
         work.gas = 0;
         work.account(state);
         let mut result = Err(reason);
+        let mut funded_fee = None;
+        let mut fee_receipt = None;
         let mut penalty_committed = true;
         if !penalties.is_empty() && signed_source(input).is_none() {
             result = Err(TransactionRejectionReason::Validation(
@@ -508,7 +510,8 @@ pub(in crate::state) fn execute_network_attempt(
                 match charged {
                     Ok(true) => {
                         require_rejection_fragment(transaction, input, execution_index, routing)?;
-                        fee.apply()?;
+                        fee_receipt = transaction.pending_nexus_fee_receipt.take();
+                        funded_fee = Some(fee);
                     }
                     Ok(false) => drop(fee),
                     Err(error) => {
@@ -518,13 +521,19 @@ pub(in crate::state) fn execute_network_attempt(
                 }
             }
         }
+        let mut result = TransactionResult::new(result);
+        result.set_nexus_fee_receipt(fee_receipt);
         let actual = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
             input_index,
-            result: TransactionResult::new(result),
+            result,
             completions: Vec::new(),
         });
         actual.validate_structure(height, inputs)?;
         let row = reservation.finish_network_rejection(actual)?;
+        // No charge becomes real before its exact receipt-bearing terminal fits.
+        if let Some(fee) = funded_fee {
+            fee.apply()?;
+        }
         return Ok(row);
     }
     // The legacy returned DFS vector is not the capture owner. The actual
@@ -545,10 +554,12 @@ pub(in crate::state) fn execute_network_attempt(
     if !receipts.is_empty() {
         return Err("Network receipts belong to another execution call".into());
     }
+    let fee_receipt = transaction.pending_nexus_fee_receipt.take();
     let (actual, journal_overflow) = match transaction.callback_journal.take(call)? {
         DrainedCallbacks::Complete { steps, completions } => {
             let mut result = TransactionResult::new(Ok(steps));
             result.set_batch_transfer_outcomes(owned);
+            result.set_nexus_fee_receipt(fee_receipt);
             (
                 ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
                     input_index,

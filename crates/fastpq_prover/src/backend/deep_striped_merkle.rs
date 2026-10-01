@@ -17,7 +17,7 @@ use super::{
     secret_polynomial::SecretPolynomial,
 };
 use crate::{Error, Result};
-use fastpq_isi::GoldilocksDigest384V1 as Digest;
+use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
 
 /// Local digest-stream budget, fixed before leaf replay.
 #[derive(Clone, Copy, Debug)]
@@ -41,7 +41,7 @@ pub(super) struct StripedMerklePlan {
 }
 
 impl StripedMerklePlan {
-    /// At most the candidate's fixed M leaves/64 queries; no proof-selected shape.
+    /// At most the candidate's fixed M leaves/77 queries; no proof-selected shape.
     /// Smaller powers of two serve other fixed FRI layers and arithmetic tests.
     pub(super) fn new(
         leaves: usize,
@@ -70,9 +70,9 @@ impl StripedMerklePlan {
                 queries,
                 MultiproofLimits {
                     max_depth: 23,
-                    max_queried_leaves: 64,
-                    max_siblings: 64 * 23,
-                    max_parent_hashes: 64 * 23,
+                    max_queried_leaves: super::deep_geometry::QUERY_COUNT,
+                    max_siblings: super::deep_geometry::QUERY_COUNT * 23,
+                    max_parent_hashes: super::deep_geometry::QUERY_COUNT * 23,
                 },
             )?)
         };
@@ -82,7 +82,7 @@ impl StripedMerklePlan {
         // query positions and sibling coordinates. Vec metadata/allocator/RSS
         // are excluded, matching the other construction payload plans.
         let payload_bytes = add(
-            mul(add(slots, mul(2, siblings)?)?, 48)?,
+            mul(add(slots, mul(2, siblings)?)?, Digest::BYTES)?,
             openings
                 .as_ref()
                 .map(MultiproofPlan::owned_payload_bytes)
@@ -154,9 +154,9 @@ impl StripedMerklePlan {
 /// A single deterministic traversal; failed or incomplete streams cannot finish.
 pub(super) struct StripedMerkle {
     plan: StripedMerklePlan,
-    lower: SecretPolynomial<[u64; 6]>,
-    upper: SecretPolynomial<[u64; 6]>,
-    siblings: SecretPolynomial<[u64; 6]>,
+    lower: SecretPolynomial<[u8; 32]>,
+    upper: SecretPolynomial<[u8; 32]>,
+    siblings: SecretPolynomial<[u8; 32]>,
     seen: usize,
     captured: usize,
     parents: usize,
@@ -206,13 +206,13 @@ impl StripedMerkle {
         while level < self.plan.lower_levels {
             let slot = level * self.plan.rows + row;
             if (stripe >> level) & 1 == 0 {
-                self.lower[slot] = value.words();
+                self.lower[slot] = value.into_bytes();
                 self.seen += 1;
                 self.failed = false;
                 return Ok(());
             }
             let left = digest(self.lower[slot]);
-            self.lower[slot] = [0; 6];
+            self.lower[slot] = [0; 32];
             level += 1;
             value = hash(level, index >> level, left, value)?;
             self.parents += 1;
@@ -221,14 +221,14 @@ impl StripedMerkle {
         let mut upper = 0;
         while (row >> upper) & 1 == 1 {
             let left = digest(self.upper[upper]);
-            self.upper[upper] = [0; 6];
+            self.upper[upper] = [0; 32];
             upper += 1;
             level += 1;
             value = hash(level, index >> level, left, value)?;
             self.parents += 1;
             self.capture(level, index >> level, value)?;
         }
-        self.upper[upper] = value.words();
+        self.upper[upper] = value.into_bytes();
         self.seen += 1;
         self.failed = false;
         Ok(())
@@ -242,8 +242,8 @@ impl StripedMerkle {
     pub(super) fn push_batch(
         &mut self,
         indices: &[usize],
-        values: &mut [[u64; 6]],
-        mut lower_hash: impl FnMut(usize, &[usize], &[[u64; 6]], &mut [[u64; 6]]) -> Result<()>,
+        values: &mut [[u8; 32]],
+        mut lower_hash: impl FnMut(usize, &[usize], &[[u8; 32]], &mut [[u8; 32]]) -> Result<()>,
         mut upper_hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
     ) -> Result<()> {
         use zeroize::Zeroize;
@@ -265,7 +265,6 @@ impl StripedMerkle {
                 .iter()
                 .enumerate()
                 .any(|(offset, &index)| index != stripe + (row + offset) * self.plan.stripes)
-            || values.iter().any(|&words| Digest::new(words).is_none())
         {
             return Err(invalid(
                 "striped commitment batch differs from canonical replay order",
@@ -298,11 +297,6 @@ impl StripedMerkle {
             for consumed in &mut self.lower[start..end] {
                 consumed.zeroize();
             }
-            if values.iter().any(|&words| Digest::new(words).is_none()) {
-                return Err(invalid(
-                    "striped parent executor returned a noncanonical digest",
-                ));
-            }
             self.parents += values.len();
             for (&index, &words) in parent_indices.iter().zip(values.iter()) {
                 self.capture(level + 1, index, digest(words))?;
@@ -314,14 +308,14 @@ impl StripedMerkle {
             let mut level = self.plan.lower_levels;
             while ((row + offset) >> upper) & 1 == 1 {
                 let left = digest(self.upper[upper]);
-                self.upper[upper] = [0; 6];
+                self.upper[upper] = [0; 32];
                 upper += 1;
                 level += 1;
                 value = upper_hash(level, index >> level, left, value)?;
                 self.parents += 1;
                 self.capture(level, index >> level, value)?;
             }
-            *words = value.words();
+            *words = value.into_bytes();
             self.upper[upper] = *words;
         }
         self.seen += values.len();
@@ -342,7 +336,7 @@ impl StripedMerkle {
             .sibling_positions()
             .binary_search(&SiblingPosition { level, index })
         {
-            self.siblings[position] = value.words();
+            self.siblings[position] = value.into_bytes();
             self.captured += 1;
         }
         Ok(())
@@ -537,7 +531,7 @@ fn stream_rows(
     };
     let mut row = SecretPolynomial::zeroed(WIDTH)?;
     let mut bytes = SecretPolynomial::zeroed(BATCH * WIDTH * 8)?;
-    let mut leaves = SecretPolynomial::<[u64; 6]>::zeroed(BATCH)?;
+    let mut leaves = SecretPolynomial::<[u8; 32]>::zeroed(BATCH)?;
     let mut selected = SecretPolynomial::zeroed(queries.len() * WIDTH)?;
     let parent = |level: usize, index: usize, left, right| {
         binding
@@ -676,8 +670,8 @@ fn binding_error(error: super::deep_binding::BindingError) -> Error {
     }
 }
 
-fn digest(words: [u64; 6]) -> Digest {
-    Digest::new(words).expect("digest scratch contains canonical hash outputs")
+fn digest(words: [u8; 32]) -> Digest {
+    Digest::from_bytes(words)
 }
 fn add(a: usize, b: usize) -> Result<usize> {
     a.checked_add(b)

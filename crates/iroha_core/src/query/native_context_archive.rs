@@ -5,6 +5,9 @@
 //! record, and retains that exact allocation through publication retries. Readers never
 //! substitute current State or reconstruct missing historical values from a root.
 
+mod read;
+pub use read::NativeContextRead;
+
 use crate::{
     kura::Kura,
     state::{NativeExecutionProjectionV1, StateBlock, StateReadOnly, WorldReadOnly},
@@ -53,13 +56,16 @@ pub enum NativeContextArchiveError {
 
 impl NativeContextArchiveError {
     /// Whether the original pool or physical allocator may admit the unchanged retry.
-    /// Permanent layout/limit failures and source mismatches require recovery.
+    /// A pool ceiling refusal may require local reconfiguration. The archive record byte
+    /// limit, impossible demand, malformed layout and source mismatches require recovery.
     pub fn is_local_refusal(&self) -> bool {
         matches!(
             self,
             Self::Allocation(
-                ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { .. })
-                    | ChargedBufferError::Allocator { .. }
+                ChargedBufferError::Admission(
+                    iroha_allocation::AllocationRefusal::Capacity { .. }
+                        | iroha_allocation::AllocationRefusal::ExceedsLimit { .. },
+                ) | ChargedBufferError::Allocator { .. }
             )
         )
     }
@@ -354,9 +360,18 @@ impl NativeContextArchive {
         Ok(())
     }
 
+    /// Retain this original namespace and an immutable carrier selection through acquisition.
+    /// No read or allocation occurs before polling; acquired descriptors and partial byte owners
+    /// survive every local refusal. The returned bytes still need native execution authentication.
+    pub fn read_job(self, height: u64, carrier_hash: HashOf<BlockHeader>) -> NativeContextRead {
+        NativeContextRead::new(self, height, carrier_hash)
+    }
+
     /// Read exact original canonical bytes for a separately selected carrier identity.
     /// The returned bytes are untrusted until NativeExecutionEvidenceVerifier consumes the
     /// full canonical carrier and checks R.native_lanes. A missing record fails closed.
+    /// This one-shot convenience drops its read job on error; callers that retry must retain
+    /// the owner returned by [`Self::read_job`] to keep the original descriptor and partial bytes.
     ///
     /// # Errors
     /// Missing/substituted record, finite byte limit, original-pool refusal or an incomplete read.
@@ -365,31 +380,8 @@ impl NativeContextArchive {
         height: u64,
         carrier_hash: HashOf<BlockHeader>,
     ) -> Result<ChargedBuffer<u8>, NativeContextArchiveError> {
-        self.recheck_namespace()?;
-        let mut file = open_record(&self.directory, height, carrier_hash)?;
-        let length = usize::try_from(file.metadata()?.len()).map_err(|_| {
-            NativeContextArchiveError::Source("record length exceeds address space")
-        })?;
-        if length == 0 || length > self.maximum.get() {
-            return Err(NativeContextArchiveError::Limit {
-                maximum: self.maximum.get(),
-                actual: length,
-            });
-        }
-        let mut bytes = ChargedBuffer::new(length, &self.budget)?;
-        let mut scratch = [0; 4096];
-        while bytes.as_slice().len() < length {
-            let count = (length - bytes.as_slice().len()).min(scratch.len());
-            file.read_exact(&mut scratch[..count])?;
-            bytes.append(&scratch[..count])?;
-        }
-        if file.read(&mut scratch[..1])? != 0 || file.metadata()?.len() != length as u64 {
-            return Err(NativeContextArchiveError::Source(
-                "record changed during exact read",
-            ));
-        }
-        self.recheck_namespace()?;
-        Ok(bytes)
+        let mut read = read::RecordRead::new(height, carrier_hash);
+        read::to_completion(|| read.poll(self))
     }
 }
 

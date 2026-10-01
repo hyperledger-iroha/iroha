@@ -5,7 +5,11 @@
 //! callers still have to carry the complete history and enforce every reciprocal curve equation.
 
 use super::*;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use crate::pasta_sha256::PastaSha256ByteV1;
 use snark_verifier::{
     loader::EcPointLoader as _, system::halo2::transcript::halo2::TranscriptObject, util::msm::Msm,
@@ -91,7 +95,11 @@ pub(super) fn validate_hybrid_commitment_limb_indices_v1(
 pub(in crate::kagemusha_v1_recursion) type DeferredProofStreamV1<'chip, C> =
     Vec<TranscriptObject<C, DeferredLoader<'chip, C>>>;
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// One succinct scalar-half result and the exact canonical proof bytes it consumed.
 ///
 /// The byte count is fixed by the authenticated ordinary-proof profile, not by a new witness
@@ -194,7 +202,11 @@ where
     loaded_stream: DeferredProofStreamV1<'chip, C>,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Verify an ordinary proof and expose its assigned canonical bytes for a containing frame.
 ///
 /// Use this entry point when the canonical authorization or credit envelope must hash the exact
@@ -223,7 +235,11 @@ where
     )
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Verify an authenticated internal helper proof at its exact smaller IPA domain.
 ///
 /// The returned opening accumulator retains that smaller round count. A monetary caller must
@@ -296,7 +312,11 @@ where
     Ok((accumulator, transcript_binding))
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Reconstruct exactly the proof-read objects, excluding transcript public inputs and constants.
 ///
 /// The pinned transcript appends only in `read_scalar` and `read_ec_point`; common inputs and

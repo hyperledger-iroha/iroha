@@ -52,7 +52,7 @@ npm install
 npm run build:native
 ```
 
-The native build writes strict V3 provenance with the execution policy
+The native build writes strict V4 provenance with the execution policy
 `trusted-local-cargo-v1`. Cargo compiles the authenticated live repository root.
 The builder seals the tracked and untracked source inventory, selected Cargo
 lockfile and exact compiled bytes, and checks that source state again after
@@ -1587,9 +1587,10 @@ prints the top contributors to stdout:
 
 Pass `-- --out /tmp/report.json` to control the output path or
 `-- --keep-tarball` to retain the generated `.tgz` for manual inspection. The
-JSON artifact stores the same metadata used in release reviews, so attaching it
-to roadmap evidence or a PR comment satisfies the “bundle-size impact report”
-gate without requiring a full publish.
+JSON artifact stores the same metadata used in release reviews. Bundle sizes
+are informational; code growth has no byte ceiling or percentage gate.
+`npm run bundle:check` verifies the declared eager/deferred module boundaries,
+complete output inventory, and browser isolation.
 
 // Build a fresh RegisterDomain transaction using the native builder helper
 const built = buildRegisterDomainTransaction({
@@ -3155,10 +3156,15 @@ import {
 } from "@iroha/iroha-js";
 import fs from "node:fs";
 
+// Use the manifest emitted alongside this compiled artifact.
+const manifest = JSON.parse(fs.readFileSync("./manifest.json", "utf8"));
+const artifactId = { dataspaceId: "0", codeHash: manifest.code_hash };
+
 const manifestTx = buildRegisterSmartContractCodeTransaction({
   networkId,
   authority,
   feePayment,
+<<<<<<< HEAD
   artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
   manifest: {
     codeHash: Buffer.alloc(32, 0xab),
@@ -3169,6 +3175,10 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
       writeKeys: ["contract:apps:ledger"],
     },
   },
+=======
+  artifactId,
+  manifest,
+>>>>>>> origin/optimizations
   privateKey,
 });
 
@@ -3176,7 +3186,11 @@ const codeTx = buildRegisterSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
+<<<<<<< HEAD
   artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
+=======
+  artifactId,
+>>>>>>> origin/optimizations
   code: fs.readFileSync("./contract.to"),
   privateKey,
 });
@@ -3185,12 +3199,17 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
+<<<<<<< HEAD
   artifactId: { dataspaceId: "0", codeHash: Buffer.alloc(32, 0xab) },
+=======
+  artifactId,
+>>>>>>> origin/optimizations
   reason: "retire archived artifact",
   privateKey,
 });
 ```
 
+<<<<<<< HEAD
 Artifact instructions require `artifactId: { dataspaceId, codeHash }`; the
 same code hash in two dataspaces identifies two separately authorized artifacts.
 Use `deploySmartContractBrowser` for the alias-first upload, manifest, and binding
@@ -3204,6 +3223,18 @@ The recipe mirrors the same validation rules: keys can be supplied as
 `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, `CONTRACT_ALIAS`
 selects the deploy dataspace via its suffix, and `CONTRACT_LEASE_EXPIRY_MS`
 can stage a leased alias binding for rehearsal environments.
+=======
+Every artifact helper requires an explicit `{ dataspaceId, codeHash }` identity;
+use a canonical decimal string for the full unsigned 64-bit dataspace range.
+Manifest registration also requires its `code_hash` to match that identity.
+The local builder checks lifecycle kinds and permissions, unique declarations,
+local callback targets, access-hint completeness and exact schema bindings before
+native encoding. Unknown manifest fields, conflicting field aliases and textual
+hashes without the Iroha marker bit are rejected. Native Norito encoding retains
+`entrypoints`, `kotoba`, and `provenance`; committed ledger admission remains
+authoritative. Bytecode helpers accept `Buffer`, typed arrays, or base64 strings.
+`buildRemoveSmartContractBytesInstruction/Transaction` rejects empty reason strings.
+>>>>>>> origin/optimizations
 
 ### Contract calls via Torii
 

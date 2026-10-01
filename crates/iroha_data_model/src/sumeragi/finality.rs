@@ -90,43 +90,88 @@ pub struct NativeFinalityArtifact {
     )]
     pub block_wire: Vec<u8>,
 }
+/// Canonical artifact construction failure, preserving local resource refusals.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum NativeFinalityArtifactError {
+    /// Invalid caller limits or malformed canonical source serialization.
+    #[error("native finality artifact: {0}")]
+    Invalid(String),
+    /// The caller's original byte/allocation allowance or physical allocator refused.
+    #[error("native finality artifact resource: {0}")]
+    Resource(norito::core::DecodeResourceError),
+}
+
+impl NativeFinalityArtifactError {
+    fn codec(error: &norito::Error) -> Self {
+        error
+            .decode_resource_error()
+            .map_or_else(|| Self::Invalid(error.to_string()), Self::Resource)
+    }
+}
+
 impl NativeFinalityArtifact {
     /// Encode a block only after counting its exact canonical size against the supplied cap.
     /// This is an offchain transport allocation, not production execution-pool admission.
     ///
     /// # Errors
     /// Rejects invalid limits, canonical encoding or size failures, and source allocation refusal.
-    pub fn from_block(block: &SignedBlock, limits: NativeFinalityLimits) -> Result<Self, String> {
-        limits.validate()?;
+    pub fn from_block(
+        block: &SignedBlock,
+        limits: NativeFinalityLimits,
+    ) -> Result<Self, NativeFinalityArtifactError> {
+        limits
+            .validate()
+            .map_err(NativeFinalityArtifactError::Invalid)?;
         let len = {
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
             norito::core::encoded_payload_len(block)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| NativeFinalityArtifactError::codec(&error))?
                 .checked_add(1 + norito::core::Header::SIZE)
-                .ok_or("native block frame length overflow")?
+                .ok_or_else(|| {
+                    NativeFinalityArtifactError::Invalid(
+                        "native block frame length overflow".into(),
+                    )
+                })?
         };
         if len > limits.block_bytes {
-            return Err("native block frame exceeds its configured source bound".into());
+            return Err(NativeFinalityArtifactError::Resource(
+                norito::core::DecodeResourceError::ArchiveLengthExceeded {
+                    length: len as u64,
+                    limit: limits.block_bytes as u64,
+                },
+            ));
         }
-        norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
-            norito::core::reserve_decode_allocation(len).map_err(|error| error.to_string())?;
-            let mut block_wire = Vec::new();
-            block_wire
-                .try_reserve_exact(len)
-                .map_err(|_| "native block source allocation failed")?;
-            block_wire.resize(len, 0);
-            block_wire[0] = block.version();
-            let mut writer = std::io::Cursor::new(&mut block_wire[1..]);
-            norito::core::write_canonical_to_writer(block, &mut writer)
-                .map_err(|error| error.to_string())?;
-            if writer.position()
-                != u64::try_from(len - 1).map_err(|_| "native frame length overflow")?
-            {
-                return Err("native block canonical length changed during streaming".into());
-            }
-            Ok(Self { block_wire })
-        })
+        norito::core::with_decode_limits_scope(
+            limits
+                .decode_limits()
+                .map_err(NativeFinalityArtifactError::Invalid)?,
+            || {
+                norito::core::reserve_decode_allocation(len)
+                    .map_err(|error| NativeFinalityArtifactError::codec(&error))?;
+                let mut block_wire = Vec::new();
+                block_wire.try_reserve_exact(len).map_err(|_| {
+                    NativeFinalityArtifactError::Resource(
+                        norito::core::DecodeResourceError::AllocationFailed { bytes: len as u64 },
+                    )
+                })?;
+                block_wire.resize(len, 0);
+                block_wire[0] = block.version();
+                let mut writer = std::io::Cursor::new(&mut block_wire[1..]);
+                norito::core::write_canonical_to_writer(block, &mut writer)
+                    .map_err(|error| NativeFinalityArtifactError::codec(&error))?;
+                if writer.position()
+                    != u64::try_from(len - 1).map_err(|_| {
+                        NativeFinalityArtifactError::Invalid("native frame length overflow".into())
+                    })?
+                {
+                    return Err(NativeFinalityArtifactError::Invalid(
+                        "native block canonical length changed during streaming".into(),
+                    ));
+                }
+                Ok(Self { block_wire })
+            },
+        )
     }
 
     /// Decode one canonical source under explicit allocation limits.
@@ -238,6 +283,19 @@ mod tests {
         .build(std::collections::BTreeSet::default())
     }
     #[test]
+    fn codec_error_keeps_resource_refusal_distinct_from_malformed_source() {
+        let resource = norito::core::DecodeResourceError::AllocationFailed { bytes: 123 };
+        assert_eq!(
+            NativeFinalityArtifactError::codec(&norito::Error::from(resource)),
+            NativeFinalityArtifactError::Resource(resource)
+        );
+        assert_eq!(
+            NativeFinalityArtifactError::codec(&norito::Error::InvalidMagic),
+            NativeFinalityArtifactError::Invalid("invalid magic header".into())
+        );
+    }
+
+    #[test]
     fn exact_native_source_roundtrips_binary_and_json() {
         let artifact = NativeFinalityArtifact::from_block(&source(), limits()).unwrap();
         assert_eq!(artifact.block_wire, source().encode_wire().unwrap());
@@ -258,6 +316,45 @@ mod tests {
             artifact
         );
     }
+    #[test]
+    fn artifact_allocation_refusal_remains_typed_and_retries_original_source() {
+        let block = source();
+        let original = block.encode_wire().unwrap();
+        let denied = NativeFinalityLimits {
+            allocated_bytes: original.len() - 1,
+            ..limits()
+        };
+        assert_eq!(
+            NativeFinalityArtifact::from_block(&block, denied),
+            Err(NativeFinalityArtifactError::Resource(
+                norito::core::DecodeResourceError::TotalAllocationExceeded {
+                    attempted: original.len() as u64,
+                    limit: denied.allocated_bytes as u64,
+                }
+            ),)
+        );
+        let admitted = NativeFinalityLimits {
+            allocated_bytes: original.len(),
+            ..limits()
+        };
+        assert_eq!(
+            NativeFinalityArtifact::from_block(&block, admitted)
+                .unwrap()
+                .block_wire,
+            original
+        );
+        assert!(matches!(
+            NativeFinalityArtifact::from_block(
+                &block,
+                NativeFinalityLimits {
+                    block_bytes: 0,
+                    ..limits()
+                }
+            ),
+            Err(NativeFinalityArtifactError::Invalid(_))
+        ));
+    }
+
     #[test]
     fn bounds_and_noncanonical_source_fail_closed() {
         let artifact = NativeFinalityArtifact::from_block(&source(), limits()).unwrap();

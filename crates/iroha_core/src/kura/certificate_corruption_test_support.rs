@@ -17,6 +17,50 @@ impl Kura {
         height: NonZeroUsize,
         commit_qc: Option<Vec<u8>>,
     ) -> Result<()> {
+        self.corrupt_certificate_parts_for_testing(height, |certificate| {
+            commit_qc.map(|commit_qc| {
+                iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+                    certificate.consensus_header().to_vec(),
+                    commit_qc,
+                    certificate.result_preimage().to_vec(),
+                    certificate.availability().to_vec(),
+                )
+            })
+        })
+    }
+
+    /// Replace only the local result preimage after genuine native publication.
+    /// The original execution, signed header, QC and availability remain unchanged.
+    /// This deliberately corrupts certificate storage to exercise exact-result rejection.
+    ///
+    /// # Errors
+    /// Returns an error if the published block/certificate is absent, publication changes
+    /// concurrently, or storage I/O fails. Use only an exclusively owned test fixture.
+    #[doc(hidden)]
+    pub fn corrupt_commit_result_for_testing(
+        &self,
+        height: NonZeroUsize,
+        result_preimage: Vec<u8>,
+    ) -> Result<()> {
+        self.corrupt_certificate_parts_for_testing(height, |certificate| {
+            Some(
+                iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+                    certificate.consensus_header().to_vec(),
+                    certificate.commit_qc().to_vec(),
+                    result_preimage,
+                    certificate.availability().to_vec(),
+                ),
+            )
+        })
+    }
+
+    fn corrupt_certificate_parts_for_testing(
+        &self,
+        height: NonZeroUsize,
+        change: impl FnOnce(
+            &iroha_data_model::block::CommitCertificate,
+        ) -> Option<iroha_data_model::block::CommitCertificate>,
+    ) -> Result<()> {
         let original = self.get_block(height).ok_or(Error::OutOfBoundsBlockRead {
             start_block_height: u64::try_from(height.get())?,
             block_count: self.blocks_count(),
@@ -28,14 +72,7 @@ impl Kura {
         let changed = original
             .as_ref()
             .clone()
-            .with_commit_certificate(commit_qc.map(|commit_qc| {
-                iroha_data_model::block::CommitCertificate::from_untrusted_parts(
-                    certificate.consensus_header().to_vec(),
-                    commit_qc,
-                    certificate.result_preimage().to_vec(),
-                    certificate.availability().to_vec(),
-                )
-            }));
+            .with_commit_certificate(change(certificate));
         let wire = changed.encode_wire().map_err(Error::NoritoFrame)?;
         let _prune = self.prune_lock.lock();
         let _canonical = self.canonical_chain_lock.lock();

@@ -9,7 +9,7 @@ use crate::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     smartcontracts::isi::triggers::set::SetReadOnly,
-    state::{State, StateStorageAdmissionError, TransactionsBlockError, World},
+    state::{State, StateReadOnly, StateStorageAdmissionError, TransactionsBlockError, World},
 };
 use iroha_data_model::{
     Registrable,
@@ -30,8 +30,11 @@ use mv::storage::StorageReadOnly;
 use std::num::{NonZeroU32, NonZeroU64};
 
 fn state(row_bytes: u64) -> State {
+    // Execution still derives authority from committed genesis metadata.
     let state = State::new_for_testing(
-        World::default(),
+        crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
@@ -49,6 +52,104 @@ fn state(row_bytes: u64) -> State {
     ));
     parameters.commit();
     state
+}
+
+/// Authenticate the original fixture World before registering ordinary callbacks.
+/// The component output owner still grants neither consensus nor finality authority.
+fn authenticated_state(row_bytes: u64) -> State {
+    authenticate_output_state(state(row_bytes))
+}
+
+fn authenticate_output_state(component: State) -> State {
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let nexus = component.nexus_snapshot();
+    let crypto = component.crypto.read().as_ref().clone();
+    let block_parameters = component.world.parameters.view().block();
+    let mut config = TestChainConfig::new(component.world, 0);
+    // Genesis materializes a complete parameter snapshot. Carry the tested limits
+    // in that signed source rather than replacing them with the builder defaults.
+    config.genesis_parameters.extend([
+        Parameter::Block(BlockParameter::ExecutionOutput(
+            block_parameters.execution_output(),
+        )),
+        Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+            block_parameters.max_time_trigger_invocations(),
+        )),
+    ]);
+    config.chain_id = component.chain_id;
+    config.pipeline = component.pipeline;
+    config.governance = Some(component.gov);
+    config.nexus = Some(nexus);
+    config.zk = Some(component.zk);
+    config.crypto = Some(crypto);
+    config.fraud_monitoring = component.fraud_monitoring;
+    let genesis_account =
+        iroha_data_model::account::AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("prepare original output genesis");
+    let state = std::sync::Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished output fixture State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        mode.into(),
+        None,
+    )
+    .expect("apply original output fixture genesis");
+    state
+}
+
+fn output_fixture_parent_time(state: &State) -> u64 {
+    u64::try_from(
+        state
+            .view()
+            .latest_block()
+            .expect("original output genesis")
+            .header()
+            .creation_time()
+            .as_millis(),
+    )
+    .expect("fixture clock fits")
+}
+
+fn output_fixture_input_time(state: &State) -> std::time::Duration {
+    std::time::Duration::from_millis(
+        output_fixture_parent_time(state)
+            .checked_add(1)
+            .expect("fixture input clock fits"),
+    )
+}
+
+fn output_fixture_header(state: &State) -> BlockHeader {
+    let view = state.view();
+    let parent = view.latest_block().expect("original output genesis");
+    BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        Some(parent.hash()),
+        None,
+        output_fixture_parent_time(state)
+            .checked_add(2)
+            .expect("fixture successor clock fits"),
+        0,
+    )
+}
+
+fn output_fixture_setup(
+    state: &State,
+) -> (Box<StateBlock<'_>>, crate::exec_witness::ExecWitnessGuard) {
+    // Seed this component's starting World at its retained parent height, without
+    // publishing a block or changing Kura. Scheduled actions are then observed from
+    // the actual successor rather than registered anew at that successor's height.
+    let header = state
+        .view()
+        .latest_block()
+        .expect("original output parent")
+        .header();
+    recorded_component_block(state, header)
 }
 
 fn source(state: &State, count: u32) -> SignedBlock {
@@ -635,6 +736,7 @@ fn receipt_source(
         BlockParameter::MaxTimeTriggerInvocations(NonZeroU32::MIN),
     ));
     parameters.commit();
+    let state = authenticate_output_state(state);
 
     // A legal long leg identity makes actual receipts exceed the minimum
     // terminal ceiling without inventing an executed callback trace.
@@ -654,7 +756,9 @@ fn receipt_source(
             1000u32,
         ),
     ]);
-    let header = BlockHeader::new(NonZeroU64::MIN, None, None, 7, 0);
+    // These direct callbacks test receipt ownership under the original World root;
+    // their lower kernel supplies neither native Network admission nor finality.
+    let header = output_fixture_header(&state);
     let mut transaction = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),

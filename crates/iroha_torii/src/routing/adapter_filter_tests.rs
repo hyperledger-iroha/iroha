@@ -174,12 +174,12 @@ mod adapter_filter_tests {
     }
     #[test]
     fn nfts_filter_adapter_accepts_exists_and_rejects_is_null() {
-        let ok = obj(vec![("op", val("exists")), ("args", val("id"))]);
+        let ok = obj(vec![("op", val("exists")), ("args", arr(vec![val("id")]))]);
         let expr: FilterExpr = norito::json::value::from_value(ok).unwrap();
         crate::filter::validate_filter(&expr).unwrap();
         #[cfg(feature = "app_api")]
         validate_nfts_filter_adapter(&expr).unwrap();
-        let bad = obj(vec![("op", val("is_null")), ("args", val("id"))]);
+        let bad = obj(vec![("op", val("is_null")), ("args", arr(vec![val("id")]))]);
         let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
         crate::filter::validate_filter(&expr2).unwrap();
         #[cfg(feature = "app_api")]
@@ -187,12 +187,12 @@ mod adapter_filter_tests {
     }
     #[test]
     fn rwas_filter_adapter_accepts_exists_and_rejects_is_null() {
-        let ok = obj(vec![("op", val("exists")), ("args", val("id"))]);
+        let ok = obj(vec![("op", val("exists")), ("args", arr(vec![val("id")]))]);
         let expr: FilterExpr = norito::json::value::from_value(ok).unwrap();
         crate::filter::validate_filter(&expr).unwrap();
         #[cfg(feature = "app_api")]
         validate_rwas_filter_adapter(&expr).unwrap();
-        let bad = obj(vec![("op", val("is_null")), ("args", val("id"))]);
+        let bad = obj(vec![("op", val("is_null")), ("args", arr(vec![val("id")]))]);
         let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
         crate::filter::validate_filter(&expr2).unwrap();
         #[cfg(feature = "app_api")]

@@ -1195,7 +1195,6 @@ mod tests {
         drop(response_lease);
         assert_eq!(released.load(Ordering::SeqCst), total);
     }
-    #[cfg(feature = "fast_dsl")]
     #[test]
     fn bounded_revalidation_rejects_hostile_field_before_cursor_mutation() {
         let handle = LiveQueryStore::start_test();

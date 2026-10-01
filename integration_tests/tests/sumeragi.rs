@@ -4,7 +4,10 @@
 use std::time::{Duration, Instant};
 
 use eyre::{Result, bail};
-use integration_tests::sandbox::{self, SerializedNetwork};
+use integration_tests::{
+    sandbox::{self, SerializedNetwork},
+    sync::sumeragi_statuses_reach_height,
+};
 use iroha::data_model::{account::Account, isi::Register, prelude::*, sumeragi::SumeragiStatus};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_registry};
 use iroha_test_samples::gen_account_in;
@@ -35,34 +38,34 @@ fn start(name: &str) -> Result<Option<(SerializedNetwork, Runtime)>> {
     sandbox::start_network_blocking_or_skip(builder(), name)
 }
 
-/// Every running peer's Sumeragi status.
+/// Every configured peer's Sumeragi status for the all-validator assertions.
 fn statuses(network: &Network) -> Vec<Result<SumeragiStatus>> {
     network
         .peers()
         .iter()
-        .filter(|peer| peer.is_running())
         .map(|peer| peer.client().client().get_sumeragi_status())
         .collect()
 }
 
-/// Wait until every running peer committed `height`, failing on a halted instance.
-fn wait_for_committed(network: &Network, height: u64, limit: Duration) -> Result<()> {
+/// Wait for every configured peer except seats the scenario explicitly stopped.
+fn wait_for_committed(
+    network: &Network,
+    height: u64,
+    limit: Duration,
+    stopped: &[&NetworkPeer],
+) -> Result<()> {
+    let peers: Vec<_> = network
+        .peers()
+        .iter()
+        .filter(|peer| !stopped.iter().any(|stopped| stopped.id() == peer.id()))
+        .collect();
     let deadline = Instant::now() + limit;
     loop {
-        let statuses = statuses(network);
-        let mut reached = true;
-        for status in &statuses {
-            match status {
-                Ok(status) => {
-                    if let Some(halted) = status.halted {
-                        bail!("a peer halted: {halted:?}");
-                    }
-                    reached &= status.committed_height >= height;
-                }
-                Err(_) => reached = false,
-            }
-        }
-        if reached {
+        let statuses: Vec<_> = peers
+            .iter()
+            .map(|peer| peer.client().client().get_sumeragi_status())
+            .collect();
+        if sumeragi_statuses_reach_height(&statuses, height)? {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -105,15 +108,15 @@ fn committed_height(network: &Network) -> Result<u64> {
 }
 
 /// Register a fresh account through a running peer (the client waits until the transaction is
-/// applied), then wait until every running peer committed its block.
-fn register_account_everywhere(network: &Network) -> Result<AccountId> {
+/// applied), then wait until every seat the scenario expects committed its block.
+fn register_account_everywhere(network: &Network, stopped: &[&NetworkPeer]) -> Result<AccountId> {
     let (account, _) = gen_account_in("wonderland");
     running_peer(network)?.client().submit(
         Register::account(Account::new(account.clone())),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let height = committed_height(network)?;
-    wait_for_committed(network, height, Duration::from_secs(60))?;
+    wait_for_committed(network, height, Duration::from_secs(60), stopped)?;
     Ok(account)
 }
 
@@ -123,9 +126,9 @@ fn four_validators_commit_a_transaction() -> Result<()> {
         return Ok(());
     };
     let result = (|| -> Result<()> {
-        wait_for_committed(&network, 1, network.sync_timeout())?;
+        wait_for_committed(&network, 1, network.sync_timeout(), &[])?;
         let before = committed_height(&network)?;
-        register_account_everywhere(&network)?;
+        register_account_everywhere(&network, &[])?;
         let after = committed_height(&network)?;
         assert!(after > before, "the transaction's block is committed");
         for status in statuses(&network) {
@@ -147,16 +150,16 @@ fn validators_restart_one_and_all() -> Result<()> {
         return Ok(());
     };
     let result = (|| -> Result<()> {
-        wait_for_committed(&network, 1, network.sync_timeout())?;
+        wait_for_committed(&network, 1, network.sync_timeout(), &[])?;
         // One validator down: the remaining quorum (3 of 4) commits.
         let restarted = &network.peers()[1];
         rt.block_on(restarted.shutdown());
-        register_account_everywhere(&network)?;
+        register_account_everywhere(&network, &[restarted])?;
         let height = committed_height(&network)?;
         let layers: Vec<_> = network.config_layers_for_peer(restarted).collect();
         rt.block_on(restarted.start_checked(layers.iter(), None))?;
-        wait_for_committed(&network, height, Duration::from_secs(60))?;
-        register_account_everywhere(&network)?;
+        wait_for_committed(&network, height, Duration::from_secs(60), &[])?;
+        register_account_everywhere(&network, &[])?;
         // Whole cluster down and up: every validator rebuilds its state from Kura.
         let height = committed_height(&network)?;
         for peer in network.peers() {
@@ -166,8 +169,8 @@ fn validators_restart_one_and_all() -> Result<()> {
             let layers: Vec<_> = network.config_layers_for_peer(peer).collect();
             rt.block_on(peer.start_checked(layers.iter(), None))?;
         }
-        wait_for_committed(&network, height, Duration::from_secs(60))?;
-        register_account_everywhere(&network)?;
+        wait_for_committed(&network, height, Duration::from_secs(60), &[])?;
+        register_account_everywhere(&network, &[])?;
         for status in statuses(&network) {
             let status = status?;
             assert!(
@@ -189,7 +192,7 @@ fn a_crashed_leader_is_replaced() -> Result<()> {
         return Ok(());
     };
     let result = (|| -> Result<()> {
-        wait_for_committed(&network, 1, network.sync_timeout())?;
+        wait_for_committed(&network, 1, network.sync_timeout(), &[])?;
         let status = network.client().client().get_sumeragi_status()?;
         let leader = status
             .leader
@@ -202,7 +205,7 @@ fn a_crashed_leader_is_replaced() -> Result<()> {
             .ok_or_else(|| eyre::eyre!("the leader {leader} is not a peer"))?;
         rt.block_on(leader_peer.shutdown());
         let started = Instant::now();
-        register_account_everywhere(&network)?;
+        register_account_everywhere(&network, &[leader_peer])?;
         eprintln!(
             "committed without the crashed leader in {:?}",
             started.elapsed()

@@ -768,7 +768,7 @@ fn queue_filesystem_panic_is_recovered() {
     });
 }
 #[test]
-fn proof_id_parsing_supports_string_and_object_forms() {
+fn proof_id_parsing_accepts_canonical_strings_and_rejects_retired_objects() {
     use hex::encode;
     use iroha_data_model::proof::ProofId;
     let proof = ProofId {
@@ -787,10 +787,7 @@ fn proof_id_parsing_supports_string_and_object_forms() {
         norito::json::Value::from(format!("0x{}", encode(proof.proof_hash))),
     );
     let object_value = norito::json::Value::Object(map);
-    assert_eq!(
-        super::proof_id_from_json(&object_value),
-        Some(proof.clone())
-    );
+    assert_eq!(super::proof_id_from_json(&object_value), None);
     let mut map_array = norito::json::Map::new();
     map_array.insert("backend".into(), norito::json::Value::from("halo2/ipa"));
     let array = proof
@@ -800,7 +797,7 @@ fn proof_id_parsing_supports_string_and_object_forms() {
         .collect();
     map_array.insert("proof_hash".into(), norito::json::Value::Array(array));
     let array_value = norito::json::Value::Object(map_array);
-    assert_eq!(super::proof_id_from_json(&array_value), Some(proof));
+    assert_eq!(super::proof_id_from_json(&array_value), None);
 }
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 #[test]

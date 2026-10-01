@@ -165,6 +165,37 @@ fn both_plain_operations_reject_noncanonical_selectors_amounts_and_durations() {
 }
 
 #[test]
+fn both_plain_operations_report_the_exact_invalid_selector_or_quantity_field() {
+    let _network = ChainDiscriminantGuard::enter(369);
+    for name in [CAST, UPDATE] {
+        for (field, invalid, diagnostic) in [
+            (
+                "referendum_id",
+                Value::String(".hidden".into()),
+                "must be 1-128 RFC 3986 unreserved ASCII characters",
+            ),
+            ("referendum_id", Value::Null, "must be 1-128"),
+            ("amount", Value::String("-1".into()), "Quantity"),
+            ("amount", Value::Number(1_u64.into()), "string"),
+        ] {
+            let mut value = payload(name, 50);
+            value
+                .get_mut(name)
+                .and_then(Value::as_object_mut)
+                .unwrap()
+                .insert(field.into(), invalid);
+            let error = from_json(&value).unwrap().unwrap_err();
+            assert_eq!(error.kind(), CodecErrorKind::InvalidArgument);
+            assert!(
+                error.reason().contains(&format!("{name}.{field}")),
+                "{error}"
+            );
+            assert!(error.reason().contains(diagnostic), "{error}");
+        }
+    }
+}
+
+#[test]
 fn decoding_invalid_typed_ballot_cannot_bypass_the_closed_contract() {
     let _network = ChainDiscriminantGuard::enter(369);
     let valid = from_json(&payload(CAST, 50)).unwrap().unwrap();

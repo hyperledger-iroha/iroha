@@ -5,8 +5,7 @@ fn replication_order_rejects_compression_before_allocation() {
     let authority = alice();
     let state = make_state_with_completion_anchor();
     let mut block = state.block(block_header_at_epoch(9));
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     insert_manifest_with_status(
         &mut stx,
         default_digest(),
@@ -280,8 +279,7 @@ fn v1_norito_decoders_reject_advertised_alternate_layouts() {
 fn completion_revalidates_policy_assignment_and_finalized_anchor_at_commit() {
     let state = make_state_with_completion_anchor();
     let mut block = state.block(block_header_at_epoch(9));
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     insert_manifest_with_status(
         &mut stx,
         default_digest(),

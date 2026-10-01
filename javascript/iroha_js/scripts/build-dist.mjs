@@ -39,7 +39,7 @@ const REQUIRED_OUTPUTS = [
   "nativeArtifactHash.js",
   "numericV1.js",
   "strictLosslessJson.js",
-  "sorafsOrderbookSubmission.js",
+  "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js",
   "sorafsOrderbookSubmission.d.ts",
   "smartContractDeploymentSubmit.js",
   "sumeragiTyped.js",

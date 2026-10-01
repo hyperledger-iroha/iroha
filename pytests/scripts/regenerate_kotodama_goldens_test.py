@@ -540,3 +540,55 @@ def test_sealed_regular_reader_rejects_hard_links(tmp_path: Path) -> None:
         pytest.skip("hard links are unavailable")
     with pytest.raises(goldens.GoldenError, match="one hard link"):
         goldens.seal_file(source, "test input")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX child umask contract")
+def test_tool_children_are_private_without_changing_parent_umask(tmp_path: Path) -> None:
+    output = tmp_path / "runtime.manifest.json"
+    previous = os.umask(0o000)
+    try:
+        result = goldens.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; "
+                "Path(sys.argv[1]).write_text('canonical'); print('done')",
+                output,
+            ],
+            tmp_path,
+        )
+        assert result == "done\n"
+        assert output.read_text() == "canonical"
+        assert output.stat().st_mode & 0o777 == 0o600
+        observed = os.umask(0o000)
+        assert observed == 0o000
+    finally:
+        os.umask(previous)
+
+
+def test_private_compiler_output_publishes_as_a_separate_public_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "stage" / "release" / "example.to"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"canonical artifact")
+    source.chmod(0o600)
+    monkeypatch.setattr(goldens, "COMPILER_MANIFESTS", {})
+    rows = [goldens.Golden("standard", Path("example.ko"), Path("demo/example.to"))]
+    rendered = goldens.rendered_files(source.parent.parent, rows)
+    assert rendered == (
+        goldens.RenderedFile(Path("demo/example.to"), 0o644, source.read_bytes()),
+    )
+    destination = tmp_path / "published"
+    goldens.publish_external_create_only(destination, rendered)
+    assert goldens.verify_rendered_tree(destination, rendered) == 0
+    public = destination / "demo/example.to"
+    assert public.read_bytes() == source.read_bytes()
+    assert public.stat().st_mode & 0o777 == 0o644
+    assert source.stat().st_mode & 0o777 == 0o600
+    assert public.stat().st_ino != source.stat().st_ino
+    for invalid_mode in (0o400, 0o640, 0o644, 0o666):
+        source.chmod(invalid_mode)
+        with pytest.raises(goldens.GoldenError, match="must use mode 0600"):
+            goldens.rendered_files(source.parent.parent, rows)
+    source.chmod(0o600)

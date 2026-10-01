@@ -246,3 +246,134 @@ fn native_parent_coverage_uses_only_the_globally_anchored_native_frontier() {
     value.merged.height = u64::MAX;
     assert!(value.covers_native_subject(u64::MAX).unwrap());
 }
+
+#[test]
+fn sparse_custody_clone_retains_the_original_immutable_signer_backing() {
+    let original = obligation();
+    let pointer = original.signers.as_slice().as_ptr();
+    let canonical = norito::encode_canonical(&original).unwrap();
+    let retained = original.clone();
+    assert_eq!(retained, original);
+    assert_eq!(norito::encode_canonical(&retained).unwrap(), canonical);
+    assert_eq!(
+        retained.signers.as_slice().as_ptr(),
+        pointer,
+        "World and rollback clones must retain the original immutable signer allocation"
+    );
+    drop(original);
+    assert_eq!(retained.signers.as_slice().as_ptr(), pointer);
+    assert_eq!(norito::encode_canonical(&retained).unwrap(), canonical);
+}
+
+#[test]
+fn sparse_custody_charged_owner_preserves_exact_pool_refusal_retry_and_last_drop() {
+    use iroha_allocation::{AllocationBudget, ChargedBuffer};
+    let source = obligation().signers;
+    let backing_bytes = std::mem::size_of::<SumeragiLaneSignerCustody>();
+    let demand = backing_bytes + SumeragiLaneCustodySigners::control_layout().size();
+    let budget = AllocationBudget::new(demand - 1);
+    let foreign = AllocationBudget::new(demand);
+    let mut rows = ChargedBuffer::new(1, &budget).unwrap();
+    rows.append(source.as_slice()).unwrap();
+    let pointer = rows.as_slice().as_ptr();
+    let (rows, error) = SumeragiLaneCustodySigners::from_charged(rows, &foreign).unwrap_err();
+    assert!(matches!(error, CustodySignersAdmissionError::ForeignBudget));
+    assert_eq!(rows.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), backing_bytes);
+    assert_eq!(foreign.reserved_bytes(), 0);
+    let (rows, error) = SumeragiLaneCustodySigners::from_charged(rows, &budget).unwrap_err();
+    assert!(matches!(
+        error,
+        CustodySignersAdmissionError::ControlAdmission(_)
+    ));
+    assert_eq!(rows.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), backing_bytes);
+    budget.set_limit_bytes(demand);
+    let admitted = SumeragiLaneCustodySigners::from_charged(rows, &budget)
+        .unwrap_or_else(|(_rows, error)| panic!("same original owner retry: {error:?}"));
+    assert_eq!(admitted.as_slice().as_ptr(), pointer);
+    assert!(admitted.admitted_to(&budget));
+    assert!(!admitted.admitted_to(&foreign));
+    assert_eq!(budget.reserved_bytes(), demand);
+    assert!(matches!(
+        admitted.admit(&foreign),
+        Err(CustodySignersAdmissionError::ForeignBudget)
+    ));
+    let same_pool = admitted.admit(&budget).unwrap();
+    let retained = admitted.clone();
+    assert_eq!(same_pool.as_slice().as_ptr(), pointer);
+    assert_eq!(retained.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), demand);
+    drop((admitted, same_pool));
+    assert_eq!(budget.reserved_bytes(), demand);
+    drop(retained);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn sparse_custody_decoded_admission_refunds_partial_copies_and_retries_original() {
+    use iroha_allocation::AllocationBudget;
+    let source = obligation().signers;
+    let pointer = source.as_slice().as_ptr();
+    let demand = std::mem::size_of::<SumeragiLaneSignerCustody>()
+        + SumeragiLaneCustodySigners::control_layout().size();
+    let budget = AllocationBudget::new(demand - 1);
+    assert!(!source.admitted_to(&budget));
+    assert!(matches!(
+        source.admit(&budget),
+        Err(CustodySignersAdmissionError::ControlAdmission(_))
+    ));
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(source.as_slice().as_ptr(), pointer);
+    budget.set_limit_bytes(demand);
+    let admitted = source.admit(&budget).unwrap();
+    assert_eq!(admitted, source);
+    assert_ne!(admitted.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), demand);
+    drop(admitted);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(source.as_slice().as_ptr(), pointer);
+}
+
+#[test]
+fn sparse_custody_immutable_storage_keeps_the_existing_binary_and_json_shape() {
+    #[derive(norito::Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::sumeragi_lanes::SumeragiLaneCustodySigners")]
+    struct OriginalShape(Vec<SumeragiLaneSignerCustody>);
+    use iroha_allocation::AllocationBudget;
+    let source = obligation().signers;
+    for rows in [Vec::new(), source.as_slice().to_vec()] {
+        let canonical = norito::encode_canonical(&OriginalShape(rows.clone())).unwrap();
+        let json = norito::json::to_json(&rows).unwrap();
+        let value = SumeragiLaneCustodySigners::try_from(rows).unwrap();
+        let budget = AllocationBudget::new(4096);
+        let admitted = value.admit(&budget).unwrap();
+        for owner in [&value, &admitted] {
+            assert_eq!(norito::encode_canonical(owner).unwrap(), canonical);
+            assert_eq!(norito::json::to_json(owner).unwrap(), json);
+        }
+        let binary = norito::decode_canonical::<SumeragiLaneCustodySigners>(&canonical).unwrap();
+        let json: SumeragiLaneCustodySigners = norito::json::from_str(&json).unwrap();
+        assert_eq!(binary, value);
+        assert_eq!(json, value);
+    }
+}
+
+#[test]
+fn sparse_custody_untrusted_control_refusal_preserves_the_decode_category() {
+    let source = obligation().signers;
+    let rows = source.as_slice().to_vec();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+    let error =
+        norito::with_decode_limits_scope(limits, || SumeragiLaneCustodySigners::try_from(rows))
+            .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            norito::Error::TotalAllocationExceeded { limit: 0, .. }
+        ),
+        "{error:?}"
+    );
+    let retried = SumeragiLaneCustodySigners::try_from(source.as_slice().to_vec()).unwrap();
+    assert_eq!(retried, source);
+}

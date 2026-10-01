@@ -1,7 +1,6 @@
 #[test]
 fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     use iroha_data_model::{
-        block::BlockHeader,
         prelude::{Account, AssetDefinition, Domain},
         smart_contract::ContractAddress,
     };
@@ -38,23 +37,18 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
         accounts,
         [fee_definition, xor_definition],
     );
-    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-        "generic-testnet".parse().expect("chain id"),
-        validation_fee_test_network_id(),
+    let state = original_validation_fee_state(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        ),
     );
-    let header = BlockHeader::new(
-        std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
-            .expect("test policy effective height is non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = original_validation_fee_header(&state, TEST_POLICY_EFFECTIVE_HEIGHT);
     let mut block = state.block(header);
-    let mut state_tx = block.transaction();
+    let mut state_tx = block.transaction_for_callback_testing();
     let deployment_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     crate::smartcontracts::Execute::execute(
@@ -64,12 +58,17 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     )
     .expect("grant contract lifecycle authority");
     let (code, manifest) = minimal_bound_contract_artifact();
-    let code_hash =
-        crate::smartcontracts::code::register_code_bytes(&deployer,iroha_model_base::topology::DataSpaceId::UNIVERSAL, code.clone(), &mut state_tx)
-            .expect("register contract bytes");
+    let code_hash = crate::smartcontracts::code::register_code_bytes(
+        &deployer,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        code.clone(),
+        &mut state_tx,
+    )
+    .expect("register contract bytes");
     crate::smartcontracts::code::register_manifest(
         &deployer,
-iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&deployer_key),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        manifest.signed(&deployer_key),
         &mut state_tx,
     )
     .expect("register signed contract manifest");
@@ -98,10 +97,12 @@ iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&deployer_ke
     let lifecycle_seal = binding
         .lifecycle_seal()
         .expect("derive test payout lifecycle seal");
-    let policy = policy_with_treasury_payout_lifecycle(binding.clone());
+    let policy =
+        policy_with_treasury_payout_lifecycle_at_network(binding.clone(), state_tx.network_id);
     let mut wrong_code_binding = binding.clone();
     wrong_code_binding.code_hash[0] ^= 0xff;
-    let wrong_code_policy = policy_with_treasury_payout_lifecycle(wrong_code_binding);
+    let wrong_code_policy =
+        policy_with_treasury_payout_lifecycle_at_network(wrong_code_binding, state_tx.network_id);
     let wrong_code_registry = policy_registry(std::slice::from_ref(&wrong_code_policy));
     install_policy_registry_fixture(&wrong_code_registry, &mut state_tx);
     let wrong_code_error = active_policy(&state_tx)
@@ -786,388 +787,477 @@ iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&deployer_ke
 #[test]
 fn disabled_successor_old_tick_debits_predecessor_lifecycle_credit() {
     let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
-    with_validation_fee_payout_state_at_height(height, |state_tx, deployer, code, code_hash| {
-        let predecessor = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            0,
-            fee_asset(),
-            "predecessor_disabled_tick",
-        );
-        let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
-        let mut disabled = successor_policy(&first);
-        disabled.charging_mode = ValidationFeeChargingMode::Disabled;
-        disabled.fee = Quantity::zero();
-        disabled.exemption_classes.clear();
-        disabled.treasury_payout_binding = None;
-        install_policy_registry_fixture(&policy_registry(&[first.clone(), disabled]), state_tx);
-        let credit = lifecycle_credit(&first);
-        commit_validation_fee_credit(state_tx, Some(&credit))
-            .expect("seed predecessor lifecycle credit");
-        assert_eq!(
-            enforce_bound_payout_tick(
+    with_ordinary_validation_fee_payout_state_at_height(
+        height,
+        |state_tx, deployer, code, code_hash| {
+            let predecessor = activate_bound_payout_runtime(
                 state_tx,
-                &predecessor,
+                deployer,
                 code,
-                canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
-            )
-            .expect("retained predecessor payout remains valid after Disabled cutover"),
-            OpaqueDeferredValidationOutcome::Apply,
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &credit)
-                .expect("read drained predecessor credit"),
-            Quantity::zero(),
-        );
-        assert_eq!(
-            enforce_bound_payout_tick(
-                state_tx,
-                &predecessor,
-                code,
-                canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64),),
-            )
-            .expect("a retained lifecycle with zero credit is an atomic no-op"),
-            OpaqueDeferredValidationOutcome::NoOp,
-        );
-    });
+                code_hash,
+                0,
+                fee_asset(),
+                "predecessor_disabled_tick",
+            );
+            let first = policy_with_treasury_payout_lifecycle_at_network(
+                predecessor.binding.clone(),
+                state_tx.network_id,
+            );
+            let mut disabled = successor_policy(&first);
+            disabled.charging_mode = ValidationFeeChargingMode::Disabled;
+            disabled.fee = Quantity::zero();
+            disabled.exemption_classes.clear();
+            disabled.treasury_payout_binding = None;
+            install_policy_registry_fixture(&policy_registry(&[first.clone(), disabled]), state_tx);
+            let credit = lifecycle_credit(&first);
+            commit_validation_fee_credit(state_tx, Some(&credit))
+                .expect("seed predecessor lifecycle credit");
+            assert_eq!(
+                enforce_bound_payout_tick(
+                    state_tx,
+                    &predecessor,
+                    code,
+                    canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
+                )
+                .expect("retained predecessor payout remains valid after Disabled cutover"),
+                OpaqueDeferredValidationOutcome::Apply,
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &credit)
+                    .expect("read drained predecessor credit"),
+                Quantity::zero(),
+            );
+            assert_eq!(
+                enforce_bound_payout_tick(
+                    state_tx,
+                    &predecessor,
+                    code,
+                    canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64),),
+                )
+                .expect("a retained lifecycle with zero credit is an atomic no-op"),
+                OpaqueDeferredValidationOutcome::NoOp,
+            );
+        },
+    );
 }
 #[test]
 fn different_asset_successor_keeps_predecessor_tick_credit_bound() {
     let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
-    with_validation_fee_payout_state_at_height(height, |state_tx, deployer, code, code_hash| {
-        let predecessor = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            0,
-            fee_asset(),
-            "different_asset_predecessor_tick",
-        );
-        let successor = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            1,
-            successor_fee_asset(),
-            "different_asset_successor_tick",
-        );
-        let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
-        let mut next = successor_policy(&first);
-        next.ds_asset_id = successor.binding.ds_asset_id.clone();
-        next.treasury_account_id = successor.binding.treasury_account_id.clone();
-        next.treasury_payout_binding = Some(successor.binding.clone());
-        install_policy_registry_fixture(&policy_registry(&[first.clone(), next.clone()]), state_tx);
-        let predecessor_credit = lifecycle_credit(&first);
-        let successor_credit = lifecycle_credit(&next);
-        commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
-            .expect("seed predecessor credit");
-        commit_validation_fee_credit(state_tx, Some(&successor_credit))
-            .expect("seed successor credit");
-        assert_eq!(
-            enforce_bound_payout_tick(
+    with_ordinary_validation_fee_payout_state_at_height(
+        height,
+        |state_tx, deployer, code, code_hash| {
+            let predecessor = activate_bound_payout_runtime(
                 state_tx,
-                &predecessor,
+                deployer,
                 code,
-                canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
-            )
-            .expect("predecessor tick resolves independently of active successor asset"),
-            OpaqueDeferredValidationOutcome::Apply,
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &predecessor_credit)
-                .expect("read predecessor credit"),
-            Quantity::zero(),
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &successor_credit)
-                .expect("read isolated successor credit"),
-            successor_credit.amount,
-        );
-    });
+                code_hash,
+                0,
+                fee_asset(),
+                "different_asset_predecessor_tick",
+            );
+            let successor = activate_bound_payout_runtime(
+                state_tx,
+                deployer,
+                code,
+                code_hash,
+                1,
+                successor_fee_asset(),
+                "different_asset_successor_tick",
+            );
+            let first = policy_with_treasury_payout_lifecycle_at_network(
+                predecessor.binding.clone(),
+                state_tx.network_id,
+            );
+            let mut next = successor_policy(&first);
+            next.ds_asset_id = successor.binding.ds_asset_id.clone();
+            next.treasury_account_id = successor.binding.treasury_account_id.clone();
+            next.treasury_payout_binding = Some(successor.binding.clone());
+            install_policy_registry_fixture(
+                &policy_registry(&[first.clone(), next.clone()]),
+                state_tx,
+            );
+            let predecessor_credit = lifecycle_credit(&first);
+            let successor_credit = lifecycle_credit(&next);
+            commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                .expect("seed predecessor credit");
+            commit_validation_fee_credit(state_tx, Some(&successor_credit))
+                .expect("seed successor credit");
+            assert_eq!(
+                enforce_bound_payout_tick(
+                    state_tx,
+                    &predecessor,
+                    code,
+                    canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
+                )
+                .expect("predecessor tick resolves independently of active successor asset"),
+                OpaqueDeferredValidationOutcome::Apply,
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                    .expect("read predecessor credit"),
+                Quantity::zero(),
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &successor_credit)
+                    .expect("read isolated successor credit"),
+                successor_credit.amount,
+            );
+        },
+    );
 }
 #[test]
 fn same_asset_successor_does_not_strand_predecessor_credit() {
     let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
-    with_validation_fee_payout_state_at_height(height, |state_tx, deployer, code, code_hash| {
-        let predecessor = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            0,
-            fee_asset(),
-            "same_asset_predecessor_tick",
-        );
-        let successor = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            1,
-            fee_asset(),
-            "same_asset_successor_tick",
-        );
-        let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
-        let mut next = successor_policy(&first);
-        next.treasury_account_id = successor.binding.treasury_account_id.clone();
-        next.treasury_payout_binding = Some(successor.binding.clone());
-        install_policy_registry_fixture(&policy_registry(&[first.clone(), next.clone()]), state_tx);
-        let predecessor_credit = lifecycle_credit(&first);
-        let successor_credit = lifecycle_credit(&next);
-        commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
-            .expect("seed predecessor credit");
-        commit_validation_fee_credit(state_tx, Some(&successor_credit))
-            .expect("seed successor credit");
-        assert_eq!(
-            enforce_bound_payout_tick(
+    with_ordinary_validation_fee_payout_state_at_height(
+        height,
+        |state_tx, deployer, code, code_hash| {
+            let predecessor = activate_bound_payout_runtime(
+                state_tx,
+                deployer,
+                code,
+                code_hash,
+                0,
+                fee_asset(),
+                "same_asset_predecessor_tick",
+            );
+            let successor = activate_bound_payout_runtime(
+                state_tx,
+                deployer,
+                code,
+                code_hash,
+                1,
+                fee_asset(),
+                "same_asset_successor_tick",
+            );
+            let first = policy_with_treasury_payout_lifecycle_at_network(
+                predecessor.binding.clone(),
+                state_tx.network_id,
+            );
+            let mut next = successor_policy(&first);
+            next.treasury_account_id = successor.binding.treasury_account_id.clone();
+            next.treasury_payout_binding = Some(successor.binding.clone());
+            install_policy_registry_fixture(
+                &policy_registry(&[first.clone(), next.clone()]),
+                state_tx,
+            );
+            let predecessor_credit = lifecycle_credit(&first);
+            let successor_credit = lifecycle_credit(&next);
+            commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                .expect("seed predecessor credit");
+            commit_validation_fee_credit(state_tx, Some(&successor_credit))
+                .expect("seed successor credit");
+            assert_eq!(
+                enforce_bound_payout_tick(
+                    state_tx,
+                    &predecessor,
+                    code,
+                    canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
+                )
+                .expect("same-asset predecessor remains bound to its own lifecycle seal"),
+                OpaqueDeferredValidationOutcome::Apply,
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                    .expect("read predecessor credit"),
+                Quantity::zero(),
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &successor_credit)
+                    .expect("read successor credit"),
+                successor_credit.amount,
+            );
+        },
+    );
+}
+#[test]
+fn predecessor_tick_cannot_spend_beyond_retained_credit_after_cutover() {
+    let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+    with_ordinary_validation_fee_payout_state_at_height(
+        height,
+        |state_tx, deployer, code, code_hash| {
+            let predecessor = activate_bound_payout_runtime(
+                state_tx,
+                deployer,
+                code,
+                code_hash,
+                0,
+                fee_asset(),
+                "bounded_predecessor_tick",
+            );
+            let first = policy_with_treasury_payout_lifecycle_at_network(
+                predecessor.binding.clone(),
+                state_tx.network_id,
+            );
+            let mut disabled = successor_policy(&first);
+            disabled.charging_mode = ValidationFeeChargingMode::Disabled;
+            disabled.fee = Quantity::zero();
+            disabled.exemption_classes.clear();
+            disabled.treasury_payout_binding = None;
+            install_policy_registry_fixture(&policy_registry(&[first.clone(), disabled]), state_tx);
+            let retained = lifecycle_credit(&first)
+                .with_amount("3.33".parse().expect("partial retained predecessor credit"));
+            commit_validation_fee_credit(state_tx, Some(&retained))
+                .expect("seed partial predecessor credit");
+            let error = enforce_bound_payout_tick(
                 state_tx,
                 &predecessor,
                 code,
                 canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
             )
-            .expect("same-asset predecessor remains bound to its own lifecycle seal"),
-            OpaqueDeferredValidationOutcome::Apply,
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &predecessor_credit)
-                .expect("read predecessor credit"),
-            Quantity::zero(),
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &successor_credit)
-                .expect("read successor credit"),
-            successor_credit.amount,
-        );
-    });
-}
-#[test]
-fn predecessor_tick_cannot_spend_beyond_retained_credit_after_cutover() {
-    let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
-    with_validation_fee_payout_state_at_height(height, |state_tx, deployer, code, code_hash| {
-        let predecessor = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            0,
-            fee_asset(),
-            "bounded_predecessor_tick",
-        );
-        let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
-        let mut disabled = successor_policy(&first);
-        disabled.charging_mode = ValidationFeeChargingMode::Disabled;
-        disabled.fee = Quantity::zero();
-        disabled.exemption_classes.clear();
-        disabled.treasury_payout_binding = None;
-        install_policy_registry_fixture(&policy_registry(&[first.clone(), disabled]), state_tx);
-        let retained = lifecycle_credit(&first)
-            .with_amount("3.33".parse().expect("partial retained predecessor credit"));
-        commit_validation_fee_credit(state_tx, Some(&retained))
-            .expect("seed partial predecessor credit");
-        let error = enforce_bound_payout_tick(
-            state_tx,
-            &predecessor,
-            code,
-            canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
-        )
-        .expect_err("a full batch cannot spend beyond retained predecessor credit");
-        assert!(
-            matches!(error, TransactionRejectionReason::Validation(
+            .expect_err("a full batch cannot spend beyond retained predecessor credit");
+            assert!(
+                matches!(error, TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(ref message)
                     ) if message.contains("effect plan") && message.contains("exact bound DS")),
-            "unexpected over-credit rejection: {error:?}",
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &retained)
-                .expect("read unchanged partial predecessor credit"),
-            retained.amount,
-        );
-    });
+                "unexpected over-credit rejection: {error:?}",
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &retained)
+                    .expect("read unchanged partial predecessor credit"),
+                retained.amount,
+            );
+        },
+    );
 }
 #[test]
 fn future_payout_lifecycle_cannot_preempt_effective_predecessor() {
     let height = TEST_POLICY_EFFECTIVE_HEIGHT + 50;
-    with_validation_fee_payout_state_at_height(height, |state_tx, deployer, code, code_hash| {
-        let runtime = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            0,
-            fee_asset(),
-            "future_payout_cutover_tick",
-        );
-        let first = policy_with_treasury_payout_lifecycle(runtime.binding.clone());
-        let mut future_binding = runtime.binding.clone();
-        future_binding.pool_vault_account_id = account(7);
-        let mut future = successor_policy(&first);
-        future.treasury_payout_binding = Some(future_binding);
-        assert!(future.effective_from_height > height);
-        install_policy_registry_fixture(&policy_registry(&[first.clone(), future]), state_tx);
-        let predecessor_credit = lifecycle_credit(&first);
-        commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
-            .expect("seed effective predecessor credit");
-
-        assert_eq!(
-            enforce_bound_payout_tick(
+    with_ordinary_validation_fee_payout_state_at_height(
+        height,
+        |state_tx, deployer, code, code_hash| {
+            let runtime = activate_bound_payout_runtime(
                 state_tx,
-                &runtime,
+                deployer,
                 code,
-                canonical_treasury_payout_plan(&runtime.binding, Quantity::from(20_u64),),
-            )
-            .expect("a future lifecycle must not authorize or make its predecessor ambiguous"),
-            OpaqueDeferredValidationOutcome::Apply,
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &predecessor_credit)
-                .expect("read drained predecessor credit"),
-            Quantity::zero(),
-        );
-    });
+                code_hash,
+                0,
+                fee_asset(),
+                "future_payout_cutover_tick",
+            );
+            let first = policy_with_treasury_payout_lifecycle_at_network(
+                runtime.binding.clone(),
+                state_tx.network_id,
+            );
+            let mut future_binding = runtime.binding.clone();
+            future_binding.pool_vault_account_id = account(7);
+            let mut future = successor_policy(&first);
+            future.treasury_payout_binding = Some(future_binding);
+            assert!(future.effective_from_height > height);
+            install_policy_registry_fixture(&policy_registry(&[first.clone(), future]), state_tx);
+            let predecessor_credit = lifecycle_credit(&first);
+            commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                .expect("seed effective predecessor credit");
+
+            assert_eq!(
+                enforce_bound_payout_tick(
+                    state_tx,
+                    &runtime,
+                    code,
+                    canonical_treasury_payout_plan(&runtime.binding, Quantity::from(20_u64),),
+                )
+                .expect("a future lifecycle must not authorize or make its predecessor ambiguous"),
+                OpaqueDeferredValidationOutcome::Apply,
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                    .expect("read drained predecessor credit"),
+                Quantity::zero(),
+            );
+        },
+    );
 }
 #[test]
 fn ambiguous_payout_runtime_identity_fails_closed() {
     let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
-    with_validation_fee_payout_state_at_height(height, |state_tx, deployer, code, code_hash| {
-        let runtime = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            0,
-            fee_asset(),
-            "ambiguous_payout_tick",
-        );
-        let first = policy_with_treasury_payout_lifecycle(runtime.binding.clone());
-        let mut rebound_binding = runtime.binding.clone();
-        rebound_binding.pool_vault_account_id = account(7);
-        let mut next = successor_policy(&first);
-        next.treasury_payout_binding = Some(rebound_binding);
-        install_policy_registry_fixture(&policy_registry(&[first.clone(), next]), state_tx);
-        let credit = lifecycle_credit(&first);
-        commit_validation_fee_credit(state_tx, Some(&credit))
-            .expect("seed unambiguous predecessor credit");
-        let error = enforce_bound_payout_tick(
-            state_tx,
-            &runtime,
-            code,
-            canonical_treasury_payout_plan(&runtime.binding, Quantity::from(20_u64)),
-        )
-        .expect_err("one scheduled runtime must not select between two lifecycle seals");
-        assert!(
-            matches!(error, TransactionRejectionReason::Validation(
+    with_ordinary_validation_fee_payout_state_at_height(
+        height,
+        |state_tx, deployer, code, code_hash| {
+            let runtime = activate_bound_payout_runtime(
+                state_tx,
+                deployer,
+                code,
+                code_hash,
+                0,
+                fee_asset(),
+                "ambiguous_payout_tick",
+            );
+            let first = policy_with_treasury_payout_lifecycle_at_network(
+                runtime.binding.clone(),
+                state_tx.network_id,
+            );
+            let mut rebound_binding = runtime.binding.clone();
+            rebound_binding.pool_vault_account_id = account(7);
+            let mut next = successor_policy(&first);
+            next.treasury_payout_binding = Some(rebound_binding);
+            install_policy_registry_fixture(&policy_registry(&[first.clone(), next]), state_tx);
+            let credit = lifecycle_credit(&first);
+            commit_validation_fee_credit(state_tx, Some(&credit))
+                .expect("seed unambiguous predecessor credit");
+            let error = enforce_bound_payout_tick(
+                state_tx,
+                &runtime,
+                code,
+                canonical_treasury_payout_plan(&runtime.binding, Quantity::from(20_u64)),
+            )
+            .expect_err("one scheduled runtime must not select between two lifecycle seals");
+            assert!(
+                matches!(error, TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(ref message)
                     ) if message.contains("matches multiple retained lifecycle identities")),
-            "unexpected ambiguous-runtime rejection: {error:?}",
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &credit)
-                .expect("read unchanged credit after ambiguous runtime"),
-            credit.amount,
-        );
-    });
+                "unexpected ambiguous-runtime rejection: {error:?}",
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &credit)
+                    .expect("read unchanged credit after ambiguous runtime"),
+                credit.amount,
+            );
+        },
+    );
 }
 #[test]
 fn unrelated_trigger_still_applies_when_fee_policy_disabled() {
     let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
-    with_validation_fee_payout_state_at_height(height, |state_tx, deployer, code, code_hash| {
-        let predecessor = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            0,
-            fee_asset(),
-            "disabled_predecessor_tick",
-        );
-        let unrelated = activate_bound_payout_runtime(
-            state_tx,
-            deployer,
-            code,
-            code_hash,
-            1,
-            fee_asset(),
-            "disabled_unrelated_tick",
-        );
-        let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
-        let mut disabled = successor_policy(&first);
-        disabled.charging_mode = ValidationFeeChargingMode::Disabled;
-        disabled.fee = Quantity::zero();
-        disabled.exemption_classes.clear();
-        disabled.treasury_payout_binding = None;
-        install_policy_registry_fixture(&policy_registry(&[first.clone(), disabled]), state_tx);
-        let predecessor_credit = lifecycle_credit(&first);
-        commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
-            .expect("seed retained predecessor credit");
-        assert_eq!(
-            enforce_bound_payout_tick(
+    with_ordinary_validation_fee_payout_state_at_height(
+        height,
+        |state_tx, deployer, code, code_hash| {
+            let predecessor = activate_bound_payout_runtime(
                 state_tx,
-                &unrelated,
+                deployer,
                 code,
-                canonical_treasury_payout_plan(&unrelated.binding, Quantity::from(20_u64)),
+                code_hash,
+                0,
+                fee_asset(),
+                "disabled_predecessor_tick",
+            );
+            let unrelated = activate_bound_payout_runtime(
+                state_tx,
+                deployer,
+                code,
+                code_hash,
+                1,
+                fee_asset(),
+                "disabled_unrelated_tick",
+            );
+            let first = policy_with_treasury_payout_lifecycle_at_network(
+                predecessor.binding.clone(),
+                state_tx.network_id,
+            );
+            let mut disabled = successor_policy(&first);
+            disabled.charging_mode = ValidationFeeChargingMode::Disabled;
+            disabled.fee = Quantity::zero();
+            disabled.exemption_classes.clear();
+            disabled.treasury_payout_binding = None;
+            install_policy_registry_fixture(&policy_registry(&[first.clone(), disabled]), state_tx);
+            let predecessor_credit = lifecycle_credit(&first);
+            commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                .expect("seed retained predecessor credit");
+            assert_eq!(
+                enforce_bound_payout_tick(
+                    state_tx,
+                    &unrelated,
+                    code,
+                    canonical_treasury_payout_plan(&unrelated.binding, Quantity::from(20_u64)),
+                )
+                .expect("Disabled policy leaves unrelated scheduled runtimes generic"),
+                OpaqueDeferredValidationOutcome::Apply,
+            );
+            let predecessor_plan =
+                canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64));
+            let predecessor_ordered =
+                ordered_treasury_payout_plan(&predecessor.binding, &predecessor_plan);
+            let predecessor_groups = std::collections::BTreeMap::from([(
+                predecessor.binding.treasury_account_id.clone(),
+                predecessor_plan,
+            )]);
+            let error = enforce_opaque_deferred_instruction_groups(
+                &predecessor_groups,
+                &predecessor_ordered,
+                state_tx,
+                Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
+                    &predecessor.runtime,
+                    code,
+                    &unrelated.trigger_id,
+                )),
             )
-            .expect("Disabled policy leaves unrelated scheduled runtimes generic"),
-            OpaqueDeferredValidationOutcome::Apply,
-        );
-        let predecessor_plan =
-            canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64));
-        let predecessor_ordered =
-            ordered_treasury_payout_plan(&predecessor.binding, &predecessor_plan);
-        let predecessor_groups = std::collections::BTreeMap::from([(
-            predecessor.binding.treasury_account_id.clone(),
-            predecessor_plan,
-        )]);
-        let error = enforce_opaque_deferred_instruction_groups(
-            &predecessor_groups,
-            &predecessor_ordered,
-            state_tx,
-            Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                &predecessor.runtime,
-                code,
-                &unrelated.trigger_id,
-            )),
-        )
-        .expect_err("a retained payout runtime paired with another trigger must fail closed");
-        assert!(
-            matches!(error, TransactionRejectionReason::Validation(
+            .expect_err("a retained payout runtime paired with another trigger must fail closed");
+            assert!(
+                matches!(error, TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(ref message)
                     ) if message.contains("scheduled trigger or executed runtime identity matches")
                         && message.contains("pair is not exact")),
-            "unexpected cross-wired payout rejection: {error:?}",
-        );
-        assert_eq!(
-            read_validation_fee_credit_balance(state_tx, &predecessor_credit)
-                .expect("read untouched predecessor credit"),
-            predecessor_credit.amount,
-        );
-    });
+                "unexpected cross-wired payout rejection: {error:?}",
+            );
+            assert_eq!(
+                read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                    .expect("read untouched predecessor credit"),
+                predecessor_credit.amount,
+            );
+        },
+    );
+}
+#[test]
+fn ordinary_validation_fee_fixture_retains_original_root_and_bound_artifact() {
+    with_ordinary_validation_fee_payout_state_at_height(
+        TEST_POLICY_EFFECTIVE_HEIGHT,
+        |state_tx, deployer, code, code_hash| {
+            let runtime = activate_bound_payout_runtime(
+                state_tx,
+                deployer,
+                code,
+                code_hash,
+                0,
+                fee_asset(),
+                "original_fee_scope_control",
+            );
+            let record = crate::smartcontracts::code::fetch_bound_contract_record(
+                state_tx,
+                &runtime.binding.contract_address,
+            )
+            .expect("the ordinary fixture retains immutable original artifact scope");
+            assert_eq!(record.code_bytes, code);
+            assert_eq!(record.contract_subject, runtime.binding.treasury_account_id);
+            assert!(crate::executor::root_scope::execution_root_scope(state_tx).is_ok());
+            assert_ne!(state_tx.network_id, validation_fee_test_network_id());
+            let policy = policy_with_treasury_payout_lifecycle_at_network(
+                runtime.binding.clone(),
+                state_tx.network_id,
+            );
+            assert_eq!(policy.network_id, state_tx.network_id);
+            install_policy_registry_fixture(
+                &policy_registry(std::slice::from_ref(&policy)),
+                state_tx,
+            );
+            assert!(
+                active_policy(state_tx)
+                    .expect("exact original network policy")
+                    .is_some()
+            );
+            let mut foreign = policy;
+            foreign.network_id = validation_fee_test_network_id();
+            install_policy_registry_fixture(&policy_registry(&[foreign]), state_tx);
+            assert!(
+                active_policy(state_tx).is_err(),
+                "a foreign network cannot inherit original artifact scope"
+            );
+        },
+    );
 }
 #[test]
 fn active_policy_admission_rejects_completed_ivm_proved_axt() {
-    use iroha_data_model::block::BlockHeader;
     let deployer_key = key_pair(55);
     let deployer = AccountId::new(deployer_key.public_key().clone());
-    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        validation_fee_payout_world(&deployer),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-        "generic-testnet".parse().expect("chain id"),
-        validation_fee_test_network_id(),
+    let state = original_validation_fee_state(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        ),
     );
-    let header = BlockHeader::new(
-        std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
-            .expect("test policy effective height is non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = original_validation_fee_header(&state, TEST_POLICY_EFFECTIVE_HEIGHT);
     let mut block = state.block(header);
-    let mut state_tx = block.transaction();
+    let mut state_tx = block.transaction_for_callback_testing();
     let policy =
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
     assert_eq!(

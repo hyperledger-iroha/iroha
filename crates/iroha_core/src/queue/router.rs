@@ -9294,7 +9294,7 @@ mod tests {
             }
             .into(),
         ];
-        let world = World::new();
+        let world = crate::state::World::new();
         let catalog = DataSpaceCatalog::default();
         for operation in operations {
             assert_eq!(

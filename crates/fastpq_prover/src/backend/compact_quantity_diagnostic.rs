@@ -4,28 +4,29 @@
 //! expectations before production use. Mathematical verification is not finality.
 
 use super::{
-    compact_axt_air::AxtTransferAir,
+    compact_axt_batch::AxtTransferBatch,
     compact_bundle::BundleLimits,
-    compact_protocol::{FixedAir, FixedAirSchema, PreparedAir, shared_openings::prove_shared},
+    compact_protocol::{FixedAir, FixedAirSchema, PreparedAir},
     compact_public_api::{
-        SharedVerifier, verify_axt_transfer_with_allocation, verify_transfer_with_allocation,
+        DeepVerifier, verify_axt_transfer_with_allocation, verify_transfer_with_allocation,
     },
-    compact_public_transfer::PublicTransferAir,
+    compact_public_batch::{BatchContextLimits, PublicTransferBatch},
     compact_quantity_tests::{QuantityCase, QuantityFixture},
     compact_value_domain::CompactTransferValue,
+    deep_relation::DeepRelation,
+    deep_trace_source::OwnedTraceSource,
 };
 use crate::{
     Error, ProofSemantics, VerifyLimits,
     gadgets::{
-        compact_smt_air::{COLUMN_COUNT, PATH_LEVELS, PHYSICAL_ROW_COUNT, SmtWitness},
-        compact_trace_columns::smt_row_cells,
+        compact_smt_air::{PATH_LEVELS, SmtWitness},
         public_transfer_statement::DerivedTransferSmtWitnesses,
     },
 };
 use iroha_crypto::Hash;
 use sha2::{Digest as _, Sha256};
 
-type Columns = Vec<Vec<u64>>;
+type Columns = OwnedTraceSource;
 
 fn policy(count: usize) -> BundleLimits {
     BundleLimits {
@@ -33,27 +34,18 @@ fn policy(count: usize) -> BundleLimits {
         max_wire_bytes: 16 * 1024 * 1024,
         max_total_segment_bytes: 16 * 1024 * 1024,
         max_total_statement_bytes: 512 * 1024,
-        max_total_queries: count * 375,
+        max_total_queries: count * super::deep_geometry::QUERY_COUNT,
         max_total_decode_allocation_charges: 192 * 1024 * 1024,
         segment: VerifyLimits {
-            max_proof_bytes: 5 * 1024 * 1024,
-            max_queries: 375,
+            max_proof_bytes: super::deep_proof::MAX_FRAME_BYTES,
+            max_queries: super::deep_geometry::QUERY_COUNT,
             ..VerifyLimits::default()
         },
     }
 }
 
-fn prove(relation: &impl FixedAir, columns: &[Vec<u64>], limits: VerifyLimits) -> Vec<u8> {
-    let proof = prove_shared(
-        relation,
-        columns,
-        VerifyLimits {
-            max_proof_bytes: 16 * 1024 * 1024,
-            ..limits
-        },
-    )
-    .unwrap();
-    norito::encode_canonical(&proof).unwrap()
+fn prove(relation: &impl DeepRelation, source: OwnedTraceSource, seed: u64) -> Vec<u8> {
+    super::deep_fixture::prove(relation, source, seed).unwrap()
 }
 
 // Consumes every private path. Only public endpoints and proof-ready columns leave.
@@ -87,31 +79,62 @@ fn columns(
             let witness = SmtWitness::from_inputs(statement, &siblings)
                 .unwrap()
                 .into_physical();
-            let mut columns: Columns = (0..COLUMN_COUNT)
-                .map(|_| Vec::with_capacity(PHYSICAL_ROW_COUNT))
-                .collect();
-            for row in witness.rows() {
-                for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-                    column.push(value);
-                }
-            }
-            columns
+            OwnedTraceSource::from_rows(witness.rows()).unwrap()
         })
         .collect();
     drop(private);
     (roots, columns)
 }
 
-fn retain(label: &str, bytes: &[u8]) {
-    let sha = format!("{:x}", Sha256::digest(bytes));
+/// Public native output awaiting an independently reviewed, immutable fixture pin.
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+struct FixturePin {
+    bytes: usize,
+    sha256: String,
+    schema: String,
+    row_root: String,
+    // Every public work counter is pinned, including raw unused tape bytes.
+    work: Vec<usize>,
+}
+
+fn counters(w: super::deep_engine::VerificationWork) -> Vec<usize> {
+    vec![
+        w.proof_bytes,
+        w.air_evaluations,
+        w.leaf_hashes,
+        w.parent_hashes,
+        w.h_calls,
+        w.verifier_messages,
+        w.g_tape_bytes,
+        w.fold_checks,
+        w.terminal_values,
+    ]
+}
+
+fn retain(label: &str, bytes: &[u8], work: super::deep_engine::VerificationWork) {
+    let proof = super::deep_proof::decode(bytes, super::deep_proof::MAX_FRAME_BYTES).unwrap();
+    let pin = FixturePin {
+        bytes: bytes.len(),
+        sha256: hex::encode(Sha256::digest(bytes)),
+        schema: hex::encode(&bytes[6..22]),
+        row_root: hex::encode(proof.row_root.as_bytes()),
+        work: counters(work),
+    };
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/fastpq-production-validation");
     std::fs::create_dir_all(&directory).unwrap();
-    let path = directory.join(format!("quantity-compact-{label}-{sha}.bin"));
+    let path = directory.join(format!("quantity-q77-{label}-{}.bin", pin.sha256));
     std::fs::write(&path, bytes).unwrap();
+    // This is an observed output, never automatically promoted to the canonical pin.
+    std::fs::write(
+        directory.join(format!("quantity-q77-{label}-{}.observed.json", pin.sha256)),
+        norito::json::to_vec(&pin).unwrap(),
+    )
+    .unwrap();
     eprintln!(
-        "retained {} bytes sha256={sha} at {}",
+        "retained {} bytes sha256={} at {}; canonical fixture pin review pending",
         bytes.len(),
+        pin.sha256,
         path.display()
     );
 }
@@ -122,7 +145,7 @@ struct Retagged<'a, R> {
     identity: &'static str,
 }
 
-impl<R: FixedAir> FixedAir for Retagged<'_, R> {
+impl<R: DeepRelation> FixedAir for Retagged<'_, R> {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
             identity: self.identity,
@@ -140,15 +163,22 @@ impl<R: FixedAir> FixedAir for Retagged<'_, R> {
     }
 }
 
+impl<R: DeepRelation> super::deep_relation::sealed::Sealed for Retagged<'_, R> {}
+impl<R: DeepRelation> DeepRelation for Retagged<'_, R> {
+    fn deep_relation(&self) -> &super::compact_transfer_air::CompactTransferAir {
+        self.relation.deep_relation()
+    }
+}
+
 fn reject_retag(
-    relation: &impl FixedAir,
+    relation: &impl DeepRelation,
     identity: &'static str,
     bytes: &[u8],
     limits: VerifyLimits,
 ) {
     let retagged = Retagged { relation, identity };
     assert!(
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 80 * 1024 * 1024
         }
         .verify_frame(&retagged, bytes, limits)
@@ -160,19 +190,24 @@ fn reject_retag(
 fn reject_single_retag(fixture: &QuantityFixture, axt: bool, bytes: &[u8], limits: VerifyLimits) {
     if axt {
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-        let relation = AxtTransferAir::new(
+        let expected = fixture.expected();
+        let batch = AxtTransferBatch::new(
             &prepared,
-            &fixture.expected(),
-            &fixture.axt.binding,
-            fixture.axt.metadata(),
-            fixture.axt.outer,
-            fixture.axt.remote.as_deref(),
+            &expected,
+            &[],
+            fixture.context(),
+            BatchContextLimits::default(),
         )
         .unwrap();
+        let relation = batch.segment(0).unwrap();
         reject_retag(&relation, u64::AXT_IDENTITY, bytes, limits);
     } else {
         let prepared = fixture.prepare(ProofSemantics::StateTransition);
-        let relation = PublicTransferAir::new(&prepared, &fixture.expected()).unwrap();
+        let expected = fixture.expected();
+        let batch =
+            PublicTransferBatch::new(&prepared, &expected, &[], BatchContextLimits::default())
+                .unwrap();
+        let relation = batch.segment(0).unwrap();
         reject_retag(&relation, u64::TRANSFER_IDENTITY, bytes, limits);
     }
 }
@@ -195,22 +230,28 @@ fn single(axt: bool) {
         let expected = fixture.expected();
         if axt {
             let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-            let relation = AxtTransferAir::new(
+            let batch = AxtTransferBatch::new(
                 &prepared,
                 &expected,
-                &fixture.axt.binding,
-                fixture.axt.metadata(),
-                fixture.axt.outer,
-                fixture.axt.remote.as_deref(),
+                &[],
+                fixture.context(),
+                BatchContextLimits::default(),
             )
             .unwrap();
-            prove(&relation, &private_columns.pop().unwrap(), limits)
+            prove(
+                &batch.segment(0).unwrap(),
+                private_columns.pop().unwrap(),
+                0x077_511,
+            )
         } else {
             let prepared = fixture.prepare(ProofSemantics::StateTransition);
+            let batch =
+                PublicTransferBatch::new(&prepared, &expected, &[], BatchContextLimits::default())
+                    .unwrap();
             prove(
-                &PublicTransferAir::new(&prepared, &expected).unwrap(),
-                &private_columns.pop().unwrap(),
-                limits,
+                &batch.segment(0).unwrap(),
+                private_columns.pop().unwrap(),
+                0x077_605,
             )
         }
     };
@@ -244,9 +285,9 @@ fn single(axt: bool) {
     );
     let verified = result.unwrap();
     assert_eq!(verified.public_io(), fixture.expected());
-    assert_eq!(verified.work().air_evaluations, 375);
-    assert_eq!(verified.work().terminal_degree_checks, 1);
-    assert_eq!(verified.work().transcripts, 1);
+    assert_eq!(verified.work().air_evaluations, 1);
+    assert_eq!(verified.work().terminal_values, 128);
+    assert_eq!(verified.work().verifier_messages, 10);
     assert_eq!(verified.work().proof_bytes, bytes.len());
     eprintln!(
         "quantity single axt={axt} bounded verification {:?}; decode charges {}; work {:?}",
@@ -266,7 +307,11 @@ fn single(axt: bool) {
     assert!(verify(&fixture, &bytes[..bytes.len() - 1], 80 * 1024 * 1024).is_err());
     fixture.claims[0].authority_digest = Hash::new(b"different proof-bound quantity authority");
     assert!(verify(&fixture, &bytes, 80 * 1024 * 1024).is_err());
-    retain(if axt { "axt-single" } else { "ordinary-single" }, &bytes);
+    retain(
+        if axt { "axt-single" } else { "ordinary-single" },
+        &bytes,
+        verified.work(),
+    );
 }
 
 #[test]
@@ -281,147 +326,134 @@ fn full_domain_axt_single_verifies_after_private_data_is_dropped() {
     single(true);
 }
 
-// These ignored regressions consume the exact content-addressed output of the
-// diagnostics above. Their explicit larger test budgets never change admission.
-fn read_retained_quantity_wire(
-    label: &str,
-    expected_bytes: usize,
-    expected_sha256: &str,
-    expected_schema: &str,
-) -> Vec<u8> {
+// Native generation must precede a separately reviewed canonical pin. The
+// producer writes observations only; these consumers never bless their own output.
+// Pins come from reviewed source/binary-bound native generation. A separately
+// rebuilt consumer must pass every retained-wire check before qualification.
+fn read_retained_quantity_wire(label: &str) -> (Vec<u8>, FixturePin) {
     use std::io::Read as _;
-
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/fastpq-production-validation");
-    let file = std::fs::File::open(
-        directory.join(format!("quantity-compact-{label}-{expected_sha256}.bin")),
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pin: FixturePin = norito::json::from_slice(
+        &std::fs::read(root.join(format!("fixtures/fastpq/q77-quantity-{label}.json")))
+            .expect("generate and independently review the current native fixture pin first"),
     )
-    .expect("run the matching full-domain diagnostic and retain its exact proof");
-    let mut bytes = Vec::with_capacity(expected_bytes + 1);
-    file.take((expected_bytes + 1) as u64)
+    .unwrap();
+    assert!(pin.bytes > 40 && pin.bytes <= super::deep_proof::MAX_FRAME_BYTES);
+    assert_eq!(pin.sha256.len(), 64);
+    assert_eq!(pin.row_root.len(), 64);
+    assert_eq!(pin.schema.len(), 32);
+    assert_eq!(pin.work.len(), 9);
+    let file = std::fs::File::open(
+        root.join("target/fastpq-production-validation")
+            .join(format!("quantity-q77-{label}-{}.bin", pin.sha256)),
+    )
+    .expect("retain the exact current native proof named by the reviewed pin");
+    let mut bytes = Vec::with_capacity(pin.bytes + 1);
+    file.take((pin.bytes + 1) as u64)
         .read_to_end(&mut bytes)
         .unwrap();
-    assert_eq!(bytes.len(), expected_bytes);
-    assert_eq!(hex::encode(Sha256::digest(&bytes)), expected_sha256);
+    assert_eq!(bytes.len(), pin.bytes);
+    assert_eq!(hex::encode(Sha256::digest(&bytes)), pin.sha256);
     assert_eq!(&bytes[..6], b"NRT0\0\0");
     assert_eq!(bytes[22], 0);
     assert_eq!(bytes[39], norito::core::header_flags::COMPACT_LEN);
-    assert_eq!(hex::encode(&bytes[6..22]), expected_schema);
+    assert_eq!(hex::encode(&bytes[6..22]), pin.schema);
     assert_eq!(
         u64::from_le_bytes(bytes[23..31].try_into().unwrap()),
-        (expected_bytes - 40) as u64
+        (pin.bytes - 40) as u64
     );
-    bytes
+    let proof = super::deep_proof::decode(&bytes, super::deep_proof::MAX_FRAME_BYTES).unwrap();
+    assert_eq!(norito::encode_canonical(&proof).unwrap(), bytes);
+    (bytes, pin)
 }
 
-fn assert_retained_single(
-    relation: &impl FixedAir,
-    bytes: &[u8],
-    expected_root: &str,
-    expected_counts: [usize; 4],
-) {
+fn assert_retained_single(relation: &impl DeepRelation, bytes: &[u8], pin: &FixturePin) {
     let limits = policy(1).segment;
-    let result = SharedVerifier {
-        max_decode_allocation_charges: 80 * 1024 * 1024,
-    }
-    .verify_frame_committed(relation, bytes, limits)
-    .unwrap();
-    assert_eq!(hex::encode(result.row_root().to_le_bytes()), expected_root);
-    let work = result.work();
-    assert_eq!(work.proof_bytes, bytes.len());
-    assert_eq!(work.transcripts, 1);
-    assert_eq!(work.air_evaluations, 375);
-    assert_eq!(
-        [
-            work.row_leaves,
-            work.oracle_leaves,
-            work.fri_leaves,
-            work.parent_hashes
-        ],
-        expected_counts
+    let verifier = DeepVerifier {
+        max_decode_allocation_charges: 32 * 1024 * 1024,
+    };
+    let (result, usage) = norito::core::with_decode_limits_measured(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 32 * 1024 * 1024, 16),
+        || verifier.verify_frame_committed(relation, bytes, limits),
     );
-    assert_eq!(work.terminal_degree_checks, 1);
-    assert!(matches!(
-        SharedVerifier {
-            max_decode_allocation_charges: 32 * 1024 * 1024,
-        }
-        .verify_frame_committed(relation, bytes, limits),
-        Err(Error::Encode(norito::Error::TotalAllocationExceeded { attempted, limit }))
-            if limit == 32 * 1024 * 1024 && attempted > limit
-    ));
-    // Check the replay, compact target and AXT byte policies separately from allocation.
+    let result = result.unwrap();
+    assert_eq!(hex::encode(result.row_root().as_bytes()), pin.row_root);
+    assert_eq!(counters(result.work()), pin.work);
+    assert_eq!(result.work().proof_bytes, bytes.len());
+    assert_eq!(result.work().verifier_messages, 10);
+    assert_eq!(result.work().air_evaluations, 1);
+    assert_eq!(result.work().terminal_values, 128);
+    let charges = usage.total_allocated_bytes();
+    assert!(charges > 0 && charges <= 32 * 1024 * 1024);
+    for (cap, accepted) in [(charges, true), (charges - 1, false)] {
+        let exact = DeepVerifier {
+            max_decode_allocation_charges: cap,
+        };
+        assert_eq!(
+            exact
+                .verify_frame_committed(relation, bytes, limits)
+                .is_ok(),
+            accepted
+        );
+    }
+    // Current compact proofs meet the unchanged ordinary and AXT byte ceilings.
     for max in [
         VerifyLimits::default().max_proof_bytes,
         512 * 1024,
         1024 * 1024,
     ] {
-        assert!(matches!(
-            SharedVerifier {
-                max_decode_allocation_charges: 80 * 1024 * 1024,
-            }
-            .verify_frame_committed(relation, bytes, VerifyLimits {
-                max_proof_bytes: max,
-                max_queries: 375,
-                ..VerifyLimits::default()
-            }),
-            Err(Error::VerifierLimitExceeded { limit: "max_proof_bytes", actual, max: observed })
-                if actual == bytes.len() && observed == max
-        ));
+        assert_eq!(
+            verifier
+                .verify_frame_committed(
+                    relation,
+                    bytes,
+                    VerifyLimits {
+                        max_proof_bytes: max,
+                        ..limits
+                    }
+                )
+                .unwrap(),
+            result
+        );
     }
+    assert!(matches!(verifier.verify_frame_committed(relation, bytes,
+        VerifyLimits { max_proof_bytes: bytes.len() - 1, ..limits }),
+        Err(Error::VerifierLimitExceeded { limit: "max_proof_bytes", actual, max })
+            if actual == bytes.len() && max == bytes.len() - 1));
 }
 
 #[test]
-#[ignore = "requires the exact retained six-lane ordinary-single quantity proof"]
+#[ignore = "requires the independently pinned current q77 ordinary quantity proof"]
 fn retained_ordinary_single_preserves_full_wire_root_and_quantity_context() {
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let bytes = read_retained_quantity_wire(
-        "ordinary-single",
-        3_994_619,
-        "8ed0b0db090e7342ae7b7dc1fb9a4e5f2ad265c5f5f4cfe2808cb066385f9091",
-        "626ab2f2e794c043f1d57dec4d05650a",
-    );
-    // The complete single relation differs from even a count-one bundle.
+    let (bytes, pin) = read_retained_quantity_wire("ordinary-single");
     let (fixture, private) = QuantityFixture::new(QuantityCase::MixedScale, 1);
     drop(private);
     let expected = fixture.expected();
     let prepared = fixture.prepare(ProofSemantics::StateTransition);
-    let relation = PublicTransferAir::new(&prepared, &expected).unwrap();
-    assert_retained_single(
-        &relation,
-        &bytes,
-        "aed561b2f726e3a9776d9855e18503c3c8965ecba1746c9c424a5a3396dd2a77f9fc8d797855096915fd679aa0002e1b",
-        [749, 750, 3960, 33169],
-    );
+    let batch =
+        PublicTransferBatch::new(&prepared, &expected, &[], BatchContextLimits::default()).unwrap();
+    assert_retained_single(&batch.segment(0).unwrap(), &bytes, &pin);
+    reject_single_retag(&fixture, false, &bytes, policy(1).segment);
 }
 
 #[test]
-#[ignore = "requires the exact retained six-lane axt-single quantity proof"]
+#[ignore = "requires the independently pinned current q77 AXT quantity proof"]
 fn retained_axt_single_preserves_full_wire_root_and_quantity_context() {
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let bytes = read_retained_quantity_wire(
-        "axt-single",
-        4_015_551,
-        "bba32fd6bdf97bd5b349a789a60cc24645f4594c2bde79ea1b42138b21cc0189",
-        "626ab2f2e794c043f1d57dec4d05650a",
-    );
-    // The complete single relation differs from even a count-one bundle.
+    let (bytes, pin) = read_retained_quantity_wire("axt-single");
     let (fixture, private) = QuantityFixture::new(QuantityCase::Maximum, 1);
     drop(private);
     let expected = fixture.expected();
     let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
-    let relation = AxtTransferAir::new(
+    let batch = AxtTransferBatch::new(
         &prepared,
         &expected,
-        &fixture.axt.binding,
-        fixture.axt.metadata(),
-        fixture.axt.outer,
-        fixture.axt.remote.as_deref(),
+        &[],
+        fixture.context(),
+        BatchContextLimits::default(),
     )
     .unwrap();
-    assert_retained_single(
-        &relation,
-        &bytes,
-        "dbabc4745d74f63ac4a8a03236b68e909ef26a4db1d91279af33cfb3f690fed41d9fa5e1ec1d6dd9d89be9c3b5edef37",
-        [750, 750, 3956, 33536],
-    );
+    assert_retained_single(&batch.segment(0).unwrap(), &bytes, &pin);
+    reject_single_retag(&fixture, true, &bytes, policy(1).segment);
 }

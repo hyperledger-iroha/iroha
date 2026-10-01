@@ -43,8 +43,8 @@ fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
     {
         // Extend the genesis world fixture without publishing another height or
         // changing committed chain lineage. This is not a finalized carrier.
-        let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-        let mut transaction = setup.transaction();
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut transaction = setup.transaction_for_callback_testing();
         for account in [&escrow, &receiver] {
             Register::account(Account::new(account.clone()))
                 .execute(&ALICE_ID, &mut transaction)
@@ -84,6 +84,7 @@ fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
         setup.commit_world_overlay_for_testing().unwrap();
     }
     let source = carrier(
+        &state,
         [(0, 20_u32), (1, 30_u32)]
             .into_iter()
             .map(|(direction, amount)| {

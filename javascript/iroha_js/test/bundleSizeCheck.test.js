@@ -123,6 +123,22 @@ function fakeSplitBundle(options, entryText = "") {
   return { outputFiles, metafile: { inputs, outputs } };
 }
 
+function assertSplitByteInventory(result, metrics) {
+  const actualBytes = (names) => names.reduce((total, name) => {
+    const output = result.outputFiles.find(({ path }) =>
+      resolve(path) === resolve(PACKAGE_ROOT, name));
+    assert.ok(output, `missing emitted output ${name}`);
+    return total + output.contents.byteLength;
+  }, 0);
+  assert.equal(metrics.eagerBytes, actualBytes(metrics.eagerOutputs));
+  for (const lazy of metrics.lazyChunks) {
+    assert.equal(lazy.bytes, actualBytes(lazy.outputs));
+  }
+  assert.equal(metrics.combinedBytes, actualBytes(metrics.outputs));
+  assert.equal(metrics.combinedBytes,
+    metrics.eagerBytes + metrics.lazyChunks.reduce((total, lazy) => total + lazy.bytes, 0));
+}
+
 before(async () => {
   bundleDistLock = await acquireDistLock({ root: PACKAGE_ROOT });
 });
@@ -143,17 +159,48 @@ test("bundle-size check fails closed when esbuild cannot be resolved", async () 
   );
 });
 
-test("bundle-size targets retain audited ceilings, lazy baselines, and browser graph guards", () => {
+for (const scope of ["eager", "lazy", "single"]) {
+  test(`bundle audit accepts code growth in the ${scope} output`, async () => {
+    const padding = `/* ${"x".repeat(2 * 1024 * 1024)} */ export {};`;
+    const logs = [];
+    await runBundleSizeCheck({
+      loadEsbuild: async () => ({
+        async build(options) {
+          if (options.splitting === true) {
+            const result = fakeSplitBundle(options, scope === "eager" ? padding : "");
+            if (scope === "lazy") {
+              const output = result.outputFiles[1];
+              output.text = padding;
+              output.contents = new TextEncoder().encode(padding);
+              const name = relative(PACKAGE_ROOT, output.path).replaceAll("\\", "/");
+              result.metafile.outputs[name].bytes = output.contents.byteLength;
+            }
+            return result;
+          }
+          const entryPoint = options.entryPoints[0];
+          const text = scope === "single" && entryPoint.endsWith("/dist/transactionCodec.js")
+            ? padding : "export {};";
+          return {
+            outputFiles: [{ contents: new TextEncoder().encode(text), text }],
+            metafile: { inputs: { [entryPoint]: {} } },
+          };
+        },
+      }),
+      log(line) { logs.push(line); },
+    });
+    assert.ok(logs.some((line) => line.includes(`${Buffer.byteLength(padding)} bytes`)));
+    assert.ok(logs.every((line) => !/limit|ceiling|reviewed/u.test(line)));
+  });
+}
+
+test("bundle-size targets retain declared module boundaries and browser graph guards", () => {
   assert.deepEqual(
-    BUNDLE_TARGETS.map(({ label, limitKb, lazyChunks, forbidNodeInputs, forbidGlobalBuffer }) => ({
+    BUNDLE_TARGETS.map(({ label, lazyChunks, forbidNodeInputs, forbidGlobalBuffer }) => ({
       label,
-      limitKb,
       lazyChunks: (lazyChunks ?? []).map(
-        ({ specifier, edgeCount, reviewedBytes, limitKb: lazyLimitKb }) => ({
+        ({ specifier, edgeCount }) => ({
           specifier,
           edgeCount,
-          reviewedBytes,
-          limitKb: lazyLimitKb,
         }),
       ),
       forbidNodeInputs: forbidNodeInputs === true,
@@ -162,19 +209,14 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
     [
       {
         label: "toriiClient.js",
-        limitKb: 788,
         lazyChunks: [
           {
             specifier: "./toriiOptional.js",
             edgeCount: 1,
-            reviewedBytes: 222_685,
-            limitKb: 218,
           },
           {
             specifier: "./sumeragiTyped.js",
             edgeCount: 2,
-            reviewedBytes: 72_493,
-            limitKb: 72,
           },
         ],
         forbidNodeInputs: false,
@@ -182,54 +224,44 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
       },
       {
         label: "transactionCodec.js (browser)",
-        limitKb: 306,
         lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "nexusApp.js (browser)",
-        limitKb: 355,
         lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "canonicalRequest.js (browser)",
-        limitKb: 94,
         lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "ivmArtifact.js (browser)",
-        limitKb: 12,
         lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "kotodamaCompiler/browser.js (browser)",
-        limitKb: 56,
         lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "browser.js (public aggregate)",
-        limitKb: 491,
         lazyChunks: [
           {
             specifier: "./sumeragiTyped.js",
             edgeCount: 2,
-            reviewedBytes: 72_806,
-            limitKb: 72,
           },
           {
             specifier: "./smartContractDeploymentSubmit.js",
             edgeCount: 1,
-            reviewedBytes: 9_190,
-            limitKb: 9,
           },
         ],
         forbidNodeInputs: true,
@@ -237,6 +269,15 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
       },
     ],
   );
+  for (const target of BUNDLE_TARGETS) {
+    assert.equal(Object.hasOwn(target, "limitKb"), false);
+    assert.equal(Object.hasOwn(target, "reviewedEagerBytes"), false);
+    assert.equal(Object.hasOwn(target, "reviewedCombinedBytes"), false);
+    for (const lazy of target.lazyChunks ?? []) {
+      assert.equal(Object.hasOwn(lazy, "limitKb"), false);
+      assert.equal(Object.hasOwn(lazy, "reviewedBytes"), false);
+    }
+  }
 });
 
 test("bundle-size check covers the browser transaction codec", () => {
@@ -244,7 +285,6 @@ test("bundle-size check covers the browser transaction codec", () => {
   assert.ok(target, "browser transaction-codec bundle target is required");
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]transactionCodec\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 306);
 });
 
 test("bundle-size check proves the Nexus app export has a browser-only graph", () => {
@@ -252,7 +292,6 @@ test("bundle-size check proves the Nexus app export has a browser-only graph", (
   assert.ok(target, "browser Nexus app bundle target is required");
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]nexusApp\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 355);
 });
 
 test("bundle-size check gates the complete public browser aggregate", () => {
@@ -261,9 +300,6 @@ test("bundle-size check gates the complete public browser aggregate", () => {
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 491);
-  assert.equal(target.reviewedEagerBytes, 496_687);
-  assert.equal(target.reviewedCombinedBytes, 578_683);
   assert.match(target.lazyChunks[0].entryPoint, /dist[/\\]sumeragiTyped\.js$/u);
   assert.match(
     target.lazyChunks[1].entryPoint,
@@ -277,7 +313,6 @@ test("bundle-size check gates canonical requests as a browser subpath", () => {
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]canonicalRequest\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 94);
 });
 
 test("bundle-size check gates the IVM artifact helper as a browser leaf", () => {
@@ -287,7 +322,6 @@ test("bundle-size check gates the IVM artifact helper as a browser leaf", () => 
   assert.match(target.entryPoint, /dist[/\\]ivmArtifact\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.equal(target.forbidGlobalBuffer, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 12);
 });
 
 test("bundle-size check gates the remote Kotodama compiler browser export", () => {
@@ -299,7 +333,6 @@ test("bundle-size check gates the remote Kotodama compiler browser export", () =
   assert.match(target.entryPoint, /dist[/\\]kotodamaCompiler[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.equal(target.forbidGlobalBuffer, true);
-  assert.equal(target.limitKb, 56);
 });
 
 test("browser graph guard detects every forbidden Node-only edge", () => {
@@ -529,44 +562,16 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   const { build } = await import("esbuild");
   const result = await build(splitBuildOptions(target));
   const metrics = analyzeSplitBundle(result, target);
-  assert.equal(target.reviewedEagerBytes, 496_687);
-  assert.equal(target.reviewedCombinedBytes, 578_683);
   assert.deepEqual(
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 103);
-  assert.deepEqual(
-    {
-      eagerBytes: metrics.eagerBytes,
-      lazyBytes: metrics.lazyChunks.map(({ specifier, bytes }) => ({
-        specifier,
-        bytes,
-      })),
-      combinedBytes: metrics.combinedBytes,
-      combinedLimitKb: metrics.combinedLimitKb,
-    },
-    {
-      eagerBytes: 448_022,
-      lazyBytes: [
-        { specifier: "./sumeragiTyped.js", bytes: 9_366 },
-        { specifier: "./smartContractDeploymentSubmit.js", bytes: 8_652 },
-      ],
-      combinedBytes: 466_040,
-      combinedLimitKb: 572,
-    },
-  );
-  assert.equal(
-    target.limitKb * 1024 - metrics.eagerBytes,
-    54_762,
-    "public browser aggregate must retain the measured 54,762-byte eager headroom",
-  );
-  assert.ok(
-    metrics.eagerBytes < 517_186,
-    "public browser eager closure must stay smaller than the prior reviewed aggregate",
-  );
-  assert.ok(metrics.eagerBytes <= target.limitKb * 1024);
-  assert.ok(metrics.combinedBytes <= metrics.combinedLimitKb * 1024);
+  assert.equal(Object.keys(result.metafile.inputs).length, 104);
+  assertSplitByteInventory(result, metrics);
+  assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
+    "./sumeragiTyped.js",
+    "./smartContractDeploymentSubmit.js",
+  ]);
   for (const output of result.outputFiles) {
     assert.doesNotMatch(
       output.text,
@@ -575,7 +580,7 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   }
 });
 
-test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims", async () => {
+test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("ivmArtifact"));
   assert.ok(target);
   const { build } = await import("esbuild");
@@ -596,32 +601,18 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 7);
-  assert.equal(result.outputFiles[0].contents.byteLength, 9_761);
-  assert.ok(result.outputFiles[0].contents.byteLength <= 12 * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
     /(?:globalThis|window|global)\.Buffer\s*=/u,
   );
 });
 
-test("remaining bundle targets retain exact current pinned-esbuild measurements", async () => {
-  const predecessor = new Map([
-    ["toriiClient.js", 945_975],
-    ["transactionCodec.js (browser)", 310_503],
-    ["nexusApp.js (browser)", 371_403],
-    ["canonicalRequest.js (browser)", 97_869],
-  ]);
-  const maximumGrowth = new Map([
-    ["toriiClient.js", 1],
-    ["transactionCodec.js (browser)", 1.05],
-    ["nexusApp.js (browser)", 1.05],
-    ["canonicalRequest.js (browser)", 1.05],
-  ]);
+test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { bytes: 773_079, modules: 125 }],
-    ["transactionCodec.js (browser)", { bytes: 220_515, modules: 63 }],
-    ["nexusApp.js (browser)", { bytes: 224_886, modules: 72 }],
-    ["canonicalRequest.js (browser)", { bytes: 92_163, modules: 47 }],
+    ["toriiClient.js", { modules: 129 }],
+    ["transactionCodec.js (browser)", { modules: 63 }],
+    ["nexusApp.js (browser)", { modules: 72 }],
+    ["canonicalRequest.js (browser)", { modules: 47 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -644,7 +635,6 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
     );
     const splitMetrics = split ? analyzeSplitBundle(result, target) : undefined;
     const actual = {
-      bytes: splitMetrics?.eagerBytes ?? result.outputFiles[0].contents.byteLength,
       modules: Object.keys(result.metafile.inputs).length,
     };
     if ([
@@ -683,35 +673,18 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
         false,
         "Torii must use the local synchronous BLS validator, not bundle noble's full curve implementation",
       );
-      assert.equal(
-        target.limitKb * 1024 - actual.bytes,
-        33_833,
-        "Torii hard ceiling must retain the measured 33,833-byte eager headroom",
-      );
+      assertSplitByteInventory(result, splitMetrics);
       assert.deepEqual(
-        splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
-        [
-          { specifier: "./toriiOptional.js", bytes: 222_901 },
-          { specifier: "./sumeragiTyped.js", bytes: 9_342 },
-        ],
+        splitMetrics.lazyChunks.map(({ specifier }) => specifier),
+        ["./toriiOptional.js", "./sumeragiTyped.js"],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_005_322);
-      assert.equal(splitMetrics.combinedLimitKb, 1_078);
-      assert.equal(target.reviewedEagerBytes, 806_184);
-      assert.equal(target.reviewedCombinedBytes, 1_101_362);
     }
     assert.deepEqual(actual, expected.get(target.label), target.label);
-    assert.ok(
-      actual.bytes <=
-        Math.floor(
-          predecessor.get(target.label) * maximumGrowth.get(target.label),
-        ),
-      `${target.label} exceeded its audited protected-tree growth ceiling`,
-    );
+
   }
 });
 
-test("Kotodama compiler browser export stays below 56 KiB without Node or Buffer shims", async () => {
+test("Kotodama compiler browser export excludes Node and Buffer shims", async () => {
   const target = BUNDLE_TARGETS.find(({ label }) =>
     label.includes("kotodamaCompiler/browser"),
   );
@@ -736,13 +709,6 @@ test("Kotodama compiler browser export stays below 56 KiB without Node or Buffer
   // The canonical nominal-error module shares validation across Unit, public
   // signatures, and cursor/page schemas while preserving the compact compiler.
   assert.equal(Object.keys(result.metafile.inputs).length, 8);
-  assert.equal(result.outputFiles[0].contents.byteLength, 56_385);
-  assert.equal(
-    target.limitKb * 1024 - result.outputFiles[0].contents.byteLength,
-    959,
-    "Kotodama compiler browser ceiling must retain its audited V1 headroom",
-  );
-  assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
     /(?:globalThis|window|global)\.Buffer\s*=/u,

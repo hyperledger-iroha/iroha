@@ -32,11 +32,11 @@ fn limits() -> ArtifactLimits {
             max_wire_bytes: 16 * 1024 * 1024,
             max_total_segment_bytes: 16 * 1024 * 1024,
             max_total_statement_bytes: 512 * 1024,
-            max_total_queries: 128,
+            max_total_queries: 154,
             max_total_decode_allocation_charges: 128 * 1024 * 1024,
             segment: crate::VerifyLimits {
                 max_proof_bytes: 4_326_227,
-                max_queries: 64,
+                max_queries: 77,
                 ..crate::VerifyLimits::default()
             },
         },

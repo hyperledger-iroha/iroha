@@ -10,16 +10,22 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     Registrable,
     account::Account,
+    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+    domain::Domain,
     isi::{
-        Grant, InstructionBox, Revoke,
+        Grant, InstructionBox, Mint, Register, Revoke,
         sorafs::{
-            AppendSorafsStreamTokenReputationJournalEntry,
-            SetSorafsReputationJournalAuthorityPolicy,
+            AppendSorafsStreamTokenReputationJournalEntry, DecideSorafsReserveMovement,
+            RegisterCapacityDeclaration, RegisterSorafsReserveAccount,
+            RequestSorafsReserveMovement, SetSorafsReputationJournalAuthorityPolicy,
+            SetSorafsReservePolicy, UpsertProviderCredit,
         },
     },
     permission::Permission,
     sorafs::{
-        capacity::{CapacityDeclarationRecord, ProviderId},
+        capacity::ProviderId,
+        pin_registry::StorageClass,
+        pricing::ProviderCreditRecord,
         reputation::{
             ReputationJournalAuthorityPolicyV1, StreamTokenRequestRouteV1,
             StreamTokenValidationRequestContextV1, StreamTokenValidationStatusV1 as Status,
@@ -28,6 +34,10 @@ use iroha_data_model::{
                 StreamTokenReputationDeliveryTemplateV1,
             },
         },
+        reserve::{
+            ReserveAuthorityPolicyV1, ReserveDuration, ReserveMovementKindV1, ReservePolicyV1,
+            ReserveProviderTermsV1, ReserveTier,
+        },
         stream_token_gateway::{
             StreamTokenGatewayQuotaRequestV1, native::StreamTokenGatewayPolicyV1,
         },
@@ -35,9 +45,19 @@ use iroha_data_model::{
     transaction::{Executable, FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
 use iroha_executor_data_model::permission::sorafs::{
-    CanCheckSorafsStreamTokenGateway, CanManageSorafsReputationJournalPolicy,
-    CanManageSorafsStreamTokenGateway, CanOperateSorafsStreamTokenGateway,
-    CanRecordSorafsReputationJournal,
+    CanCheckSorafsStreamTokenGateway, CanDeclareSorafsCapacity,
+    CanManageSorafsReputationJournalPolicy, CanManageSorafsStreamTokenGateway,
+    CanOperateSorafsStreamTokenGateway, CanRecordSorafsReputationJournal,
+    CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
+};
+use iroha_model_base::domain::DomainId;
+use iroha_primitives::numeric::Quantity;
+use sorafs_manifest::{
+    capacity::{
+        CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
+        ChunkerCommitmentV1,
+    },
+    provider_advert::StakePointer,
 };
 use std::{
     collections::{BTreeSet, HashSet},
@@ -102,6 +122,149 @@ fn credentials() -> (tempfile::TempDir, SorafsStreamTokenGatewayNativeConfig) {
         },
     )
 }
+// Complete the actual native custody prerequisite before the gateway-specific sequence. These
+// four nonempty committed blocks precede the original policy times; callback deadlines stay exact.
+fn register_capacity_provider(
+    chain: &mut CertifiedTestChain,
+    provider: ProviderId,
+    asset_definition: AssetDefinitionId,
+    now: u64,
+) {
+    let reserve = ReserveAuthorityPolicyV1 {
+        version: 1,
+        revision: 1,
+        predecessor_policy_digest: None,
+        economics: ReservePolicyV1::default(),
+        asset_definition,
+        custody_account: account(5),
+        treasury_account: account(6),
+        operations_authority: account(1),
+        decision_authority: account(1),
+        grace_period_days: 7,
+        default_after_days: 30,
+        max_provider_debt: "1000".parse().unwrap(),
+        max_pending_movements_per_provider: 4,
+        max_open_appeals_per_provider: 2,
+    };
+    reserve.validate().unwrap();
+    let digest = reserve.digest().unwrap();
+    let register = chain.sign(
+        &key(1),
+        [
+            SetSorafsReservePolicy::new(reserve).into(),
+            RegisterSorafsReserveAccount::new(
+                ReserveProviderTermsV1 {
+                    provider_id: provider,
+                    provider_account: account(4),
+                    tier: ReserveTier::TierA,
+                    storage_class: StorageClass::Hot,
+                    duration: ReserveDuration::Monthly,
+                    capacity_gib: 1,
+                },
+                digest,
+            )
+            .into(),
+        ],
+        now - 8_501,
+    );
+    assert_eq!(
+        chain.commit_at(now - 8_500, vec![register]),
+        [true],
+        "native reserve setup"
+    );
+    let top_up = chain.sign(
+        &key(4),
+        [RequestSorafsReserveMovement::new(
+            [0x43; 32],
+            provider,
+            ReserveMovementKindV1::TopUp,
+            "100".parse().unwrap(),
+            1,
+            digest,
+        )
+        .into()],
+        now - 7_501,
+    );
+    assert_eq!(
+        chain.commit_at(now - 7_500, vec![top_up]),
+        [true],
+        "owner-funded reserve request"
+    );
+    let fund_and_credit = chain.sign(
+        &key(1),
+        [
+            DecideSorafsReserveMovement::new(
+                [0x43; 32],
+                2,
+                digest,
+                true,
+                "fund genuine gateway fixture capacity".into(),
+            )
+            .into(),
+            UpsertProviderCredit::new(ProviderCreditRecord::new(
+                provider,
+                Quantity::zero(),
+                Quantity::from(100_u32),
+                Quantity::from(1_u32),
+                Quantity::zero(),
+                (now - 6_500) / 1_000,
+                (now - 6_500) / 1_000,
+                Default::default(),
+            ))
+            .into(),
+        ],
+        now - 6_501,
+    );
+    assert_eq!(
+        chain.commit_at(now - 6_500, vec![fund_and_credit]),
+        [true],
+        "native custody-backed credit"
+    );
+    let declaration = CapacityDeclarationV1 {
+        version: CAPACITY_DECLARATION_VERSION_V1,
+        provider_id: *provider.as_bytes(),
+        stake: StakePointer {
+            pool_id: [0x42; 32],
+            stake_amount: "1".parse().unwrap(),
+        },
+        committed_capacity_gib: 1,
+        chunker_commitments: vec![ChunkerCommitmentV1 {
+            profile_id: "sorafs.sf1@1.0.0".into(),
+            profile_aliases: None,
+            committed_gib: 1,
+            capability_refs: Vec::new(),
+        }],
+        lane_commitments: Vec::new(),
+        pricing: None,
+        valid_from: (now - 9_000) / 1_000,
+        valid_until: (now + 600_000) / 1_000,
+        metadata: vec![
+            CapacityMetadataEntry {
+                key: "sorafs.owner_account_id".into(),
+                value: account(4).to_string(),
+            },
+            CapacityMetadataEntry {
+                key: "sorafs.storage_class".into(),
+                value: "hot".into(),
+            },
+        ],
+    };
+    declaration.validate().unwrap();
+    let register = chain.sign(
+        &key(4),
+        [
+            RegisterCapacityDeclaration::new(norito::encode_canonical(&declaration).unwrap())
+                .into(),
+        ],
+        now - 5_501,
+    );
+    assert_eq!(
+        chain.commit_at(now - 5_500, vec![register]),
+        [true],
+        "native canonical capacity registration"
+    );
+}
+
 struct Fixture {
     chain: CertifiedTestChain,
     policy: StreamTokenGatewayPolicyV1,
@@ -112,18 +275,46 @@ impl Fixture {
     }
     fn with_delivery_ttl(time_to_live_ms: u64) -> Self {
         let now = now_ms();
-        let mut world = World::with(
+        let world = World::with(
             [],
-            (1..=4).map(|seed| Account::new(account(seed)).build(&account(1))),
+            (1..=6).map(|seed| Account::new(account(seed)).build(&account(1))),
             [],
         );
         let provider = ProviderId::new([0x41; 32]);
-        world.provider_owners.insert(provider, account(4));
-        world.capacity_declarations.insert(
-            provider,
-            CapacityDeclarationRecord::new(provider, vec![1], 1, 1, 1, 2, Default::default()),
+        let reserve_domain = DomainId::try_new("gateway-reserve", "universal").unwrap();
+        let reserve_asset = AssetDefinitionId::derive_from_components(
+            reserve_domain.clone(),
+            "xor".parse().unwrap(),
         );
-        let mut config = TestChainConfig::new(world, now - 5_000);
+        // Establish the provider through the existing pre-genesis governance owner. Capacity
+        // and its backing below are ordinary signed native transitions, never World row writes.
+        let mut governance = actual::Governance::default();
+        governance
+            .sorafs_provider_owners
+            .insert(provider, account(4));
+        let mut config = TestChainConfig::new(world, now - 9_000);
+        config.governance = Some(governance);
+        config.genesis_instructions.extend([
+            Register::domain(Domain::new(reserve_domain)).into(),
+            Register::asset_definition(AssetDefinition::numeric(
+                reserve_asset.clone(),
+                "Gateway reserve XOR",
+                AssetBalancePolicy::Global,
+                None,
+            ))
+            .into(),
+            Mint::asset_quantity(
+                Quantity::from(1_000_u32),
+                AssetId::of(reserve_asset.clone(), account(4)),
+            )
+            .into(),
+            Grant::account_permission(Permission::from(CanSetSorafsReservePolicy), account(1))
+                .into(),
+            Grant::account_permission(Permission::from(CanUpsertSorafsProviderCredit), account(1))
+                .into(),
+            Grant::account_permission(Permission::from(CanDeclareSorafsCapacity), account(4))
+                .into(),
+        ]);
         config.genesis_instructions.push(
             Grant::account_permission(
                 Permission::from(CanManageSorafsStreamTokenGateway),
@@ -146,6 +337,7 @@ impl Fixture {
         let mut chain = CertifiedTestChain::start(config)
             .map_err(|error| error.error)
             .unwrap();
+        register_capacity_provider(&mut chain, provider, reserve_asset, now);
         let network_id = *chain.state().network_id_ref();
         let mut policy = StreamTokenGatewayPolicyV1 {
             network_id,
@@ -477,12 +669,24 @@ impl NativeDriver {
                     let signed: SignedTransaction = transaction.external().unwrap().clone();
                     if applied.insert(signed.hash()) {
                         let mut log = observed.lock().unwrap();
-                        assert_eq!(
-                            fixture.chain.commit_at(now_ms(), vec![signed.clone()]),
-                            [true],
-                            "real native action"
-                        );
-                        log.push(signed);
+                        let executed = fixture.chain.commit_at(now_ms(), vec![signed.clone()]);
+                        if executed == [true] {
+                            log.push(signed);
+                        }
+                        drop(log);
+                        if executed != [true] {
+                            let height = fixture.chain.height();
+                            let committed = fixture.chain.committed(height);
+                            let output = committed
+                                .block()
+                                .network_output_at(0)
+                                .map(|(_, output)| &output.result);
+                            assert_eq!(
+                                executed,
+                                [true],
+                                "real native action at height {height}, sole network output: {output:?}"
+                            );
+                        }
                     }
                 }
                 std::thread::sleep(Duration::from_millis(5));
@@ -968,11 +1172,11 @@ fn native_gateway_delivery_rejects_substitution_permission_drift_and_original_de
     );
     let signed = iroha_data_model::transaction::TransactionBuilder::new(
         *runtime.state.network_id_ref(),
-        account(1),
+        account(4),
         FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([revoke])
-    .try_sign(key(1).private_key())
+    .try_sign(key(4).private_key())
     .unwrap();
     runtime
         .transactions

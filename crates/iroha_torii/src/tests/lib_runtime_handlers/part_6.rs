@@ -630,6 +630,36 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
     let routing_source = include_str!("../../routing.rs");
     let routes = [
         (
+            "handler_explorer_accounts_list",
+            "handle_v1_explorer_accounts_admitted",
+            "handle_v1_explorer_accounts_sync",
+        ),
+        (
+            "handler_explorer_domains_list",
+            "handle_v1_explorer_domains_admitted",
+            "handle_v1_explorer_domains_sync",
+        ),
+        (
+            "handler_explorer_asset_definitions_list",
+            "handle_v1_explorer_asset_definitions_admitted",
+            "handle_v1_explorer_asset_definitions_sync",
+        ),
+        (
+            "handler_explorer_assets_list",
+            "handle_v1_explorer_assets_admitted",
+            "handle_v1_explorer_assets_sync",
+        ),
+        (
+            "handler_explorer_nfts_list",
+            "handle_v1_explorer_nfts_admitted",
+            "handle_v1_explorer_nfts_sync",
+        ),
+        (
+            "handler_explorer_rwas_list",
+            "handle_v1_explorer_rwas_admitted",
+            "handle_v1_explorer_rwas_sync",
+        ),
+        (
             "handler_explorer_blocks_list",
             "handle_v1_explorer_blocks_admitted",
             "handle_v1_explorer_blocks_sync",
@@ -667,7 +697,7 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
     assert_eq!(
         admitted_definition_count,
         routes.len(),
-        "every Explorer admitted history wrapper must be inventoried here"
+        "every Explorer admitted collection or history wrapper must be inventoried here"
     );
 
     for (http_handler, admitted_handler, sync_handler) in routes {
@@ -1457,15 +1487,25 @@ fn seed_authoritative_hosted_http_revision(
     )],
 ) {
     for (_, validator_account_id, peer_id, _) in assignments {
-        let canonical_peer_id =
-            PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string();
-        assert_eq!(
-            peer_id, &canonical_peer_id,
-            "positive hosted HTTP fixtures must bind each validator account to its canonical peer"
+        let target = iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
+            validator_account_id: validator_account_id.clone(),
+            peer_id: peer_id.clone(),
+        };
+        target
+            .validate()
+            .expect("canonical validator and peer identity pair");
+        assert!(
+            bundle.service.placement_targets.contains(&target),
+            "positive hosted HTTP fixtures must bind an admitted account and peer pair"
         );
         let validator_peer_id = peer_id
             .parse::<PeerId>()
             .expect("hosted HTTP assignment peer id must be valid");
+        assert_eq!(
+            validator_peer_id.public_key().algorithm(),
+            iroha_crypto::Algorithm::BlsNormal,
+            "hosted HTTP peer must be admitted by the production P2P relay"
+        );
         world.public_lane_validators_mut_for_testing().insert(
             (
                 iroha_model_base::topology::LaneId::SINGLE,
@@ -1486,6 +1526,30 @@ fn seed_authoritative_hosted_http_revision(
                 last_reward_epoch: None,
             },
         );
+        {
+            let mut stake_block = world.block();
+            let mut stake_tx = stake_block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
+            stake_tx.public_lane_stake_shares_mut_for_testing().insert(
+                (
+                    iroha_model_base::topology::LaneId::SINGLE,
+                    validator_account_id.clone(),
+                    validator_account_id.clone(),
+                ),
+                iroha_data_model::nexus::PublicLaneStakeShare {
+                    lane_id: iroha_model_base::topology::LaneId::SINGLE,
+                    validator: validator_account_id.clone(),
+                    staker: validator_account_id.clone(),
+                    bonded: Quantity::from(1_u64),
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: Default::default(),
+                },
+            );
+            stake_tx.apply();
+            stake_block.commit();
+        }
         let capability = iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
             schema_version:
                 iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
@@ -1698,9 +1762,12 @@ fn hosted_http_service_lease_state(
     }
 }
 fn checked_torii_test_inrou_host_identity(seed: u8, context: &'static str) -> (AccountId, PeerId) {
-    let key_pair = checked_torii_test_ed25519_keypair(seed, context);
-    let public_key = key_pair.public_key().clone();
-    (AccountId::new(public_key.clone()), PeerId::from(public_key))
+    let account_key = checked_torii_test_ed25519_keypair(seed, context);
+    let peer_key = checked_torii_test_bls_keypair(seed, context);
+    (
+        AccountId::new(account_key.public_key().clone()),
+        PeerId::from(peer_key.public_key().clone()),
+    )
 }
 fn seed_hosted_http_public_lane_validator(
     app: &SharedAppState,
@@ -1740,6 +1807,23 @@ fn seed_hosted_http_public_lane_validator(
                 election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
+            },
+        );
+    tx.world_mut_for_testing()
+        .public_lane_stake_shares_mut_for_testing()
+        .insert(
+            (
+                iroha_model_base::topology::LaneId::SINGLE,
+                validator.clone(),
+                validator.clone(),
+            ),
+            iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: validator.clone(),
+                bonded: Quantity::from(1_u64),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Default::default(),
             },
         );
     tx.apply();
@@ -1784,6 +1868,123 @@ fn hosted_http_local_identity() -> (AccountId, PeerId) {
 fn hosted_http_local_peer_id() -> PeerId {
     hosted_http_local_identity().1
 }
+/// Bind admitted release targets to the exact fixture assignments, retaining two declared
+/// stores even when the test intentionally models unavailable or unassigned replicas.
+fn hosted_http_placement_targets(
+    assignments: &[(
+        u16,
+        AccountId,
+        String,
+        iroha_data_model::soracloud::SoraServiceHealthStatusV1,
+    )],
+) -> BTreeSet<iroha_data_model::soracloud::SoraInrouPlacementTargetV1> {
+    use iroha_data_model::soracloud::SoraInrouPlacementTargetV1;
+    let mut targets = assignments
+        .iter()
+        .map(
+            |(_, validator_account_id, peer_id, _)| SoraInrouPlacementTargetV1 {
+                validator_account_id: validator_account_id.clone(),
+                peer_id: peer_id.clone(),
+            },
+        )
+        .collect::<BTreeSet<_>>();
+    for seed in [0x70, 0x71] {
+        if targets.len() >= 2 {
+            break;
+        }
+        let (validator_account_id, peer_id) = checked_torii_test_inrou_host_identity(
+            seed,
+            "derive hosted-http unassigned admitted store fixture key",
+        );
+        targets.insert(SoraInrouPlacementTargetV1 {
+            validator_account_id,
+            peer_id: peer_id.to_string(),
+        });
+    }
+    assert!(
+        targets.len() >= 2,
+        "two desired replicas require two declared stores"
+    );
+    targets
+}
+#[test]
+fn hosted_http_placement_targets_bind_assignments_and_keep_unavailable_stores() {
+    use iroha_data_model::soracloud::SoraServiceHealthStatusV1;
+    let (validator, peer) = hosted_http_local_identity();
+    assert_eq!(
+        validator
+            .try_signatory()
+            .expect("account signer")
+            .algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+    assert_eq!(
+        peer.public_key().algorithm(),
+        iroha_crypto::Algorithm::BlsNormal
+    );
+    assert_ne!(
+        validator.try_signatory().expect("account signer"),
+        peer.public_key()
+    );
+    let first = (
+        0,
+        validator,
+        peer.to_string(),
+        SoraServiceHealthStatusV1::Healthy,
+    );
+    let (validator, peer) = checked_torii_test_inrou_host_identity(
+        0x41,
+        "derive hosted-http placement target regression remote key",
+    );
+    let second = (
+        1,
+        validator,
+        peer.to_string(),
+        SoraServiceHealthStatusV1::Healthy,
+    );
+    let assignments = [first, second];
+    for count in 0..=assignments.len() {
+        let targets = hosted_http_placement_targets(&assignments[..count]);
+        assert_eq!(targets.len(), 2);
+        for target in &targets {
+            target.validate().expect("canonical identity-bound store");
+        }
+        for (_, validator, peer, _) in &assignments[..count] {
+            assert!(
+                targets
+                    .iter()
+                    .any(|target| &target.validator_account_id == validator
+                        && &target.peer_id == peer)
+            );
+        }
+    }
+}
+/// Execute signed genesis before testing height-active validator and lane authority.
+fn mk_hosted_http_app_with_world(world: World) -> SharedAppState {
+    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, 1_000))
+        .expect("hosted fixture prepares its original signed genesis");
+    let genesis_account = AccountId::new(prepared.genesis.public_key().clone());
+    iroha_core::sumeragi::startup::apply_genesis(
+        &prepared.state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        prepared.genesis.consensus_metadata().mode.into(),
+        None,
+    )
+    .expect("hosted fixture executes its original signed genesis");
+    let mut app = mk_app_state_for_tests();
+    let app_mut = Arc::get_mut(&mut app).expect("unique hosted fixture app");
+    app_mut.state = prepared.state;
+    app_mut.kura = prepared.kura;
+    assert!(Arc::get_mut(&mut app_mut.state).is_some());
+    let view = app_mut.state.view();
+    assert_eq!(view.height(), 1);
+    assert!(view.native_execution_tip().is_some());
+    assert!(view.is_lane_active_for_authority(iroha_model_base::topology::LaneId::SINGLE));
+    drop(view);
+    app
+}
 fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
@@ -1794,97 +1995,6 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
     snapshot_local_peer_id: Option<String>,
     service_lease: Option<iroha_data_model::soracloud::SoraServiceLeaseStateV1>,
 ) -> SharedAppState {
-    let mut world = seed_public_soracloud_world();
-    let service_name = "web_portal";
-    let baseline_version = "2026.02.0";
-    let candidate_version = "2026.03.0";
-    let mut baseline_bundle = world
-        .view()
-        .soracloud_service_revisions()
-        .get(&(service_name.to_owned(), baseline_version.to_owned()))
-        .cloned()
-        .expect("public service bundle");
-    baseline_bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
-    baseline_bundle.container.inrou = Some(test_inrou_manifest());
-    baseline_bundle.container.entrypoint = "/app/main".to_owned();
-    baseline_bundle.service.execution_plane =
-        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-    baseline_bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replicas");
-    baseline_bundle.service.state_bindings.clear();
-    baseline_bundle.service.handlers.clear();
-    baseline_bundle.service.artifacts.clear();
-    baseline_bundle.service.lease_volumes = vec![
-        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
-            volume_name: "root_disk".parse().expect("volume"),
-            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
-            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
-            mount_path: "/".to_owned(),
-            max_total_bytes: std::num::NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("bytes"),
-        },
-        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
-            volume_name: "index_state".parse().expect("volume"),
-            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
-            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
-            mount_path: "/var/lib/soracloud/volumes/index_state".to_owned(),
-            max_total_bytes: std::num::NonZeroU64::new(1024 * 1024).expect("bytes"),
-        },
-    ];
-    baseline_bundle.service.container.manifest_hash = baseline_bundle.container_manifest_hash();
-    baseline_bundle
-        .validate_for_admission()
-        .expect("baseline hosted HTTP Inrou fixture must pass production validation");
-    world.soracloud_service_revisions_mut_for_testing().insert(
-        (service_name.to_owned(), baseline_version.to_owned()),
-        baseline_bundle.clone(),
-    );
-    let mut candidate_bundle = baseline_bundle.clone();
-    candidate_bundle.service.service_version = candidate_version.to_owned();
-    candidate_bundle.container.bundle_hash = Hash::new(b"hosted-http-inactive-bundle");
-    candidate_bundle.container.bundle_path = "/bundles/public-inactive.to".to_owned();
-    candidate_bundle.service.container.manifest_hash = candidate_bundle.container_manifest_hash();
-    candidate_bundle
-        .validate_for_admission()
-        .expect("candidate hosted HTTP Inrou fixture must pass production validation");
-    world.soracloud_service_revisions_mut_for_testing().insert(
-        (service_name.to_owned(), candidate_version.to_owned()),
-        candidate_bundle.clone(),
-    );
-    let lease_volume_states =
-        hosted_http_lease_volume_states(&baseline_bundle, service_lease.as_ref());
-    let deployment = iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
-        schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-        service_name: service_name.parse().expect("service"),
-        current_service_version: baseline_version.to_owned(),
-        current_service_manifest_hash: baseline_bundle.service_manifest_hash(),
-        current_container_manifest_hash: baseline_bundle.container_manifest_hash(),
-        revision_count: 2,
-        process_generation: 1,
-        process_started_sequence: 1,
-        active_rollout: None,
-        last_rollout: None,
-        config_generation: 0,
-        secret_generation: 0,
-        service_configs: BTreeMap::new(),
-        service_secrets: BTreeMap::new(),
-        fhe_policy_records: BTreeMap::new(),
-        service_lease,
-        lease_volume_states,
-    };
-    deployment
-        .validate()
-        .expect("single-revision hosted HTTP deployment must be production-valid");
-    deployment
-        .validate_against_active_bundle(&baseline_bundle)
-        .expect("single-revision hosted HTTP deployment must bind its current bundle");
-    iroha_core::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
-        &deployment,
-        &baseline_bundle,
-    )
-    .expect("hosted HTTP deployment must exactly match admitted lease-volume economics");
-    world
-        .soracloud_service_deployments_mut_for_testing()
-        .insert(service_name.parse().expect("service"), deployment);
-
     let (local_validator_account_id, local_peer_id) = hosted_http_local_identity();
     let local_peer_id_string = local_peer_id.to_string();
     let mut local_host_available = true;
@@ -1962,13 +2072,116 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
             }
         }
     }
+
+    let mut world = seed_public_soracloud_world();
+    let service_name = "web_portal";
+    let baseline_version = "2026.02.0";
+    let candidate_version = "2026.03.0";
+    let mut baseline_bundle = world
+        .view()
+        .soracloud_service_revisions()
+        .get(&(service_name.to_owned(), baseline_version.to_owned()))
+        .cloned()
+        .expect("public service bundle");
+    baseline_bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+    baseline_bundle.container.inrou = Some(test_inrou_manifest());
+    baseline_bundle.container.entrypoint = "/app/main".to_owned();
+    baseline_bundle.service.execution_plane =
+        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    baseline_bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replicas");
+    baseline_bundle.service.placement_targets =
+        hosted_http_placement_targets(&baseline_assignments);
+    baseline_bundle.service.state_bindings.clear();
+    baseline_bundle.service.handlers.clear();
+    baseline_bundle.service.artifacts.clear();
+    baseline_bundle.service.lease_volumes = vec![
+        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("volume"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/".to_owned(),
+            max_total_bytes: std::num::NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("bytes"),
+        },
+        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("volume"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/var/lib/soracloud/volumes/index_state".to_owned(),
+            max_total_bytes: std::num::NonZeroU64::new(1024 * 1024).expect("bytes"),
+        },
+    ];
+    baseline_bundle.service.container.manifest_hash = baseline_bundle.container_manifest_hash();
+    baseline_bundle
+        .validate_for_admission()
+        .expect("baseline hosted HTTP Inrou fixture must pass production validation");
+    world.soracloud_service_revisions_mut_for_testing().insert(
+        (service_name.to_owned(), baseline_version.to_owned()),
+        baseline_bundle.clone(),
+    );
+    let mut candidate_bundle = baseline_bundle.clone();
+    candidate_bundle.service.service_version = candidate_version.to_owned();
+    candidate_bundle.service.placement_targets =
+        hosted_http_placement_targets(&candidate_assignments);
+    candidate_bundle.container.bundle_hash = Hash::new(b"hosted-http-inactive-bundle");
+    candidate_bundle.container.bundle_path = "/bundles/public-inactive.to".to_owned();
+    candidate_bundle.service.container.manifest_hash = candidate_bundle.container_manifest_hash();
+    candidate_bundle
+        .validate_for_admission()
+        .expect("candidate hosted HTTP Inrou fixture must pass production validation");
+    world.soracloud_service_revisions_mut_for_testing().insert(
+        (service_name.to_owned(), candidate_version.to_owned()),
+        candidate_bundle.clone(),
+    );
+    let service_lease = service_lease.map(|mut lease| {
+        lease.replica_count = baseline_bundle.service.replicas;
+        lease
+    });
+    let lease_volume_states =
+        hosted_http_lease_volume_states(&baseline_bundle, service_lease.as_ref());
+    let deployment = iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+        service_name: service_name.parse().expect("service"),
+        current_service_version: baseline_version.to_owned(),
+        current_service_manifest_hash: baseline_bundle.service_manifest_hash(),
+        current_container_manifest_hash: baseline_bundle.container_manifest_hash(),
+        revision_count: 2,
+        process_generation: 1,
+        process_started_sequence: 1,
+        active_rollout: None,
+        last_rollout: None,
+        config_generation: 0,
+        secret_generation: 0,
+        service_configs: BTreeMap::new(),
+        service_secrets: BTreeMap::new(),
+        fhe_policy_records: BTreeMap::new(),
+        service_lease,
+        lease_volume_states,
+    };
+    deployment
+        .validate()
+        .expect("single-revision hosted HTTP deployment must be production-valid");
+    deployment
+        .validate_against_active_bundle(&baseline_bundle)
+        .expect("single-revision hosted HTTP deployment must bind its current bundle");
+    iroha_core::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
+        &deployment,
+        &baseline_bundle,
+    )
+    .expect("hosted HTTP deployment must exactly match admitted lease-volume economics");
+    world
+        .soracloud_service_deployments_mut_for_testing()
+        .insert(service_name.parse().expect("service"), deployment);
+
     let baseline_local_replicas = baseline_replica_plans
         .into_iter()
-        .filter(|replica| {
-            baseline_assignments.iter().any(|assignment| {
+        .filter_map(|mut replica| {
+            let assignment = baseline_assignments.iter().find(|assignment| {
                 assignment.0 == replica.replica_slot
                     && assignment.2.as_str() == local_peer_id_string.as_str()
-            })
+            })?;
+            replica.validator_account_id = assignment.1.to_string();
+            replica.peer_id = assignment.2.clone();
+            Some(replica)
         })
         .collect::<Vec<_>>();
     assert!(
@@ -2018,7 +2231,7 @@ fn seed_public_hosted_http_current_app_with_replica_plans_and_snapshot_peer_id(
         ),
         captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
-    let mut app = mk_app_state_for_tests_with_world(world);
+    let mut app = mk_hosted_http_app_with_world(world);
     seed_hosted_http_public_lane_validator(&app, &local_validator_account_id, &local_peer_id);
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.local_peer_id = Some(local_peer_id);
@@ -2480,9 +2693,26 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
             "/bundles/travel-ops-vault-update.to",
         ),
     };
+    let (host_seed, host_context) = match mode {
+        TravelSplitVaultMode::LocalRead => (
+            0x45,
+            "derive canonical hosted live/local split host fixture key",
+        ),
+        TravelSplitVaultMode::OrderedMailbox => (
+            0x47,
+            "derive canonical hosted live/mailbox split host fixture key",
+        ),
+    };
+    let (live_validator_account_id, live_peer_id) =
+        checked_torii_test_inrou_host_identity(host_seed, host_context);
     let mut live_bundle = seed_bundle.clone();
     live_bundle.service.service_name = "travel_ops_live".parse().expect("service");
     live_bundle.service.service_version = "2026.04.0".to_owned();
+    live_bundle.service.placement_targets =
+        BTreeSet::from([iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
+            validator_account_id: live_validator_account_id.clone(),
+            peer_id: live_peer_id.to_string(),
+        }]);
     live_bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
     live_bundle.container.bundle_hash = Hash::new(live_hash);
     live_bundle.container.bundle_path = live_path.to_owned();
@@ -2512,7 +2742,7 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
             volume_name: "service_state".parse().expect("volume"),
             kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
-            mount_path: "/var/lib/soracloud/service".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/service_state".to_owned(),
             max_total_bytes: std::num::NonZeroU64::new(1024 * 1024).expect("bytes"),
         },
     ];
@@ -2614,25 +2844,13 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
             .insert(service_name, deployment);
     }
 
-    let (host_seed, host_context) = match mode {
-        TravelSplitVaultMode::LocalRead => (
-            0x45,
-            "derive canonical hosted live/local split host fixture key",
-        ),
-        TravelSplitVaultMode::OrderedMailbox => (
-            0x47,
-            "derive canonical hosted live/mailbox split host fixture key",
-        ),
-    };
-    let (live_validator_account_id, live_peer_id) =
-        checked_torii_test_inrou_host_identity(host_seed, host_context);
     seed_authoritative_hosted_http_revision(
         &mut world,
         &live_bundle,
         live_bundle.service.replicas.get(),
         &[(
             1,
-            live_validator_account_id,
+            live_validator_account_id.clone(),
             live_peer_id.to_string(),
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         )],
@@ -2651,13 +2869,18 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
                 iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
                 100,
                 iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-                vec![hosted_http_runtime_replica_plan(
-                    &live_materialization_dir,
-                    1,
-                    iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-                    Some(&listen_base_url),
-                    Some(1),
-                )],
+                vec![{
+                    let mut replica = hosted_http_runtime_replica_plan(
+                        &live_materialization_dir,
+                        1,
+                        iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+                        Some(&listen_base_url),
+                        Some(1),
+                    );
+                    replica.validator_account_id = live_validator_account_id.to_string();
+                    replica.peer_id = live_peer_id.to_string();
+                    replica
+                }],
             ),
         )]),
     );
@@ -2696,7 +2919,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
         }),
         captured_requests: Arc::clone(&captured_requests),
     };
-    let mut app = mk_app_state_for_tests_with_world(world);
+    let mut app = mk_hosted_http_app_with_world(world);
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.local_peer_id = Some(live_peer_id);
     app_mut.soracloud_runtime = Some(Arc::new(runtime));
@@ -2751,7 +2974,11 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     upstream_task.abort();
 }
 
+<<<<<<< HEAD
 pub(super) fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
+=======
+fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
+>>>>>>> origin/optimizations
     use iroha_data_model::{
         block::consensus::{SumeragiRootScope, ValidatorPower},
         parameter::{
@@ -2762,7 +2989,6 @@ pub(super) fn app_with_root_scope_for_token_test(private: bool) -> SharedAppStat
             },
         },
     };
-    let world = World::new();
     let validators = iroha_core::sumeragi::test_chain::fixture_validators()
         .into_iter()
         .map(|(validator, _)| ValidatorPower {
@@ -2789,6 +3015,7 @@ pub(super) fn app_with_root_scope_for_token_test(private: bool) -> SharedAppStat
         sumeragi_context: context,
     };
     metadata.validate().unwrap();
+<<<<<<< HEAD
     let app = mk_app_state_for_tests_with_world(world);
     let mut block = app.state.block(BlockHeader::new(
         NonZeroU64::new(1).unwrap(),
@@ -2808,6 +3035,22 @@ pub(super) fn app_with_root_scope_for_token_test(private: bool) -> SharedAppStat
     transaction.apply();
     block.commit_world_overlay_for_testing().unwrap();
     app
+=======
+    {
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(Default::default(), 0);
+        transaction
+            .parameters_mut_for_testing()
+            .get_mut()
+            .set_parameter(Parameter::Custom(CustomParameter::new(
+                consensus_metadata::handshake_meta_id(),
+                Json::new(metadata),
+            )));
+        transaction.apply();
+        block.commit();
+    }
+    mk_app_state_for_tests_with_world(world)
+>>>>>>> origin/optimizations
 }
 
 #[tokio::test]
@@ -2815,7 +3058,7 @@ async fn private_root_listener_token_closes_public_gateway_and_config_bypass() {
     use tower::ServiceExt as _;
     for private in [false, true] {
         for configured in [false, true] {
-            let mut app = app_with_root_scope_for_token_test(private);
+            let mut app = app_with_root_scope_for_handler_test(World::new(), private);
             assert_eq!(app.is_private_root(), private);
             let app_mut = Arc::get_mut(&mut app).unwrap();
             // Even a false local setting cannot open an authenticated private root.

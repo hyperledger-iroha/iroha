@@ -721,6 +721,7 @@ mod tests {
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
+    use iroha_test_samples::ALICE_KEYPAIR;
     use mv::storage::StorageReadOnly;
     use std::num::NonZeroU64;
     fn owner() -> AccountId {
@@ -1217,11 +1218,39 @@ mod tests {
             .saturating_add(1);
         BlockHeader::new(
             NonZeroU64::new(height).expect("height > 0"),
-            None,
+            state.view().latest_block_hash(),
             None,
             creation_time_ms,
             0,
         )
+    }
+    fn authenticated_alias_maintenance_state(
+        world: World,
+        payment_asset: &AssetDefinitionId,
+    ) -> State {
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        let mut config = TestChainConfig::new(world, 0);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.fees.fee_asset_id = payment_asset.to_string();
+        config.nexus = Some(nexus);
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        let consensus_mode = config.consensus_mode;
+        let prepared =
+            CertifiedTestChain::prepare(config).expect("prepare signed alias maintenance genesis");
+        let state = std::sync::Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished alias maintenance State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            consensus_mode.into(),
+            None,
+        )
+        .expect("apply signed alias maintenance genesis");
+        state
     }
     fn alias_auto_renew_fixture(
         owner_balance: Quantity,
@@ -1279,12 +1308,7 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        configure_test_fee_asset(&state, &payment_asset);
+        let state = authenticated_alias_maintenance_state(world, &payment_asset);
         let target = iroha_data_model::alias_setup::AliasTargetV1::Domain(ResolvedDomainV1::new(
             leased_domain_id,
             DataSpaceId::UNIVERSAL,
@@ -1328,14 +1352,13 @@ mod tests {
         }
     }
     fn run_alias_auto_renew_maintenance(state: &State, now_ms: u64) {
-        let mut header = next_header_at(state, now_ms);
-        // This fixture seeds World without a canonical history. Maintenance is
-        // an ordinary phase following that setup, never unauthenticated genesis.
-        if header.is_genesis() {
-            header.set_height(NonZeroU64::new(2).unwrap());
-        }
-        let mut block = state.block(header.clone());
-        let outputs = crate::state::run_empty_network_owner_fixture(&mut block, None);
+        let header = next_header_at(state, now_ms);
+        // Maintenance consumes the original authenticated genesis policy and
+        // actual retained parent, with no synthetic Network transaction.
+        let source = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let (mut block, _recording, outputs, _) =
+            crate::state::run_empty_network_owner_fixture(state, &source);
         assert!(
             outputs.is_empty(),
             "native maintenance must not invent trigger outputs"
@@ -1363,6 +1386,41 @@ mod tests {
         block
             .commit_world_overlay_for_testing()
             .expect("policy update block commits");
+    }
+    #[test]
+    fn alias_auto_renew_fixture_retains_genesis_identity_and_initial_accounting() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        assert_eq!(fixture.state.committed_height(), 1);
+        assert_eq!(fixture.state.kura().blocks_count(), 1);
+        let genesis = fixture
+            .state
+            .kura()
+            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .unwrap();
+        let signed =
+            iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&genesis)
+                .unwrap();
+        let view = fixture.state.view();
+        assert_eq!(
+            crate::sumeragi::lanes::routing::committed_root_scope(view.world()),
+            Some(signed.sumeragi_context.root_scope)
+        );
+        assert_eq!(view.latest_block_hash(), Some(genesis.hash()));
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.owner),
+            Quantity::from(2_u32)
+        );
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.collector),
+            Quantity::zero()
+        );
+        assert_eq!(
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms,
+            AUTO_RENEW_EXPIRY_MS
+        );
     }
     #[test]
     fn native_auto_renew_suspends_invalid_persisted_timing_without_charge() {
@@ -2008,7 +2066,8 @@ mod tests {
         let collector_before = asset_balance(&state, &payment_asset, &collector);
         let first_alias_key = first_alias.account_alias();
         let mut block = state.block(next_header(&state));
-        let mut transaction = block.transaction();
+        let mut transaction =
+            block.transaction_for_fastpq_testing(Hash::prehashed([0x44; Hash::LENGTH]));
         seed_test_call_hash(&mut transaction, 0x44);
         first_ensure
             .execute(&authority, &mut transaction)
@@ -2220,7 +2279,8 @@ mod tests {
         let payer_before = asset_balance(&state, &payment_asset, &authority);
         {
             let mut block = state.block(next_header(&state));
-            let mut transaction = block.transaction();
+            let mut transaction =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC9; Hash::LENGTH]));
             seed_test_call_hash(&mut transaction, 0xC9);
             ensure_parent
                 .clone()
@@ -2477,7 +2537,8 @@ mod tests {
             AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL);
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC2; Hash::LENGTH]));
             seed_test_call_hash(&mut stx, 0xC2);
             ensure_account_alias_instruction(
                 &stx,
@@ -2509,7 +2570,8 @@ mod tests {
         drop(view);
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC3; Hash::LENGTH]));
             seed_test_call_hash(&mut stx, 0xC3);
             renew_account_alias_instruction(&stx, &alias, 1)
                 .execute(&authority, &mut stx)
@@ -2577,7 +2639,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut transaction = block.transaction();
+            let mut transaction =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC4; Hash::LENGTH]));
             seed_test_call_hash(&mut transaction, 0xC4);
             ensure_account_alias_instruction(
                 &transaction,
@@ -2612,7 +2675,8 @@ mod tests {
             )
         };
         let mut block = state.block(next_header(&state));
-        let mut transaction = block.transaction();
+        let mut transaction =
+            block.transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
         seed_test_call_hash(&mut transaction, 0xC5);
         let mut renewal = renew_account_alias_instruction(&transaction, &alias, 1);
         renewal.expected_current_expiry_ms = current_expiry.saturating_add(1);
@@ -2705,7 +2769,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xD1; Hash::LENGTH]));
             Register::account(Account::new(retail_account.clone()))
                 .execute(&authority, &mut stx)
                 .expect("register retail account");
@@ -2830,7 +2895,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xD2; Hash::LENGTH]));
             Register::account(Account::new(retail_account.clone()))
                 .execute(&authority, &mut stx)
                 .expect("register retail account");
@@ -2925,11 +2991,11 @@ mod tests {
             let payer_before = asset_balance(&state, &payment_asset, &authority);
             let collector_before = asset_balance(&state, &payment_asset, &collector);
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
-            seed_test_call_hash(
-                &mut stx,
-                0xE0_u8.saturating_add(u8::try_from(index).expect("bounded claim index")),
-            );
+            let call_hash_byte =
+                0xE0_u8.saturating_add(u8::try_from(index).expect("bounded claim index"));
+            let mut stx = block
+                .transaction_for_fastpq_testing(Hash::prehashed([call_hash_byte; Hash::LENGTH]));
+            seed_test_call_hash(&mut stx, call_hash_byte);
             match claim.execute(&authority, &mut stx) {
                 Ok(()) => {
                     successes = successes.saturating_add(1);
@@ -3014,7 +3080,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xE2; Hash::LENGTH]));
             seed_test_call_hash(&mut stx, 0xE2);
             ensure_account_alias_instruction(
                 &stx,
@@ -3417,5 +3484,404 @@ mod tests {
             matches!(err, InstructionExecutionError::InvariantViolation(_)),
             "unexpected error: {err:?}"
         );
+    }
+
+    // Actual signed native execution: the fixture only supplies initial FI
+    // permissions and parent leases in the signed genesis, never a target lease
+    // or caller-authored execution output. This grants no runtime authority.
+    #[test]
+    fn retail_registration_bare_multisig_then_existing_primary_alias_executes_atomically() {
+        use crate::{
+            state::StateReadOnly as _,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_allocation::AllocationBudget;
+        use iroha_data_model::{
+            IntoKeyValue,
+            account::{MultisigMember, MultisigPolicy},
+            asset::AssetBalancePolicy,
+            nexus::UniversalAccountId,
+            sumeragi_finality::world_state_value_hash_v1,
+        };
+        use iroha_executor_data_model::{
+            isi::multisig::{DEFAULT_MULTISIG_TTL_MS, MultisigSpec},
+            permission::query::CanReadAllLedgerData,
+        };
+        use iroha_primitives::json::Json;
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            num::NonZeroU16,
+        };
+        let registrar_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+        let registrar = AccountId::new(registrar_key.public_key().clone());
+        let collector = AccountId::new(
+            KeyPair::from_seed(vec![0xCF; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let client = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
+        let signer = AccountId::new(client.public_key().clone());
+        let wallet = AccountId::new_multisig(
+            MultisigPolicy::new(
+                1,
+                vec![MultisigMember::new(client.public_key().clone(), 1).unwrap()],
+            )
+            .unwrap(),
+        );
+        let domain = DomainId::try_new("leumi", "is2").unwrap();
+        let dataspace = DataSpaceId::new(77);
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace,
+                alias: "is2".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .unwrap();
+        let alias = ResolvedAccountAliasV1::new("retail@leumi.is2".parse().unwrap(), dataspace);
+        let payment: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .unwrap();
+        let mut world = World::with(
+            [
+                Domain::new(DomainId::try_new("genesis", "universal").unwrap()).build(&collector),
+                Domain::new(domain.clone()).build(&registrar),
+            ],
+            [
+                Account::new(registrar.clone()).build(&registrar),
+                Account::new(collector.clone()).build(&collector),
+            ],
+            [AssetDefinition::numeric(
+                payment.clone(),
+                "Fixture fee",
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&registrar)],
+        );
+        let (asset, value) = Asset::new(
+            AssetId::of(payment.clone(), registrar.clone()),
+            1_000_000_u64,
+        )
+        .into_key_value();
+        world.assets.insert(asset, value);
+        seed_default_namespace_policies(&mut world);
+        seed_active_dataspace_lease(&mut world, "is2", dataspace, &registrar);
+        let domain_selector = crate::sns::selector_for_domain(&domain).unwrap();
+        let controller =
+            NameControllerV1::account(&AccountAddress::from_account_id(&registrar).unwrap());
+        let domain_lease = NameRecordV1::new(
+            domain_selector.clone(),
+            registrar.clone(),
+            vec![controller],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&domain_selector),
+            norito::codec::Encode::encode(&domain_lease),
+        );
+        world.account_permissions.insert(
+            registrar.clone(),
+            BTreeSet::from([
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain.clone()),
+                }),
+                Permission::from(CanReadAllLedgerData),
+            ]),
+        );
+        let target = AliasTargetV1::AccountAlias(alias.clone());
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(&target).unwrap();
+        assert!(crate::sns::get_name_record_by_selector(&world.view(), &selector, 2_000).is_err());
+        let quote = crate::sns::quote_resolved_name_registration(
+            &world.view(),
+            selector.clone(),
+            &wallet,
+            1,
+            None,
+            2_000,
+        )
+        .unwrap();
+        let policy = policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID)
+            .unwrap()
+            .unwrap();
+        let uaid = UniversalAccountId::from_hash(Hash::new(
+            format!(
+                "retail_registration|alias={}|account_id={}",
+                alias.canonical_text(),
+                wallet.canonical_i105().unwrap()
+            )
+            .as_bytes(),
+        ));
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert("multisig/spec".parse().unwrap(), Json::new(spec));
+        metadata.insert(
+            "iroha:multisig_home_domain".parse().unwrap(),
+            Json::new(Some(domain)),
+        );
+        let bare_wallet = Account::new(wallet.clone())
+            .with_metadata(metadata.clone())
+            .with_uaid(Some(uaid));
+        assert!(bare_wallet.label.is_none());
+        let ensure = EnsureAlias::new(
+            AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: alias.clone(),
+                target_account: wallet.clone(),
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Primary,
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: policy.policy_version,
+                expected_payment_asset: payment.clone(),
+                max_amount: quote.charge_amount.clone(),
+                valid_until_ms: 120_000,
+            },
+        );
+        let mut config = TestChainConfig::new(world, 1_000);
+        config.genesis_key = registrar_key.clone();
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.dataspace_catalog = catalog.clone();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        config.nexus = Some(nexus);
+        let mut chain = CertifiedTestChain::start(config).unwrap();
+        let instructions: Vec<iroha_data_model::isi::InstructionBox> = vec![
+            Register::account(Account::new(signer.clone())).into(),
+            Register::account(bare_wallet.clone()).into(),
+            ensure.clone().into(),
+        ];
+        let signed = chain.sign(&registrar_key, instructions, 1_999);
+        assert_eq!(chain.commit_at(2_000, vec![signed]), vec![true]);
+        let tip = chain.committed(2);
+        let (wallet_original, signer_original, lease_original, payer_after, collector_after) = {
+            let view = chain.state().view();
+            let wallet_original = view.world().accounts().get(&wallet).unwrap().clone();
+            let details = wallet_original.as_ref();
+            assert_eq!(details.label.as_ref(), Some(&alias.account_alias()));
+            assert_eq!(details.uaid.as_ref(), Some(&uaid));
+            assert_eq!(details.metadata, metadata);
+            assert!(details.opaque_ids.is_empty());
+            let signer_original = view.world().accounts().get(&signer).unwrap().clone();
+            let signer_details = signer_original.as_ref();
+            assert!(signer_details.label.is_none());
+            assert!(signer_details.uaid.is_none());
+            assert!(signer_details.metadata.is_empty());
+            assert_eq!(
+                view.world().account_aliases().get(&alias.account_alias()),
+                Some(&wallet)
+            );
+            assert_eq!(
+                view.world()
+                    .account_rekey_records()
+                    .get(&alias.account_alias())
+                    .unwrap()
+                    .active_account_id,
+                wallet
+            );
+            let lease =
+                crate::sns::get_name_record_by_selector(view.world(), &selector, 2_000).unwrap();
+            assert_eq!(lease.owner, wallet);
+            assert_eq!(
+                lease.controllers,
+                vec![NameControllerV1::account(
+                    &AccountAddress::from_account_id(&wallet).unwrap()
+                )]
+            );
+            assert!(matches!(
+                lease.status,
+                iroha_data_model::sns::NameStatus::Active
+            ));
+            assert_eq!(lease.expires_at_ms, quote.expires_at_ms);
+            let payer_after = asset_balance_in_world(view.world(), &payment, &registrar);
+            let collector_after = asset_balance_in_world(view.world(), &payment, &collector);
+            (
+                wallet_original,
+                signer_original,
+                lease,
+                payer_after,
+                collector_after,
+            )
+        };
+        assert_eq!(
+            payer_after,
+            Quantity::from(1_000_000_u64)
+                .try_sub(&quote.charge_amount)
+                .unwrap()
+        );
+        assert_eq!(collector_after, quote.charge_amount);
+        let budget = AllocationBudget::new(128 * 1024 * 1024);
+        chain
+            .state()
+            .with_native_resource_names_snapshot_v1(
+                &tip,
+                &registrar,
+                &budget,
+                |snapshot, _, _, _| {
+                    assert_eq!(
+                        snapshot.root().unwrap(),
+                        tip.commitment().execution.world_state_root
+                    );
+                    assert_eq!(
+                        snapshot.schema_hash,
+                        State::native_world_schema_hash_v1().unwrap()
+                    );
+                    for (key, value) in [
+                        (wallet.clone(), wallet_original.clone()),
+                        (signer.clone(), signer_original.clone()),
+                    ] {
+                        assert!(
+                            snapshot
+                                .entries
+                                .iter()
+                                .any(|row| row.field_id == "world.accounts"
+                                    && row.key_hash
+                                        == Some(world_state_value_hash_v1(&key).unwrap())
+                                    && row.value_hash
+                                        == world_state_value_hash_v1(&value).unwrap())
+                        );
+                    }
+                    let bytes = norito::codec::Encode::encode(&lease_original);
+                    assert!(snapshot.entries.iter().any(|row| {
+                        row.field_id == "world.smart_contract_state"
+                            && row.key_hash
+                                == Some(
+                                    world_state_value_hash_v1(&crate::sns::record_storage_key(
+                                        &selector,
+                                    ))
+                                    .unwrap(),
+                                )
+                            && row.value_hash == world_state_value_hash_v1(&bytes).unwrap()
+                    }));
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(budget.reserved_bytes(), 0);
+        // A failed quote in the atomic native transaction rolls back both
+        // preceding Register effects; an unexecuted intent is not a final label.
+        let second_client = KeyPair::from_seed(vec![0xA2; 32], Algorithm::Ed25519);
+        let second_signer = AccountId::new(second_client.public_key().clone());
+        let second_wallet = AccountId::new_multisig(
+            MultisigPolicy::new(
+                1,
+                vec![MultisigMember::new(second_client.public_key().clone(), 1).unwrap()],
+            )
+            .unwrap(),
+        );
+        let second_alias_name: AccountAliasName = "other@leumi.is2".parse().unwrap();
+        let second_uaid = UniversalAccountId::from_hash(Hash::new(
+            format!(
+                "retail_registration|alias={second_alias_name}|account_id={}",
+                second_wallet.canonical_i105().unwrap()
+            )
+            .as_bytes(),
+        ));
+        let second_spec = MultisigSpec {
+            signatories: BTreeMap::from([(second_signer.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let mut second_metadata = Metadata::default();
+        second_metadata.insert("multisig/spec".parse().unwrap(), Json::new(second_spec));
+        second_metadata.insert(
+            "iroha:multisig_home_domain".parse().unwrap(),
+            Json::new(Some(DomainId::try_new("leumi", "is2").unwrap())),
+        );
+        let second_bare_wallet = Account::new(second_wallet.clone())
+            .with_metadata(second_metadata)
+            .with_uaid(Some(second_uaid));
+        let mut invalid_ensure = ensure;
+        if let AliasIntentV1::AccountAlias(intent) = &mut invalid_ensure.intent {
+            intent.alias.canonical_name = second_alias_name;
+            intent.target_account = second_wallet.clone();
+        }
+        invalid_ensure.quote_guard.max_amount = Quantity::zero();
+        let second_quote = {
+            let view = chain.state().view();
+            let selector = crate::alias_setup::selector_for_resolved_alias_target(
+                &invalid_ensure.intent.target(),
+            )
+            .unwrap();
+            crate::sns::quote_resolved_name_registration(
+                view.world(),
+                selector,
+                &second_wallet,
+                1,
+                None,
+                3_000,
+            )
+            .unwrap()
+        };
+        assert!(!second_quote.charge_amount.is_zero());
+        let rejected = chain.sign(
+            &registrar_key,
+            vec![
+                Register::account(Account::new(second_signer.clone())).into(),
+                Register::account(second_bare_wallet).into(),
+                invalid_ensure.into(),
+            ],
+            2_999,
+        );
+        let rejected_hash =
+            iroha_data_model::transaction::TransactionEntrypoint::External(rejected.clone()).hash();
+        assert_eq!(chain.commit_at(3_000, vec![rejected]), vec![false]);
+        let rejected_tip = chain.committed(3);
+        let rejected_block = rejected_tip.block();
+        let rejected_outputs = rejected_block
+            .execution_outputs()
+            .iter()
+            .filter_map(|output| {
+                let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(network) =
+                    output
+                else {
+                    return None;
+                };
+                rejected_block
+                    .network_entrypoint_at(network.input_index as usize)
+                    .filter(|input| input.hash() == rejected_hash)
+                    .map(|_| output)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rejected_outputs.len(), 1);
+        let Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            iroha_data_model::ValidationFail::InstructionFailed(
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    message,
+                )),
+            ),
+        )) = &rejected_outputs[0].result().0
+        else {
+            panic!(
+                "third EnsureAlias must reach its native quote guard: {:?}",
+                rejected_outputs[0].result()
+            );
+        };
+        assert_eq!(
+            message.to_string(),
+            format!(
+                "alias.quote.cap_exceeded: exact charge {} exceeds authorized cap 0",
+                second_quote.charge_amount
+            )
+        );
+        let view = chain.state().view();
+        assert!(view.world().account(&second_signer).is_err());
+        assert!(view.world().account(&second_wallet).is_err());
+        let second_alias = AccountAlias::from_literal("other@leumi.is2", &catalog).unwrap();
+        assert!(view.world().account_aliases().get(&second_alias).is_none());
     }
 }

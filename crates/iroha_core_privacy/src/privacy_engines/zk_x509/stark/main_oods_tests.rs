@@ -163,7 +163,13 @@ fn mixed_native_quotients_and_every_composition_chunk_are_bound() {
     };
     deep.composition_values[0][0] = total.coefficients().map(|value| value.0);
     assert!(verify_composition_v1(&shared, &deep, point, total).is_ok());
-    let degree = shared.fri_degree_cap(AGGREGATE_PARAMETERS_V1).unwrap();
+    let degree =
+        crate::privacy_engines::zk_x509::composition_masking::QuotientChunkGeometryV1::new_v1(
+            &shared,
+            AGGREGATE_PARAMETERS_V1,
+        )
+        .unwrap()
+        .stride_v1();
     for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
         deep.composition_values[0][chunk][0] += 1;
         assert!(verify_composition_v1(&shared, &deep, point, total).is_err());
@@ -218,18 +224,19 @@ fn scalar_dispatch_residues(
             io.challenges,
         )
         .unwrap(),
-        SegmentAdapterIdV1::StrictDer => evaluate_zk_x509_der_stark_residues_v1(
-            opening.base_current.try_into().unwrap(),
-            opening.base_next.try_into().unwrap(),
-            opening.aux_current.try_into().unwrap(),
-            opening.aux_next.try_into().unwrap(),
-            fixed.try_into().unwrap(),
-            &prepared.public[1].der.map(native_value),
-            log19.post_base.der(),
-            log19.der_public,
-            log19.claims.der,
-        )
-        .unwrap(),
+        SegmentAdapterIdV1::StrictDer => {
+            crate::privacy_engines::zk_x509::der_stark::evaluate_zk_x509_der_stark_local_residues_v1(
+                opening.base_current.try_into().unwrap(),
+                opening.base_next.try_into().unwrap(),
+                opening.aux_current.try_into().unwrap(),
+                opening.aux_next.try_into().unwrap(),
+                fixed.try_into().unwrap(),
+                &prepared.public[1].der.map(native_value),
+                log19.post_base.der(),
+                log19.der_public,
+            )
+            .unwrap()
+        }
         SegmentAdapterIdV1::Rfc5280 => evaluate_zk_x509_rfc5280_stark_residues_v1(
             opening.base_current.try_into().unwrap(),
             opening.base_next.try_into().unwrap(),
@@ -265,15 +272,8 @@ fn scalar_dispatch_residues(
             .unwrap()
         }
         _ => {
-            let (signature, _) = p256_instance_parts_v1(registration.segment.instance).unwrap();
-            p256_opened_residues_v1(
-                registration,
-                opening,
-                fixed,
-                p256.challenges,
-                &p256.terminals[signature],
-            )
-            .unwrap()
+            let (_signature, _) = p256_instance_parts_v1(registration.segment.instance).unwrap();
+            p256_opened_residues_v1(registration, opening, fixed, p256.challenges).unwrap()
         }
     }
 }
@@ -308,13 +308,9 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
     let statement =
         crate::privacy_engines::zk_x509::main_io::tests::statement_with_disclosures_v1(0);
     let fixed_source = P256MainVerifierFixedSourceV1::new_v1().unwrap();
-    let mut p256 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
-        &layout,
-        &fixed_source,
-        post_base,
-        claims.p256,
-    )
-    .unwrap();
+    let p256 =
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed_source, post_base)
+            .unwrap();
     let projection =
         MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, &statement, post_base)
             .unwrap();
@@ -442,6 +438,7 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
             &groups,
             point,
             alphas,
+            &[E::ONE; 192],
             p256,
             &projection,
             &io,
@@ -449,10 +446,23 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
             &prepared,
         )
     };
+    let expected = expected.add(
+        main_terminal_links::MainTerminalLinkPlanV1::new_v1(&layout)
+            .unwrap()
+            .evaluate_v1(&groups, point, &[E::ONE; 192])
+            .unwrap(),
+    );
     assert_eq!(evaluate(&alphas, &p256).unwrap(), expected);
     // Nonzero higher chunks exercise reconstruction, rather than accepting a
     // sole constant composition opening.
-    let power = point.pow(shared.fri_degree_cap(AGGREGATE_PARAMETERS_V1).unwrap() as u128);
+    let power = point.pow(
+        crate::privacy_engines::zk_x509::composition_masking::QuotientChunkGeometryV1::new_v1(
+            &shared,
+            AGGREGATE_PARAMETERS_V1,
+        )
+        .unwrap()
+        .stride_v1() as u128,
+    );
     let mut constant = expected;
     for chunk in 1..COMPOSITION_DEGREE_CHUNKS {
         let value = E::canonical([chunk as u64 + 17, 19, 23, 29]).unwrap();
@@ -465,6 +475,7 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         &deep,
         point,
         &alphas,
+        &[E::ONE; 192],
         &p256,
         &projection,
         &io,
@@ -497,19 +508,15 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         assert!(verify_composition_v1(&shared, &deep, point, changed).is_err());
         alphas[index][0][column] = alphas[index][0][column].sub(E::ONE);
     }
-    let original = p256.terminals[0].buses.arithmetic_scalar[0];
-    p256.terminals[0].buses.arithmetic_scalar[0] = original.add(F::ONE);
-    assert!(match evaluate(&alphas, &p256) {
-        Ok(value) => value != expected,
-        Err(_) => true,
-    });
-    p256.terminals[0].buses.arithmetic_scalar[0] = original;
+    // Private terminal mutations are exercised by the closed link-plan tests;
+    // the verifier context no longer has private scalar claims to mutate.
     assert!(
         main_deep_composition_v1(
             &layout,
             &groups,
             point.add(E::ONE),
             &alphas,
+            &[E::ONE; 192],
             &p256,
             &projection,
             &io,
@@ -525,6 +532,7 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
             &deep,
             point,
             &alphas,
+            &[E::ONE; 192],
             &p256,
             &projection,
             &io,
@@ -593,13 +601,9 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
     .unwrap();
     let post_base = binding.main_post_base();
     let fixed_source = P256MainVerifierFixedSourceV1::new_v1().unwrap();
-    let verifier_p256 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
-        &layout,
-        &fixed_source,
-        post_base,
-        bound.claims.p256,
-    )
-    .unwrap();
+    let verifier_p256 =
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed_source, post_base)
+            .unwrap();
     let projection = MainProjectionVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixture.statement,

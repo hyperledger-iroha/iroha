@@ -256,7 +256,8 @@ pub(crate) fn verify_retained(
     // The shared loader owns the built-in instruction registry required by signed decoding.
     init_instruction_registry();
     let invalid = || Error::Invalid("retained private-root artifact binding differs".into());
-    if prepared.context.client_config != root.join("client.toml")
+    if prepared.service_profile != LocalnetServiceProfile::Standard
+        || prepared.context.client_config != root.join("client.toml")
         || prepared.context.dataspace_id != spec.dataspace_id.as_u64()
         || prepared.context.dataspace_alias != spec.dataspace_alias
         || prepared.peers.len() != 4
@@ -278,6 +279,7 @@ pub(crate) fn verify_retained(
     let block =
         iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|_| invalid())?;
     iroha_data_model::sumeragi_finality::genesis_epoch(&block).map_err(|_| invalid())?;
+    service_authorities::validate_signed_profile(prepared, &block)?;
     let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&block)
         .map_err(|_| invalid())?;
     if metadata.sumeragi_context.root_scope != spec.scope()
@@ -444,6 +446,11 @@ fn prepare_fresh(
         &gas,
         &peers,
     )?;
+    let genesis = service_authorities::append_profile(
+        genesis,
+        LocalnetServiceProfile::Standard,
+        &owner.account_id,
+    )?;
     copy_rans_tables(&root)?;
     let signed_path = root.join("genesis.signed.nrt");
     let trusted = peers
@@ -578,6 +585,7 @@ fn prepare_fresh(
     )?;
     custody::validate_private_tree(&root, &[])?;
     Ok(PreparedLocalnet {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         context: ManagedContext {
             name: name.into(),
             chain_id: chain,

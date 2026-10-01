@@ -243,6 +243,10 @@ public enum ToriiGovernanceKagemushaArtifactRoleTagV1: String, Decodable, Sendab
   case mintHashClaimVkEq = "mint_hash_claim_vk_eq"
   case mintHashClaimPkEp = "mint_hash_claim_pk_ep"
   case mintHashClaimVkEp = "mint_hash_claim_vk_ep"
+  case ordinaryAppGuardPkEq = "ordinary_app_guard_pk_eq"
+  case ordinaryAppGuardVkEq = "ordinary_app_guard_vk_eq"
+  case ordinaryAppGuardPkEp = "ordinary_app_guard_pk_ep"
+  case ordinaryAppGuardVkEp = "ordinary_app_guard_vk_ep"
 }
 
 public enum ToriiGovernanceKagemushaGovernedVerifierReleaseStatusV1: UInt8, Decodable, Sendable,
@@ -271,6 +275,7 @@ public enum ToriiGovernanceKagemushaQualifiedHelperCircuitTagV1: String, Decodab
   case guardBundle = "guard_bundle"
   case mintHashShard = "mint_hash_shard"
   case mintHashClaim = "mint_hash_claim"
+  case ordinaryAppGuard = "ordinary_app_guard"
 }
 
 public enum ToriiGovernanceKagemushaQualifiedRelationTagV1: String, Decodable, Sendable, Equatable {

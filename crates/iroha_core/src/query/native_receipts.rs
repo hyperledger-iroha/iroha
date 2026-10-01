@@ -9,6 +9,8 @@
 
 mod ordinary_writes;
 
+pub(crate) mod lane_payload;
+
 use crate::{
     query::native_context_archive::NativeContextArchive, state::StateReadOnly,
     sumeragi::finality::build_proof,

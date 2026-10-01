@@ -226,3 +226,20 @@ fn duplicate_credit_on_disk_and_uncertain_append_fail_closed() {
         .unwrap();
     assert_eq!(recovered.total_admitted(), 17);
 }
+
+#[test]
+fn canonical_fixed_digest_records_roundtrip_within_the_existing_wal_bound() {
+    let (scope, anchor) = scope_and_anchor();
+    let admitted = admission(scope, &anchor, [0x11; 32], [0x21; 32], 17, [0x31; 32]);
+    let facts = CreditFacts::from_admission(&admitted).unwrap();
+    for record in [Record::Initialize { scope }, Record::Credit(facts)] {
+        let encoded = encode_record(&record).expect("canonical fixed facts fit the original bound");
+        assert!(!encoded.is_empty());
+        assert!(encoded.len() <= RECORD_MAX_BYTES);
+        let decoded = decode_record(&encoded).expect("canonical fixed facts roundtrip");
+        assert_eq!(encode_record(&decoded).unwrap(), encoded);
+        assert!(decode_record(&encoded[..encoded.len() - 1]).is_err());
+    }
+    assert_eq!(RECORD_MAX_BYTES, 1024);
+    assert!(decode_record(&vec![0; RECORD_MAX_BYTES + 1]).is_err());
+}

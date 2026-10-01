@@ -83,7 +83,8 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
     if (cidBytes.length !== 36 || ![1, 0x71, 0x1f, 32].every((byte, index) => cidBytes[index] === byte)
         || cidBytes.subarray(4).every(byte => byte === 0)) fail(context, "has an invalid native manifest CID");
     if (!SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1.includes(fields.chunking_profile)) fail(`${context}.chunking_profile`, "must use an exact canonical registered profile handle");
-    const sla = record(fields.sla, ["ingest_deadline_secs", "min_availability_percent_milli", "min_por_success_percent_milli"], `${context}.sla`);
+    const slaContext = `${context}.sla`;
+    const sla = record(fields.sla, ["ingest_deadline_secs", "min_availability_percent_milli", "min_por_success_percent_milli"], slaContext);
     const result = {
       version: 1, order_id_hex: hex(fields.order_id_hex, `${context}.order_id_hex`),
       manifest_cid_b64: cid, manifest_digest_hex: hex(fields.manifest_digest_hex, `${context}.manifest_digest_hex`),
@@ -91,9 +92,9 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
       target_replicas: positive(fields.target_replicas, `${context}.target_replicas`, 0xffffn),
       assignments: array(fields.assignments, 1024, `${context}.assignments`, assignment),
       issued_at: u64(fields.issued_at, `${context}.issued_at`), deadline_at: u64(fields.deadline_at, `${context}.deadline_at`),
-      sla: { ingest_deadline_secs: positive(sla.ingest_deadline_secs, `${context}.sla.ingest_deadline_secs`, 0xffff_ffffn),
-        min_availability_percent_milli: positive(sla.min_availability_percent_milli, `${context}.sla.min_availability_percent_milli`, 100_000n),
-        min_por_success_percent_milli: positive(sla.min_por_success_percent_milli, `${context}.sla.min_por_success_percent_milli`, 100_000n) },
+      sla: { ingest_deadline_secs: positive(sla.ingest_deadline_secs, `${slaContext}.ingest_deadline_secs`, 0xffff_ffffn),
+        min_availability_percent_milli: positive(sla.min_availability_percent_milli, `${slaContext}.min_availability_percent_milli`, 100_000n),
+        min_por_success_percent_milli: positive(sla.min_por_success_percent_milli, `${slaContext}.min_por_success_percent_milli`, 100_000n) },
       metadata: array(fields.metadata, 64, `${context}.metadata`, (entry, label) => {
         const item = record(entry, ["key", "value"], label);
         const key = text(item.key, `${label}.key`), value = text(item.value, `${label}.value`);
@@ -114,19 +115,22 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
   }
   function completion(value, context) {
     const fields = record(value, ["provider_hex", "completed_by", "completion_epoch", "assignment_revision", "completion_authority", "finalized_anchor"], context);
-    const authority = record(fields.completion_authority, ["provider_owner", "signer_policy"], `${context}.completion_authority`);
-    const policy = record(authority.signer_policy, ["policy_id_hex", "revision", "predecessor_digest_hex", "policy_digest_hex"], `${context}.completion_authority.signer_policy`);
-    const anchor = record(fields.finalized_anchor, ["height", "block_hash_hex"], `${context}.finalized_anchor`);
-    const revision = positive(policy.revision, `${context}.completion_authority.signer_policy.revision`);
-    const predecessor = policy.predecessor_digest_hex === null ? null : hex(policy.predecessor_digest_hex, `${context}.completion_authority.signer_policy.predecessor_digest_hex`);
+    const authorityContext = `${context}.completion_authority`;
+    const policyContext = `${authorityContext}.signer_policy`;
+    const anchorContext = `${context}.finalized_anchor`;
+    const authority = record(fields.completion_authority, ["provider_owner", "signer_policy"], authorityContext);
+    const policy = record(authority.signer_policy, ["policy_id_hex", "revision", "predecessor_digest_hex", "policy_digest_hex"], policyContext);
+    const anchor = record(fields.finalized_anchor, ["height", "block_hash_hex"], anchorContext);
+    const revision = positive(policy.revision, `${policyContext}.revision`);
+    const predecessor = policy.predecessor_digest_hex === null ? null : hex(policy.predecessor_digest_hex, `${policyContext}.predecessor_digest_hex`);
     if ((revision === 1) !== (predecessor === null)) fail(context, "has inconsistent signer-policy predecessor");
     const result = {
       provider_hex: hex(fields.provider_hex, `${context}.provider_hex`), completed_by: identity(fields.completed_by, `${context}.completed_by`),
       completion_epoch: u64(fields.completion_epoch, `${context}.completion_epoch`), assignment_revision: positive(fields.assignment_revision, `${context}.assignment_revision`),
-      completion_authority: { provider_owner: identity(authority.provider_owner, `${context}.completion_authority.provider_owner`),
-        signer_policy: { policy_id_hex: hex(policy.policy_id_hex, `${context}.completion_authority.signer_policy.policy_id_hex`), revision,
-          predecessor_digest_hex: predecessor, policy_digest_hex: hex(policy.policy_digest_hex, `${context}.completion_authority.signer_policy.policy_digest_hex`) } },
-      finalized_anchor: { height: positive(anchor.height, `${context}.finalized_anchor.height`), block_hash_hex: hex(anchor.block_hash_hex, `${context}.finalized_anchor.block_hash_hex`) },
+      completion_authority: { provider_owner: identity(authority.provider_owner, `${authorityContext}.provider_owner`),
+        signer_policy: { policy_id_hex: hex(policy.policy_id_hex, `${policyContext}.policy_id_hex`), revision,
+          predecessor_digest_hex: predecessor, policy_digest_hex: hex(policy.policy_digest_hex, `${policyContext}.policy_digest_hex`) } },
+      finalized_anchor: { height: positive(anchor.height, `${anchorContext}.height`), block_hash_hex: hex(anchor.block_hash_hex, `${anchorContext}.block_hash_hex`) },
     };
     if (result.completed_by !== result.completion_authority.provider_owner) fail(context, "must retain the provider owner's completion authority");
     return result;
@@ -141,8 +145,10 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
       provider_completions: array(fields.provider_completions, 1024, `${context}.provider_completions`, completion),
       providers: array(fields.providers, 1024, `${context}.providers`, hex),
     };
+    const issuedEpoch = BigInt(result.issued_epoch);
+    const deadlineEpoch = BigInt(result.deadline_epoch);
     if (result.order_id_hex !== result.order.order_id_hex || result.manifest_digest_hex !== result.order.manifest_digest_hex
-        || BigInt(result.issued_epoch) !== BigInt(result.order.issued_at) || BigInt(result.deadline_epoch) !== BigInt(result.order.deadline_at)
+        || issuedEpoch !== BigInt(result.order.issued_at) || deadlineEpoch !== BigInt(result.order.deadline_at)
         || result.providers.length !== result.order.assignments.length
         || result.providers.some((provider, index) => provider !== result.order.assignments[index].provider_id_hex)) fail(context, "disagrees with its order projection");
     const seen = new Set();
@@ -151,7 +157,7 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
       const epoch = BigInt(item.completion_epoch);
       if (seen.has(item.provider_hex) || !result.providers.includes(item.provider_hex)
           || BigInt(item.assignment_revision) !== BigInt(result.assignment_revision)
-          || epoch < BigInt(result.issued_epoch) || epoch > BigInt(result.deadline_epoch)
+          || epoch < issuedEpoch || epoch > deadlineEpoch
           || previous !== undefined && epoch < previous) fail(context, "contains inconsistent provider completions");
       seen.add(item.provider_hex); previous = epoch;
     }
@@ -160,8 +166,8 @@ export function createSorafsReplicationResponseNormalizer({ account }) {
     switch (result.status.state) {
       case "pending": valid &&= count < target; break;
       case "completed": valid &&= count === target && previous === BigInt(result.status.epoch); break;
-      case "cancelled": valid &&= count < target && BigInt(result.status.epoch) >= BigInt(result.issued_epoch) && BigInt(result.status.epoch) <= BigInt(result.deadline_epoch); break;
-      case "expired": valid &&= count < target && BigInt(result.status.epoch) > BigInt(result.deadline_epoch); break;
+      case "cancelled": valid &&= count < target && BigInt(result.status.epoch) >= issuedEpoch && BigInt(result.status.epoch) <= deadlineEpoch; break;
+      case "expired": valid &&= count < target && BigInt(result.status.epoch) > deadlineEpoch; break;
     }
     if (!valid) fail(context, "has inconsistent completion lifecycle");
     return result;

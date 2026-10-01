@@ -12195,7 +12195,7 @@ mod openapi_tests {
         );
         assert!(!emitted.ends_with(b"\n"));
     }
-    // Direct fragment keeps this cohesive OpenAPI regression test together under the source cap.
+    // Direct fragment keeps this cohesive OpenAPI regression test together.
     include!("tests/openapi_empty_manifest_writers.rs");
     #[test]
     fn manifest_verifier_rejects_digest_matching_empty_openapi() {

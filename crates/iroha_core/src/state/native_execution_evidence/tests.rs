@@ -1,7 +1,7 @@
 //! Genuine native carrier verification, genesis anchoring and interval refusal.
 
 use super::*;
-use crate::state::World;
+use crate::state::{StateReadOnly, World};
 use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
 use std::num::NonZeroUsize;
 
@@ -64,12 +64,39 @@ fn only_actual_native_successor_authenticates_genesis_execution_and_empty_contex
     for height in 2..=3 {
         let block = frame(&chain, height);
         let expected = block.hash();
-        let verified = reader
+        let mut verified = reader
             .push_height(block.clone(), &projection(&chain, &block))
             .unwrap()
             .unwrap();
         assert_eq!(verified.block().hash(), expected);
+        assert_eq!(
+            verified.ordinary_writes_root(),
+            chain
+                .committed(u64::try_from(height).unwrap())
+                .commitment()
+                .execution
+                .ordinary_writes_root
+        );
         assert!(verified.lanes().lanes.is_empty());
+        assert_eq!(
+            verified.matches_original_tip(chain.state().view().native_execution_tip().unwrap()),
+            height == 3
+        );
+        if height == 3 {
+            let tip = chain.state().view().native_execution_tip().unwrap();
+            let core_hash = verified.core_hash;
+            verified.core_hash = iroha_sumeragi::types::Hash32([0x81; 32]);
+            assert!(
+                !verified.matches_original_tip(tip),
+                "same Iroha carrier cannot replace native core identity"
+            );
+            verified.core_hash = core_hash;
+            verified.result = iroha_sumeragi::types::Hash32([0x82; 32]);
+            assert!(
+                !verified.matches_original_tip(tip),
+                "same Iroha carrier cannot replace original execution result"
+            );
+        }
     }
     assert!(reader.pending_genesis.is_none());
     assert_eq!(reader.carriers.len(), 3);
@@ -156,7 +183,7 @@ fn live_reader_reuses_original_archived_contexts_through_actual_native_tip() {
     ));
     assert_eq!(
         chain.state().verified_sumeragi_lane_state().unwrap_err(),
-        missing_source.to_string(),
+        format!("required historical native lane state source 2: {missing_source}"),
         "the live reader must propagate the original missing-record refusal"
     );
     std::fs::write(&path, &original).unwrap();
@@ -223,15 +250,16 @@ fn certified_result_rejects_changed_actual_lane_history_and_counter() {
         match field {
             0 => value.lanes.incarnations += 1,
             1 => value.lanes.last_transition = 2,
-            _ => value
-                .lanes
-                .samples
-                .push(iroha_data_model::sumeragi_lanes::SumeragiLaneSample {
+            _ => {
+                let mut samples = value.lanes.samples.to_vec();
+                samples.push(iroha_data_model::sumeragi_lanes::SumeragiLaneSample {
                     height: 2,
                     time_ms: 2000,
                     transactions: 1,
                     lanes: 1,
-                }),
+                });
+                value.lanes.samples = samples.try_into().unwrap();
+            }
         }
         // The actual source must differ. Clearing an empty list would be no tamper.
         assert_ne!(
@@ -260,5 +288,47 @@ fn live_receipt_cannot_move_to_an_equivalent_distinct_state_owner() {
     assert!(
         !receipt.is_current(equivalent.state()),
         "equal chain data/generation never replace the original State owner"
+    );
+}
+
+#[test]
+fn authenticated_genesis_callback_requires_actual_successor_and_rejection_poisons_interval() {
+    let chain = chain();
+    let mut reader = reader(&chain);
+    let genesis = Arc::new(frame(&chain, 1));
+    let next = Arc::new(frame(&chain, 2));
+    assert!(
+        reader
+            .push_shared_height_with_genesis(
+                Arc::clone(&genesis),
+                &projection(&chain, &genesis),
+                |_| panic!("unsigned genesis cannot escape")
+            )
+            .unwrap()
+            .is_none()
+    );
+    let mut called = false;
+    let error = reader
+        .push_shared_height_with_genesis(Arc::clone(&next), &projection(&chain, &next), |receipt| {
+            called = true;
+            assert_eq!(receipt.block().hash(), genesis.hash());
+            assert_eq!(
+                receipt.ordinary_writes_root(),
+                chain
+                    .committed(1)
+                    .commitment()
+                    .execution
+                    .ordinary_writes_root
+            );
+            Err("selected original creation rejected".to_owned())
+        })
+        .unwrap_err();
+    assert!(called);
+    assert!(error.contains("selected original creation rejected"));
+    assert!(
+        reader
+            .push_shared_height(Arc::clone(&next), &projection(&chain, &next))
+            .unwrap_err()
+            .contains("poisoned")
     );
 }

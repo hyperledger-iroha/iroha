@@ -205,6 +205,27 @@ PipelineGas remains directly settled to the technical account, so its lease
 usage is recorded as executed and settled atomically; Nexus receipt usage is
 recorded as executed first and becomes settled only when relay merge commits.
 
+An actual nonzero direct Nexus charge is retained in the exact Network
+`TransactionResult` as its mandatory nullable `nexus_fee_receipt` field. The
+binary result tuple always has three fields, and JSON always includes the key,
+including explicit `null` when no charge was applied. The receipt participates
+in the result hash and therefore in the executed output commitment. It binds
+the original outer entrypoint, physical dataspace and lane, applying height,
+actual authority or sponsor program and revision, signed asset/amount cap,
+canonical payload length, metering inputs and actual amount. Direct settlement
+records `Burn`, because the native charge reduces the payer or sponsor custody
+balance and the global XOR supply; a configured sink or a fee quote is not
+proof of a paid charge.
+
+The execution owner retains the fee overlay until its receipt-bearing terminal
+output is funded. A business rejection whose diagnostic is too large retains
+the same actual receipt with a bounded reason. If even that terminal cannot
+fit, the carrier refuses before the charge is applied. Healthy successful-output
+overflow drops the attempted business effects and fee together. Public receipt
+shape checks bind the signed intent and arithmetic, but do not authenticate
+execution, the applicable policy, FASTPQ coverage or finality; consumers must
+verify the genuine executed carrier and its consensus commitment.
+
 The first-release `NexusFeeReceipt` layout is closed and exact. Its
 `program_revision` and `lease_id` slots are always encoded, using explicit
 `null` when the corresponding binding is absent; omission and unknown fields

@@ -329,6 +329,7 @@ fn stream_token_custody_debug_syscalls_cannot_mutate_delete_or_disclose_native_s
 fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_typed_values() {
     let paths = custody_namespace_paths();
     let user: StatePath = "sorafs_stream_token_custody_v1x".parse().unwrap();
+<<<<<<< HEAD
     // Slash descendants are namespace probes, not valid Kotodama declaration identifiers.
     // Keep their real syscall denials below without building an invalid CNTR declaration.
     let namespace_descendants: BTreeSet<_> = paths
@@ -357,13 +358,59 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         declarations.len() + namespace_descendants.len(),
         paths.len()
     );
+=======
+    // Slash paths are real native namespace probes, but cannot be scalar CNTR
+    // declarations. Prove admission rejects every such program before testing
+    // all original paths at the real syscall boundary with a valid interface.
+    let namespace_only = paths
+        .iter()
+        .filter(|path| {
+            !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(
+                path.as_ref(),
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        namespace_only.len(),
+        14,
+        "all provider-admission paths and the custody descendant"
+    );
+    for path in &namespace_only {
+        assert!(path.as_ref().contains('/'));
+        let invalid = build_authenticated_test_contract_program_with_states(
+            &[],
+            0,
+            false,
+            vec![ivm::EmbeddedStateDescriptor {
+                name: path.to_string(),
+                ty: ivm::EmbeddedStateType::Bytes,
+            }],
+        );
+        assert_eq!(
+            IVM::new(u64::MAX).load_program(&invalid),
+            Err(ivm::VMError::InvalidMetadata),
+            "native path cannot acquire scalar declaration authority: {path}"
+        );
+    }
+    let mut declarations = paths
+        .iter()
+        .filter(|path| !namespace_only.contains(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(declarations.len() + namespace_only.len(), paths.len());
+>>>>>>> origin/optimizations
     declarations.push(user.clone());
     let value = custody_namespace_bytes_record();
     let mut vm = custody_namespace_vm(&declarations);
     let mut host = custody_namespace_scoped_host();
     for path in &paths {
         let typed_value = ivm::host::validate_declared_state_value_payload(&vm, path, &value);
+<<<<<<< HEAD
         if namespace_descendants.contains(path) {
+=======
+        if namespace_only.contains(path) {
+>>>>>>> origin/optimizations
             assert_eq!(
                 typed_value,
                 Err(ivm::VMError::NoritoInvalid),
@@ -391,7 +438,11 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
             vm.set_register(11, value_ptr);
             // Reads validate declarations first; writes apply the namespace guard first.
             // Every declarable native key must reach the opaque namespace denial instead.
+<<<<<<< HEAD
             let expected = if namespace_descendants.contains(path)
+=======
+            let expected = if namespace_only.contains(path)
+>>>>>>> origin/optimizations
                 && matches!(
                     syscall,
                     ivm_sys::SYSCALL_STATE_GET
@@ -410,7 +461,11 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         }
         vm.set_register(10, path_ptr);
         let count = host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm);
+<<<<<<< HEAD
         if namespace_descendants.contains(path) {
+=======
+        if namespace_only.contains(path) {
+>>>>>>> origin/optimizations
             assert_eq!(count, Err(ivm::VMError::NoritoInvalid));
         } else {
             assert!(count.is_ok());

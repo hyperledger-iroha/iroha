@@ -33,6 +33,7 @@ struct ForgedNexusFeeReceipt {
     program_revision: Option<u64>,
     lease_id: Option<Hash>,
     fee_amount: Numeric,
+    settlement: NexusFeeSettlementV1,
     schedule: NexusFeeScheduleInputs,
 }
 #[derive(Encode)]
@@ -65,6 +66,7 @@ fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
         program_revision: None,
         lease_id: None,
         fee_amount: "0.001".parse().expect("quantity"),
+        settlement: NexusFeeSettlementV1::Burn,
         schedule: NexusFeeScheduleInputs {
             tx_bytes_len: 100,
             instruction_count: 1,
@@ -104,6 +106,7 @@ fn negative_numeric_payloads_cannot_decode_as_nexus_fees() {
         program_revision: valid.program_revision,
         lease_id: valid.lease_id,
         fee_amount: Numeric::new(-1_i32, 0),
+        settlement: valid.settlement,
         schedule: valid.schedule,
     };
     let encoded = forged_receipt.encode();

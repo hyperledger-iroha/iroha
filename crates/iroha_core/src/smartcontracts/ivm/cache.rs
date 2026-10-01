@@ -2296,6 +2296,14 @@ mod tests {
 
     #[test]
     fn nested_runtime_and_template_charges_survive_final_baseline_owner() {
+        // This positive requires enabled retention for its whole owner lifetime.
+        // Serialize the canonical configuration writers that may evict every pool.
+        let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+            capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+            max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+            max_decoded_ops:
+                iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+        });
         const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
         let code_hash = ivm::contract_code_hash(&program);
@@ -2538,6 +2546,14 @@ mod tests {
     }
     #[test]
     fn program_summary_owned_lease_reuses_runtime_on_early_return() {
+        // This positive requires enabled retention for its whole owner lifetime.
+        // Serialize the canonical configuration writers that may evict every pool.
+        let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+            capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+            max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+            max_decoded_ops:
+                iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+        });
         const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
         let mut cache = IvmCache::with_capacity(2);

@@ -213,13 +213,14 @@ mod tests {
         zero.incarnations = 1;
         assert!(validate_sumeragi_lane_state(network, 0, &zero).is_err());
         zero = SumeragiLaneState::default();
-        zero.samples
-            .push(iroha_data_model::sumeragi_lanes::SumeragiLaneSample {
-                height: 0,
-                time_ms: 0,
-                transactions: 0,
-                lanes: 1,
-            });
+        zero.samples = vec![iroha_data_model::sumeragi_lanes::SumeragiLaneSample {
+            height: 0,
+            time_ms: 0,
+            transactions: 0,
+            lanes: 1,
+        }]
+        .try_into()
+        .unwrap();
         assert!(validate_sumeragi_lane_state(network, 0, &zero).is_err());
         assert!(validate_sumeragi_lane_state(network, 1, &exact).is_ok());
         assert!(validate_sumeragi_lane_state(network, 4, &exact).is_ok());
@@ -279,17 +280,16 @@ mod seal_tests {
             match mutation {
                 0 => overlay.world.sumeragi_lanes.get_mut().incarnations += 1,
                 1 => overlay.world.sumeragi_lanes.get_mut().last_transition = 3,
-                _ => overlay
-                    .world
-                    .sumeragi_lanes
-                    .get_mut()
-                    .samples
-                    .push(SumeragiLaneSample {
+                _ => {
+                    let mut samples = overlay.world.sumeragi_lanes.get().samples.to_vec();
+                    samples.push(SumeragiLaneSample {
                         height: 3,
                         time_ms: 3000,
                         transactions: 1,
                         lanes: 1,
-                    }),
+                    });
+                    overlay.world.sumeragi_lanes.get_mut().samples = samples.try_into().unwrap();
+                }
             }
             assert!(overlay.verify_sumeragi_lane_state_seal().is_err());
             assert!(

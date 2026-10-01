@@ -14,39 +14,53 @@ pub(super) enum PhaseV1 {
     Preparation,
     Assembly,
     BaseSources,
-    BaseMasks,
-    BaseCommitment,
+    BaseSampleAndCommit,
     CompactCa,
     BoundSources,
     DerBinding,
     RfcBinding,
-    AuxMasks,
-    AuxCommitment,
+    AuxSampleAndCommit,
     Composition,
     DeepAndFri,
     QueryOpenings,
     EnvelopeAndSelfCheck,
     SampleSourceColumns,
     SampleMaskDraws,
+    CompositionRegistration,
+    CompositionTraceCache,
+    CompositionDenominators,
+    CompositionBaseReplay,
+    CompositionAuxReplay,
+    CompositionFixedReplay,
+    CompositionResiduesAndFold,
+    CompositionInverseTransform,
+    CompositionDegreeChunks,
 }
-const PHASES: [PhaseV1; 17] = [
+const PHASES: [PhaseV1; 24] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
-    PhaseV1::BaseMasks,
-    PhaseV1::BaseCommitment,
+    PhaseV1::BaseSampleAndCommit,
     PhaseV1::CompactCa,
     PhaseV1::BoundSources,
     PhaseV1::DerBinding,
     PhaseV1::RfcBinding,
-    PhaseV1::AuxMasks,
-    PhaseV1::AuxCommitment,
+    PhaseV1::AuxSampleAndCommit,
     PhaseV1::Composition,
     PhaseV1::DeepAndFri,
     PhaseV1::QueryOpenings,
     PhaseV1::EnvelopeAndSelfCheck,
     PhaseV1::SampleSourceColumns,
     PhaseV1::SampleMaskDraws,
+    PhaseV1::CompositionRegistration,
+    PhaseV1::CompositionTraceCache,
+    PhaseV1::CompositionDenominators,
+    PhaseV1::CompositionBaseReplay,
+    PhaseV1::CompositionAuxReplay,
+    PhaseV1::CompositionFixedReplay,
+    PhaseV1::CompositionResiduesAndFold,
+    PhaseV1::CompositionInverseTransform,
+    PhaseV1::CompositionDegreeChunks,
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -58,7 +72,7 @@ struct PhaseCountV1 {
     elapsed: Duration,
 }
 
-/// Public counters observed from completed MAIN common-domain FFT calls.
+/// Public counters observed from completed MAIN transform calls, separated by use.
 #[derive(Default)]
 pub(super) struct ReceiptV1 {
     // Identity prevents an accidentally long-lived timer from writing into a
@@ -73,6 +87,10 @@ pub(super) struct ReceiptV1 {
     metal_calls: u64,
     metal_columns: u64,
     failures: u64,
+    fixed_backend_columns: [[u64; 2]; 2],
+    quotient_backend_columns: [u64; 2],
+    native_replay_backend_columns: [u64; 2],
+    fixed_failures: u64,
     fixed_forward_columns: u64,
     fixed_inverse_columns: u64,
     fixed_forward_butterflies: u64,
@@ -181,7 +199,7 @@ pub(super) fn completed_transform_v1(metal: bool, columns: usize) {
         }
     });
 }
-/// Completed public fixed-column CPU work, recorded after each Rayon join.
+/// Completed public fixed-column work, recorded after each bounded batch.
 /// Recovery IFFTs are additional work introduced by the bounded matrix owner.
 pub(super) fn completed_fixed_coset_v1(columns: usize, rows: usize, recovery: bool) {
     assert!((1..=8).contains(&columns) && rows.is_power_of_two());
@@ -199,6 +217,46 @@ pub(super) fn completed_fixed_coset_v1(columns: usize, rows: usize, recovery: bo
     });
 }
 
+/// Actual completed fixed-coset arithmetic, separated by direction and backend.
+pub(super) fn completed_fixed_backend_v1(metal: bool, inverse: bool, columns: usize) {
+    assert!((1..=8).contains(&columns));
+    ACTIVE.with(|active| {
+        if let Some(receipt) = active.borrow_mut().as_mut() {
+            receipt.fixed_backend_columns[usize::from(metal)][usize::from(inverse)] +=
+                columns as u64;
+        }
+    });
+}
+
+/// Completed private quotient stripe FFTs; fixed and common-domain counters stay separate.
+pub(super) fn completed_quotient_backend_v1(metal: bool, columns: usize) {
+    assert!((1..=8).contains(&columns));
+    ACTIVE.with(|active| {
+        if let Some(receipt) = active.borrow_mut().as_mut() {
+            receipt.quotient_backend_columns[usize::from(metal)] += columns as u64;
+        }
+    });
+}
+
+/// Completed private native replay IFFTs, before any mask application.
+pub(super) fn completed_native_replay_backend_v1(metal: bool, columns: usize) {
+    assert!((1..=8).contains(&columns));
+    ACTIVE.with(|active| {
+        if let Some(receipt) = active.borrow_mut().as_mut() {
+            receipt.native_replay_backend_columns[usize::from(metal)] += columns as u64;
+        }
+    });
+}
+
+/// Failed public fixed-coset production calls; distinct from MAIN replay work.
+pub(super) fn failed_fixed_coset_v1() {
+    ACTIVE.with(|active| {
+        if let Some(receipt) = active.borrow_mut().as_mut() {
+            receipt.fixed_failures += 1;
+        }
+    });
+}
+
 pub(super) fn failed_transform_v1() {
     ACTIVE.with(|active| {
         if let Some(receipt) = active.borrow_mut().as_mut() {
@@ -209,17 +267,26 @@ pub(super) fn failed_transform_v1() {
 impl ReceiptV1 {
     pub(super) fn public_text_v1(&self) -> String {
         let mut text = format!(
-            "observation_scope=calling-thread-public-fixed-counters\nphase_durations=nested-not-additive\ntransform_scope=MAIN-common-domain-FFT-only\ntransform_policy_counts_by_max_device_columns={:?}\ntransform_cpu_calls={}\ntransform_cpu_columns={}\ntransform_metal_calls={}\ntransform_metal_columns={}\ntransform_failed_calls={}\nfixed_coset_backend=CPU\nfixed_coset_forward_columns={}\nfixed_coset_recovery_inverse_columns={}\nfixed_coset_forward_butterflies={}\nfixed_coset_recovery_inverse_butterflies={}\nother_transform_backends=unobserved",
+            "observation_scope=calling-thread-public-geometry-counters\nphase_durations=nested-not-additive\ntransform_scope=MAIN-common-domain-FFT-only\ntransform_policy_counts_by_max_device_columns={:?}\ntransform_cpu_calls={}\ntransform_cpu_columns={}\ntransform_metal_calls={}\ntransform_metal_columns={}\ntransform_failed_calls={}\nfixed_coset_backend=observed\nfixed_coset_failed_calls={}\nfixed_coset_cpu_forward_columns={}\nfixed_coset_cpu_inverse_columns={}\nfixed_coset_metal_forward_columns={}\nfixed_coset_metal_inverse_columns={}\nfixed_coset_forward_columns={}\nfixed_coset_recovery_inverse_columns={}\nfixed_coset_forward_butterflies={}\nfixed_coset_recovery_inverse_butterflies={}\nquotient_stripe_backend=observed\nquotient_stripe_cpu_forward_columns={}\nquotient_stripe_metal_forward_columns={}\nnative_replay_backend=observed\nnative_replay_scope=initial-resident-and-original-mask-replay\nnative_replay_cpu_inverse_columns={}\nnative_replay_metal_inverse_columns={}\nother_transform_backends=unobserved",
             self.policies,
             self.cpu_calls,
             self.cpu_columns,
             self.metal_calls,
             self.metal_columns,
             self.failures,
+            self.fixed_failures,
+            self.fixed_backend_columns[0][0],
+            self.fixed_backend_columns[0][1],
+            self.fixed_backend_columns[1][0],
+            self.fixed_backend_columns[1][1],
             self.fixed_forward_columns,
             self.fixed_inverse_columns,
             self.fixed_forward_butterflies,
             self.fixed_inverse_butterflies,
+            self.quotient_backend_columns[0],
+            self.quotient_backend_columns[1],
+            self.native_replay_backend_columns[0],
+            self.native_replay_backend_columns[1],
         );
         for (phase, count) in PHASES.iter().zip(self.phases) {
             use core::fmt::Write as _;
@@ -250,6 +317,28 @@ impl ReceiptV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_pass_observation_reports_combined_phases_and_keeps_sampling_subphases() {
+        let observation = ObservationV1::begin_v1();
+        PhaseTimerV1::start_v1(PhaseV1::BaseSampleAndCommit).complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::AuxSampleAndCommit).complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::SampleSourceColumns).complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::SampleMaskDraws).complete_v1();
+        let receipt = observation.finish_v1();
+        for phase in [
+            PhaseV1::BaseSampleAndCommit,
+            PhaseV1::AuxSampleAndCommit,
+            PhaseV1::SampleSourceColumns,
+            PhaseV1::SampleMaskDraws,
+        ] {
+            assert_eq!(receipt.phases[phase as usize].completed, 1);
+        }
+        let text = receipt.public_text_v1();
+        assert!(text.contains("BaseSampleAndCommit") && text.contains("AuxSampleAndCommit"));
+        assert!(!text.contains("BaseMasks") && !text.contains("AuxMasks"));
+        assert!(text.contains("native_replay_scope=initial-resident-and-original-mask-replay"));
+    }
+
     #[test]
     fn public_observation_counts_success_error_unwind_and_actual_backends() {
         let observation = ObservationV1::begin_v1();
@@ -298,6 +387,73 @@ mod tests {
     }
 
     #[test]
+    fn native_replay_observation_separates_inverse_work_from_all_forward_counters() {
+        let observation = ObservationV1::begin_v1();
+        completed_native_replay_backend_v1(false, 8);
+        completed_native_replay_backend_v1(true, 4);
+        let receipt = observation.finish_v1();
+        assert_eq!(receipt.native_replay_backend_columns, [8, 4]);
+        assert_eq!(receipt.quotient_backend_columns, [0, 0]);
+        assert_eq!(receipt.fixed_backend_columns, [[0, 0], [0, 0]]);
+        assert_eq!(receipt.cpu_columns + receipt.metal_columns, 0);
+        assert!(
+            receipt
+                .public_text_v1()
+                .contains("native_replay_cpu_inverse_columns=8")
+        );
+        assert!(
+            receipt
+                .public_text_v1()
+                .contains("native_replay_metal_inverse_columns=4")
+        );
+    }
+
+    #[test]
+    fn quotient_backend_observation_does_not_count_fixed_or_common_domain_work() {
+        let observation = ObservationV1::begin_v1();
+        completed_quotient_backend_v1(false, 8);
+        completed_quotient_backend_v1(true, 3);
+        let receipt = observation.finish_v1();
+        assert_eq!(receipt.quotient_backend_columns, [8, 3]);
+        assert_eq!(receipt.fixed_backend_columns, [[0, 0], [0, 0]]);
+        assert_eq!(receipt.cpu_columns + receipt.metal_columns, 0);
+        assert!(
+            receipt
+                .public_text_v1()
+                .contains("quotient_stripe_cpu_forward_columns=8")
+        );
+        assert!(
+            receipt
+                .public_text_v1()
+                .contains("quotient_stripe_metal_forward_columns=3")
+        );
+    }
+
+    #[test]
+    fn fixed_backend_observation_counts_only_reported_directions() {
+        let observation = ObservationV1::begin_v1();
+        completed_fixed_backend_v1(false, false, 8);
+        completed_fixed_backend_v1(false, true, 2);
+        completed_fixed_backend_v1(true, false, 3);
+        completed_fixed_backend_v1(true, true, 1);
+        failed_fixed_coset_v1();
+        let receipt = observation.finish_v1();
+        assert_eq!(receipt.fixed_backend_columns, [[8, 2], [3, 1]]);
+        assert_eq!(receipt.fixed_failures, 1);
+        assert_eq!(receipt.cpu_columns + receipt.metal_columns, 0);
+        let text = receipt.public_text_v1();
+        for count in [
+            "cpu_forward_columns=8",
+            "cpu_inverse_columns=2",
+            "metal_forward_columns=3",
+            "metal_inverse_columns=1",
+            "failed_calls=1",
+        ] {
+            assert!(text.contains(&format!("fixed_coset_{count}")));
+        }
+    }
+
+    #[test]
     fn observation_is_bounded_scoped_and_does_not_claim_worker_thread_coverage() {
         assert!(core::mem::size_of::<ReceiptV1>() < 2_048);
         let observation = ObservationV1::begin_v1();
@@ -325,5 +481,71 @@ mod tests {
         let receipt = second.finish_v1();
         assert_eq!(receipt.phases[PhaseV1::Assembly as usize].calls, 0);
         assert_eq!(receipt.phases[PhaseV1::Preparation as usize].completed, 1);
+    }
+    #[test]
+    fn composition_subphases_preserve_bounded_thread_scoped_error_and_unwind_counts() {
+        // These observations are wall time around the original serial caller's
+        // whole parallel operation, never per-worker field data or CPU time.
+        let phases = [
+            PhaseV1::CompositionRegistration,
+            PhaseV1::CompositionTraceCache,
+            PhaseV1::CompositionDenominators,
+            PhaseV1::CompositionBaseReplay,
+            PhaseV1::CompositionAuxReplay,
+            PhaseV1::CompositionFixedReplay,
+            PhaseV1::CompositionResiduesAndFold,
+            PhaseV1::CompositionInverseTransform,
+            PhaseV1::CompositionDegreeChunks,
+        ];
+        let observation = ObservationV1::begin_v1();
+        for phase in phases {
+            PhaseTimerV1::start_v1(phase).complete_v1();
+            drop(PhaseTimerV1::start_v1(phase));
+            let _ = std::panic::catch_unwind(|| {
+                let _timer = PhaseTimerV1::start_v1(phase);
+                panic!("synthetic composition subphase unwind");
+            });
+        }
+        std::thread::spawn(|| {
+            PhaseTimerV1::start_v1(PhaseV1::CompositionResiduesAndFold).complete_v1();
+        })
+        .join()
+        .unwrap();
+        let receipt = observation.finish_v1();
+        assert!(core::mem::size_of::<ReceiptV1>() < 2_048);
+        for phase in phases {
+            let count = receipt.phases[phase as usize];
+            assert_eq!(count.calls, 3);
+            assert_eq!(count.completed, 1);
+            assert_eq!(count.interrupted, 2);
+            assert_eq!(count.unwound, 1);
+            assert!(receipt.public_text_v1().contains(&format!(
+                "phase={phase:?} calls=3 completed=1 interrupted=2 unwound=1"
+            )));
+        }
+        assert_eq!(receipt.phases[PhaseV1::Composition as usize].calls, 0);
+        assert_eq!(receipt.cpu_columns + receipt.metal_columns, 0);
+    }
+
+    #[test]
+    fn composition_subphase_timer_cannot_cross_observation_epochs() {
+        let first = ObservationV1::begin_v1();
+        let stale = PhaseTimerV1::start_v1(PhaseV1::CompositionRegistration);
+        assert_eq!(
+            first.finish_v1().phases[PhaseV1::CompositionRegistration as usize].calls,
+            0
+        );
+        let second = ObservationV1::begin_v1();
+        stale.complete_v1();
+        PhaseTimerV1::start_v1(PhaseV1::CompositionTraceCache).complete_v1();
+        let receipt = second.finish_v1();
+        assert_eq!(
+            receipt.phases[PhaseV1::CompositionRegistration as usize].calls,
+            0
+        );
+        assert_eq!(
+            receipt.phases[PhaseV1::CompositionTraceCache as usize].completed,
+            1
+        );
     }
 }

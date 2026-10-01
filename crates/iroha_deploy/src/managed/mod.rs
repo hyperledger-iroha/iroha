@@ -112,6 +112,8 @@ pub struct ManagedPeer {
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PreparedLocalnet {
+    /// Exact closed genesis service-authority profile; never inferred from optional files.
+    pub service_profile: crate::localnet::LocalnetServiceProfile,
     /// Client identity and connection information generated with this genesis.
     pub context: ManagedContext,
     /// Exactly four independent validators, in stable order.
@@ -121,6 +123,8 @@ pub struct PreparedLocalnet {
 /// A localnet startup request. Omitted CLI settings should use [`Self::new`].
 #[derive(Debug, Clone)]
 pub struct LocalnetRequest {
+    /// Explicit internal preparation profile; an existing generation must match exactly.
+    pub service_profile: crate::localnet::LocalnetServiceProfile,
     /// Store-local network name.
     pub name: String,
     /// Installed Kagami executable, used to start the native background worker.
@@ -136,6 +140,7 @@ impl LocalnetRequest {
     #[must_use]
     pub fn new(launcher: PathBuf, daemon: PathBuf) -> Self {
         Self {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             name: "local".into(),
             launcher,
             daemon,

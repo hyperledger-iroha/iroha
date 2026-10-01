@@ -34,7 +34,7 @@ use snark_verifier::{
 };
 
 use super::{
-    KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1 as PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
+    DigestV1, KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1 as PASTA_IPA_POSEIDON_FULL_ROUNDS_V1,
     KAGEMUSHA_IPA_POSEIDON_PARTIAL_ROUNDS_V1 as PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
     KAGEMUSHA_IPA_POSEIDON_RATE_V1 as PASTA_IPA_POSEIDON_RATE_V1,
     KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1 as PASTA_IPA_POSEIDON_SECURE_MDS_V1,
@@ -647,6 +647,9 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     state_checkpoint_artifacts: super::KagemushaRecursionArtifactsV1,
     provider_policy_root: [u8; 32],
     eq_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    eq_ordinary_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    ep_ordinary_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
+    ordinary_guard_protocol_digests: [DigestV1; 2],
     ep_guard_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
@@ -723,6 +726,22 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .resolve(KagemushaArtifactRoleV1::StateVkEp)?
                 .as_ref(),
             profile.state_ep,
+        )?;
+        let eq_ordinary_guard_vk = read_eq_ordinary_guard_vk(
+            artifacts
+                .resolve(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq)?
+                .as_ref(),
+            profile.guard_eq.clone(),
+            provider_policy_root,
+            artifacts.ordinary_issuer_table(),
+        )?;
+        let ep_ordinary_guard_vk = read_ep_ordinary_guard_vk(
+            artifacts
+                .resolve(KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp)?
+                .as_ref(),
+            profile.guard_ep.clone(),
+            provider_policy_root,
+            artifacts.ordinary_issuer_table(),
         )?;
         let eq_guard_vk = read_eq_guard_vk(
             artifacts
@@ -875,6 +894,37 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 "compiled recursive protocol roles alias".to_owned(),
             ));
         }
+        let eq_ordinary_guard_protocol = compile(
+            &eq_parameters,
+            &eq_ordinary_guard_vk,
+            snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![
+                super::ordinary_guard_circuit::ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1,
+            ]),
+        );
+        let ep_ordinary_guard_protocol = compile(
+            &ep_parameters,
+            &ep_ordinary_guard_vk,
+            snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![
+                super::ordinary_guard_circuit::ORDINARY_GUARD_PUBLIC_INSTANCE_COUNT_V1,
+            ]),
+        );
+        let ordinary_guard_protocol_digests = [
+            native_parent_protocol_digest_v1(
+                &eq_ordinary_guard_protocol,
+                KagemushaPastaParityV1::Eq,
+            )
+            .map_err(KagemushaArtifactErrorV1::InvalidRelease)?,
+            native_parent_protocol_digest_v1(
+                &ep_ordinary_guard_protocol,
+                KagemushaPastaParityV1::Ep,
+            )
+            .map_err(KagemushaArtifactErrorV1::InvalidRelease)?,
+        ];
+        if ordinary_guard_protocol_digests != artifacts.ordinary_guard_protocol_digests() {
+            return Err(KagemushaArtifactErrorV1::InvalidRelease(
+                "compiled ordinary app Guard protocol mismatch".into(),
+            ));
+        }
         let eq_terminal_authorization_protocol = compile(
             &eq_parameters,
             &eq_terminal_authorization_vk,
@@ -1002,6 +1052,8 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ep_protocol_digest,
             guard_eq_protocol_digest,
             guard_ep_protocol_digest,
+            ordinary_guard_protocol_digests[0],
+            ordinary_guard_protocol_digests[1],
             terminal_authorization_eq_protocol_digest,
             terminal_authorization_ep_protocol_digest,
             commit_wrapper_eq_protocol_digest,
@@ -1031,6 +1083,9 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             provider_policy_root,
             eq_guard_protocol,
             ep_guard_protocol,
+            eq_ordinary_guard_protocol,
+            ep_ordinary_guard_protocol,
+            ordinary_guard_protocol_digests,
             eq_state_protocol,
             ep_state_protocol,
             eq_commit_wrapper_protocol,
@@ -1085,6 +1140,39 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         self.authorize_release_proof_material(release)
     }
 
+    /// Admit the first production ordinary State family against its distinct signed Guard.
+    /// State roles must contain actual ordinary State keys; this operation cannot convert a
+    /// verifier already authorized under another family or relabel an OEM helper proof.
+    /// # Errors
+    /// Rejects another purpose, changed authority, wrong loaded originals or family replacement.
+    pub fn authorize_ordinary_monetary_release(
+        &mut self,
+        release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+    ) -> Result<(), String> {
+        require_release_admission_purpose_v1(
+            release.purpose(),
+            ReleaseAdmissionV1::ProductionMonetary,
+        )?;
+        let ordinary = super::KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(
+            &release,
+            self.state_checkpoint_artifacts
+                .canonical_empty_effect_digest,
+        )
+        .map_err(|error| error.to_string())?;
+        if self.authenticated_release.is_some() {
+            if self.state_checkpoint_artifacts != ordinary {
+                return Err("native State family is already authorized".to_owned());
+            }
+            return self.authorize_release_proof_material(release);
+        }
+        // The common check authenticates every already-loaded role and actual ordinary
+        // compiled protocol before any authority/family is installed. Nothing fallible
+        // remains after it returns, so a failed admission cannot half-change this owner.
+        self.authorize_release_proof_material(release)?;
+        self.state_checkpoint_artifacts = ordinary;
+        Ok(())
+    }
+
     /// Install a threshold-signed testnet release solely for proof-lineage experiments.
     ///
     /// The verified purpose must be `TestnetExperiment`. This cannot create a production
@@ -1108,12 +1196,44 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &mut self,
         release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
     ) -> Result<(), String> {
-        let expected = super::KagemushaRecursionArtifactsV1::from_authenticated_release(
-            &release,
+        let expected = match (
             self.state_checkpoint_artifacts
-                .canonical_empty_effect_digest,
-        );
+                .guard_bundle_verifying_key_eq
+                .role,
+            self.state_checkpoint_artifacts
+                .guard_bundle_verifying_key_ep
+                .role,
+        ) {
+            (
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::OrdinaryAppGuardVkEq,
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::OrdinaryAppGuardVkEp,
+            ) => super::KagemushaRecursionArtifactsV1::from_authenticated_ordinary_release(
+                &release,
+                self.state_checkpoint_artifacts
+                    .canonical_empty_effect_digest,
+            )
+            .map_err(|error| error.to_string())?,
+            (
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::GuardBundleVkEq,
+                iroha_data_model::kagemusha::KagemushaArtifactRoleV1::GuardBundleVkEp,
+            ) => super::KagemushaRecursionArtifactsV1::from_authenticated_release(
+                &release,
+                self.state_checkpoint_artifacts
+                    .canonical_empty_effect_digest,
+            ),
+            _ => return Err("native State helper roles are mixed".to_owned()),
+        };
         expected.validate().map_err(|error| error.to_string())?;
+        let ordinary = release
+            .helper_protocol(
+                iroha_data_model::kagemusha::KagemushaQualifiedHelperCircuitV1::OrdinaryAppGuard,
+            )
+            .ok_or_else(|| "ordinary app Guard helper is absent".to_owned())?;
+        if [ordinary.eq_protocol_digest, ordinary.ep_protocol_digest]
+            != self.ordinary_guard_protocol_digests
+        {
+            return Err("ordinary app Guard release differs from loaded keys".into());
+        }
         if expected != self.state_checkpoint_artifacts
             || release.provider_policy_root() != self.provider_policy_root
             || release.native_profile_digest() != self.native_profile_digest
@@ -1213,6 +1333,21 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                 .state_checkpoint_artifacts
                 .canonical_empty_effect_digest,
             provider_policy_root: self.provider_policy_root,
+        }
+    }
+
+    pub(super) fn ordinary_guard_verifier_material(
+        &self,
+    ) -> super::ordinary_guard_verifier::OrdinaryGuardMaterialV1<'_> {
+        super::ordinary_guard_verifier::OrdinaryGuardMaterialV1 {
+            eq_parameters: &self.eq_parameters,
+            ep_parameters: &self.ep_parameters,
+            eq_protocol: &self.eq_ordinary_guard_protocol,
+            ep_protocol: &self.ep_ordinary_guard_protocol,
+            release_id: self.release_id,
+            artifact_manifest_digest: self.artifact_manifest_digest,
+            eq_protocol_digest: self.ordinary_guard_protocol_digests[0],
+            ep_protocol_digest: self.ordinary_guard_protocol_digests[1],
         }
     }
 
@@ -1854,7 +1989,7 @@ fn append_usize_slice(bytes: &mut Vec<u8>, values: &[usize]) -> Result<(), Strin
     Ok(())
 }
 
-fn read_eq_state_vk(
+pub(super) fn read_eq_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
@@ -1865,7 +2000,7 @@ fn read_eq_state_vk(
     )
 }
 
-fn read_ep_state_vk(
+pub(super) fn read_ep_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
@@ -1876,7 +2011,7 @@ fn read_ep_state_vk(
     )
 }
 
-fn read_eq_inner_state_vk(
+pub(super) fn read_eq_inner_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
@@ -1887,7 +2022,7 @@ fn read_eq_inner_state_vk(
     )
 }
 
-fn read_ep_inner_state_vk(
+pub(super) fn read_ep_inner_state_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
@@ -1928,7 +2063,60 @@ fn read_ep_guard_vk(
     )
 }
 
-fn read_eq_terminal_authorization_vk(
+pub(super) fn read_eq_ordinary_guard_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
+) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary provider root is absent".into(),
+        ));
+    }
+    let params = super::ordinary_guard_circuit::KagemushaOrdinaryGuardCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
+    read_recursive_vk_checked::<
+        EqAffine,
+        super::ordinary_guard_circuit::KagemushaOrdinaryAppGuardEqCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Eq ordinary app approval Guard",
+    )
+}
+pub(super) fn read_ep_ordinary_guard_vk(
+    bytes: &[u8],
+    params: BaseCircuitParams,
+    root: [u8; 32],
+    issuer_table: &super::ordinary_issuer_config::OrdinaryIssuerTableV1,
+) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
+    if root == [0; 32] {
+        return Err(KagemushaArtifactErrorV1::InvalidRelease(
+            "ordinary provider root is absent".into(),
+        ));
+    }
+    let params = super::ordinary_guard_circuit::KagemushaOrdinaryGuardCircuitParamsV1 {
+        base: params,
+        provider_policy_root: root,
+        issuer_table: issuer_table.clone(),
+    };
+    read_recursive_vk_checked::<
+        EpAffine,
+        super::ordinary_guard_circuit::KagemushaOrdinaryAppGuardEpCircuitV1,
+    >(
+        bytes,
+        params,
+        KAGEMUSHA_HALO2_K_V1,
+        "Ep ordinary app approval Guard",
+    )
+}
+
+pub(super) fn read_eq_terminal_authorization_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
@@ -1939,7 +2127,7 @@ fn read_eq_terminal_authorization_vk(
     )
 }
 
-fn read_ep_terminal_authorization_vk(
+pub(super) fn read_ep_terminal_authorization_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {
@@ -1950,14 +2138,14 @@ fn read_ep_terminal_authorization_vk(
     )
 }
 
-fn read_eq_commit_wrapper_vk(
+pub(super) fn read_eq_commit_wrapper_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EqAffine>, KagemushaArtifactErrorV1> {
     read_eq_recursive_vk::<KagemushaCommitWrapperEqCircuitV1>(bytes, params, "commit-wrapper")
 }
 
-fn read_ep_commit_wrapper_vk(
+pub(super) fn read_ep_commit_wrapper_vk(
     bytes: &[u8],
     params: BaseCircuitParams,
 ) -> Result<VerifyingKey<EpAffine>, KagemushaArtifactErrorV1> {

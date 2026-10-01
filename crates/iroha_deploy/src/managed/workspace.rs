@@ -101,8 +101,9 @@ impl ManagedStore {
             Err(Error::NoSelection) if requested.is_none() => ("local".into(), false),
             Err(error) => return Err(error),
         };
-        let request = runtime.localnet_request(&name, timeout);
+        let mut request = runtime.localnet_request(&name, timeout);
         let status = if retained {
+            request.service_profile = self.prepared(&name)?.service_profile;
             self.up_retained(&request)?
         } else {
             self.up(&request)?
@@ -391,6 +392,52 @@ mod tests {
         assert!(workspace_state_root(Path::new("relative"), &a).is_err());
         assert!(workspace_state_root(&root, &root).is_err());
         assert!(default_state_root().unwrap().is_absolute());
+    }
+
+    #[test]
+    fn selected_authority_profile_reaches_native_spawn_without_repreparing_identity() {
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
+        let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
+        let directory = networks.create_child("native-authorities").unwrap();
+        for program in ["kagami", "iroha3d"] {
+            directory
+                .write_atomic(
+                    format!("{program}{}", std::env::consts::EXE_SUFFIX),
+                    b"intentionally not an executable",
+                    PublishMode::CreateNew,
+                )
+                .unwrap();
+        }
+        let runtime = InstalledRuntime::from_directory(directory.path()).unwrap();
+        let mut request =
+            runtime.localnet_request("native-authorities", std::time::Duration::from_secs(60));
+        request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
+        let retained = {
+            let _operation =
+                super::super::store::acquire(&directory, "operation.lock", &request.name).unwrap();
+            let ports = super::super::LocalnetPorts::reserve().unwrap();
+            super::super::generation::prepare(
+                &directory,
+                &request,
+                super::super::RootKind::Global,
+                super::super::store::pin_binary(&runtime.kagami).unwrap(),
+                super::super::store::pin_binary(&runtime.daemon).unwrap(),
+                &ports,
+            )
+            .unwrap()
+        };
+        store.select(&request.name).unwrap();
+        let error = store
+            .ensure_selected(&runtime, None, std::time::Duration::from_secs(60))
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::Io(_)),
+            "expected actual native spawn failure after exact profile selection: {error}"
+        );
+        assert_eq!(store.prepared(&request.name).unwrap(), retained.prepared);
+        assert!(!directory.path().join(".preparing").exists());
     }
 
     #[test]

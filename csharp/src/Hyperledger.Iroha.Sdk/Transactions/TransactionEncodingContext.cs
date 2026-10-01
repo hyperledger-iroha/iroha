@@ -112,6 +112,23 @@ internal sealed class TransactionEncodingContext
         return EncodeString(RequireExactNonBlank(value, nameof(value)));
     }
 
+    internal static string CanonicalizeDomainId(string value, string paramName)
+    {
+        var exact = RequireExactNonBlank(value, paramName);
+        DomainIdNative.ValidateCanonical(exact, paramName);
+        return exact;
+    }
+
+    public byte[] EncodeDomainId(string value)
+    {
+        var exact = CanonicalizeDomainId(value, nameof(value));
+        var separator = exact.IndexOf('.');
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteField(EncodeName(exact[..separator]));
+        writer.WriteField(EncodeName(exact[(separator + 1)..]));
+        return writer.ToArray();
+    }
+
     public byte[] EncodeOptionalString(string? value)
     {
         var writer = new CanonicalNoritoWriter();
@@ -129,7 +146,9 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeJson(JsonNode? value)
     {
-        return EncodeString(CanonicalJson(value));
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteField(EncodeString(CanonicalJson(value)));
+        return writer.ToArray();
     }
 
     internal static string CanonicalJson(JsonNode? value) => WriteJsonNode(value);
@@ -335,25 +354,31 @@ internal sealed class TransactionEncodingContext
         return writer.ToArray();
     }
 
+    internal static string CanonicalizeNftId(string nftId, string paramName)
+    {
+        var exact = RequireExactNonBlank(nftId, paramName);
+        var separator = exact.IndexOf('$');
+        if (separator <= 0 || separator != exact.LastIndexOf('$') || separator == exact.Length - 1)
+            throw new ArgumentException("NFT ID must use exact name$domain.dataspace spelling.", paramName);
+        CanonicalizeDomainId(exact[(separator + 1)..], paramName);
+        return exact;
+    }
+
     public byte[] EncodeNftId(string nftId)
     {
-        var exactNftId = RequireExactNonBlank(nftId, nameof(nftId));
-
-        var separatorIndex = exactNftId.IndexOf('$');
-        if (separatorIndex <= 0 || separatorIndex != exactNftId.LastIndexOf('$') || separatorIndex == exactNftId.Length - 1)
-        {
-            throw new ArgumentException($"Invalid NFT id `{nftId}`.", nameof(nftId));
-        }
-
+        var exact = CanonicalizeNftId(nftId, nameof(nftId));
+        var separator = exact.IndexOf('$');
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(EncodeName(exactNftId[(separatorIndex + 1)..]));
-        writer.WriteField(EncodeName(exactNftId[..separatorIndex]));
+        writer.WriteField(EncodeDomainId(exact[(separator + 1)..]));
+        writer.WriteField(EncodeName(exact[..separator]));
         return writer.ToArray();
     }
 
     public byte[] EncodeTriggerId(string triggerId)
     {
-        return EncodeName(triggerId);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteField(EncodeName(triggerId));
+        return writer.ToArray();
     }
 
     public void EnsureAuthorityMatchesPrivateKey(ReadOnlySpan<byte> privateKeySeed)
@@ -380,10 +405,7 @@ internal sealed class TransactionEncodingContext
     {
         var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodeString(key));
-        var jsonString = EncodeJson(value);
-        var jsonField = new CanonicalNoritoWriter();
-        jsonField.WriteField(jsonString);
-        writer.WriteField(jsonField.ToArray());
+        writer.WriteField(EncodeJson(value));
         return writer.ToArray();
     }
 
@@ -508,7 +530,7 @@ internal sealed class TransactionEncodingContext
 
         writer.WriteUInt32LittleEndian(1);
         var dataspaceWriter = new CanonicalNoritoWriter();
-        dataspaceWriter.WriteUInt64LittleEndian(dataspaceId.Value);
+        dataspaceWriter.WriteField(EncodeUInt64(dataspaceId.Value));
         writer.WriteField(dataspaceWriter.ToArray());
         return writer.ToArray();
     }

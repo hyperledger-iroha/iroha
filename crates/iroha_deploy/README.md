@@ -102,3 +102,23 @@ The committed definitions are `networks/dev.toml`, `networks/ci.toml` and
 TODO: add `networks/taira.toml` at release time (P9), once the real host keys
 are pinned. Until then `tests/fixtures/taira.toml` has the same shape with
 generated keys.
+
+The shared managed generator also has an internal `StreamTokenAuthorities` profile for
+preparing a future native token service. It retains seven distinct private credentials,
+registered and funded transaction accounts, and exact initial capabilities in signed genesis.
+Its immutable governance configuration seeds the provider owner as the issuer operator before the
+first block. The original signed genesis commits that exact owner map through its execution policy;
+all four retained configs must reproduce it. This seed does not admit the provider or declare capacity,
+and an existing context cannot acquire it by changing configuration after genesis.
+The profile also registers distinct non-signing reserve custody and treasury accounts, with no
+private credentials, permissions or initial balance. Only the manager receives the canonical reserve
+policy and provider-credit management capabilities. Reserve policy, owner-funded collateral,
+credit projection and capacity declaration still require their ordinary signed native transitions.
+Signed public metadata binds the selected profile, each credential's exact account role and both
+reserve account roles;
+retained sidecar replacement or removal cannot reinterpret those original identities.
+The ordinary CLI and Mochi creation paths still select `Standard`; restart preserves the
+selected retained profile. Profile changes require a new context and private roots reject this
+service profile. Neither profile metadata nor generated credentials establish provider admission
+or current token eligibility. Token services remain disabled until a separate production owner
+commits the ordinary policies/enrollment/grants and publishes a retained configuration revision.

@@ -6,15 +6,15 @@
 //! or redemption proof and canonical envelope are persisted before exposure. Recovery resumes the
 //! exact durable stage and every retry returns the originally persisted bytes.
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use std::ops::Range;
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 use iroha_data_model::kagemusha::KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_OUTBOX_RETRY_METADATA_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
@@ -29,7 +29,7 @@ use iroha_data_model::kagemusha::{
 };
 use norito::codec::{Decode, Encode};
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 use super::KagemushaOutgoingOperationPrepareOutcomeV1;
 use super::{
     DigestV1, HardwareTransitionStatementV1, KAGEMUSHA_STATE_VERSION_V1,
@@ -143,7 +143,6 @@ impl KagemushaReceiverInboxCapacityV1 {
         self.mint_inbox_bytes
     }
 
-    #[cfg(test)]
     /// Install the exact mint-journal charge without borrowing any issued peer allocation.
     pub(super) fn with_mint_inbox_bytes(&self, bytes: u64) -> Result<Self, KagemushaStateErrorV1> {
         let mut next = self.clone();
@@ -163,7 +162,7 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return a checked capacity successor after one durable inbound credit is staged.
     pub(super) fn receiver_snapshot_staged_successor(
         &self,
@@ -183,7 +182,7 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(next)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return a checked capacity successor after one pending credit becomes consumed.
     pub(super) fn receiver_snapshot_folded_successor(
         &self,
@@ -220,7 +219,6 @@ impl KagemushaReceiverInboxCapacityV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     fn reconcile_receiver_snapshot_usage(&mut self) -> Result<(), KagemushaStateErrorV1> {
         let snapshot_bytes = receiver_snapshot_usage_from_entry_bytes(
             self.pending_credit_entry_bytes,
@@ -309,7 +307,7 @@ pub enum SenderOutboxReservationOutcomeV1 {
     AlreadyReserved,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Opaque authority to ask qualified hardware to commit one exact staged transition intent.
 ///
 /// The capability is neither cloneable nor serializable. Recovery reissues it only while the
@@ -321,7 +319,7 @@ pub struct KagemushaOutgoingCommitCapabilityV1 {
     _non_clone_seal: Cell<()>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 impl KagemushaOutgoingCommitCapabilityV1 {
     pub(super) fn for_prepared(
         prepared: &PreparedOutgoingCandidateV1,
@@ -344,7 +342,7 @@ impl KagemushaOutgoingCommitCapabilityV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Core-derived sender inputs durably sealed before hardware consumes a payment predecessor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -364,7 +362,7 @@ pub(super) struct PreparedSendMaterialV1 {
     pub(super) normalized_guard_statement_digest: DigestV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Core-derived redeemer inputs sealed before hardware consumes a redemption predecessor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -641,7 +639,7 @@ pub(crate) fn terminal_journal_commitment_v1(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Canonical fixed-frame template and semantic offsets for the journal circuit opening.
 ///
 /// Only the five semantic fields and the derived Norito checksum are holes. The template comes
@@ -739,7 +737,7 @@ pub(crate) fn terminal_recovery_commitment_v1(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// The encoder-owned fixed header for a bounded recursive opening of recovery material.
 ///
 /// Only the payload length and checksum are left open. Payload fields are assembled from
@@ -913,7 +911,7 @@ impl PreparedOutgoingCandidateV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Build one already-derived sender payment intent.
     pub(super) fn send(
         predecessor_state: KagemushaStateV1,
@@ -985,7 +983,7 @@ impl PreparedOutgoingCandidateV1 {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Build one already-derived partial or full redemption intent.
     pub(super) fn redemption(
         predecessor_state: KagemushaStateV1,
@@ -1124,7 +1122,7 @@ impl PreparedOutgoingCandidateV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Borrow the derived compact payment output when this is a `SendSplit` candidate.
     #[must_use]
     pub fn send_output(&self) -> Option<&KagemushaPaymentOutputV1> {
@@ -1822,7 +1820,7 @@ impl CommittedOutgoingCandidateV1 {
         .map_err(|error| KagemushaStateErrorV1::ProofRejected(error.to_string()))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn canonical_storage_bytes(&self) -> Result<u64, KagemushaStateErrorV1> {
         canonical_len(self)
     }
@@ -2131,7 +2129,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         &mut self.operation_index
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Stage one caller-indexed operation and its exact Core preparation atomically.
     pub(super) fn prepare_indexed(
         &mut self,
@@ -2156,7 +2154,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         Ok(outcome)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Atomically stage an exact transition intent before hardware commit.
     fn prepare(
         &mut self,
@@ -2176,7 +2174,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Persist the sole verified operation proof authority before hardware may consume state.
     pub(super) fn persist_candidate(
         &mut self,
@@ -2206,7 +2204,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Install the sole hardware commit; a second successor cannot be attached to the candidate.
     pub(super) fn commit(
         &mut self,
@@ -2242,7 +2240,7 @@ impl KagemushaOutgoingCandidateJournalV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Persist a verified terminal envelope and clear only the active stage.
     pub(super) fn install_finalized(
         &mut self,
@@ -2291,14 +2289,54 @@ impl KagemushaOutgoingCandidateJournalV1 {
             .ok_or(KagemushaStateErrorV1::InvalidCandidateStage)
     }
 
-    #[cfg(test)]
     /// Borrow one durable terminal envelope for retry or settlement processing.
     #[must_use]
-    pub fn finalized_envelope(
+    pub(crate) fn finalized_envelope(
         &self,
         reservation_id: DigestV1,
     ) -> Option<&DurableOutgoingEnvelopeV1> {
         self.finalized_outbox.get(&reservation_id)
+    }
+
+    // Only the native receipt-owning kernel calls this after independently authenticating
+    // the original peer ACK or full finalized redemption receipt and signed device release.
+    // An arbitrary digest is never an external release capability.
+    pub(super) fn release_verified_terminal(
+        &mut self,
+        outbox: &mut KagemushaSenderOutboxCapacityV1,
+        reservation_id: DigestV1,
+        envelope_digest: DigestV1,
+        receipt_digest: DigestV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let next_index = self
+            .operation_index
+            .release_successor(reservation_id, envelope_digest, receipt_digest)
+            .map_err(map_operation_index_error)?;
+        if self.released_envelopes.get(&reservation_id) == Some(&envelope_digest) {
+            if next_index != self.operation_index {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            return Ok(());
+        }
+        if self
+            .finalized_outbox
+            .get(&reservation_id)
+            .map(|record| record.envelope_digest)
+            != Some(envelope_digest)
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let mut next = self.clone();
+        let mut next_outbox = outbox.clone();
+        next_outbox.mark_terminal_released(reservation_id, envelope_digest)?;
+        next.finalized_outbox.remove(&reservation_id);
+        next.released_envelopes
+            .insert(reservation_id, envelope_digest);
+        next.operation_index = next_index;
+        next_outbox.reconcile_capacity_meters(&next)?;
+        *self = next;
+        *outbox = next_outbox;
+        Ok(())
     }
 
     pub(crate) fn validate_recovered<R>(
@@ -2562,7 +2600,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(SenderOutboxReservationOutcomeV1::Reserved)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     pub(super) fn require_reservation(
         &self,
         reservation: KagemushaOutboxReservationV1,
@@ -2582,7 +2620,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(commitment)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn bind_terminal_envelope(
         &mut self,
         reservation: KagemushaOutboxReservationV1,
@@ -2603,7 +2641,6 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     fn mark_terminal_released(
         &mut self,
         reservation_id: DigestV1,

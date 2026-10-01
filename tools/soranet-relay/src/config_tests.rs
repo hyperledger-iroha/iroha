@@ -1131,10 +1131,10 @@ fn constant_rate_capability_rejects_strict_mode_without_silent_downgrade() {
     assert!(
         error
             .to_string()
-            .contains("Quinn 0.11.9 / quinn-proto 0.11.15")
+            .contains("Quinn 0.11.12 / quinn-proto 0.11.18")
             && error
                 .to_string()
-                .contains("payload bytes instead of entries"),
+                .contains("end-to-end transport requalification"),
         "unexpected strict-mode rejection: {error}"
     );
     // Keep the requested value observable; validation must reject it rather

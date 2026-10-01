@@ -383,16 +383,16 @@ fn fixed_native_asset_alias_and_state_path_key_sets_authenticate_completeness() 
         .sort_by_key(|entry| (entry.field_id.clone(), entry.kind, entry.key_hash));
     let verified = snapshot.authenticate(&certify(&snapshot)).unwrap();
     verified
-        .verify_asset_keys_complete(&[asset.clone()])
+        .verify_asset_keys_complete(std::slice::from_ref(&asset))
         .unwrap();
     verified
-        .verify_asset_definition_alias_binding_keys_complete(&[definition.clone()])
+        .verify_asset_definition_alias_binding_keys_complete(std::slice::from_ref(&definition))
         .unwrap();
     verified
-        .verify_smart_contract_state_keys_complete(&[path.clone()])
+        .verify_smart_contract_state_keys_complete(std::slice::from_ref(&path))
         .unwrap();
     verified
-        .verify_account_alias_keys_complete(&[account_alias.clone()])
+        .verify_account_alias_keys_complete(std::slice::from_ref(&account_alias))
         .unwrap();
     assert!(verified.verify_account_alias_keys_complete(&[]).is_err());
     assert!(
@@ -491,19 +491,19 @@ fn every_fixed_fee_table_absence_and_complete_keys_bind_exact_native_key_types()
         .sort_by_key(|entry| (entry.field_id.clone(), entry.kind, entry.key_hash));
     let verified = snapshot.authenticate(&certify(&snapshot)).unwrap();
     verified
-        .verify_fee_sponsor_program_keys_complete(&[program.clone()])
+        .verify_fee_sponsor_program_keys_complete(std::slice::from_ref(&program))
         .unwrap();
     verified
-        .verify_fee_sponsor_program_revision_keys_complete(&[revision.clone()])
+        .verify_fee_sponsor_program_revision_keys_complete(std::slice::from_ref(&revision))
         .unwrap();
     verified
-        .verify_fee_sponsor_enrollment_keys_complete(&[enrollment.clone()])
+        .verify_fee_sponsor_enrollment_keys_complete(std::slice::from_ref(&enrollment))
         .unwrap();
     verified
-        .verify_fee_sponsor_vault_keys_complete(&[vault.clone()])
+        .verify_fee_sponsor_vault_keys_complete(std::slice::from_ref(&vault))
         .unwrap();
     verified
-        .verify_fee_sponsor_budget_counter_keys_complete(&[counter.clone()])
+        .verify_fee_sponsor_budget_counter_keys_complete(std::slice::from_ref(&counter))
         .unwrap();
     assert!(
         verified
@@ -564,4 +564,56 @@ fn every_fixed_fee_table_absence_and_complete_keys_bind_exact_native_key_types()
     verified
         .verify_fee_sponsor_budget_counter_keys_complete(&[])
         .unwrap();
+}
+
+#[test]
+fn exact_asset_definition_binding_absence_requires_complete_certified_native_cut() {
+    let (mut present, definition, ..) = snapshot();
+    present.entries.push(WorldStateSnapshotEntryV1 {
+        field_id: "world.asset_definition_alias_bindings".into(),
+        kind: WorldStateElementKindV1::Table,
+        key_hash: Some(world_state_value_hash_v1(&definition).unwrap()),
+        // Explicit synthetic value; exact key presence is the predicate under test.
+        value_hash: world_state_value_hash_v1(&vec![1_u8, 2, 3]).unwrap(),
+    });
+    present
+        .entries
+        .sort_by_key(|entry| (entry.field_id.clone(), entry.kind, entry.key_hash));
+    let present_tip = certify(&present);
+    let present_wire = norito::encode_canonical(&present).unwrap();
+    let decoded = WorldStateSnapshotV1::decode_bounded_canonical(&present_wire).unwrap();
+    let verified = decoded.authenticate(&present_tip).unwrap();
+    assert!(
+        verified
+            .verify_asset_definition_alias_binding_absent(&definition)
+            .is_err()
+    );
+    let mut absent = decoded.clone();
+    absent
+        .entries
+        .retain(|entry| entry.field_id != "world.asset_definition_alias_bindings");
+    assert!(
+        absent.authenticate(&present_tip).is_err(),
+        "omission cannot retain the genuine original certificate"
+    );
+    let verified_absent = absent.authenticate(&certify(&absent)).unwrap();
+    verified_absent
+        .verify_asset_definition_alias_binding_absent(&definition)
+        .unwrap();
+    let mut incompatible = absent;
+    incompatible.entries.push(WorldStateSnapshotEntryV1 {
+        field_id: "world.asset_definition_alias_bindings".into(),
+        kind: WorldStateElementKindV1::Cell,
+        key_hash: None,
+        value_hash: world_state_value_hash_v1(&vec![4_u8, 5, 6]).unwrap(),
+    });
+    incompatible
+        .entries
+        .sort_by_key(|entry| (entry.field_id.clone(), entry.kind, entry.key_hash));
+    let wrong_kind = incompatible.authenticate(&certify(&incompatible)).unwrap();
+    assert!(
+        wrong_kind
+            .verify_asset_definition_alias_binding_absent(&definition)
+            .is_err()
+    );
 }

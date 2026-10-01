@@ -112,8 +112,15 @@ Norito schema identities and field order for these records at implementation:
 - `RamLfeSemanticContextV1`: chain ID, program ID, canonical domainless owner
   `AccountId`, backend and execution descriptor hash, in that order.
 - `RamLfeMathParametersV1`: registered encryption parameters and public key,
-  relinearization key, and fixed execution profile, in that order. Reject all
-  rotation, Galois and bootstrap refresh keys for this programmed profile.
+  relinearization material, the fixed ordered Galois-key roles required by the
+  [scalar-packing candidate](ram_lfe_plaintext_packing.md), and the complete
+  execution/encoding profile. The earlier scalar diagnostic's no-Galois bundle
+  is not this replacement schema. Authenticate exponents 5, 25, 625, 5601, 4033,
+  3969 and 8191, with every selected level/basis variant and key-switch digit.
+  Exact profile/key encoding, refresh/sanitization algorithms and any additional
+  authenticated key roles remain unresolved. Reject undeclared material; a
+  refresh mask is not a bootstrap. This candidate contract does not change the
+  current diagnostic validator or enable encryption.
 - `RamLfePublicParametersV1`: math-parameters hash and logical-function commitment.
 - `RamLfeAuthorityContextV1`: semantic-context hash, policy commitment,
   full-public-parameters hash, resolver key, output-opening key and verification

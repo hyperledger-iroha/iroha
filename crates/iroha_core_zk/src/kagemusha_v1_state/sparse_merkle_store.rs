@@ -34,7 +34,7 @@ const DECISION_BRANCH_ADDRESS_DOMAIN_V1: &[u8] =
 const PREPARED_CAS_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:history-store:prepared-cas\0";
 const ROOT_SELECTION_CERTIFICATE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:history-store:root-selection-certificate\0";
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 const PROOF_ROOT_BRIDGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:history-store:proof-root-bridge\0";
 
 /// Independent authenticated sparse-tree namespace.
@@ -113,7 +113,7 @@ pub struct KagemushaHistoryNodeRecordV1 {
 }
 
 impl KagemushaHistoryNodeRecordV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Construct one validated leaf in the selected tree namespace.
     pub(crate) fn leaf(
         tree: KagemushaHistoryTreeV1,
@@ -129,7 +129,7 @@ impl KagemushaHistoryNodeRecordV1 {
         Ok(record)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Construct one validated branch in the selected tree namespace.
     pub(crate) fn branch(
         tree: KagemushaHistoryTreeV1,
@@ -222,13 +222,13 @@ impl KagemushaHistoryRootsV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the currently selected replay root.
     pub(crate) const fn replay(self) -> DigestV1 {
         self.replay
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the currently selected terminal-decision root.
     pub(crate) const fn terminal_decision(self) -> DigestV1 {
         self.terminal_decision
@@ -268,7 +268,7 @@ pub(crate) struct KagemushaHistoryRootCasV1 {
 }
 
 impl KagemushaHistoryRootCasV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Construct one exact expected-to-selected root transition.
     pub(crate) const fn new(expected: DigestV1, selected: DigestV1) -> Self {
         Self { expected, selected }
@@ -303,7 +303,7 @@ pub(crate) struct KagemushaHistoryRootSelectionV1 {
 }
 
 impl KagemushaHistoryRootSelectionV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Select only a replay-root transition.
     pub(crate) const fn replay(expected: DigestV1, selected: DigestV1) -> Self {
         Self {
@@ -312,7 +312,7 @@ impl KagemushaHistoryRootSelectionV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Select only a terminal-decision-root transition.
     pub(crate) const fn terminal_decision(expected: DigestV1, selected: DigestV1) -> Self {
         Self {
@@ -321,7 +321,7 @@ impl KagemushaHistoryRootSelectionV1 {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Select both roots atomically, retaining a separate CAS precondition for each tree.
     pub(crate) const fn both(
         replay: KagemushaHistoryRootCasV1,
@@ -420,7 +420,7 @@ struct KagemushaPreparedHistoryCasSubjectV1 {
 }
 
 impl KagemushaPreparedHistoryCasV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Canonicalize and content-address one prepared root transition and its immutable nodes.
     pub(crate) fn new(
         root_selection: KagemushaHistoryRootSelectionV1,
@@ -468,7 +468,7 @@ impl KagemushaPreparedHistoryCasV1 {
         self.transaction_id
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the Core transition attempt bound into the transaction identity.
     pub(crate) const fn attempt_binding_digest(&self) -> DigestV1 {
         self.attempt_binding_digest
@@ -479,7 +479,7 @@ impl KagemushaPreparedHistoryCasV1 {
         self.root_selection
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Apply this transaction's independent CAS preconditions to exact predecessor roots.
     pub(crate) fn successor_roots_from(
         &self,
@@ -539,7 +539,7 @@ pub(crate) struct KagemushaHistoryRootSelectionSubjectV1 {
 }
 
 impl KagemushaHistoryRootSelectionSubjectV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Bind one prepared transaction to a hardware profile, epoch, and rollback-resistant counter.
     pub(crate) const fn new(
         transaction: &KagemushaPreparedHistoryCasV1,
@@ -594,7 +594,7 @@ pub(crate) struct KagemushaHistoryRootSelectionCertificateV1 {
 }
 
 impl KagemushaHistoryRootSelectionCertificateV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Attach the hardware signature to its exact root-selection subject.
     pub(crate) const fn new(
         subject: KagemushaHistoryRootSelectionSubjectV1,
@@ -639,7 +639,7 @@ impl VerifiedKagemushaHistoryRootSelectionV1 {
         self.certificate.subject.root_selection
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the authenticated hardware profile identity.
     pub(crate) const fn hardware_profile_id(self) -> DigestV1 {
         self.certificate.subject.hardware_profile_id
@@ -1008,7 +1008,7 @@ pub(crate) enum KagemushaHistoryIdentityClassificationV1 {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Result of preparing one exact authenticated identity insertion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum KagemushaHistoryInsertPreparationV1 {
@@ -1028,7 +1028,7 @@ pub(crate) enum KagemushaHistoryInsertPreparationV1 {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Result of preparing replay and terminal-decision identity updates as one root selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum KagemushaHistoryDualInsertPreparationV1 {
@@ -1071,7 +1071,7 @@ pub(crate) struct KagemushaHistoryProofRootBridgeRequestV1 {
 }
 
 impl KagemushaHistoryProofRootBridgeRequestV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Construct the exact roots that a future proof- and hardware-authenticated bridge must bind.
     pub(crate) fn new(
         transaction: &KagemushaPreparedHistoryCasV1,
@@ -1106,43 +1106,43 @@ impl KagemushaHistoryProofRootBridgeRequestV1 {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the prepared external CAS identity.
     pub(crate) const fn transaction_id(self) -> DigestV1 {
         self.transaction_id
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the logical replay/decision operation jointly bound by proof and hardware CAS.
     pub(crate) const fn operation_binding_digest(self) -> DigestV1 {
         self.operation_binding_digest
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the canonical digest committed by the verified state transition.
     pub(crate) fn canonical_digest(self) -> Result<DigestV1, KagemushaHistoryStoreErrorV1> {
         digest_canonical(PROOF_ROOT_BRIDGE_DOMAIN_V1, &self)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the exact external roots before the prepared CAS.
     pub(crate) const fn external_predecessor_roots(self) -> KagemushaHistoryRootsV1 {
         self.external_predecessor_roots
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the exact external roots selected by the prepared CAS.
     pub(crate) const fn external_successor_roots(self) -> KagemushaHistoryRootsV1 {
         self.external_successor_roots
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the paired Pasta replay root consumed by the recursive transition.
     pub(crate) const fn pasta_predecessor_replay_root(self) -> KagemushaPastaStateCommitmentV1 {
         self.pasta_predecessor_replay_root
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the paired Pasta replay root produced by the recursive transition.
     pub(crate) const fn pasta_successor_replay_root(self) -> KagemushaPastaStateCommitmentV1 {
         self.pasta_successor_replay_root
@@ -1157,14 +1157,14 @@ pub(crate) struct VerifiedKagemushaHistoryProofRootBridgeV1 {
 }
 
 impl VerifiedKagemushaHistoryProofRootBridgeV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Return the exact request authenticated by this capability.
     pub(crate) const fn request(self) -> KagemushaHistoryProofRootBridgeRequestV1 {
         self.request
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Typed state-proof integration failure for the cross-commitment bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum KagemushaHistoryProofRootBridgeErrorV1 {
@@ -1176,7 +1176,7 @@ pub(crate) enum KagemushaHistoryProofRootBridgeErrorV1 {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Reconcile independently encoded SHA-256 and Pasta histories through one authenticated logical
 /// operation.
 ///
@@ -1226,7 +1226,7 @@ where
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Build and durably prepare one immutable authenticated-map insertion.
 ///
 /// The committed tree is validated before the live overlay is touched. Repeating an already
@@ -1285,7 +1285,7 @@ where
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Prepare replay and terminal-decision insertions under one hardware-selected transaction.
 ///
 /// If one binding already committed byte-identically, the transaction selects only the still
@@ -1407,14 +1407,14 @@ where
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 enum KagemushaHistoryInsertBuildV1 {
     Inserted(DigestV1),
     ExactDuplicate,
     Conflict { existing_value_digest: DigestV1 },
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 fn build_inserted_root<S>(
     store: &S,
     tree: KagemushaHistoryTreeV1,
@@ -1528,7 +1528,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 fn insert_overlay_node(
     overlay: &mut BTreeMap<DigestV1, KagemushaHistoryNodeRecordV1>,
     node: KagemushaHistoryNodeRecordV1,
@@ -1547,7 +1547,7 @@ fn insert_overlay_node(
     Ok(address)
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 fn load_verified_node_with_overlay<S>(
     store: &S,
     tree: KagemushaHistoryTreeV1,
@@ -2487,7 +2487,7 @@ fn key_bit(key: DigestV1, depth: usize) -> bool {
     ((byte >> shift) & 1) == 1
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 fn common_prefix_bits(left: DigestV1, right: DigestV1) -> usize {
     for (byte_index, (&left_byte, &right_byte)) in left.iter().zip(&right).enumerate() {
         let difference = left_byte ^ right_byte;

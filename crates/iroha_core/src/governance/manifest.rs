@@ -8,7 +8,7 @@ use hex::decode;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
 };
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 use iroha_crypto::privacy::CommitmentScheme;
 use iroha_crypto::{
     Hash,
@@ -748,18 +748,18 @@ struct LaneManifestSourceContentDigestV1 {
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::manifest::LaneManifestRegistryDigestV1")]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 #[derive(Encode)]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 struct LaneManifestRegistryDigestV1 {
     version: u8,
     lanes: Vec<LaneManifestStatusDigestV1>,
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::manifest::LaneManifestStatusDigestV1")]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 #[derive(Encode)]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 struct LaneManifestStatusDigestV1 {
     lane: u32,
     alias: String,
@@ -773,9 +773,9 @@ struct LaneManifestStatusDigestV1 {
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::manifest::GovernanceRulesDigestV1")]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 #[derive(Encode)]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 struct GovernanceRulesDigestV1 {
     version: u32,
     validators: Vec<AccountId>,
@@ -786,9 +786,9 @@ struct GovernanceRulesDigestV1 {
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::manifest::ManifestValidatorBindingDigestV1")]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 #[derive(Encode)]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 struct ManifestValidatorBindingDigestV1 {
     validator: AccountId,
     peer_id: PeerId,
@@ -796,9 +796,9 @@ struct ManifestValidatorBindingDigestV1 {
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::manifest::RuntimeUpgradeHookDigestV1")]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 #[derive(Encode)]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 struct RuntimeUpgradeHookDigestV1 {
     allow: bool,
     require_metadata: bool,
@@ -807,9 +807,9 @@ struct RuntimeUpgradeHookDigestV1 {
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::manifest::LanePrivacyCommitmentDigestV1")]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 #[derive(Encode)]
-#[cfg(any(test, feature = "telemetry"))]
+#[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
 enum LanePrivacyCommitmentDigestV1 {
     Merkle {
         id: u16,
@@ -1003,7 +1003,7 @@ impl LaneManifestRegistry {
     pub fn consensus_policy_digest(&self) -> [u8; 32] {
         self.consensus_policy_digest
     }
-    #[cfg(any(test, feature = "telemetry"))]
+    #[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
     fn status_policy_digest(statuses: &BTreeMap<LaneId, LaneManifestStatus>) -> [u8; 32] {
         const DOMAIN: &[u8] = b"iroha:nexus:lane-manifest-policy-set:v1\0";
         let lanes = statuses

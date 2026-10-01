@@ -611,7 +611,7 @@ def require_block_start_construction(state: str) -> None:
     if not code.endswith("#[inline(never)]fnfinish_state_block_construction<R>(finish:implFnOnce()->R)->R{finish()}"):
         raise RuntimeError(f"{path}: start construction must retain its bounded borrowed finish")
     for owner in (
-        "impl<'state>StateBlock<'state>{fnfrom_fields(fields:StateBlockFields<'state>)->Self{Self{fields:Some(fields),publication:None,}}",
+        "impl<'state>StateBlock<'state>{fnfrom_fields(fields:StateBlockFields<'state>)->Self{Self{fields:Some(fields),world_cut_capture:None,publication:None,}}",
         (
             "implDropforStateBlock<'_>{fndrop(&mutself){"
             "letSome(fields)=self.fields.as_ref()else{return;};"
@@ -622,7 +622,7 @@ def require_block_start_construction(state: str) -> None:
             "membership.with_deferred_refund_notifications(|_|{"
             "hashes.with_deferred_refund_notifications(|_|{"
             "mv::BlockRetirement::release_writers(self);"
-            "drop(self.fields.take());drop(self.publication.take());})})});}}"
+            "drop(self.world_cut_capture.take());drop(self.fields.take());drop(self.publication.take());})})});}}"
         ),
     ):
         if state_code.count(owner) != 1:
@@ -1027,21 +1027,49 @@ NATIVE_HEADER_SOURCE_PATH = "crates/iroha_core/src/block/native_header_source.rs
 
 
 def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
-    """One exact committed demand gates follower admission and local production."""
+    """Authenticated root ownership and exact committed demand gate both consumers."""
     path = EPOCH_BEACON_PATH
+    ownership = compact_rust(rust_item(beacon, "fn owns_global_control(", path))
+    expected_ownership = compact_rust("""
+        fn owns_global_control(
+            scope: SumeragiRootScope,
+            world: &impl WorldReadOnly,
+            current: &ValidatorEpochContextV1,
+        ) -> Result<bool, String> {
+            scope.validate().map_err(|error| error.to_string())?;
+            if matches!(scope, SumeragiRootScope::Global) {
+                return Ok(true);
+            }
+            if current.mode != ConsensusMode::Permissioned
+                || current.authorization.beacon != BeaconEpochBindingV1::Bootstrap
+                || world.parliament_required_beacon_pulse_slots().iter().next().is_some()
+                || world.active_global_beacon_key_session().is_some()
+                || world.global_beacon_pulses().iter().next().is_some()
+            {
+                return Err("private root cannot own global epoch, Parliament, or beacon control".into());
+            }
+            Ok(false)
+        }
+    """)
+    if ownership != expected_ownership:
+        raise RuntimeError(f"{path}: private roots must refuse global control custody")
     requirement = compact_rust(rust_item(beacon, "pub(crate) fn required(", path))
     expected = compact_rust("""
         pub(crate) fn required(
+            scope: SumeragiRootScope,
             world: &impl WorldReadOnly,
             current: &ValidatorEpochContextV1,
             height: u64,
-        ) -> bool {
-            (current.mode == ConsensusMode::Npos
+        ) -> Result<bool, String> {
+            if !owns_global_control(scope, world, current)? {
+                return Ok(false);
+            }
+            Ok((current.mode == ConsensusMode::Npos
                 && height.checked_add(1) == Some(current.authorization.last_height))
                 || world
                     .parliament_required_beacon_pulse_slots()
                     .get(&(BeaconSessionId::for_network_v1(&current.network_id), height))
-                    .is_some_and(|attempts| !attempts.is_empty())
+                    .is_some_and(|attempts| !attempts.is_empty()))
         }
     """)
     if requirement != expected:
@@ -1054,7 +1082,43 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
     admission = compact_rust(rust_item(beacon, "pub(crate) fn capture(", path))
     admission_order = (
         "current.validate()?;",
-        "letdemanded=required(world,current,height);",
+        compact_rust("""
+            match (height, expected_context.as_ref()) {
+                (1, None) if supplied.is_none() => {}
+                (1, _) => {
+                    return Err(
+                        "signed genesis cannot contain a native pulse or native parent context".into(),
+                    );
+                }
+                (_, Some(context)) => {
+                    context.validate().map_err(str::to_owned)?;
+                    if context.epoch != current.authorization.epoch
+                        || context.epoch_context_id != current.context_id()?
+                    {
+                        return Err(
+                            "native beacon expected context differs from the authenticated epoch".into(),
+                        );
+                    }
+                }
+                (_, None) => {
+                    return Err(
+                        "native beacon admission lacks its independently checked native context".into(),
+                    );
+                }
+            }
+        """),
+        compact_rust("""
+            if height < current.authorization.first_height
+                || height > current.authorization.last_height
+                || u64::try_from(hashes.hash_count())
+                    .ok()
+                    .and_then(|height| height.checked_add(1))
+                    != Some(height)
+            {
+                return Err("native beacon witness is outside its exact committed prestate".into());
+            }
+        """),
+        "letdemanded=required(scope,world,current,height)?;",
         compact_rust("""
             let Some(pulse) = supplied else {
                 return if demanded {
@@ -1071,6 +1135,25 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
             if !demanded {
                 return Err("native beacon control witness was not requested".into());
             }
+        """),
+        compact_rust("""
+            if pulse.network_id != current.network_id
+                || pulse.height != height
+                || pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1
+            {
+                return Err("native beacon witness changes its network, height or round".into());
+            }
+            let parent = height
+                .checked_sub(1)
+                .filter(|height| *height > 0)
+                .ok_or("native beacon witness lacks finalized parent")?;
+            let index = usize::try_from(parent - 1).map_err(|_| "native beacon parent index overflows")?;
+            let anchor = GlobalThresholdBeaconChainAnchorV1 {
+                height: parent,
+                block_hash: *hashes
+                    .hash_at(index)
+                    .ok_or("native beacon parent is absent")?,
+            };
         """),
         "validate_pending_slot(world,current,height)?;",
         "letpeers=current.committee.iter().map(|seat|seat.validator.clone()).collect::<Vec<_>>();",
@@ -1105,27 +1188,63 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
         raise RuntimeError(
             f"{producer_path}: native production must retain one original beacon requirement"
         )
+    parent_source = compact_rust(rust_item(producer, "    fn parent_source(", producer_path))
+    parent_order = (
+        "ifcontext.instance!=self.instance||applied.0.checked_add(1)!=Some(context.height)"
+        "||applied.1!=context.parent_hash||u64::try_from(state.height()).ok()!=Some(applied.0)"
+        "{returnErr(NativeBeaconError::Context);}",
+        compact_rust("""
+            let parent = state.native_execution_tip().ok_or_else(|| {
+                NativeBeaconError::Source("published State has no original execution tip".into())
+            })?;
+        """),
+        compact_rust("""
+            let journal_matches = {
+                #[cfg(all(test, sumeragi_core_mutation = "HC17"))]
+                { true }
+                #[cfg(not(all(test, sumeragi_core_mutation = "HC17")))]
+                { state.block_hashes().last() == Some(&parent.iroha_hash()) }
+            };
+            if parent.height() != applied.0 || !journal_matches {
+                return Err(NativeBeaconError::Source(
+                    "original execution tip differs from the published State hash journal".into(),
+                ));
+            }
+        """),
+        "ifparent.core_hash()!=context.parent_hash||parent.result()!=context.parent_result"
+        "{returnErr(NativeBeaconError::Context);}",
+        "Ok(parent)}",
+    )
+    positions = [parent_source.find(token) for token in parent_order]
+    if (any(parent_source.count(token) != 1 for token in parent_order)
+            or positions != sorted(positions) or not parent_source.endswith(parent_order[-1])):
+        raise RuntimeError(
+            f"{producer_path}: native production must authenticate the original tip and published parent cut"
+        )
     source = compact_rust(rust_item(producer, "    fn ensure_source(", producer_path))
     activation = compact_rust("""
-        let active = if super::required(state.world(), current, context.height) {
+        let active = if required {
             super::validate_pending_slot(state.world(), current, context.height)
                 .map_err(NativeBeaconError::Source)?;
             Some(ActiveRound::open(
     """)
     installed = "self.active=active;self.prepared=Some(*context);Ok(())}"
     source_order = (
-        "ifcontext.instance!=self.instance||applied.0.checked_add(1)!=Some(context.height)"
-        "||applied.1!=context.parent_hash||u64::try_from(state.height()).ok()!=Some(applied.0)"
-        "{returnErr(NativeBeaconError::Context);}",
-        "letparent=committed_block(state,applied.0)",
-        "ifparent.core_hash()!=context.parent_hash||parent.result()!=context.parent_result"
-        "{returnErr(NativeBeaconError::Context);}",
+        "letparent=self.parent_source(state,context,applied)?;",
         "letretained=state.world().consensus_schedule();",
         ".ready(context.height)",
         "ifcurrent.network_id!=*state.network_id()||schedule::core_epoch(current)",
+        compact_rust("""
+            let root_scope = crate::sumeragi::lanes::routing::committed_root_scope(state.world())
+                .ok_or_else(|| {
+                    NativeBeaconError::Source("native control requires immutable root scope".into())
+                })?;
+            let required = super::required(root_scope, state.world(), current, context.height)
+                .map_err(NativeBeaconError::Source)?;
+        """),
         "ifself.prepared.as_ref()==Some(context){returnOk(());}",
         activation,
-        "GlobalThresholdBeaconChainAnchorV1{height:applied.0,block_hash:parent.block_hash(),}",
+        "GlobalThresholdBeaconChainAnchorV1{height:applied.0,block_hash:parent.iroha_hash(),}",
         ")?)}else{None};",
         "self.mandatory_attestation=current.mode==ConsensusMode::Npos"
         "&&context.height==current.authorization.last_height;",
@@ -1219,7 +1338,7 @@ def require_native_beacon_pulse_application(
         "authenticate_successor_context(self,&self._curr_block,expected)?;",
     ))
     capture = (
-        "epoch_beacon::capture(&self.world,self.block_hashes(),{epoch},height,"
+        "epoch_beacon::capture(root_scope,&self.world,self.block_hashes(),{epoch},height,"
         "supplied_pulse,expected_context,).map_err(ScheduleError::Epoch)?;"
     )
     application = compact_rust("""
@@ -1245,6 +1364,18 @@ def require_native_beacon_pulse_application(
         }
     """)
     request_order = (
+        compact_rust("""
+            let root_scope = if height == genesis_height {
+                iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
+                    .map_err(ScheduleError::Epoch)?
+                    .sumeragi_context
+                    .root_scope
+            } else {
+                crate::sumeragi::lanes::routing::committed_root_scope(&self.world).ok_or_else(|| {
+                    ScheduleError::Epoch("native control requires immutable root scope".into())
+                })?
+            };
+        """),
         capture.format(epoch="&epoch"),
         "letcurrent=&schedule.ready(height)?.epoch;",
         capture.format(epoch="current"),
@@ -1456,17 +1587,16 @@ def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
         "&encrypted_shares,\n            &share_acceptances,",
         "GlobalThresholdBeaconDkgTranscriptV1 {",
     ))
-    verification = section(
-        core, "fn validate_adaptive_dkg_shape(",
-        "\nfn reconstruct_adaptive_beacon_transcript(", core_path,
-    )
+    verification = rust_item(core, "fn validate_adaptive_dkg_shape<E>(", core_path)
     require_all(core_path, verification, (
-        "snapshot.validate()?;",
+        "admit: &mut impl FnMut(usize) -> Result<(), E>",
+        "Result<(), GlobalThresholdBeaconVerificationError<E>>",
+        "validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;",
         "transcript.recipient_keys.len() != seats",
         "|| transcript.dealer_commitments.len() != seats",
         "|| transcript.encrypted_shares.len() != all_edges",
         "|| transcript.share_acceptances.len() != all_edges",
-        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);",
+        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());",
         "&transcript.encrypted_shares,\n        &transcript.share_acceptances,",
         "!= transcript.event_hash",
     ))
@@ -1534,6 +1664,116 @@ def require_proved_trigger_rejection(source: str) -> None:
     )
     if "proved.bytecode" in source:
         raise RuntimeError(f"{path}: proved trigger was downgraded to plain bytecode")
+
+
+def require_threshold_signer_startup_readiness(runtime_deps: str) -> None:
+    """Bind retained and expired startup custody to their exact executable test owners."""
+    runtime_deps_path = "crates/irohad/src/main/runtime_deps.rs"
+    require_all(
+        runtime_deps_path,
+        runtime_deps,
+        (
+            "parliament_tle_partial_release_signer:",
+            "Option<Arc<dyn iroha_core::tle_release::TlePartialReleaseSignerV1>>",
+            "with_parliament_tle_partial_release_signer(",
+            "pub(crate) fn parliament_tle_release_coordinator(",
+            "TleReleaseCoordinatorV1::without_signer",
+            "TleReleaseCoordinatorV1::from_signer",
+            "tle_key_sessions_required_for_runtime_custody_v1(committed_height)",
+            ".tle_key_session_rosters()",
+            "parliament_tle_local_participant_index_v1(frozen_roster, local_peer)",
+            "require_parliament_tle_capability_for_local_seat_v1(",
+            ".attest_partial_release_capability(session, participant_index)",
+            "attestation.matches(session, participant_index)",
+        ),
+    )
+    readiness = rust_item(
+        runtime_deps, "fn validate_threshold_signer_startup_readiness_v1(", runtime_deps_path,
+    )
+    capability = rust_item(
+        runtime_deps, "fn require_parliament_tle_capability_for_local_seat_v1(", runtime_deps_path,
+    )
+    if any(".sign_partial_release(" in owner for owner in (readiness, capability)):
+        raise RuntimeError(
+            f"{runtime_deps_path}: startup readiness must attest custody without signing"
+        )
+    require_all(runtime_deps_path, capability, (
+        ".attest_partial_release_capability(session, participant_index)",
+        "attestation.matches(session, participant_index)",
+    ))
+    readiness_fixture = rust_item(
+        runtime_deps, "fn threshold_signer_readiness_fixture_v1(", runtime_deps_path,
+    )
+    require_all(
+        runtime_deps_path,
+        readiness_fixture,
+        (
+            "const RETAINED_SESSION_BYTE: u8 = 0xD1",
+            "const ACTIVE_SESSION_BYTE: u8 = 0xE1",
+            "const RETENTION_DEADLINE_HEIGHT: u64 = 13",
+            "active_validator_keys.reverse()",
+            "let retained_participant_index = 2",
+            "let active_participant_index = 3",
+            "TleKeySessionId::new([RETAINED_SESSION_BYTE; 32])",
+            "put_parliament_attempt_for_testing(attempt_id, attempt)",
+            "while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < committed_height",
+        ),
+    )
+    retained_readiness_test = rust_item(
+        runtime_deps,
+        "fn threshold_signer_startup_readiness_scans_active_and_deadline_retained_frozen_rosters() {",
+        runtime_deps_path,
+    )
+    require_all(
+        runtime_deps_path,
+        retained_readiness_test,
+        (
+            "threshold_signer_readiness_fixture_v1(13)",
+            "validate_threshold_signer_startup_readiness_v1(",
+            "fixture.retained_key_session_id",
+            "fixture.retained_participant_index",
+            "fixture.active_key_session_id",
+            "fixture.active_participant_index",
+            "assert_eq!(calls, expected)",
+            "signer.sign_calls.load(Ordering::Acquire), 0",
+        ),
+    )
+    require_all(runtime_deps_path, compact_rust(retained_readiness_test), (
+        "letmutcalls=signer.attestation_calls();calls.sort_unstable();",
+        "letmutexpected=vec![(fixture.retained_key_session_id,fixture.retained_participant_index,),"
+        "(fixture.active_key_session_id,fixture.active_participant_index,),];"
+        "expected.sort_unstable();assert_eq!(calls,expected);",
+    ))
+    expired_readiness_test = rust_item(
+        runtime_deps,
+        "fn threshold_signer_startup_readiness_skips_expired_history_and_rejects_mismatch() {",
+        runtime_deps_path,
+    )
+    require_all(
+        runtime_deps_path,
+        expired_readiness_test,
+        (
+            "threshold_signer_readiness_fixture_v1(14)",
+            "validate_threshold_signer_startup_readiness_v1(",
+            "exact_signer.attestation_calls()",
+            "fixture.active_key_session_id",
+            "fixture.active_participant_index",
+            "CapabilityMode::MismatchedSeat",
+            "mismatched_signer.attestation_calls()",
+            "returned a mismatched runtime custody attestation",
+        ),
+    )
+    expired = compact_rust(expired_readiness_test)
+    for signer in ("exact_signer", "mismatched_signer"):
+        expected_calls = (
+            f"assert_eq!({signer}.attestation_calls(),"
+            "vec![(fixture.active_key_session_id,fixture.active_participant_index,)]);"
+        )
+        no_signing = f"assert_eq!({signer}.sign_calls.load(Ordering::Acquire),0);"
+        if expired.count(expected_calls) != 1 or expired.count(no_signing) != 1:
+            raise RuntimeError(
+                f"{runtime_deps_path}: expired startup readiness must assert only the active exact seat without signing"
+            )
 
 
 def main() -> int:
@@ -3998,101 +4238,7 @@ def main() -> int:
             retired_public_parliament_identifiers,
         )
 
-    runtime_deps_path = "crates/irohad/src/main/runtime_deps.rs"
-    runtime_deps = read(runtime_deps_path)
-    require_all(
-        runtime_deps_path,
-        runtime_deps,
-        (
-            "parliament_tle_partial_release_signer:",
-            "Option<Arc<dyn iroha_core::tle_release::TlePartialReleaseSignerV1>>",
-            "with_parliament_tle_partial_release_signer(",
-            "pub(crate) fn parliament_tle_release_coordinator(",
-            "TleReleaseCoordinatorV1::without_signer",
-            "TleReleaseCoordinatorV1::from_signer",
-            "tle_key_sessions_required_for_runtime_custody_v1(committed_height)",
-            ".tle_key_session_rosters()",
-            "parliament_tle_local_participant_index_v1(frozen_roster, local_peer)",
-            "require_parliament_tle_capability_for_local_seat_v1(",
-            ".attest_partial_release_capability(session, participant_index)",
-            "attestation.matches(session, participant_index)",
-        ),
-    )
-    readiness = section(
-        runtime_deps,
-        "fn validate_threshold_signer_startup_readiness_v1(",
-        "macro_rules! define_runtime_dep_setters_v1",
-        runtime_deps_path,
-    )
-    if ".sign_partial_release(" in readiness:
-        raise RuntimeError(
-            f"{runtime_deps_path}: startup readiness must attest custody without signing"
-        )
-    readiness_fixture = section(
-        runtime_deps,
-        "fn threshold_signer_readiness_fixture_v1(",
-        "fn parliament_tle_coordinator_is_fail_closed_or_runtime_injected() {",
-        runtime_deps_path,
-    )
-    require_all(
-        runtime_deps_path,
-        readiness_fixture,
-        (
-            "const RETAINED_SESSION_BYTE: u8 = 0xD1",
-            "const ACTIVE_SESSION_BYTE: u8 = 0xE1",
-            "const RETENTION_DEADLINE_HEIGHT: u64 = 13",
-            "active_validator_keys.reverse()",
-            "let retained_participant_index = 2",
-            "let active_participant_index = 3",
-            "TleKeySessionId::new([RETAINED_SESSION_BYTE; 32])",
-            "put_parliament_attempt_for_testing(attempt_id, attempt)",
-            "while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < committed_height",
-        ),
-    )
-    retained_readiness_test = section(
-        runtime_deps,
-        "fn threshold_signer_startup_readiness_scans_active_and_deadline_retained_frozen_rosters() {",
-        "fn threshold_signer_startup_readiness_skips_expired_history_and_rejects_mismatch() {",
-        runtime_deps_path,
-    )
-    require_all(
-        runtime_deps_path,
-        retained_readiness_test,
-        (
-            "threshold_signer_readiness_fixture_v1(13)",
-            "validate_threshold_signer_startup_readiness_v1(",
-            "fixture.retained_key_session_id",
-            "fixture.retained_participant_index",
-            "fixture.active_key_session_id",
-            "fixture.active_participant_index",
-            "assert_eq!(calls, expected)",
-            "signer.sign_calls.load(Ordering::Acquire), 0",
-        ),
-    )
-    expired_readiness_test = section(
-        runtime_deps,
-        "fn threshold_signer_startup_readiness_skips_expired_history_and_rejects_mismatch() {",
-        "fn threshold_signer_preflight_rejects_before_consensus_startup() {",
-        runtime_deps_path,
-    )
-    require_all(
-        runtime_deps_path,
-        expired_readiness_test,
-        (
-            "threshold_signer_readiness_fixture_v1(14)",
-            "validate_threshold_signer_startup_readiness_v1(",
-            "exact_signer.attestation_calls()",
-            "fixture.active_key_session_id",
-            "fixture.active_participant_index",
-            "CapabilityMode::MismatchedSeat",
-            "mismatched_signer.attestation_calls()",
-            "returned a mismatched runtime custody attestation",
-        ),
-    )
-    if "fixture.retained_key_session_id" in expired_readiness_test:
-        raise RuntimeError(
-            f"{runtime_deps_path}: expired startup-readiness call set still includes the historical session"
-        )
+    require_threshold_signer_startup_readiness(read("crates/irohad/src/main/runtime_deps.rs"))
 
     broker_primitives_path = (
         "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"

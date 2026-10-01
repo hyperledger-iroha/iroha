@@ -310,7 +310,7 @@ impl AmxRecordProofV1 {
         record: AmxRecordV1,
     ) -> Result<Self, AmxError> {
         let commitment = ExecutionResultCommitment::decode(&block.result_preimage)
-            .map_err(|error| AmxError::Proof(format!("result preimage: {error}")))?;
+            .map_err(|error| super::commitment_error(&error))?;
         let key = record.witness_key();
         let (write, value) = AmxWriteProofV1::from_writes(writes, &key)?;
         if value != record.witness_value()? {

@@ -123,6 +123,8 @@ internal object KagemushaVerifierProposalValidatorV1 {
             "inner_mint_credit_pk_ep", "inner_mint_credit_vk_ep", "mint_hash_shard_pk_eq", "mint_hash_shard_vk_eq",
             "mint_hash_shard_pk_ep", "mint_hash_shard_vk_ep", "mint_hash_claim_pk_eq", "mint_hash_claim_vk_eq",
             "mint_hash_claim_pk_ep", "mint_hash_claim_vk_ep",
+            "ordinary_app_guard_pk_eq", "ordinary_app_guard_vk_eq",
+            "ordinary_app_guard_pk_ep", "ordinary_app_guard_vk_ep",
         )) { "$label.role has unknown tag" }
         require(record["value"] == null) { "$label.value must be explicit null" }
     }
@@ -331,7 +333,7 @@ internal object KagemushaVerifierProposalValidatorV1 {
     private fun qualifiedHelperCircuit(value: Any?, label: String) {
         val record = objectValue(value, label)
         exact(record, setOf("helper", "value"), label)
-        require(string(record["helper"], "$label.helper") in setOf("mint_authorization", "mint_credit", "platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim")) { "$label.helper has unknown tag" }
+        require(string(record["helper"], "$label.helper") in setOf("mint_authorization", "mint_credit", "platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim", "ordinary_app_guard")) { "$label.helper has unknown tag" }
         require(record["value"] == null) { "$label.value must be explicit null" }
     }
 

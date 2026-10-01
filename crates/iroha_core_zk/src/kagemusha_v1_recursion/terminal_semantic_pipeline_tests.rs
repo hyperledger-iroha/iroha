@@ -532,6 +532,9 @@ fn guard_cells<F: KagemushaPoseidonFieldV1>(
             constant_bytes(&[0; 32]).try_into().unwrap()
         }),
         credential_device_public_keys: std::array::from_fn(|_| Vec::new()),
+        credential_financial_authority_commitments: std::array::from_fn(|_| {
+            constant_bytes(&[0; 32]).try_into().unwrap()
+        }),
         protocol_version: at(state_relation::public_instance::PROTOCOL_VERSION),
         predecessor_suite_id: [
             at(state_relation::public_instance::PREDECESSOR_SUITE_LO),

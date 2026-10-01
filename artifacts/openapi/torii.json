@@ -5246,7 +5246,11 @@
             "type": "integer"
           },
           "challenge": {
-            "$ref": "#/components/schemas/Fixed32ByteArray"
+            "description": "Exact nonzero 32-byte caller challenge serialized by the actual native fixed-byte JSON codec as uppercase hexadecimal. The HTTP request header uses lowercase hexadecimal.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^(?!0{64}$)[0-9A-F]{64}$",
+            "type": "string"
           },
           "network_id": {
             "$ref": "#/components/schemas/Hash"
@@ -13568,7 +13572,11 @@
               "mint_hash_claim_pk_eq",
               "mint_hash_claim_vk_eq",
               "mint_hash_claim_pk_ep",
-              "mint_hash_claim_vk_ep"
+              "mint_hash_claim_vk_ep",
+              "ordinary_app_guard_pk_eq",
+              "ordinary_app_guard_vk_eq",
+              "ordinary_app_guard_pk_ep",
+              "ordinary_app_guard_vk_ep"
             ],
             "type": "string"
           },
@@ -14344,7 +14352,8 @@
               "platform_credential",
               "guard_bundle",
               "mint_hash_shard",
-              "mint_hash_claim"
+              "mint_hash_claim",
+              "ordinary_app_guard"
             ],
             "type": "string"
           },
@@ -48467,6 +48476,68 @@
         ],
         "type": "object"
       },
+      "SumeragiDataAvailabilityLayout": {
+        "additionalProperties": false,
+        "description": "Signed RS16 availability geometry pinned for one lane incarnation.",
+        "properties": {
+          "chunk_size_bytes": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "data_shards": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "encoding": {
+            "additionalProperties": false,
+            "properties": {
+              "details": {
+                "type": "null"
+              },
+              "encoding": {
+                "const": "reed_solomon16",
+                "type": "string"
+              }
+            },
+            "required": [
+              "details",
+              "encoding"
+            ],
+            "type": "object"
+          },
+          "max_chunk_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_payload_size_bytes": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parity_shards": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chunk_size_bytes",
+          "data_shards",
+          "encoding",
+          "max_chunk_count",
+          "max_payload_size_bytes",
+          "parity_shards"
+        ],
+        "type": "object"
+      },
       "SumeragiDiagnosticsResponse": {
         "additionalProperties": false,
         "properties": {
@@ -49303,6 +49374,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "da_layout": {
+            "$ref": "#/components/schemas/SumeragiDataAvailabilityLayout"
+          },
           "dataspace": {
             "description": "Dataspace owning the lane.",
             "format": "uint64",
@@ -49346,17 +49420,18 @@
           }
         },
         "required": [
-          "lane",
-          "dataspace",
-          "incarnation",
-          "params",
+          "active_from",
+          "anchor_freshness",
+          "closing",
           "committee",
           "created_at",
-          "active_from",
-          "closing",
-          "anchor_freshness",
+          "da_layout",
+          "dataspace",
+          "incarnation",
+          "lane",
           "merged",
           "merged_at",
+          "params",
           "rescued"
         ],
         "type": "object"
@@ -60686,6 +60761,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
+<<<<<<< HEAD
     "/v1/contracts/artifacts/{dataspace_id}/{code_hash}": {
       "get": {
         "description": "Fetch the complete canonical ContractManifest and optional derived hash conveniences by exact dataspace and content hash. Canonical account signing and current dataspace visibility are required. Private roots additionally require the owner listener API token. The response binds the exact network and artifact identity; manifest code_hash must match artifact_id.code_hash.",
@@ -60928,10 +61004,20 @@
         "parameters": [
           {
             "description": "Exact full-width dataspace identifier as canonical unsigned decimal; no leading zeroes.",
+=======
+    "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes": {
+      "get": {
+        "description": "Fetch the canonical base64 contract artifact by its exact dataspace and code hash. Canonical account request signing is required.",
+        "operationId": "contractArtifactBytesGet",
+        "parameters": [
+          {
+            "description": "Exact owning dataspace identifier.",
+>>>>>>> origin/optimizations
             "in": "path",
             "name": "dataspace_id",
             "required": true,
             "schema": {
+<<<<<<< HEAD
               "maxLength": 20,
               "pattern": "^(0|[1-9][0-9]{0,19})$",
               "type": "string"
@@ -60939,11 +61025,24 @@
           },
           {
             "description": "Exact lowercase 64-digit hexadecimal contract content hash.",
+=======
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Contract code hash (hex).",
+>>>>>>> origin/optimizations
             "in": "path",
             "name": "code_hash",
             "required": true,
             "schema": {
+<<<<<<< HEAD
               "pattern": "^[0-9a-f]{64}$",
+=======
+>>>>>>> origin/optimizations
               "type": "string"
             }
           },
@@ -60998,7 +61097,11 @@
             "content": {
               "application/json": {
                 "schema": {
+<<<<<<< HEAD
                   "$ref": "#/components/schemas/ContractArtifactBytesResponse"
+=======
+                  "$ref": "#/components/schemas/JsonValue"
+>>>>>>> origin/optimizations
                 }
               }
             },
@@ -61022,7 +61125,11 @@
                 }
               }
             },
+<<<<<<< HEAD
             "description": "The dataspace or contract content hash is not canonical.",
+=======
+            "description": "The contract code hash is invalid.",
+>>>>>>> origin/optimizations
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -61071,6 +61178,7 @@
               }
             }
           },
+<<<<<<< HEAD
           "403": {
             "content": {
               "application/json": {
@@ -61091,6 +61199,8 @@
               }
             }
           },
+=======
+>>>>>>> origin/optimizations
           "404": {
             "content": {
               "application/json": {
@@ -61099,7 +61209,11 @@
                 }
               }
             },
+<<<<<<< HEAD
             "description": "No registered artifact exists in the exact requested dataspace.",
+=======
+            "description": "No contract artifact exists for the code hash.",
+>>>>>>> origin/optimizations
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -61143,7 +61257,11 @@
             "IrohaCanonicalWitness": []
           }
         ],
+<<<<<<< HEAD
         "summary": "Fetch contract code bytes.",
+=======
+        "summary": "Fetch scoped contract artifact bytes.",
+>>>>>>> origin/optimizations
         "tags": [
           "Contracts"
         ],
@@ -74341,7 +74459,7 @@
         ],
         "summary": "Read challenged complete native authority state for one asset definition.",
         "tags": [
-          "Kagemusha"
+          "KAGEMUSHA"
         ],
         "x-iroha-max-response-bytes": 134217728,
         "x-iroha-route-auth": {

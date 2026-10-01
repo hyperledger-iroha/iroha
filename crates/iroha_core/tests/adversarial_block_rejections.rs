@@ -8,7 +8,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::cache::IvmCache,
-    state::{State, World, WorldReadOnly},
+    state::{State, StateReadOnly, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -103,7 +103,10 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         alice_asset_id,
         bob_asset_id,
     } = setup_world();
-    let network_id = *state.network_id_ref();
+    // Both hostile and valid transactions execute beneath the same authenticated root.
+    let chain = crate::block::tests::component_chain(state);
+    let state = Arc::clone(chain.state());
+    let network_id = chain.network_id();
     let max_clock_drift = state
         .view()
         .world()
@@ -113,8 +116,8 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
     let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
+        NonZeroU64::new(chain.height() + 1).expect("successor height"),
+        state.view().latest_block_hash(),
         None,
         1_700_000_000_000,
         0,
@@ -283,10 +286,10 @@ fn block_history_tamper_rejected_without_mutation() {
     );
     let reason = native_validation::validate(&chain, signed_rewind)
         .expect_err("native validation rejects foreign parent hash");
+    // The native source authenticates its original parent cut before generic header checks.
     assert!(
-        matches!(reason.as_ref(), BlockValidationError::PrevBlockHashMismatch {
-            expected, actual,
-        } if *expected == expected_prev && *actual == actual_prev),
+        matches!(reason.as_ref(), BlockValidationError::ExecutionContextInvalid(message)
+            if message == "invalid native epoch: native successor differs from its original committed header/parent cut"),
         "unexpected rejection: {reason}"
     );
     // State stays on the canonical head.

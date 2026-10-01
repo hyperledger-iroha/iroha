@@ -36,6 +36,7 @@ use super::{
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_external_binding_air::{
         P256ExternalBindingErrorV1, compile_zk_x509_p256_external_cross_sources_v1,
+        p256_selected_input_writer_id_v1,
     },
     p256_trace::{P256EcdsaTopologyV1, P256TraceCompilerErrorV1, compile_p256_ecdsa_topology_v1},
     p256_value_bus::{
@@ -55,7 +56,7 @@ use std::{sync::OnceLock, vec::Vec};
 use thiserror::Error;
 /// Exact compact P-256 fixed-schedule semantics bound by the release profile.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log22:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest=sha3-384-opaque48-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
+    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log22:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest=sha3-384-opaque48-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:writer-source=external-sink-plus-selected-Qx-Qy-r-s64-limb-uses:multiplicity-small0through2+64+65+129:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
 #[cfg(test)]
 const P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:p256-fixed-algebraic-compiler:v1";
@@ -77,7 +78,7 @@ const P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1: [usize; 6] = [
     P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
 ];
 const P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1: [usize; 6] =
-    [11_563, 11_563, 28_673, 28_681, 59_556, 59_556];
+    [11_563, 11_563, 28_689, 28_689, 59_556, 59_556];
 const CERTIFICATE_ARITHMETIC_START_V1: usize = 0;
 const WALLET_ARITHMETIC_START_V1: usize =
     CERTIFICATE_ARITHMETIC_START_V1 + P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1;
@@ -1470,6 +1471,26 @@ fn compile_writer_fixed_v1(
             .checked_add(1)
             .ok_or(ZkX509P256FixedAlgebraicErrorV1::Resource)?;
     }
+    // The selected-input sink consumes each Qx/Qy/r/s writer limb once
+    // in addition to the original external equality schedule. Derive those
+    // public owners independently, exactly as the closed native provider does.
+    for word in 0..4 {
+        let id = p256_selected_input_writer_id_v1(word)
+            .map_err(map_external_error_v1)?
+            .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?;
+        for limb in 0..P256_VALUE_BUS_LIMBS_V1 {
+            let address = checked_add_v1(
+                checked_mul_v1(id_index_v1(id)?, P256_VALUE_BUS_LIMBS_V1)?,
+                limb,
+            )?;
+            let multiplicity = multiplicities
+                .get_mut(address)
+                .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?;
+            *multiplicity = multiplicity
+                .checked_add(1)
+                .ok_or(ZkX509P256FixedAlgebraicErrorV1::Resource)?;
+        }
+    }
     let mut active = [Vec::<(usize, F)>::new(), Vec::<(usize, F)>::new()];
     let mut addresses = [Vec::<(usize, F)>::new(), Vec::<(usize, F)>::new()];
     let mut selectors: [[Vec<(usize, F)>; 4]; 2] =
@@ -1521,14 +1542,14 @@ fn compile_writer_fixed_v1(
         if address != 0 {
             addresses[slot].push((row, f_usize_v1(address)?));
         }
-        let selector = match multiplicity {
-            1 => 0,
-            64 => 1,
-            65 => 2,
-            129 => 3,
+        let (selector, value) = match multiplicity {
+            1 | 2 => (0, F(u64::from(multiplicity))),
+            64 => (1, F::ONE),
+            65 => (2, F::ONE),
+            129 => (3, F::ONE),
             _ => return Err(ZkX509P256FixedAlgebraicErrorV1::Topology),
         };
-        selectors[slot][selector].push((row, F::ONE));
+        selectors[slot][selector].push((row, value));
     }
     for slot in 0..2 {
         active[slot].sort_unstable_by_key(|(row, _)| *row);
@@ -2934,9 +2955,9 @@ mod tests {
     // Filled from the first successful structural compilation and deliberately
     // pinned thereafter. A topology or atom-decomposition change must update
     // the profile and this KAT together.
-    const P256_FIXED_ALGEBRAIC_ATOM_COUNT_KAT_V1: usize = 199_592;
+    const P256_FIXED_ALGEBRAIC_ATOM_COUNT_KAT_V1: usize = 199_616;
     const P256_FIXED_ALGEBRAIC_ATOM_PROFILE_KAT_V1: (usize, usize, usize, u64, u64) =
-        (41_848, 149_102, 8_642, 21_813_752, 14_828);
+        (41_872, 149_102, 8_642, 21_813_752, 14_828);
     const P256_FIXED_ALGEBRAIC_UNIQUE_REPEAT_STRIDES_KAT_V1: &[u64] =
         &[2, 3, 5, 7, 8, 16, 24, 25, 32, 944, 1_376, 5_088, 7_104];
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3580,6 +3601,101 @@ mod tests {
         assert_eq!(row[EXECUTION_WRITER_START_V1], F::ONE);
         assert_eq!(row[EXECUTION_WRITER_START_V1 + 1], F::ONE);
         assert_eq!(row[EXECUTION_WRITER_START_V1 + 2], F::ZERO);
+    }
+    #[test]
+    fn selected_input_writers_match_closed_native_fixed_rows_in_both_roles() {
+        use super::super::p256_cross_trace_bus::P256CrossTraceWriterSourceFixedV1;
+        for role in [
+            P256EcdsaRoleV1::CertificateOrCrl,
+            P256EcdsaRoleV1::WalletOwnership,
+        ] {
+            let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+                ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
+                ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+                F(GOLDILOCKS_GENERATOR_V1),
+            )
+            .expect("release domain");
+            let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
+                domain,
+                u16_v1(P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1).unwrap(),
+            )
+            .unwrap();
+            compile_writer_fixed_v1(
+                &mut builder,
+                0,
+                role,
+                P256_INITIAL_VALUES_V1 + P256_ARITHMETIC_OPERATIONS_V1,
+            )
+            .unwrap();
+            let schedule = builder.finish_v1().unwrap();
+            let native = P256CrossTraceWriterSourceFixedV1::compile_v1(role).unwrap();
+            let mut rows = BTreeSet::new();
+            for (word, id) in [47_usize, 48, 52, 53].into_iter().enumerate() {
+                assert_eq!(
+                    p256_selected_input_writer_id_v1(word).unwrap(),
+                    Some(P256ValueIdV1(id as u32))
+                );
+                for limb in 0..P256_VALUE_BUS_LIMBS_V1 {
+                    let ordinal =
+                        id * P256_VALUE_BUS_SEGMENT_ROWS_V1 + 3 * P256_VALUE_BUS_LIMBS_V1 + limb;
+                    let row = ordinal / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+                    let slot = ordinal % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+                    let mut actual = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1];
+                    schedule.native_row_v1(row as u64, &mut actual).unwrap();
+                    let event = EXECUTION_WRITER_START_V1 + slot * 3;
+                    assert_eq!(
+                        &actual[event..event + 3],
+                        &[
+                            F::ONE,
+                            F::ONE,
+                            F((id * P256_VALUE_BUS_LIMBS_V1 + limb) as u64)
+                        ]
+                    );
+                    let multiplicity = EXECUTION_WRITER_MULTIPLICITY_START_V1 + slot * 4;
+                    let expected =
+                        if word < 2 {
+                            [F::ZERO, F::ZERO, F::ONE, F::ZERO]
+                        } else {
+                            [
+                                F(1 + u64::from(
+                                    word == 3 && role == P256EcdsaRoleV1::WalletOwnership,
+                                )),
+                                F::ZERO,
+                                F::ZERO,
+                                F::ZERO,
+                            ]
+                        };
+                    assert_eq!(&actual[multiplicity..multiplicity + 4], &expected);
+                    rows.extend([row - 1, row, row + 1]);
+                }
+            }
+            for row in rows {
+                let mut actual = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1];
+                schedule.native_row_v1(row as u64, &mut actual).unwrap();
+                let expected = native.row_v1(row).unwrap();
+                for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+                    let event = EXECUTION_WRITER_START_V1 + slot * 3;
+                    assert_eq!(
+                        &actual[event..event + 3],
+                        &[
+                            expected.events[slot].active,
+                            expected.events[slot].endpoint,
+                            expected.events[slot].address
+                        ]
+                    );
+                    let multiplicity = EXECUTION_WRITER_MULTIPLICITY_START_V1 + slot * 4;
+                    assert_eq!(
+                        &actual[multiplicity..multiplicity + 4],
+                        &[
+                            expected.multiplicity_small[slot],
+                            expected.multiplicity_64[slot],
+                            expected.multiplicity_65[slot],
+                            expected.multiplicity_129[slot]
+                        ]
+                    );
+                }
+            }
+        }
     }
     fn schedule_v1() -> &'static ZkX509P256FixedAlgebraicScheduleV1 {
         zk_x509_p256_fixed_algebraic_schedule_v1()

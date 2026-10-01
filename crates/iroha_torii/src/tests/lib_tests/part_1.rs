@@ -151,9 +151,11 @@ fn bodyless_por_and_orderbook_get_mounts_have_zero_body_limits() {
             "sorafs::api::handle_get_sorafs_orderbook_events_ws",
         ),
     ] {
-        let expected = format!(
-            "&route_catalog::contracts_and_verification_keys::{route},catalog_get({handler}).layer(DefaultBodyLimit::max(0))"
-        );
+        let expected = if route.ends_with("_STREAM_GET") || route.ends_with("_WS_GET") {
+            format!("{route}=>limited_canonical_account_get({handler},app_state,0,0);")
+        } else {
+            format!("{route}=>limited_public_get({handler},0);")
+        };
         assert!(
             compact_source.contains(&expected),
             "{route} must reject every non-empty request body"
@@ -1629,6 +1631,21 @@ fn bind_asset_alias_for_test(
     );
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
+    use iroha_executor_data_model::permission::asset_definition::{
+        AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
+    };
+    let resolved = iroha_data_model::asset::ResolvedAssetDefinitionAliasV1::resolve_catalog(
+        alias.as_ref(),
+        &app.state.nexus_snapshot().dataspace_catalog,
+        definition_id.clone(),
+    )
+    .expect("asset alias parent resolves in the fixture catalog");
+    tx.world_mut_for_testing().add_account_permission(
+        authority,
+        Permission::from(CanManageAssetDefinitionAlias {
+            scope: AssetDefinitionAliasPermissionScope::Alias(resolved),
+        }),
+    );
     iroha_data_model::isi::SetAssetDefinitionAlias::bind(
         definition_id.clone(),
         alias.clone(),
@@ -2042,6 +2059,29 @@ fn set_latest_block_height(app: &SharedAppState, height: u64) {
         current_height = next_height;
     }
 }
+// Seed canonical identity before adding its independently owned primary alias.
+fn bind_primary_account_alias_for_test(
+    app: &SharedAppState,
+    account: &AccountId,
+    alias: &AccountAlias,
+) {
+    let catalog = app.state.nexus_snapshot().dataspace_catalog.clone();
+    let literal = alias.to_literal(&catalog).expect("primary alias literal");
+    bind_account_alias_for_test(app, account, &literal);
+    let height = next_block_height(app);
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing()
+        .account_mut(account)
+        .expect("canonical account was seeded first")
+        .set_label(Some(alias.clone()));
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit primary alias label after its authoritative binding");
+    assert_eq!(next_block_height(app), height);
+}
 fn grant_alias_resolve_permissions(
     app: &SharedAppState,
     account_id: &AccountId,
@@ -2063,12 +2103,8 @@ fn grant_alias_resolve_permissions(
         Permission::from(CanResolveAccountAlias { scope }),
     );
     stx.apply();
-    block.transactions.insert_block(
-        HashSet::new(),
-        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-    );
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit should persist alias resolve permission");
 }
 fn signed_alias_resolve_headers_for_test(
@@ -2083,7 +2119,14 @@ fn signed_alias_resolve_headers_for_test(
     let uri: Uri = "/v1/aliases/resolve"
         .parse()
         .expect("alias resolve test URI");
-    signed_app_headers(account_id, keypair, &method, &uri, body)
+    crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        account_id,
+        keypair,
+        &method,
+        &uri,
+        body,
+    )
 }
 fn grant_alias_resolve_dataspace_permission(
     app: &SharedAppState,
@@ -2101,12 +2144,8 @@ fn grant_alias_resolve_dataspace_permission(
         }),
     );
     stx.apply();
-    block.transactions.insert_block(
-        HashSet::new(),
-        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-    );
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit should persist alias dataspace resolve permission");
 }
 fn recipient_lookup_sbp_dataspace_for_test() -> DataSpaceId {

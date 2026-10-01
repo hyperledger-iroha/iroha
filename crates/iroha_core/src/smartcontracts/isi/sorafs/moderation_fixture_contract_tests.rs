@@ -118,3 +118,105 @@ fn insufficient_challenge_bond_rejects_without_balances_records_or_counters() {
         Quantity::zero()
     );
 }
+
+#[test]
+fn moderation_authenticated_fixture_keeps_original_balances_and_signed_root() {
+    let manager = keypair(0xD1);
+    let outsider = keypair(0xD2);
+    let manager_id = account(&manager);
+    let outsider_id = account(&outsider);
+    let state =
+        authenticated_moderation_state(moderation_world(&[&manager, &outsider], &manager_id));
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.kura().blocks_count(), 1);
+    let genesis = state
+        .kura()
+        .get_block(std::num::NonZeroUsize::new(1).unwrap())
+        .unwrap();
+    let view = state.view();
+    assert_eq!(
+        state.network_id_ref(),
+        &iroha_data_model::NetworkId::from_genesis_hash(genesis.hash())
+    );
+    let signed = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&genesis)
+        .expect("original signed moderation root metadata");
+    assert_eq!(
+        crate::sumeragi::lanes::routing::committed_root_scope(view.world()),
+        Some(signed.sumeragi_context.root_scope)
+    );
+    assert_eq!(
+        crate::state::StateReadOnly::native_execution_tip(&view)
+            .expect("applied genesis tip")
+            .height(),
+        1
+    );
+    assert_eq!(
+        fixture_header(&state, 2, OPENED_AT).prev_block_hash,
+        Some(genesis.hash())
+    );
+    assert_eq!(
+        voting_asset_balance(&state, &manager_id),
+        Quantity::from(1_000_u32)
+    );
+    assert_eq!(
+        voting_asset_balance(&state, &outsider_id),
+        Quantity::from(1_000_u32)
+    );
+    assert_eq!(
+        voting_asset_balance(&state, &policy().challenge_escrow_account),
+        Quantity::zero()
+    );
+}
+
+#[test]
+fn moderation_challenge_without_retained_invocation_preserves_all_custody() {
+    let fixture = Fixture::new(1);
+    let challenger = account(&fixture.outsider);
+    let case_before = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+        .execute(&fixture.state.view())
+        .expect("original moderation case");
+    let status_before = FindSorafsModerationStatus
+        .execute(&fixture.state.view())
+        .unwrap();
+    let mut block = fixture.state.block(header(fixture.next_height, 2_500));
+    let mut transaction = block.transaction();
+    transaction.tx_call_hash = Some(iroha_crypto::Hash::new(
+        [fixture.next_height.to_le_bytes(), 2_500_u64.to_le_bytes()].concat(),
+    ));
+    let error = RaiseSorafsModerationChallenge::new(
+        "case-1".to_owned(),
+        "round-1".to_owned(),
+        "missing-source".to_owned(),
+        ModerationChallengeKindV1::EvidenceMismatch,
+        None,
+        [0xE1; 32],
+        "missing source".to_owned(),
+    )
+    .execute(&challenger, &mut transaction)
+    .expect_err("a hash alone is not retained producer custody");
+    assert!(format!("{error:?}").contains("FASTPQ source has no retained producer invocation"));
+    drop(transaction);
+    drop(block);
+    assert_bond_custody_distribution(&fixture.state, &challenger, 1_000, 0, 0);
+    assert_eq!(
+        FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .unwrap(),
+        case_before
+    );
+    assert_eq!(
+        FindSorafsModerationStatus
+            .execute(&fixture.state.view())
+            .unwrap(),
+        status_before
+    );
+    assert!(
+        FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "missing-source".to_owned()
+        )
+        .execute(&fixture.state.view())
+        .is_err()
+    );
+}

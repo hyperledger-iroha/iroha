@@ -190,6 +190,7 @@ fn coefficient_preflight_rejects_incomplete_noncanonical_and_unbounded_work() {
 
 #[test]
 fn selected_group_stripes_keep_all_fiber_coordinates_and_reject_bad_indices_early() {
+    assert_eq!(super::super::deep_geometry::QUERY_COUNT, 77);
     let plan = CoefficientReplayPlan::with_shape(1024, 16, 1, 4, limits(1)).unwrap();
     let coefficients = (0..16).map(dense).collect::<Vec<_>>();
     let sources = [&coefficients[..]];
@@ -199,7 +200,7 @@ fn selected_group_stripes_keep_all_fiber_coordinates_and_reject_bad_indices_earl
         vec![0, 0],
         vec![3, 1],
         vec![256],
-        (0..129).collect(),
+        (0..2 * super::super::deep_geometry::QUERY_COUNT + 1).collect(),
     ] {
         assert!(
             replay
@@ -233,5 +234,36 @@ fn selected_group_stripes_keep_all_fiber_coordinates_and_reject_bad_indices_earl
     for (s, &visited) in seen.iter().enumerate() {
         assert_eq!(visited, indices.iter().any(|i| i % 64 == s));
     }
+    assert!(replay.ensure_pass_available().is_err());
+}
+
+#[test]
+fn selected_group_stripes_accept_the_exact_query_plus_sibling_boundary() {
+    let plan = CoefficientReplayPlan::with_shape(1024, 16, 1, 4, limits(1)).unwrap();
+    let coefficients = (0..16).map(dense).collect::<Vec<_>>();
+    let sources = [&coefficients[..]];
+    let mut replay = CoefficientReplay::new(plan, &sources).unwrap();
+    let indices = (0..2 * super::super::deep_geometry::QUERY_COUNT).collect::<Vec<_>>();
+    assert_eq!(indices.len(), 154);
+    let mut checked = 0;
+    replay
+        .visit_selected_stripes(&indices, |stripe| {
+            for &index in &indices {
+                if index % 64 == stripe.stripe_index() {
+                    let mut fiber = [F::ZERO; 4];
+                    stripe.fiber(index / 64, &mut fiber)?;
+                    for (position, &value) in fiber.iter().enumerate() {
+                        assert_eq!(
+                            value,
+                            horner(&coefficients, plan.domain().point(index + position * 256))
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(checked, 154 * 4);
     assert!(replay.ensure_pass_available().is_err());
 }

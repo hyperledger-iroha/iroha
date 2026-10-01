@@ -25,7 +25,7 @@ MAX_SOURCE_FILE_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_CHECKSUM_BYTES = 1024 * 1024
 PACKAGE_RECIPE_SHA256 = "844bea24667a3df6d3be236e13e9bf008d321ba0c63ea4ef25d0cbe482fb15e9"
-BUILD_RECIPE_SHA256 = "59955e518b5047a4887ff6507826f04f1af3f250352e3d9cfa11c47a513150c6"
+BUILD_RECIPE_SHA256 = "1de9f08d46ed8c06f1335d59469e5cb465cf18edce44937f3c0118a4a9dd18fb"
 ENGINE_RECIPE_SHA256 = "54fc313b8b4da1c4953a2c68bce5a357d8b52be39b35f3f2fab8ca6a2bf80550"
 ENGINE_CONTRACT_SHA256 = "ffe14c863ca7c189dfea331fb1c832cd15092ce6369955f3af50021ab4446d8c"
 CHECKSUM_MEMBER = "native/iroha_js_host.checksums.json"
@@ -42,7 +42,7 @@ _SOURCE_NAME = re.compile(r"src/(?:public/|kotodamaCompiler/)?[A-Za-z][A-Za-z0-9
 REQUIRED_OUTPUTS = frozenset((
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "kagemusha.js", "native.js", "nativeArtifactHash.js",
-    "numericV1.js", "strictLosslessJson.js", "sorafsOrderbookSubmission.js",
+    "numericV1.js", "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js",
     "sorafsOrderbookSubmission.d.ts", "smartContractDeploymentSubmit.js", "sumeragiTyped.js",
     "tairaTestnetProfile.js", "toriiBrowserClient.js", "toriiClient.js", "toriiOptional.js",
     "kotodamaCompiler/index.js", "kotodamaCompiler/browser.js", "kotodamaCompiler/client.js",

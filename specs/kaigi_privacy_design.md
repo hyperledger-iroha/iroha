@@ -141,7 +141,10 @@ expiry. Relay descriptors require nonempty keys of at most 4 KiB and positive
 bandwidth class. V1 bounds registry and allowlist membership at 500 identities;
 restoration rejects an over-cap registry. Registration, rotation, health reports
 and removal authenticate the relevant active account lineage. Exact repeated
-descriptors produce no mutation event. Pinned manifests remain self-contained.
+descriptors produce no mutation event. A relay's registered HPKE key cannot rotate
+or be removed while a live call references it. Host-authorized end releases the
+call's live dependencies. Historical manifests remain self-contained after
+retirement; future admission requires live registered descriptors.
 
 The current opaque HPKE key carrier still needs its final explicit suite tag and
 actual three-hop interoperability/transport recovery qualification. Circuit

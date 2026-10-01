@@ -212,6 +212,43 @@ macro_rules! permissioned_soracloud_transaction {
         soracloud_transaction!($state, block_header, $state_block, $stx);
     };
 }
+macro_rules! initial_permissioned_soracloud_state {
+    ($kura:ident, $state:ident) => {
+        let $kura = Kura::blank_kura_for_testing();
+        let $state = state_with_initial_soracloud_permission(&$kura)?;
+    };
+    ($kura:ident, mut $state:ident) => {
+        let $kura = Kura::blank_kura_for_testing();
+        let mut $state = state_with_initial_soracloud_permission(&$kura)?;
+    };
+}
+macro_rules! initial_soracloud_transaction_at_height {
+    ($state:ident, $header:ident, $state_block:ident, $stx:ident, $height:expr) => {
+        let $header = initial_soracloud_header(&$state, $height);
+        let mut $state_block = $state.block($header);
+        let mut $stx = $state_block.transaction();
+        assert!(crate::executor::root_scope::execution_root_scope(&$stx).is_ok());
+        set_current_transaction_hash(
+            &mut $stx,
+            concat!(file!(), ":", line!(), ":", stringify!($stx)).as_bytes(),
+        );
+    };
+}
+macro_rules! initial_soracloud_transaction {
+    ($state:ident, $header:ident, $state_block:ident, $stx:ident) => {
+        initial_soracloud_transaction_at_height!($state, $header, $state_block, $stx, 2);
+    };
+}
+macro_rules! initial_permissioned_soracloud_transaction {
+    ($kura:ident, $state:ident, $header:ident, $state_block:ident, $stx:ident) => {
+        initial_permissioned_soracloud_state!($kura, $state);
+        initial_soracloud_transaction!($state, $header, $state_block, $stx);
+    };
+    ($kura:ident, $state:ident, $state_block:ident, $stx:ident) => {
+        initial_permissioned_soracloud_state!($kura, $state);
+        initial_soracloud_transaction!($state, block_header, $state_block, $stx);
+    };
+}
 macro_rules! full_bootstrap_execution_case {
         (default: ($($setup:pat),+), inputs: ($($io:pat),+)) => {
             let ($($setup,)+ $($io),+) = sample_full_bootstrap_execution_verification_case();
@@ -3520,6 +3557,48 @@ fn assert_invariant_contains(err: InstructionExecutionError, expected: &str) {
         "unexpected error: {err:?}"
     );
 }
+#[test]
+fn soracloud_placeholder_marker_cache_uses_one_canonical_owner_across_native_paths() {
+    let collapsed = soracloud_collapsed_placeholder_markers();
+    assert_eq!(
+        collapsed,
+        SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS
+            .iter()
+            .map(|marker| ascii_alnum_collapsed(marker))
+            .filter(|marker| marker.len() >= SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES)
+            .collect::<Vec<_>>(),
+    );
+    for marker in SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS {
+        let uppercase = marker
+            .iter()
+            .map(u8::to_ascii_uppercase)
+            .collect::<Vec<_>>();
+        assert!(soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(&uppercase));
+        let mut decorated = vec![0xFF, 0];
+        decorated.extend_from_slice(&uppercase);
+        decorated.extend_from_slice(&[0, 0x80]);
+        assert!(soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(&decorated));
+        let canonical = ascii_alnum_collapsed(marker);
+        if canonical.len() >= SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES {
+            let fragmented = uppercase
+                .iter()
+                .flat_map(|byte| [*byte, 0])
+                .collect::<Vec<_>>();
+            assert!(soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(&fragmented));
+        }
+    }
+    for native_bytes in [
+        &[0x00, 0xFF, 0x80, 0x01][..],
+        b"canonical sealed native envelope",
+    ] {
+        assert!(!soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(native_bytes));
+    }
+    assert!(std::ptr::eq(
+        collapsed,
+        soracloud_collapsed_placeholder_markers()
+    ));
+}
+
 #[test]
 fn soracloud_fhe_stark_native_envelope_preflight_rejects_text_placeholders() {
     for (label, bytes) in [
@@ -19589,7 +19668,7 @@ fn deploy_soracloud_service_rejects_missing_replica_private_http_service_data_vo
 #[test]
 fn initial_executor_soracloud_lease_usage_and_runtime_preserve_exact_assignment()
 -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
+    initial_permissioned_soracloud_state!(kura, state);
     let mut bundle = sample_bundle("portal", "1.0.0", 0);
     bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
     bundle.container.entrypoint = "/app/bin/service".to_owned();
@@ -19613,7 +19692,7 @@ fn initial_executor_soracloud_lease_usage_and_runtime_preserve_exact_assignment(
     bundle.service.handlers.clear();
     bundle.service.artifacts[0].handler_name = None;
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    soracloud_transaction_at_height!(state, block_header, state_block, stx, 2);
+    initial_soracloud_transaction_at_height!(state, block_header, state_block, stx, 2);
     execute_initial_soracloud(
         isi::DeploySoracloudService {
             bundle: bundle.clone(),
@@ -19743,7 +19822,13 @@ fn initial_executor_soracloud_lease_usage_and_runtime_preserve_exact_assignment(
     let successor_height = lease_started_height
         .checked_add(1)
         .expect("the test lease height has a successor");
-    soracloud_transaction_at_height!(state, usage_header, usage_block, usage_tx, successor_height);
+    initial_soracloud_transaction_at_height!(
+        state,
+        usage_header,
+        usage_block,
+        usage_tx,
+        successor_height
+    );
     execute_initial_soracloud(
         isi::ReportSoracloudServiceLeaseUsage {
             service_name: bundle.service.service_name.clone(),
@@ -21073,7 +21158,7 @@ fn fhe_retirement_preserves_authenticated_state_and_secret_cleanup() -> Result<(
 
 #[test]
 fn mutate_soracloud_state_records_authoritative_service_state() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
+    initial_permissioned_soracloud_state!(kura, state);
     let bundle = sample_bundle_with_state_binding(
         "portal",
         "1.0.0",
@@ -21085,7 +21170,7 @@ fn mutate_soracloud_state_records_authoritative_service_state() -> Result<(), ey
         512,
         2_048,
     );
-    soracloud_transaction!(state, block_header, state_block, stx);
+    initial_soracloud_transaction!(state, block_header, state_block, stx);
     isi::DeploySoracloudService {
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
@@ -22588,8 +22673,8 @@ fn run_fhe_input_admission_rejection_cases(
 ) -> Result<(), eyre::Report> {
     for &case in cases {
         let spec = case.spec();
-        permissioned_soracloud_state!(kura, state);
-        soracloud_transaction!(state, block_header, state_block, state_transaction);
+        initial_permissioned_soracloud_state!(kura, state);
+        initial_soracloud_transaction!(state, block_header, state_block, state_transaction);
         #[cfg(feature = "zk-stark")]
         let verifier_key =
             configure_fhe_input_admission_rejection_verifier(&mut state_transaction, case)?;
@@ -22715,7 +22800,7 @@ fhe_input_admission_rejection_test! {
 #[test]
 fn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof()
 -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    initial_permissioned_soracloud_transaction!(kura, state, state_block, stx);
     stx.zk.stark.enabled = true;
     let vk_box = sample_fhe_input_admission_vk_box();
     let vk_id = register_fhe_input_admission_verifier(&mut stx, vk_box.clone())?;
@@ -22795,7 +22880,7 @@ fn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_pr
 #[test]
 fn mutate_soracloud_state_rejects_registered_bounded_noise_binding_only_fhe_input_admission_proof()
 -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    initial_permissioned_soracloud_transaction!(kura, state, state_block, stx);
     stx.zk.stark.enabled = true;
     let vk_box = sample_fhe_input_admission_vk_box();
     let vk_id = register_fhe_input_admission_verifier(&mut stx, vk_box.clone())?;
@@ -22903,7 +22988,7 @@ fhe_input_admission_rejection_test! {
 }
 #[test]
 fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
+    initial_permissioned_soracloud_state!(kura, state);
     let bundle = sample_bundle_with_state_binding(
         "portal",
         "1.0.0",
@@ -22915,7 +23000,7 @@ fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), 
         4_096,
         16_384,
     );
-    soracloud_transaction!(state, block_header, state_block, stx);
+    initial_soracloud_transaction!(state, block_header, state_block, stx);
     isi::DeploySoracloudService {
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),
@@ -23080,7 +23165,7 @@ fn training_start_rejects_signed_model_and_job_text_aliases_before_mutation()
 
 #[test]
 fn start_soracloud_training_job_records_authoritative_job_state() -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    initial_permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
     let training = TrainingStartFixture::portal();
     training.execute(&mut stx)?;
@@ -23109,7 +23194,7 @@ fn start_soracloud_training_job_records_authoritative_job_state() -> Result<(), 
 }
 #[test]
 fn checkpoint_soracloud_training_job_updates_authoritative_state() -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    initial_permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
     let training = TrainingStartFixture::portal();
     training.execute(&mut stx)?;
@@ -23134,7 +23219,7 @@ fn checkpoint_soracloud_training_job_updates_authoritative_state() -> Result<(),
 }
 #[test]
 fn retry_soracloud_training_job_records_retry_pending_state() -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    initial_permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
     let training = TrainingStartFixture::portal();
     training.execute(&mut stx)?;
@@ -23170,7 +23255,7 @@ fn retry_soracloud_training_job_records_retry_pending_state() -> Result<(), eyre
 }
 #[test]
 fn register_soracloud_model_artifact_records_authoritative_state() -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    initial_permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
     let training = TrainingStartFixture::portal();
     training.execute(&mut stx)?;
@@ -23225,7 +23310,7 @@ fn register_soracloud_model_artifact_records_authoritative_state() -> Result<(),
 }
 #[test]
 fn model_weight_lifecycle_updates_authoritative_registry_state() -> Result<(), eyre::Report> {
-    permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    initial_permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
     let training = TrainingStartFixture::portal();
     training.execute(&mut stx)?;
@@ -23358,9 +23443,9 @@ fn model_weight_lifecycle_updates_authoritative_registry_state() -> Result<(), e
 #[test]
 fn rollback_soracloud_model_weight_updates_authoritative_registry_state() -> Result<(), eyre::Report>
 {
-    permissioned_soracloud_state!(kura, state);
+    initial_permissioned_soracloud_state!(kura, state);
     let bundle = sample_training_bundle("portal", "1.0.0");
-    soracloud_transaction!(state, block_header, state_block, stx);
+    initial_soracloud_transaction!(state, block_header, state_block, stx);
     isi::DeploySoracloudService {
         bundle: bundle.clone(),
         initial_service_configs: BTreeMap::new(),

@@ -836,6 +836,7 @@ mod block {
     mod capture;
     pub(super) use capture::MembershipWriter;
     pub use capture::TransactionsBlockField;
+    #[cfg(test)]
     pub(crate) use capture::TransactionsCaptureSlot;
 
     #[path = "detached_publication.rs"]
@@ -1383,10 +1384,9 @@ mod block {
 }
 #[cfg(test)]
 pub(crate) use block::MembershipPredecessorStatus;
-pub(crate) use block::{
-    DetachedTransactionsBlock, DetachedTransactionsPublicationSlot,
-    PreparedDetachedTransactionsBlock, PreparedTransactionsBlock, TransactionsCaptureSlot,
-};
+pub(crate) use block::PreparedTransactionsBlock;
+#[cfg(test)]
+pub(crate) use block::{DetachedTransactionsBlock, PreparedDetachedTransactionsBlock};
 #[allow(unused_imports)]
 pub use block::{TransactionsBlock, TransactionsBlockError, TransactionsBlockField};
 

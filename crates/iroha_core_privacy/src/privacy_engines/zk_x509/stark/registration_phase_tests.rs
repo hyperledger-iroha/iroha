@@ -74,8 +74,21 @@ fn maximum_credential_bound_sources_preserve_joint_binding_and_terminal_handoffs
         source.p256.post_base_v1().unwrap(),
         binding.main_post_base()
     );
-    validate_zk_x509_der_rfc_terminal_equalities_v1(source.claims.der, source.claims.rfc5280)
-        .expect("DER/RFC source handoff");
+    let der_last =
+        super::super::der_stark::zk_x509_der_stark_aggregate_aux_row_v1(&source.der, (1 << 19) - 1)
+            .expect("actual DER final native row");
+    for (der_column, rfc_column) in super::super::der_stark::zk_x509_der_terminal_columns_v1()
+        .into_iter()
+        .zip(super::super::rfc5280_stark::zk_x509_rfc_der_terminal_columns_v1())
+    {
+        let rfc_values = ZeroizingMainTraceColumnV1(
+            source
+                .rfc
+                .build_aux_column_v1(rfc_column)
+                .expect("actual private RFC handoff column"),
+        );
+        assert_eq!(der_last[der_column], rfc_values[(1 << 19) - 1]);
+    }
     assert!(zk_x509_main_rfc_sha_terminal_products_match_v1(
         source.claims.rfc5280,
         source.claims.sha
@@ -120,7 +133,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "775b6fc6871d99d6211ba840c22df45beb0d7eaf5015c09bffc603906240fb31",
+        "6de4f9403e4659834a309ceff14b2bd4ba8f2e0b182a1d4b85bf98e71d000ff5",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -178,7 +191,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "bd4b3c6494b0d6d10cc22515e1014b6beb2c7bfa7cc0d5f9c14d218276234a2c",
+        "da169e0edd7885a13b8d5d5a8faab55442fa1c5213fab7eacb30fe3e9c7221fd",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
@@ -1651,9 +1664,15 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         ]),
     )
     .expect("exact MAIN providers");
-    let direct =
-        main_opened_composition_value_v1(&mut providers, query_index, lane, &trace_groups, &alphas)
-            .expect("direct MAIN row composition");
+    let direct = main_opened_composition_value_v1(
+        &mut providers,
+        query_index,
+        lane,
+        &trace_groups,
+        &alphas,
+        &[E::ONE; 192],
+    )
+    .expect("direct MAIN row composition");
     let lde_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).expect("canonical MAIN LDE root");
     let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(query_index as u128));
@@ -1683,11 +1702,21 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             .map(|value| sum.add(value))
         })
         .expect("independent registered quotient sum");
+    let independently_expected = independently_expected.add(
+        main_aggregate::main_link_composition_for_test_v1(
+            &layout,
+            &trace_groups,
+            x,
+            &[E::ONE; 192],
+        )
+        .unwrap(),
+    );
     assert_eq!(direct, independently_expected);
     let evaluated = {
         let mut evaluator = MainOpenedRowEvaluatorV1 {
             providers: &mut providers,
             alphas: &alphas,
+            link_alphas: &[E::ONE; 192],
             mixes: &mixes,
         };
         aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
@@ -1730,21 +1759,29 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut changed_rows = trace_groups.clone();
     changed_rows[0].base_current[0] = changed_rows[0].base_current[0].add(F::ONE);
     assert_ne!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &changed_rows,
-                &alphas,
-            )
-            .expect("semantic row mutation"),
-            direct
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &changed_rows,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .expect("semantic row mutation"),
+        direct
+    );
     let mut short_rows = trace_groups.clone();
     short_rows[0].base_current.pop();
     assert!(
-        main_opened_composition_value_v1(&mut providers, query_index, lane, &short_rows, &alphas,)
-            .is_err()
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &short_rows,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
     );
     let mut noncanonical_rows = trace_groups.clone();
     noncanonical_rows[0].base_current[0] =
@@ -1756,6 +1793,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &noncanonical_rows,
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1766,6 +1804,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups[..FULL_PROFILE_TRACE_GROUPS_V1 - 1],
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1776,6 +1815,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups,
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1786,6 +1826,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             SECURITY_LANES,
             &trace_groups,
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1798,6 +1839,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups,
             &short_alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1810,6 +1852,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups,
             &short_alpha_lanes,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1818,6 +1861,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &short_mix,
     };
     assert!(
@@ -1836,6 +1880,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &short_mix_lanes,
     };
     assert!(
@@ -1857,6 +1902,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &inconsistent_mix,
     };
     assert!(
@@ -1873,6 +1919,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &mixes,
     };
     assert!(
@@ -1896,15 +1943,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("short-residue adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
     drop(providers);
     log5.short_residues = false;
     log5.noncanonical_residues = true;
@@ -1916,15 +1964,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("noncanonical-residue adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
     drop(providers);
     log5.noncanonical_residues = false;
     log5.short_fixed_row = true;
@@ -1936,15 +1985,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("short-fixed-row adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
     drop(providers);
     log5.short_fixed_row = false;
     log5.noncanonical_fixed_row = true;
@@ -1956,15 +2006,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("noncanonical-fixed-row adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
 }
 #[test]
 fn main_base_commitment_session_mints_pre_aux_only_after_joined_commitment() {
@@ -2317,27 +2368,36 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
 #[test]
 fn main_phase_source_retains_original_masks_and_authenticates_replay() {
     let source = include_str!("main_aggregate.rs");
-    let helper_start = source
-        .find("fn sample_main_trace_group_v1")
-        .expect("MAIN commitment helper");
-    let helper_end = source[helper_start..]
-        .find("fn main_trace_group_root_v1")
-        .map(|offset| helper_start + offset)
-        .expect("MAIN commitment helper end");
-    let helper = &source[helper_start..helper_end];
-    assert!(
-        helper.contains("MainTraceMaskGroupV1::sample_v1"),
-        "MAIN sampling must retain the original independent masks for every joined column"
-    );
-    assert!(
-        !helper.contains("MaskedTracePolynomialSetV1::sample_columns_v1")
-            && !helper.contains("commit_masked_trace_columns_v1(")
-            && !helper.contains("commit_masked_trace_columns_retaining_encrypted_scratch_v1")
-            && !helper.contains("spill_replayed_masked_trace_columns_v1")
-            && !helper.contains("replay_masked_trace_columns_via_encrypted_scratch_v1"),
-        "MAIN must not retain the whole masked coefficient matrix or substitute an unrelated spool"
-    );
     let replay_source = include_str!("main_trace_replay.rs");
+    let helper_start = replay_source
+        .find("fn sample_and_replay_batch_with_v1<")
+        .expect("bounded first-pass sampler");
+    let helper_end = replay_source[helper_start..]
+        .find("fn replay_v1(")
+        .map(|offset| helper_start + offset)
+        .expect("test replay boundary");
+    let helper = &replay_source[helper_start..helper_end];
+    assert!(
+        helper.contains("sample_trace_mask_v1(MASK_DEGREE, rng)") && helper.contains("self.masks"),
+        "MAIN sampling retains each original independent mask"
+    );
+    assert!(
+        helper.contains("drop(source)"),
+        "source header allocation drops before inverse staging"
+    );
+    for forbidden in [
+        "MaskedTracePolynomialSetV1::sample_columns_v1",
+        "commit_masked_trace_columns_v1(",
+        "commit_masked_trace_columns_retaining_encrypted_scratch_v1",
+        "spill_replayed_masked_trace_columns_v1",
+        "replay_masked_trace_columns_via_encrypted_scratch_v1",
+    ] {
+        assert!(
+            !replay_source[..replay_source.find("\n#[cfg(test)]\nmod tests {").unwrap()]
+                .contains(forbidden),
+            "MAIN cannot substitute whole-matrix retention or a spool"
+        );
+    }
     let replay_start = replay_source
         .find("fn replay_batch_v1(")
         .expect("live original-mask batch replay");
@@ -2346,7 +2406,24 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .map(|offset| replay_start + offset)
         .expect("mask replay end");
     let replay = &replay_source[replay_start..replay_end];
-    assert!(replay.contains("goldilocks_ifft_v1"));
+    assert!(replay.contains("policy.inverse_with_v1(&mut batch, root"));
+    let adapter = include_str!("main_bounded_transform.rs");
+    let inverse_start = adapter
+        .find("fn inverse_with_v1(")
+        .expect("bounded inverse");
+    let inverse_end = adapter[inverse_start..]
+        .find("fn private_with_v1(")
+        .map(|offset| inverse_start + offset)
+        .expect("shared private adapter");
+    assert!(adapter[inverse_start..inverse_end].contains("Direction::Inverse"));
+    let inverse = replay.find("policy.inverse_with_v1").unwrap();
+    let masking = replay
+        .find("for (native, mask) in batch.iter_mut().zip(masks)")
+        .unwrap();
+    assert!(
+        inverse < masking,
+        "inverse completion must precede mask application"
+    );
     assert!(replay.contains("mask.coefficients()"));
     assert!(replay.contains("coefficients[degree].sub(random)"));
     assert!(replay.contains("coefficients[native_rows + degree].add(random)"));
@@ -2368,6 +2445,9 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .find("pub(crate) fn bind_credential_pre_aux_v1_with_rng")
         .expect("credential-bound phase");
     let base = &phases[..bound_start];
+    let base_quarantine = base
+        .find("goldilocks_transform_completion_uncertain_v1()")
+        .expect("base quarantine gate");
     let preallocation = base
         .find("check_before_sources_v1")
         .expect("source preallocation gate");
@@ -2381,16 +2461,20 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .find("check_native_sources_v1")
         .expect("actual source capacity gate");
     let base_entropy = base
-        .find("sample_main_trace_group_v1")
+        .find("sample_and_commit_joined_v1")
         .expect("first base mask sampling");
     assert!(
-        preallocation < source_shapes
+        base_quarantine < preallocation
+            && preallocation < source_shapes
             && source_shapes < p256_construction
             && p256_construction < actual_capacities
             && actual_capacities < base_entropy,
         "source admission must precede bulk allocation, and actual capacity admission must precede entropy"
     );
     let bound = &phases[bound_start..];
+    let aux_quarantine = bound
+        .find("goldilocks_transform_completion_uncertain_v1()")
+        .expect("auxiliary quarantine gate");
     let bound_preallocation = bound
         .find("check_before_sources_v1")
         .expect("bound source preallocation gate");
@@ -2401,24 +2485,30 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .find("check_native_sources_v1")
         .expect("bound capacity gate");
     let aux_entropy = bound
-        .find("sample_main_trace_group_v1")
+        .find("sample_and_commit_joined_v1")
         .expect("first auxiliary mask sampling");
     assert!(
-        bound_preallocation < bound_construction
+        aux_quarantine < bound_preallocation
+            && bound_preallocation < bound_construction
             && bound_construction < bound_capacities
             && bound_capacities < aux_entropy,
         "bound sources must be admitted before auxiliary entropy"
     );
     assert_eq!(
-        phases.matches("base_polynomials.push(polynomials)").count(),
-        FULL_PROFILE_TRACE_GROUPS_V1,
-        "phase one must retain exactly six base mask groups"
+        phases
+            .matches("MainTracePolynomialSetV1::sample_and_commit_joined_v1(")
+            .count(),
+        2,
+        "both initial roots must consume the same bounded sample-and-commit path"
     );
-    assert_eq!(
-        phases.matches("aux_polynomials.push(polynomials)").count(),
-        FULL_PROFILE_TRACE_GROUPS_V1,
-        "phase two must retain exactly six auxiliary mask groups"
-    );
+    let initial = &replay_source[replay_source
+        .find("fn sample_and_commit_joined_v1<")
+        .unwrap()
+        ..replay_source.find("fn commit_joined_batches_v1(").unwrap()];
+    assert!(initial.contains("FULL_PROFILE_TRACE_GROUPS_V1"));
+    assert!(initial.contains(".try_into()"));
+    assert!(initial.contains("set.validate_v1(layout, kind)?"));
+    assert!(initial.contains("MainTraceMaskGroupV1::empty_v1"));
     let provenance = phases
         .find("matches_main_pre_aux_v1")
         .expect("provenance check");
@@ -2536,7 +2626,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         .expect("MAIN finish end");
     let finish = &source[finish_start..finish_end];
     assert!(finish.contains("commit_joined_v1"));
-    assert!(finish.contains("self.composition_material_v1()"));
+    assert!(finish.contains("self.composition_material_v1(rng)"));
     assert!(finish.contains("MainTraceReplaySourcesV1::Bound"));
     let base_replay = finish
         .find("let base_openings = self.base_polynomials.commit_joined_v1")
@@ -2556,7 +2646,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(base_replay < base_root_check && aux_replay < base_root_check);
     assert!(base_root_check < publish && aux_root_check < publish);
     let material_start = source
-        .find("fn composition_material_v1(&self)")
+        .find("fn composition_material_v1<R: TryRngCore>")
         .expect("retained composition material");
     let material_end = source[material_start..]
         .find("pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng")
@@ -2566,6 +2656,20 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         source[material_start..material_end]
             .contains("main_composition_material_from_polynomials_v1")
     );
+    let combined_start = source
+        .find("fn main_composition_material_from_polynomials_v1<R: TryRngCore>")
+        .expect("canonical MAIN composition owner");
+    let combined = &source[combined_start..];
+    let links = combined
+        .find(".accumulate_v1(")
+        .expect("private endpoint contributions");
+    let blind = combined
+        .find(".blind_v1(lane, rng)")
+        .expect("canonical quotient masks");
+    let evaluate = combined
+        .find("evaluate_main_composition_coefficient_chunks_v1(")
+        .expect("masked coefficient evaluation");
+    assert!(links < blind && blind < evaluate);
     assert!(!finish.contains("verify_opened_query_relations_with_deep_v1"));
     for forbidden in [
         "spill_replayed_masked_trace_columns_v1",
@@ -2607,7 +2711,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(!verifier.contains("verify_opened_query_relations_with_deep_v1"));
     let engine = include_str!("../engine.rs");
     let engine_production = &engine[..engine
-        .find("#[cfg(test)]")
+        .find("\n#[cfg(test)]\nmod tests {")
         .expect("engine production/test boundary")];
     assert!(engine_production.contains("verify_zk_x509_main_aggregate_stark_v1"));
     assert!(engine_production.contains("ca_accumulator_subproof_binding_from_proof_v1"));

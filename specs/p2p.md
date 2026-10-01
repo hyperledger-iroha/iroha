@@ -628,13 +628,13 @@ admission API.
 
 - Build-time: enable `iroha_p2p/quic` to include QUIC support.
 - Current shipping status: `[network].quic_enabled = true` is rejected before
-  any UDP socket is created. The lockfile resolves quinn-proto 0.11.15, while
-  released 0.11.17 fixes unauthenticated remote-memory exhaustion in stream
-  reassembly and connection-ID retirement as well as DATAGRAM accounting.
+  any UDP socket is created. The lockfile resolves patched quinn-proto
+  0.11.18; dependency memory and panic fixes do not replace complete
+  authenticated-transport, resource and interoperability qualification.
   Mandatory authenticated TLS-over-TCP remains the active P2P transport.
-- The QUIC implementation and its focused tests remain as dormant
-  requalification material. After the lockfile reaches quinn-proto 0.11.17 or
-  later, rerun the abuse and interoperability suites before allowing
+- The QUIC implementation remains dormant shipping material; focused
+  local tests exercise bounded DATAGRAM delivery with the patched dependency.
+  Complete the abuse and interoperability suites before allowing
   `[network].quic_enabled = true` again.
 - Dormant QUIC authentication: nodes use self-signed transport certificates. Rustls verifies
   the TLS `CertificateVerify` proof, then the Iroha identity handshake signs the
@@ -649,18 +649,16 @@ admission API.
   `TrustGossip`, and `Health` therefore use their reliable-stream fallback.
   - The payload and per-connection buffer knobs remain in the schema for
     requalification but cannot currently enable the extension.
-  - Locked `quinn-proto` 0.11.15 charges its private receive queue by payload
-    bytes only, so zero-length entries can consume no configured budget before
-    application polling. Released quinn-proto 0.11.17 fixes this with
-    `DatagramBuffer::memory_used()` (payload plus fixed `Datagram` overhead).
-    Upgrade the lockfile to released quinn-proto 0.11.17 or later before
-    re-enabling DATAGRAM.
+  - Locked `quinn-proto` 0.11.18 charges its private receive and send
+    buffers by payload plus fixed `Datagram` overhead, including empty entries.
+    Private requalification requires each buffer to hold one maximum payload
+    plus that overhead. Shipping DATAGRAM enablement still requires complete
+    transport qualification.
   - The dormant P2P ingress still has eager pre-authentication draining,
     exact-size payload compaction, a serialized authentication boundary, and a
     256-entry handoff charged to the process-wide low-priority byte budget.
-    These defenses and focused tests remain for dependency-upgrade
-    requalification; they are not presented as a bound on Quinn's vulnerable
-    pre-poll queue.
+    These defenses and focused tests remain for transport requalification;
+    the dependency-owned pre-poll queue has its own fixed-overhead accounting.
 
 ### Mandatory TLS-over-TCP
 
@@ -870,5 +868,5 @@ Recommended:
 - TLS: TLS 1.3 and the exact raw-P2P ALPN are unconditional.
 - QUIC: configure idle timeout via `[network].quic_max_idle_timeout_ms`.
 - QUIC DATAGRAM (best-effort): unavailable in the shipping profile until
-  quinn-proto 0.11.17 or later is locked and requalified. Leave
+  the locked quinn-proto 0.11.18 transport is requalified. Leave
   `[network].quic_datagrams_enabled = false`; an explicit `true` aborts startup.

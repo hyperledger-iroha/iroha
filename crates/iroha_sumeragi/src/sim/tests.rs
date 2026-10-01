@@ -151,6 +151,37 @@ scenario_test!(f01_crashed_leaders, "F1", scenarios::f01);
 scenario_test!(f02_silent_proxy_tail, "F2", scenarios::f02);
 scenario_test!(f03_withholding_proxy_tail, "F3", scenarios::f03);
 scenario_test!(f04_silent_or_slow_set_a, "F4", scenarios::f04);
+
+#[test]
+fn f04_progress_keeps_eight_heights_for_slow_rotations() {
+    for seed in [1_139, 8_479] {
+        let mut world = World::new(scenarios::f04(seed));
+        let minimum = world.duration;
+        world.run_until(minimum);
+        assert!(world.failure.is_none());
+        assert_eq!(world.now, minimum);
+        assert!(world.honest().iter().any(|r| world.committed(*r) < 8));
+        for r in world.honest() {
+            if world.committed(r) < 8 {
+                assert!(world.oracle.reps[r].deadline > minimum);
+            }
+        }
+        world.run().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            world.duration, minimum,
+            "minimum observation remains unchanged"
+        );
+        assert!(world.now > minimum);
+        for r in world.honest() {
+            assert!(world.committed(r) >= 8, "seed {seed}, replica {r}");
+        }
+        eprintln!(
+            "F04 seed {seed}: all eight heights observed at t={}",
+            world.now
+        );
+    }
+}
+
 scenario_test!(f05_equivocating_leader, "F5", scenarios::f05);
 scenario_test!(f06_vote_withholders, "F6", scenarios::f06);
 scenario_test!(f07_adversarial_tc_composition, "F7", scenarios::f07);

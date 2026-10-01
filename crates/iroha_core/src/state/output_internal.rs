@@ -205,8 +205,9 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         tx.tx_call_hash = Some(call);
         tx.current_tx_hash = None;
         tx.current_entrypoint_index = None;
+        let root_dataspace = capture_internal_root_dataspace(tx)?;
         // Event routing is authenticated event data, not authority to route the
-        // callback's writes. Preserve the internal transaction's own route policy.
+        // callback's writes. The immutable root owns this invocation's namespace.
         let generation = tx.world.triggers.registration_generation(id);
         let nft = match &invocation {
             InternalInvocation::Pipeline(_) => None,
@@ -245,6 +246,8 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         if tx.tx_call_hash != Some(call)
             || tx.current_tx_hash.is_some()
             || tx.current_entrypoint_index.is_some()
+            || tx.current_dataspace_id != Some(root_dataspace)
+            || tx.world.current_dataspace_id != Some(root_dataspace)
         {
             return Err("internal callback changed its execution owner".into());
         }
@@ -480,3 +483,23 @@ mod tests {
         assert!(bounded_diagnostic(&Refused, 1024).is_err());
     }
 }
+
+/// Capture the immutable root's namespace for a fresh internal invocation.
+/// The triggering event's route does not authorize the callback's own effects.
+fn capture_internal_root_dataspace(
+    tx: &mut StateTransaction<'_, '_>,
+) -> Result<iroha_model_base::topology::DataSpaceId, String> {
+    if tx.current_dataspace_id.is_some() || tx.world.current_dataspace_id.is_some() {
+        return Err("internal invocation already has a captured dataspace".into());
+    }
+    let scope =
+        crate::executor::root_scope::execution_root_scope(tx).map_err(|error| error.to_string())?;
+    let dataspace = scope.dataspace_id();
+    tx.current_dataspace_id = Some(dataspace);
+    tx.world.current_dataspace_id = Some(dataspace);
+    Ok(dataspace)
+}
+
+#[cfg(test)]
+#[path = "output_internal_root_scope_tests.rs"]
+mod root_scope_tests;

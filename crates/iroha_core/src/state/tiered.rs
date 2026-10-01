@@ -3090,6 +3090,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.active_account_id_at_proposal.measured_bytes_extra());
             total = total.saturating_add(self.proposed_controller.measured_bytes_extra());
             total = total.saturating_add(self.approvals.measured_bytes_extra());
+            total = total.saturating_add(self.cancellation_approvals.measured_bytes_extra());
             total = total.saturating_add(self.proposed_by.measured_bytes_extra());
             total = total.saturating_add(self.status.measured_bytes_extra());
             total

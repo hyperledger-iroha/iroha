@@ -3372,8 +3372,7 @@ mod tests {
         .expect("valid PoR entry")
     }
 
-    #[test]
-    fn reputation_event_id_identity_projection_matches_capture() {
+    fn reputation_event_id_identity_fixture_values() -> norito::json::Value {
         let rows = [0x31, 0x52].map(|seed| {
             let entry = por_entry(seed);
             let mut material = entry.clone();
@@ -3391,11 +3390,37 @@ mod tests {
             );
             crate::concrete_identity_tests::projected_record(&projection, &material)
         });
+        norito::json!({"projections": (rows.to_vec())})
+    }
+
+    #[test]
+    fn reputation_event_id_identity_projection_matches_capture() {
         assert_eq!(
-            norito::json!({"projections": (rows.to_vec())}),
+            reputation_event_id_identity_fixture_values(),
             crate::concrete_identity_tests::fixture_values(include_str!(
                 "../../tests/fixtures/reputation_event_id_identity_frames.json"
             )),
+        );
+    }
+
+    #[test]
+    #[ignore = "explicit maintenance command prints current reputation event-id projection frames"]
+    fn print_reputation_event_id_identity_fixture() {
+        assert!(cfg!(feature = "governance"), "capture requires governance");
+        assert!(cfg!(feature = "http"), "capture requires HTTP");
+        assert!(
+            !cfg!(feature = "ids_projection"),
+            "capture requires the concrete identity profile"
+        );
+        let fixture = norito::json!({
+            "governance": (cfg!(feature = "governance")),
+            "http": (cfg!(feature = "http")),
+            "ids_projection": (cfg!(feature = "ids_projection")),
+            "values": (reputation_event_id_identity_fixture_values()),
+        });
+        println!(
+            "REPUTATION_EVENT_ID_FIXTURE={}",
+            norito::json::to_json(&fixture).expect("current event-id projection capture")
         );
     }
     #[test]

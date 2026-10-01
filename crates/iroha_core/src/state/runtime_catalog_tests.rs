@@ -289,33 +289,53 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
 
 fn catalog_payload(state: &State, keys: &[iroha_crypto::KeyPair]) -> NexusCatalogTransitionV1 {
     let hash = [0x67; 32];
-    let new_dataspace = DataSpaceId::from_hash(&hash);
+    catalog_transition_for_testing(
+        state,
+        DataSpaceMetadata {
+            id: DataSpaceId::from_hash(&hash),
+            alias: "new-catalog-ds".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+        hash,
+        RuntimeLaneConfig {
+            id: LaneId::new(5),
+            alias: "new-catalog-lane".to_owned(),
+            dataspace_id: DataSpaceId::from_hash(&hash),
+            ..RuntimeLaneConfig::default()
+        },
+        &keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Build an additive request from the current retained catalog and original committee peers.
+/// The caller still submits this through normal accepted execution and certified publication.
+pub(crate) fn catalog_transition_for_testing(
+    state: &State,
+    descriptor: DataSpaceMetadata,
+    manifest_hash: [u8; 32],
+    lane: RuntimeLaneConfig,
+    peers: &[PeerId],
+) -> NexusCatalogTransitionV1 {
     let nexus = state.nexus_snapshot();
     NexusCatalogTransitionV1 {
-        version: 1,
+        version: NexusCatalogTransitionV1::VERSION,
         expected_catalog_hash: LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog),
         expected_incarnation_root: lane_lifecycle_incarnation_root(
             &nexus.lane_catalog,
             &state.lane_incarnations_snapshot(),
         )
         .unwrap(),
-        expected_runtime_catalog_hash: None,
+        expected_runtime_catalog_hash: state.view().runtime_catalog_hash().unwrap(),
         dataspace_additions: vec![RuntimeDataSpaceAdditionV1 {
-            descriptor: DataSpaceMetadata {
-                id: new_dataspace,
-                alias: "new-catalog-ds".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-            manifest_hash: hash,
+            descriptor,
+            manifest_hash,
         }],
-        lane_additions: vec![RuntimeLaneConfig {
-            id: LaneId::new(5),
-            alias: "new-catalog-lane".to_owned(),
-            dataspace_id: new_dataspace,
-            ..RuntimeLaneConfig::default()
-        }],
-        manifest_additions: vec![catalog_manifest(LaneId::new(5), "new-catalog-lane", keys)],
+        manifest_additions: vec![catalog_manifest_for_peers(lane.id, &lane.alias, peers)],
+        lane_additions: vec![lane],
     }
 }
 
@@ -324,15 +344,27 @@ fn catalog_manifest(
     alias: &str,
     keys: &[iroha_crypto::KeyPair],
 ) -> RuntimeLaneManifestV1 {
-    let validators: Vec<_> = keys
+    catalog_manifest_for_peers(
+        lane_id,
+        alias,
+        &keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn catalog_manifest_for_peers(
+    lane_id: LaneId,
+    alias: &str,
+    peers: &[PeerId],
+) -> RuntimeLaneManifestV1 {
+    let validators: Vec<_> = peers
         .iter()
-        .map(|key| {
-            let validator = AccountId::new(key.public_key().clone()).to_string();
-            let peer_id = PeerId::new(key.public_key().clone()).to_string();
-            norito::json!({
-                "validator": validator,
-                "peer_id": peer_id,
-            })
+        .map(|peer| {
+            let validator = AccountId::new(peer.public_key().clone()).to_string();
+            let peer_id = peer.to_string();
+            norito::json!({ "validator": validator, "peer_id": peer_id })
         })
         .collect();
     RuntimeLaneManifestV1 {

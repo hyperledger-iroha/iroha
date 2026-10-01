@@ -7,13 +7,12 @@
 use crate::governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use iroha_crypto::{
-    Hash, Hash as UntypedHash, HashOf,
+    Hash as UntypedHash, HashOf,
     privacy::{CommitmentScheme, LanePrivacyCommitment},
 };
 use iroha_data_model::isi::settlement::{SettlementAtomicity, SettlementExecutionOrder};
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
-use iroha_telemetry::metrics;
 #[cfg(test)]
 use std::sync::Condvar;
 use std::{

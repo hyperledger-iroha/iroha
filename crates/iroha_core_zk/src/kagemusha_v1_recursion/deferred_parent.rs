@@ -37,7 +37,11 @@ use snark_verifier::{
     },
 };
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use super::state_relation::public_instance;
 use super::{
     KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1, KAGEMUSHA_IPA_POSEIDON_FULL_ROUNDS_V1,
@@ -93,7 +97,11 @@ mod proof_bytes;
 pub(super) use proof_bytes::canonical_loaded_proof_bytes_v1;
 pub(super) use proof_bytes::verify_hybrid_ordinary_proof_and_stream_v1;
 use proof_bytes::verify_ordinary_proof_and_stream_v1;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 pub(in crate::kagemusha_v1_recursion) use proof_bytes::verify_ordinary_proof_with_canonical_bytes_v1;
 pub(super) use proof_bytes::verify_two_carrier_hybrid_ordinary_proof_and_stream_v1;
 
@@ -796,7 +804,11 @@ where
     }))
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Complete same-parity material needed to verify one predecessor and fold its opening claim.
 ///
 /// `protocol` must be witness-loaded and identity-constrained by the enclosing circuit before it
@@ -901,7 +913,11 @@ where
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Verify/fold one parent into an existing shared loader without finalizing its audit.
 ///
 /// When `enabled` is zero (the bootstrap base case), the parser and scalar verifier keep their

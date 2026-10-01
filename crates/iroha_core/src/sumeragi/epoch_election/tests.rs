@@ -7,7 +7,10 @@ use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetId},
-    block::{BlockHeader, consensus::ValidatorPower},
+    block::{
+        BlockHeader,
+        consensus::{SumeragiRootScope, ValidatorPower},
+    },
     consensus::{ConsensusKeyId, ConsensusKeyStatus},
     isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     nexus::{PublicLaneStakeShare, PublicLaneValidatorStatus},
@@ -535,7 +538,11 @@ fn native_control_capture_verifies_transported_threshold_pulse_without_local_agg
     }
     let view = world.view();
     let captured = crate::sumeragi::epoch_beacon::capture(
+<<<<<<< HEAD
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
+=======
+        SumeragiRootScope::Global,
+>>>>>>> origin/optimizations
         &view,
         &hashes[..8],
         &current,
@@ -545,13 +552,34 @@ fn native_control_capture_verifies_transported_threshold_pulse_without_local_agg
     )
     .unwrap();
     assert_eq!(captured.pulse(), Some(pulse));
+    // This genuine signed global pulse cannot grant custody to a private root.
+    assert!(
+        crate::sumeragi::epoch_beacon::capture(
+            SumeragiRootScope::Dataspace {
+                parent_network_id: current.network_id,
+                dataspace_id: iroha_model_base::topology::DataSpaceId::new((1_u64 << 40) + 7),
+            },
+            &view,
+            &hashes[..8],
+            &current,
+            9,
+            Some(pulse),
+            Some(component_pulse_context(&current)),
+        )
+        .unwrap_err()
+        .contains("private root cannot own global"),
+    );
     assert_eq!(
         captured.link(),
         Some(validate_persisted_global_threshold_beacon_pulse_v1(&pulse).unwrap())
     );
     assert!(
         crate::sumeragi::epoch_beacon::capture(
+<<<<<<< HEAD
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
+=======
+            SumeragiRootScope::Global,
+>>>>>>> origin/optimizations
             &view,
             &hashes[..8],
             &current,
@@ -564,7 +592,11 @@ fn native_control_capture_verifies_transported_threshold_pulse_without_local_agg
     // Presence is determined by the authenticated scheduling context, not by having a proof.
     assert!(
         crate::sumeragi::epoch_beacon::capture(
+<<<<<<< HEAD
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
+=======
+            SumeragiRootScope::Global,
+>>>>>>> origin/optimizations
             &view,
             &hashes[..7],
             &current,
@@ -576,7 +608,11 @@ fn native_control_capture_verifies_transported_threshold_pulse_without_local_agg
     );
     assert!(
         crate::sumeragi::epoch_beacon::capture(
+<<<<<<< HEAD
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
+=======
+            SumeragiRootScope::Global,
+>>>>>>> origin/optimizations
             &view,
             &hashes[..7],
             &current,
@@ -602,7 +638,11 @@ fn native_control_capture_verifies_transported_threshold_pulse_without_local_agg
         }
         assert!(
             crate::sumeragi::epoch_beacon::capture(
+<<<<<<< HEAD
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
+=======
+                SumeragiRootScope::Global,
+>>>>>>> origin/optimizations
                 &view,
                 &hashes[..8],
                 &current,
@@ -618,7 +658,11 @@ fn native_control_capture_verifies_transported_threshold_pulse_without_local_agg
     world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
     assert!(
         crate::sumeragi::epoch_beacon::capture(
+<<<<<<< HEAD
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
+=======
+            SumeragiRootScope::Global,
+>>>>>>> origin/optimizations
             &world.view(),
             &hashes[..8],
             &current,

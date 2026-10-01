@@ -5232,6 +5232,17 @@ fn admit_host_action_progress(
         ));
     }
     let key = host_action_key(admitted, action);
+    let plan = host_forward_plan(admitted);
+    let ordinal = plan
+        .iter()
+        .position(|expected| expected == &key)
+        .ok_or_else(|| eyre!("host action is not present in the exact physical-host plan"))?;
+    if ordinal < usize::from(progress.next_forward_ordinal) {
+        // The coordinator's phase cursor may lag a later prepared host action.
+        // Dispatch still requires this completed action's exact immutable receipt
+        // and revalidates the current target; replay never replaces that preparation.
+        return Ok(HostProgressDecision::Replay);
+    }
     if let Some(prepared) = &progress.prepared_action
         && prepared != &key
     {
@@ -5239,13 +5250,8 @@ fn admit_host_action_progress(
             "host action cannot supersede a different durably prepared action"
         ));
     }
-    let plan = host_forward_plan(admitted);
-    let ordinal = plan
-        .iter()
-        .position(|expected| expected == &key)
-        .ok_or_else(|| eyre!("host action is not present in the exact physical-host plan"))?;
     match ordinal.cmp(&usize::from(progress.next_forward_ordinal)) {
-        std::cmp::Ordering::Less => Ok(HostProgressDecision::Replay),
+        std::cmp::Ordering::Less => unreachable!("completed action classified above"),
         std::cmp::Ordering::Equal => Ok(HostProgressDecision::Advance),
         std::cmp::Ordering::Greater => Err(eyre!(
             "host action violates the exact monotonic physical-host phase order"
@@ -9149,12 +9155,21 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                 require_state_identity(state, &intent)?;
             } else {
                 let state = Path::new(&validator.state_root);
-                if state.join(".public-reset-generated-v1.json").exists() {
-                    return Err(eyre!(
-                        "rollback cannot claim success while the authorization fresh-state marker remains live"
-                    ));
-                }
                 require_root_directory(state, false, "restored validator state root")?;
+                match fs::symlink_metadata(state.join(".public-reset-generated-v1.json")) {
+                    Ok(_) => {
+                        let metadata = fs::symlink_metadata(state)?;
+                        validate_historical_prior_state_marker(
+                            &read_generated_marker(state)?,
+                            admitted,
+                            validator,
+                            metadata.dev(),
+                            metadata.ino(),
+                        )?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
                 let intent_path = rollback.join("state-move.intent.json");
                 if intent_path.exists() {
                     let intent = load_state_move_intent(&rollback, admitted)?;
@@ -9225,6 +9240,46 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn validate_historical_prior_state_marker(
+    marker: &GeneratedMarkerV1,
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+    device: u64,
+    inode: u64,
+) -> Result<()> {
+    if marker.authorization_nonce == admitted.inventory.authorization_nonce
+        || marker.inventory_sha256 == admitted.inventory_sha256
+    {
+        return Err(eyre!(
+            "rollback cannot claim success while the authorization fresh-state marker remains live"
+        ));
+    }
+    // A marker is historical metadata only. The signed stopped predecessor
+    // identity independently proves that this is the original state directory.
+    let prior = validator.admitted_release()?;
+    if prior.service_state.stopped_state().is_none() {
+        return Err(eyre!(
+            "historical state marker requires an independently signed stopped state identity"
+        ));
+    }
+    prior.service_state.validate_state_identity(device, inode)?;
+    if marker.schema != GENERATED_MARKER_SCHEMA_V1
+        || marker.kind != "fresh_state"
+        || marker.host_slug != validator.slug
+        || marker.created_at_unix_ms == 0
+    {
+        return Err(eyre!("historical predecessor state marker is invalid"));
+    }
+    super::validate_lower_hex("historical state inventory", &marker.inventory_sha256, 64)?;
+    super::validate_lower_hex(
+        "historical state authorization nonce",
+        &marker.authorization_nonce,
+        32,
+    )?;
+    super::validate_lower_hex("historical state revision", &marker.revision, 40)?;
+    Ok(())
 }
 
 fn restore_admitted_edge_config(
@@ -21436,6 +21491,152 @@ mod tests {
                 .expect("the exact touched target remains next after absent no-op"),
             HostProgressDecision::Advance
         );
+    }
+
+    #[test]
+    fn completed_host_action_replay_preserves_a_later_prepared_action_and_exact_receipt() {
+        let mut admitted = progress_admission();
+        let plan = host_forward_plan(&admitted);
+        let later = plan
+            .iter()
+            .position(|key| {
+                key.host_slug == "taira-validator-2" && key.action == HostAction::Install.label()
+            })
+            .expect("second validator install");
+        let mut progress = initial_host_progress(&admitted);
+        progress.next_forward_ordinal = u16::try_from(later).unwrap();
+        progress.prepared_action = Some(plan[later].clone());
+        progress.touched_hosts = admitted
+            .inventory
+            .validators
+            .iter()
+            .map(|validator| validator.slug.clone())
+            .collect();
+        let before = json::to_json(&progress).unwrap();
+
+        select_target(&mut admitted, "taira-validator-1");
+        assert_eq!(
+            admit_host_action_progress(&admitted, HostAction::Install, &progress).unwrap(),
+            HostProgressDecision::Replay
+        );
+        assert_eq!(json::to_json(&progress).unwrap(), before);
+
+        let directory = tempfile::tempdir().unwrap();
+        let name = host_receipt_name(HostAction::Install, "").unwrap();
+        assert!(
+            read_existing_host_receipt(directory.path(), &name, &admitted, HostAction::Install)
+                .unwrap()
+                .is_none()
+        );
+        let path = directory.path().join(&name);
+        let mut receipt = host_receipt(&admitted, HostAction::Install, false, 0, 0, "installed");
+        let bytes = json::to_json(&receipt).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let inode = fs::symlink_metadata(&path).unwrap().ino();
+        read_existing_host_receipt(directory.path(), &name, &admitted, HostAction::Install)
+            .unwrap()
+            .expect("exact completed action receipt");
+        assert_eq!(fs::read_to_string(&path).unwrap(), bytes);
+        assert_eq!(fs::symlink_metadata(&path).unwrap().ino(), inode);
+        receipt.request_sha256 = "e".repeat(64);
+        fs::write(&path, json::to_json(&receipt).unwrap()).unwrap();
+        assert!(
+            read_existing_host_receipt(directory.path(), &name, &admitted, HostAction::Install)
+                .is_err()
+        );
+
+        select_target(&mut admitted, "taira-validator-2");
+        assert_eq!(
+            admit_host_action_progress(&admitted, HostAction::Install, &progress).unwrap(),
+            HostProgressDecision::Advance
+        );
+        select_target(&mut admitted, "taira-validator-3");
+        assert!(admit_host_action_progress(&admitted, HostAction::Install, &progress).is_err());
+        select_target(&mut admitted, "taira-validator-1");
+        assert!(admit_host_action_progress(&admitted, HostAction::Reset, &progress).is_err());
+        progress.rolling_back = true;
+        assert!(admit_host_action_progress(&admitted, HostAction::Install, &progress).is_err());
+        progress.rolling_back = false;
+        progress.prepared_action = None;
+        select_target(&mut admitted, "taira-validator-3");
+        assert!(admit_host_action_progress(&admitted, HostAction::Install, &progress).is_err());
+        assert_eq!(progress.next_forward_ordinal, u16::try_from(later).unwrap());
+    }
+
+    #[test]
+    fn rollback_historical_marker_requires_the_signed_prior_inode_and_foreign_authorization() {
+        let admitted = progress_admission();
+        let directory = tempfile::tempdir().unwrap();
+        let metadata = fs::symlink_metadata(directory.path()).unwrap();
+        let mut validator = admitted.inventory.validators[0].clone();
+        let super::super::ValidatorInitialStateV1::AdmittedRelease(prior) =
+            &mut validator.initial_state
+        else {
+            panic!("occupied predecessor fixture");
+        };
+        prior.service_state =
+            PriorValidatorServiceStateV1::Stopped(super::super::StoppedValidatorStateV1 {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            });
+        let marker = GeneratedMarkerV1 {
+            schema: GENERATED_MARKER_SCHEMA_V1.into(),
+            kind: "fresh_state".into(),
+            host_slug: validator.slug.clone(),
+            inventory_sha256: "e".repeat(64),
+            authorization_nonce: "f".repeat(32),
+            revision: "c".repeat(40),
+            created_at_unix_ms: 1,
+        };
+        let check = |marker: &GeneratedMarkerV1, validator: &ValidatorV1, device, inode| {
+            validate_historical_prior_state_marker(marker, &admitted, validator, device, inode)
+        };
+        check(&marker, &validator, metadata.dev(), metadata.ino()).unwrap();
+        assert!(check(&marker, &validator, metadata.dev() ^ 1, metadata.ino()).is_err());
+        assert!(check(&marker, &validator, metadata.dev(), metadata.ino() + 1).is_err());
+        for field in [
+            "current_nonce",
+            "current_inventory",
+            "schema",
+            "kind",
+            "host",
+            "inventory",
+            "nonce",
+            "revision",
+            "time",
+        ] {
+            let mut wrong = marker.clone();
+            match field {
+                "current_nonce" => {
+                    wrong.authorization_nonce = admitted.inventory.authorization_nonce.clone()
+                }
+                "current_inventory" => wrong.inventory_sha256 = admitted.inventory_sha256.clone(),
+                "schema" => wrong.schema = "unknown".into(),
+                "kind" => wrong.kind = "release".into(),
+                "host" => wrong.host_slug = "taira-validator-2".into(),
+                "inventory" => wrong.inventory_sha256 = "not-a-hash".into(),
+                "nonce" => wrong.authorization_nonce = "not-a-nonce".into(),
+                "revision" => wrong.revision = "not-a-revision".into(),
+                "time" => wrong.created_at_unix_ms = 0,
+                _ => unreachable!(),
+            }
+            assert!(
+                check(&wrong, &validator, metadata.dev(), metadata.ino()).is_err(),
+                "accepted {field} drift"
+            );
+        }
+        let mut running = validator.clone();
+        let super::super::ValidatorInitialStateV1::AdmittedRelease(prior) =
+            &mut running.initial_state
+        else {
+            unreachable!();
+        };
+        prior.service_state = PriorValidatorServiceStateV1::Running;
+        assert!(check(&marker, &running, metadata.dev(), metadata.ino()).is_err());
+        let mut vacant = validator.clone();
+        vacant.initial_state = super::super::ValidatorInitialStateV1::Vacant;
+        assert!(check(&marker, &vacant, metadata.dev(), metadata.ino()).is_err());
     }
 
     #[test]

@@ -8,6 +8,8 @@ use crate::{
     encode_instruction_frame, instruction_from_json, value_to_instruction,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use iroha_data_model::smart_contract::ContractArtifactId;
+use iroha_model_base::topology::DataSpaceId;
 
 fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
     Value::Object(
@@ -359,8 +361,13 @@ fn game_binary_decode_rechecks_public_invariants_and_rejects_alternate_json_enve
 #[test]
 fn cancel_upload_roundtrip_preserves_the_native_batch_instruction() {
     let native = iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
+<<<<<<< HEAD
         artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
             iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+=======
+        artifact_id: ContractArtifactId::new(
+            DataSpaceId::new(u64::MAX),
+>>>>>>> origin/optimizations
             json::from_value(field(&game("OpenGameSessionV1"), "session_id")).unwrap(),
         ),
     };

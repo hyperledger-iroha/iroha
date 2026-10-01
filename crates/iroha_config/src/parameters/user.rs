@@ -8059,13 +8059,13 @@ pub struct Network {
     pub deferred_send_max_bytes_total: usize,
     /// Request QUIC transport (feature-gated).
     ///
-    /// Runtime startup rejects `true` before binding while the lockfile resolves
-    /// `quinn 0.11.9` / vulnerable `quinn-proto 0.11.15`. TLS-over-TCP remains available.
+    /// Runtime startup rejects `true` before binding pending transport requalification
+    /// with locked `quinn 0.11.12` / `quinn-proto 0.11.18`. TLS-over-TCP remains available.
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
     /// Request QUIC DATAGRAM support for best-effort topics (feature-gated by QUIC).
     ///
-    /// The first-release runtime rejects `true` until quinn-proto 0.11.17 or
+    /// The first-release runtime rejects `true` until quinn-proto 0.11.18 or
     /// later is locked and requalified. Leave this disabled so gossip and
     /// health frames use their reliable-stream fallback.
     #[config(default = "defaults::network::QUIC_DATAGRAMS_ENABLED")]

@@ -2352,11 +2352,20 @@ mod tests {
             .stage(),
             "signer-seed"
         );
-        let unsupported = bundle_with(
+        let x509 = bundle_with(
             [7; 32],
             &authority_for_seed([7; 32]),
             "iroha-zk-x509-stark-p256-v1",
             "zk_x509_identity_presentation_v1",
+            PUBLIC_ACTION.as_bytes(),
+            WITNESS.as_bytes(),
+        );
+        assert!(inspect_privacy_wallet_execution_bundle_v1(&x509).is_ok());
+        let unsupported = bundle_with(
+            [7; 32],
+            &authority_for_seed([7; 32]),
+            "unknown-privacy-protocol-v1",
+            "unknown_operation_v1",
             PUBLIC_ACTION.as_bytes(),
             WITNESS.as_bytes(),
         );

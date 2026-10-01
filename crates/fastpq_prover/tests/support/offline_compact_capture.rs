@@ -304,7 +304,7 @@ fn source_occurrences(
         .collect()
 }
 
-/// Finite public facade limits with the normal 512 KiB child and 64-query envelope.
+/// Finite public facade limits with the normal 512 KiB child and 77-query envelope.
 pub fn capture_policy() -> VerificationLimits {
     let mut limits = policy();
     limits.transport.max_wire_bytes = 1024 * 1024;

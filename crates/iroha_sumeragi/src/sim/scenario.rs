@@ -295,6 +295,9 @@ pub struct Checks {
     pub perf: Perf,
     /// Sanity: every honest running node commits at least this many heights after heal.
     pub progress: u64,
+    /// After the minimum duration, finish missing progress under already established O-LIVE
+    /// deadlines. Only a genuine commit starts another deadline; the progress target is fixed.
+    pub complete_progress: bool,
     /// O-TXP (poison present).
     pub txp: bool,
     /// O-CQ (no crashes).
@@ -318,6 +321,7 @@ impl Default for Checks {
             liveness: true,
             perf: Perf::None,
             progress: 3,
+            complete_progress: false,
             txp: false,
             cq: false,
             may_halt: Vec::new(),

@@ -68,6 +68,13 @@ pub(crate) fn qualification_projection_v1(bytes: &[u8]) -> Option<QualificationP
     control_payload::qualification_projection_v1(bytes).ok()
 }
 
+/// Bounded data-only projection of the existing exact canonical operation-21 codec.
+pub(crate) fn wallet_recovery_snapshot_projection_v1(
+    bytes: &[u8],
+) -> Option<(Option<Vec<u8>>, u128, u128, u128)> {
+    control_payload::decode_wallet_recovery_snapshot_reply_v1(bytes).ok()
+}
+
 /// Verify exact coordinator reply components using the sole device signature transcript.
 /// This grants no catalog membership, current credential status, or outstanding-challenge authority.
 pub(crate) fn verify_observation_reply_v1(
@@ -78,6 +85,7 @@ pub(crate) fn verify_observation_reply_v1(
     authenticator: &[u8],
     qualification: &QualificationProjectionV1,
     wallet: &ObservationWalletContextV1,
+    provider_policy_root: &[u8; 32],
 ) -> bool {
     if !validate_coordinator_observation_binding_v1(operation, command)
         || request_id == [0; 32]
@@ -98,6 +106,7 @@ pub(crate) fn verify_observation_reply_v1(
             reply,
             qualification,
             wallet,
+            provider_policy_root,
         )
         .is_err()
     {

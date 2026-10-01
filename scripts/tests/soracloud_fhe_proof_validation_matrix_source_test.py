@@ -16,7 +16,7 @@ PROVENANCE_SUFFIX_SHA256 = (
     "7d5f0d1dadc0d37aa6dcadbab85d5a816f7670ccba4aa4c079604799da2abb76"
 )
 FHE_PREFIX_NORMALIZED_SHA256 = (
-    "324a894e0d9362fc26637238749d46b15bf4ab6a247c83137b573847b6b28a16"
+    "c2a9e28322222b6d1f1050574209db436afb03bae0d3aa8727ba3bbf533cc966"
 )
 SUFFIX_MARKER = b"#[test]\nfn rollout_provenance_payload_encodes_canonical_tuple() {\n"
 

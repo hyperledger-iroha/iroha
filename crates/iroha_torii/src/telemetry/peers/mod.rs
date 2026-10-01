@@ -447,7 +447,13 @@ impl FromStr for ToriiUrl {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let url = Url::parse(s)
             .map_err(|error| ToriiUrlError::new(format!("failed to parse URL: {error}")))?;
-        Self::try_from(url)
+        let origin = Self::try_from(url)?;
+        // URL parsing discards an empty userinfo marker. Inspect the original
+        // input as well so `https://@host/` cannot bypass credential rejection.
+        if s.contains('@') {
+            return Err(ToriiUrlError::new("URL must not contain user credentials"));
+        }
+        Ok(origin)
     }
 }
 impl TryFrom<Url> for ToriiUrl {
@@ -757,6 +763,10 @@ mod tests {
             "https://peer.example/#fragment",
             "https://operator:secret@peer.example/",
             "https://@peer.example/",
+            "https://@peer.example",
+            "https://:@peer.example/",
+            "https://\t@peer.example/",
+            "https://@\npeer.example/",
         ] {
             assert!(
                 candidate.parse::<ToriiUrl>().is_err(),

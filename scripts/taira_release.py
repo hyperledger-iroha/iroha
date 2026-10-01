@@ -6,14 +6,15 @@ and explicitly hash-pinned Zig/cargo-zigbuild executables. `check` runs the
 maintained native CLI gate in the existing sibling .taira-testnet-build-targets/routine
 lane (override with --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR; both must agree).
 `prepare` keeps repo target/ by default, ignoring the development-only environment
-selector, and also builds the four Linux release binaries
+selector, and builds the four Linux release binaries
 from one fixed Git-object source capture with six jobs and captures read-only
-copies. Rerun the same prepare command to reuse completed checks/captures or
-retry an incomplete local build in the same warm Cargo lane. After a shipping,
-capacity or network failure, an exact pre-network checkpoint avoids rerunning the
-startup and priority tests that passed before the four-peer gate; fresh matching
-Cargo artifact copies, the real four-peer gate and the remaining independent
-tests are still required. Failed attempt directories and logs remain intact.
+copies. Rerun the same prepare command to reuse completed captures or retry an
+incomplete local build in the same warm Cargo lane. Failed attempt directories
+and logs remain intact. Preparation records native_check_scope=build-only
+and checks.passed=false, without running native regression checks. Its signed
+source, pinned tools and captured release artifacts retain the same custody;
+it is unqualified build evidence, never a Basic or Full pass. Native deployment
+preflight, canary, finality, readiness and restart checks remain mandatory.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 For a mutable-source prequalification diagnostic, check accepts repeatable
@@ -1599,56 +1600,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             return prepare_in_lane(args, source, lock_fd, mode_lock_fd)
 
 
-def read_native_check_checkpoint(checkpoint: Path, request: dict[str, object],
-                                 label: str) -> dict[str, object] | None:
-    """Return exact-request evidence, or None when no pass was recorded."""
-    if not checkpoint.exists():
-        return None
-    record = read_record(checkpoint)
-    require(set(record) == {"request", "evidence"} and record["request"] == request
-            and isinstance(record["evidence"], dict),
-            f"{label} native check checkpoint differs or is incomplete")
-    return record["evidence"]
-
-
-def run_native_checks_with_checkpoints(selected_gate, source: Path, native_env: dict[str, str],
-                                       request: dict[str, object], pre_network: Path,
-                                       independent: Path, revalidate, retire_checkpoint,
-                                       lock_fds: tuple[int, ...]) -> None:
-    """Resume only exact passes from this preparation request.
-
-    The pre-network checkpoint records the prefix that passed before shipping
-    codegen and the four-peer fixture; the independent checkpoint records the
-    complete census after both. The gate compares each against the actual
-    census and copied artifacts and retires either before its tests rerun.
-    """
-    completed_pre_network = read_native_check_checkpoint(pre_network, request, "pre-network")
-    completed_independent = read_native_check_checkpoint(independent, request, "independent")
-
-    def updater(checkpoint: Path):
-        def update(evidence):
-            if evidence is None:
-                retire_checkpoint(checkpoint)
-                return
-            revalidate()
-            write_record(checkpoint, {"request": request, "evidence": evidence})
-        return update
-
-    try:
-        selected_gate.run_checks(source, environment=native_env, source_commit=request["commit"],
-                                 lock_fds=lock_fds,
-                                 completed_independent_checks=completed_independent,
-                                 update_independent_checks=updater(independent),
-                                 completed_pre_network_checks=completed_pre_network,
-                                 update_pre_network_checks=updater(pre_network),
-                                 qualification_scope=request["native_check_scope"])
-    except selected_gate.CheckError as error:
-        raise PrepareError(str(error)) from error
-
-
 def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, mode_lock_fd: int) -> dict[str, object]:
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
-    require(args.native_check_scope in {"basic", "full"}, "unknown native check scope")
+    require(args.native_check_scope == "build-only", "preparation is build-only; use check for regression tests")
     output = real_path(args.output_dir, exists=False)
     preflight_preparation_tmpdir(dict(os.environ))
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
@@ -1709,7 +1663,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     print("[taira-release] pinned native linker " + json.dumps(native_linker, sort_keys=True), flush=True)
     command = build_command(source, target_dir, env["CARGO"])
     base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
-            "native_check_scope": args.native_check_scope,
+            "native_check_scope": "build-only",
             "native_incremental": native_env["CARGO_INCREMENTAL"] == "1",
             "native_linker": native_linker,
             "environment_sha256": hashlib.sha256(canonical_json_bytes(environment_record)).hexdigest(),
@@ -1799,10 +1753,10 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
                 print(f"[taira-release] {label} elapsed {timings[label]:.3f}s", flush=True)
 
         checks = output / "checks.json"
-        independent_checks = output / "independent-checks.json"
-        pre_network_checks = output / "pre-network-checks.json"
         if checks.exists():
-            require(read_record(checks) == {"request": request, "passed": True}, "native check checkpoint differs")
+            record = read_record(checks)
+            require(record == {"request": request, "passed": False}
+                    and type(record.get("passed")) is bool, "native check checkpoint differs")
 
         def retire_checkpoint(checkpoint):
             # Remove the resumable success checkpoint before retiring any cache
@@ -1818,24 +1772,14 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
 
         def retire_checks():
             retire_checkpoint(checks)
-            retire_checkpoint(independent_checks)
-            retire_checkpoint(pre_network_checks)
 
         admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
         revalidate()
         if checks.exists():
-            print("[taira-release] reused completed native CLI checks", flush=True)
+            print("[taira-release] reused build-only observation; native checks were not run", flush=True)
         else:
-            selected_gate = captured_gate(source, before)
-            def run_native_checks():
-                run_native_checks_with_checkpoints(
-                    selected_gate, source, native_env, request, pre_network_checks,
-                    independent_checks, revalidate, retire_checkpoint,
-                    (lock_fd, lane_lock_fd, mode_lock_fd))
-            stage("native CLI checks", run_native_checks)
-            revalidate()
-            if not checks.exists():
-                write_record(checks, {"request": request, "passed": True})
+            write_record(checks, {"request": request, "passed": False})
+            print("[taira-release] build-only: native checks not run; artifacts remain unqualified", flush=True)
         revalidate()
         stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd, mode_lock_fd=mode_lock_fd))
         with source_fingerprints(source, target_dir, TARGET, packages, repair=False):
@@ -2013,9 +1957,9 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
         command.add_argument("--target-dir", type=Path, help="existing warm Cargo lane (check: sibling routine lane; prepare: repo target/)")
-        command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
-                             help="basic Taira deployment checks (default), or full regression qualification")
         if name == "check":
+            command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
+                                 help="basic native regression checks (default), or full regression qualification")
             command.add_argument("--session-dir", type=Path,
                                  help="fresh private directory for a detached diagnostic; use check-status for its durable result")
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
@@ -2023,6 +1967,7 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
                                  help="development diagnostic: run selected portable ownership targets first, then mandatory configuration and remaining explicit harnesses; not qualification")
         if name == "prepare":
+            command.set_defaults(native_check_scope="build-only")
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
                                  help="pinned native gate linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")
             command.add_argument("--expected-commit", required=True)

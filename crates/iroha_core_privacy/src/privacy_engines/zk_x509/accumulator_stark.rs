@@ -152,7 +152,7 @@ const SERIALIZED_SHA_PRODUCT_START: usize =
     DIGEST_AUX_START + DIGEST_STATES_V1 * ZK_X509_SHA_BUS_LANES_V1;
 const ROOT_SPKI_IO_PRODUCT_START: usize = SERIALIZED_SHA_PRODUCT_START + ZK_X509_SHA_BUS_LANES_V1;
 /// Canonical root-SPKI channel before two channels per public disclosure.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_ROOT_SPKI_BASE_CHANNEL_V1: u32 = 28;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_ROOT_SPKI_BASE_CHANNEL_V1: u32 = 30;
 /// Exact number of root-SPKI consumer events.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_ROOT_SPKI_IO_EVENTS_V1: u16 =
     ZK_X509_CA_SPKI_DER_BYTES_V1 as u16;
@@ -208,7 +208,7 @@ const _: () = {
     assert!(LEAF_DYNAMIC_WORD_END_V1 == 38);
 };
 /// Stable proof-facing compact accumulator identity.
-pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-adapter-claim-addresses-length-and-no-trailing-bytes:claim-envelope108-records*12+header14=1310bytes:inner-predeep-max1446016:inner-deep52800:subproof-max1500126:single-log13-trace8192:dedicated-lde-log16:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask696-coefficients:max-fri-rate9over64:fri136-distinct-post-grinding20:fri-ordered-low-high-pair-leaves:binary-fri6-rounds-terminal1024-degree143:independent-fp4-fri-mask-root-before-deep-batching:one-shared-deep-point-current+next:complete-fp4-air1379-and-verifier-fixed-polynomials-at-deep:current-only-queries-after-complete-oods-no-scalar-query-callback:fp4-composition-lanes1:fixed-selector-aware-maximum-quotient-degree34851:composition-degree-chunks4:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding8088:base695-11chunks:aux128-2chunks:fixed80:constraints1379:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=28+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:typed-outer-binding=public-root+channel+ordered-sha13+rfc91:shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-fixed64-reservoir-health-check-zeroize-poison-error-or-unwind:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
+pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-adapter-claim-addresses-length-and-no-trailing-bytes:claim-envelope108-records*12+header14=1310bytes:inner-predeep-max1446016:inner-deep52800:subproof-max1500126:single-log13-trace8192:dedicated-lde-log16:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask696-coefficients:max-fri-rate9over64:fri136-distinct-post-grinding20:fri-ordered-low-high-pair-leaves:binary-fri6-rounds-terminal1024-degree143:independent-fp4-fri-mask-root-before-deep-batching:one-shared-deep-point-current+next:complete-fp4-air1379-and-verifier-fixed-polynomials-at-deep:current-only-queries-after-complete-oods-no-scalar-query-callback:fp4-composition-lanes1:fixed-selector-aware-maximum-quotient-degree34851:composition-degree-chunks4:canonical-chunk-stride9079:independent-adjacent-fp4-masks137-before-commitment:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding8088:base695-11chunks:aux128-2chunks:fixed80:constraints1379:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=30+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:typed-outer-binding=public-root+channel+ordered-sha13+rfc91:shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-fixed64-reservoir-health-check-zeroize-poison-error-or-unwind:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
 const CA_PROOF_MAGIC_V1: [u8; 4] = *b"X5C1";
 const CA_INNER_PROOF_MAGIC_V1: [u8; 4] = *b"X5C2";
 const CA_ADAPTER_ID_V1: u16 = 5;
@@ -761,6 +761,7 @@ pub(crate) fn checked_ca_accumulator_resource_envelope_v1(
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let quotient_chunk_capacity = fri_degree_cap
         .checked_add(1)
+        .and_then(|coefficients| coefficients.checked_sub(request.fri_query_count.checked_add(1)?))
         .and_then(|coefficients| coefficients.checked_mul(COMPOSITION_DEGREE_CHUNKS_V1))
         .and_then(|coefficients| coefficients.checked_sub(1))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
@@ -850,6 +851,20 @@ pub(crate) fn checked_ca_accumulator_resource_envelope_v1(
         .and_then(|cells| cells.checked_mul(ZK_X509_CA_ACCUMULATOR_EXTENSION_COMPONENTS_V1))
         .and_then(|cells| cells.checked_mul(FIELD_BYTES_V1))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
+    // The blinder retains D coefficients per chunk beside the output codewords.
+    // Its in-place inverse transform consumes the original quotient allocation
+    // and drops that allocation before producing the first output codeword.
+    let composition_blinding_bytes = fri_degree_cap
+        .checked_add(1)
+        .and_then(|coefficients| coefficients.checked_mul(COMPOSITION_DEGREE_CHUNKS_V1))
+        .and_then(|coefficients| coefficients.checked_mul(request.composition_extension_lanes))
+        .and_then(|coefficients| coefficients.checked_mul(core::mem::size_of::<E>()))
+        .and_then(|bytes| {
+            bytes.checked_add(
+                super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
+            )
+        })
+        .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let adapter_resident_payload_bytes = native_material_bytes
         .checked_add(total_local_lde_bytes)
         .and_then(|bytes| bytes.checked_add(current_next_block_bytes))
@@ -857,6 +872,7 @@ pub(crate) fn checked_ca_accumulator_resource_envelope_v1(
         .and_then(|bytes| bytes.checked_add(trace_mask_bytes))
         .and_then(|bytes| bytes.checked_add(residue_vector_bytes))
         .and_then(|bytes| bytes.checked_add(composition_chunk_bytes))
+        .and_then(|bytes| bytes.checked_add(composition_blinding_bytes))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let envelope = ZkX509CaAccumulatorResourceEnvelopeV1 {
         mask_coefficients,
@@ -2415,9 +2431,12 @@ fn verify_ca_deep_constraints_v1(
         .inv()
         .ok_or(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening)?;
     let chunk_power = point.pow(
-        layout
-            .fri_degree_cap(CA_AGGREGATE_PARAMETERS_V1)
-            .map_err(map_aggregate_proof_error_v1)? as u128,
+        super::composition_masking::QuotientChunkGeometryV1::new_v1(
+            layout,
+            CA_AGGREGATE_PARAMETERS_V1,
+        )
+        .map_err(map_aggregate_proof_error_v1)?
+        .stride_v1() as u128,
     );
     let expected = residues
         .iter()
@@ -2517,9 +2536,38 @@ fn ca_quotient_value_v1(
         })
         .mul_base(inverse_vanishing))
 }
+/// Clearing owner retained through every commitment, transcript and FRI operation.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+type CaCompositionLanesV1 = super::private_table::PrivateTableV1<Vec<Vec<E>>>;
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn erase_ca_composition_chunks_v1(chunks: &mut [Vec<E>]) {
+    for chunk in chunks {
+        super::private_table::zeroize_words_v1(chunk);
+    }
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn own_ca_composition_lane_v1(
+    chunks: Vec<Vec<E>>,
+) -> Result<CaCompositionLanesV1, ZkX509CaAccumulatorProofErrorV1> {
+    // Adopt the returned codewords before the only fallible outer reservation.
+    let chunks = super::private_table::PrivateTableV1::new(chunks, erase_ca_composition_chunks_v1);
+    let mut lanes = CaCompositionLanesV1::new(Vec::new(), |lanes| {
+        for lane in lanes {
+            erase_ca_composition_chunks_v1(lane);
+        }
+    });
+    lanes
+        .try_reserve_exact(1)
+        .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?;
+    lanes.push(chunks.into_vec());
+    Ok(lanes)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn ca_composition_lanes_v1(
+fn ca_composition_lanes_v1<R: rand::TryRngCore>(
     public: ZkX509CaAccumulatorStarkPublicV1,
     base_lde: &[Vec<F>],
     aux_lde: &[Vec<F>],
@@ -2529,7 +2577,8 @@ fn ca_composition_lanes_v1(
     claims: ZkX509CaAccumulatorStarkTerminalClaimsV1,
     alphas: &[E],
     layout: &aggregate::AggregateProofLayoutV1,
-) -> Result<Vec<Vec<Vec<E>>>, ZkX509CaAccumulatorProofErrorV1> {
+    rng: &mut R,
+) -> Result<CaCompositionLanesV1, ZkX509CaAccumulatorProofErrorV1> {
     let rows = layout.common_lde_size();
     let group = layout
         .trace_groups()
@@ -2546,7 +2595,10 @@ fn ca_composition_lanes_v1(
     }
     let lde_root = goldilocks_primitive_root_v1(layout.common_lde_log2())
         .map_err(map_transparent_proof_error_v1)?;
-    let mut evaluations = Vec::new();
+    let mut evaluations =
+        super::private_table::PrivateTableV1::new(Vec::new(), |values: &mut [E]| {
+            super::private_table::zeroize_words_v1(values);
+        });
     evaluations
         .try_reserve_exact(rows)
         .map_err(|_| ZkX509CaAccumulatorProofErrorV1::Resource)?;
@@ -2578,13 +2630,15 @@ fn ca_composition_lanes_v1(
         evaluations.push(ca_quotient_value_v1(x, &residues, alphas)?);
         x = x.mul(lde_root);
     }
-    let chunks = aggregate::split_composition_evaluations_v1(
-        &evaluations,
-        CA_AGGREGATE_PARAMETERS_V1,
+    let geometry = super::composition_masking::QuotientChunkGeometryV1::new_v1(
         layout,
+        CA_AGGREGATE_PARAMETERS_V1,
     )
     .map_err(map_aggregate_proof_error_v1)?;
-    Ok(vec![chunks])
+    let chunks = geometry
+        .split_evaluations_v1(evaluations.into_vec(), layout.common_lde_log2(), rng)
+        .map_err(map_aggregate_proof_error_v1)?;
+    own_ca_composition_lane_v1(chunks)
 }
 fn ca_challenge_vector_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -2830,7 +2884,7 @@ fn ca_base_columns_v1(
 /// fallible cryptographic entropy.
 ///
 /// Public/witness/resource preflight is complete before the source is touched.
-/// One fixed-block, health-checked reservoir session then covers every trace
+/// One fixed-block, health-checked reservoir session then covers every trace, quotient
 /// and FRI mask, and the producer independently verifies the final canonical
 /// bytes. Returned errors and source unwinds poison the session.
 #[allow(clippy::too_many_lines)]
@@ -2954,6 +3008,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         claims,
         &alphas,
         &layout,
+        &mut checked_rng,
     )?;
     let mut composition_trees = Vec::new();
     let mut composition_roots = Vec::new();
@@ -3515,7 +3570,7 @@ mod tests {
         assert_eq!(material.terminals[0].role, ZkX509ShaCallRoleV1::CaLeaf);
         assert_eq!(material.terminals[12].call, 28);
         assert_eq!(material.terminals[12].role, ZkX509ShaCallRoleV1::CaNode(11));
-        assert_eq!(material.root_spki_terminal.channel, 36);
+        assert_eq!(material.root_spki_terminal.channel, 38);
         assert_eq!(
             material.root_spki_terminal.event_count,
             ZK_X509_CA_ACCUMULATOR_ROOT_SPKI_IO_EVENTS_V1
@@ -3598,7 +3653,8 @@ mod tests {
             );
             assert!(
                 envelope.maximum_quotient_degree
-                    < (envelope.fri_degree_cap + 1) * COMPOSITION_DEGREE_CHUNKS_V1
+                    < (envelope.fri_degree_cap + 1 - request.fri_query_count - 1)
+                        * COMPOSITION_DEGREE_CHUNKS_V1
             );
             assert_eq!(envelope.native_material_field_cells, 7_397_376);
             assert_eq!(envelope.native_material_bytes, 59_179_008);
@@ -3649,7 +3705,7 @@ mod tests {
         assert_eq!(envelope.composition_residue_evaluations, 90_374_144);
         assert_eq!(envelope.composition_component_evaluations, 361_496_576);
         assert_eq!(envelope.lde_butterflies, 521_515_008);
-        assert_eq!(envelope.adapter_resident_payload_bytes, 548_032_344);
+        assert_eq!(envelope.adapter_resident_payload_bytes, 549_212_024);
         assert!(
             envelope.adapter_resident_payload_bytes >= envelope.total_local_lde_bytes,
             "the materialized first-release LDE must be counted as resident"
@@ -4526,5 +4582,41 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn ca_composition_codewords_clear_on_success_downstream_error_and_unwind() {
+        use super::super::private_table::inspection;
+        for outcome in 0..3 {
+            let (result, erased) = inspection::observe_v1(|| {
+                std::panic::catch_unwind(|| {
+                    let chunks = vec![vec![E::canonical([3, 5, 7, 11]).unwrap(); 7]; 4];
+                    let pointers = chunks.iter().map(Vec::as_ptr).collect::<Vec<_>>();
+                    let owner = own_ca_composition_lane_v1(chunks)?;
+                    assert_eq!(owner.len(), 1);
+                    assert_eq!(
+                        owner[0].iter().map(Vec::as_ptr).collect::<Vec<_>>(),
+                        pointers
+                    );
+                    // All later fallible consumers borrow this exact owner.
+                    match outcome {
+                        0 => Ok(()),
+                        1 => Err(ZkX509CaAccumulatorProofErrorV1::ConstraintOpening),
+                        _ => panic!("injected downstream composition consumer unwind"),
+                    }
+                })
+            });
+            match outcome {
+                0 => assert!(result.unwrap().is_ok()),
+                1 => assert!(result.unwrap().is_err()),
+                _ => assert!(result.is_err()),
+            }
+            assert_eq!(erased.iter().map(|row| row.cells).sum::<usize>(), 28);
+            assert_eq!(
+                erased.iter().map(|row| row.nonzero_before).sum::<usize>(),
+                28
+            );
+            assert!(erased.iter().all(|row| row.nonzero_after == 0));
+        }
     }
 }

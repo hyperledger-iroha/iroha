@@ -14,6 +14,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 import zipfile
 
 
@@ -28,7 +29,59 @@ PODSPEC_TEMPLATE = (
 VERSION = "1.0.0"
 
 
+def run_isolated_package_case(
+    case: unittest.TestCase, result: unittest.TestResult | None = None
+) -> unittest.TestResult:
+    """Execute one real isolated case and report its outcome to the parent runner."""
+    owns_result = result is None
+    if result is None:
+        result = case.defaultTestResult()
+        result.startTestRun()
+    result.startTest(case)
+    try:
+        selected = f"{type(case).__name__}.{case._testMethodName}"
+        command = [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), selected]
+        child = subprocess.run(
+            command,
+            cwd=REPOSITORY_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if child.returncode != 0 or "Ran 1 test" not in child.stdout:
+            raise AssertionError(
+                f"isolated mobile package case {selected} failed (exit {child.returncode}):\n"
+                f"{child.stdout}"
+            )
+    except AssertionError:
+        result.addFailure(case, sys.exc_info())
+    except Exception:
+        result.addError(case, sys.exc_info())
+    else:
+        result.addSuccess(case)
+    finally:
+        result.stopTest(case)
+        if owns_result:
+            result.stopTestRun()
+    return result
+
+
 class MobileSdkPackagePublisherTests(unittest.TestCase):
+    def run(self, result: unittest.TestResult | None = None) -> unittest.TestResult:
+        # Preserve each original case in a genuine isolated interpreter rather
+        # than requiring the normally collected parent runner to be isolated.
+        if sys.flags.isolated:
+            return super().run(result)
+        return run_isolated_package_case(self, result)
+
+    def _assert_real_isolated_runtime(self) -> None:
+        self.assertEqual(sys.version_info[:2], (3, 12))
+        self.assertTrue(sys.flags.isolated)
+        self.assertTrue(sys.flags.no_site)
+
+    def _deliberate_isolated_failure(self) -> None:
+        self.fail("isolated child assertion propagation probe")
+
     def setUp(self) -> None:
         if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
             self.fail("tests require isolated Python 3.12")
@@ -370,6 +423,26 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         )
         self.assertFalse(self.output.exists())
 
+    def test_local_integration_provenance_is_rejected_after_external_copy(self) -> None:
+        client = self.artifacts / "gradle-build/iroha_kotlin_sdk/client-android"
+        provenance = client / "generated/nativeProvenance/default/iroha/native-build-provenance-v1.json"
+        document = json.loads(provenance.read_text())
+        document["artifact_scope"] = "local-integration"
+        document["source_tree_dirty"] = False
+        payload = (json.dumps(document) + "\n").encode()
+        provenance.write_bytes(payload)
+        aar = client / "outputs/aar/client-android-release.aar"
+        with zipfile.ZipFile(aar) as archive:
+            contents = {name: archive.read(name) for name in archive.namelist()}
+        contents["assets/iroha/native-build-provenance-v1.json"] = payload
+        with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_STORED) as archive:
+            for name, value in contents.items():
+                archive.writestr(name, value)
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("diagnostic Android artifact scope", result.stderr)
+        self.assertFalse(self.output.exists())
+
     def test_success_publishes_only_to_absent_destination(self) -> None:
         result = self._package()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -599,6 +672,32 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self.assertNotEqual(no_follow.returncode, 0)
         self.assertIn("must not traverse symbolic links", no_follow.stderr)
         self.assertFalse((real_parent / "mobile-sdk").exists())
+
+
+class PackageIsolationLauncherTests(unittest.TestCase):
+    def test_parent_executes_one_genuinely_isolated_case(self) -> None:
+        case = MobileSdkPackagePublisherTests("_assert_real_isolated_runtime")
+        result = unittest.TestResult()
+        with mock.patch.object(subprocess, "run", wraps=subprocess.run) as executed:
+            run_isolated_package_case(case, result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertEqual(executed.call_args.args[0][1:4], ["-I", "-S", "-B"])
+        self.assertEqual(
+            executed.call_args.args[0][-1],
+            "MobileSdkPackagePublisherTests._assert_real_isolated_runtime",
+        )
+
+    def test_child_assertion_failure_is_reported_to_parent(self) -> None:
+        case = MobileSdkPackagePublisherTests("_deliberate_isolated_failure")
+        result = unittest.TestResult()
+        run_isolated_package_case(case, result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertFalse(result.wasSuccessful())
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 1)
+        self.assertIs(result.failures[0][0], case)
+        self.assertIn("isolated child assertion propagation probe", result.failures[0][1])
 
 
 if __name__ == "__main__":

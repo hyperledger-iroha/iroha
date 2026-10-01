@@ -980,41 +980,26 @@ const SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS: &[&[u8]] = &[
 fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes: &[u8]) -> bool {
     let is_text_byte = |byte: &u8| byte.is_ascii_graphic() || byte.is_ascii_whitespace();
     if envelope_bytes.iter().all(is_text_byte) {
-        return soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
-            envelope_bytes,
-            SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
-        );
+        return soracloud_fhe_stark_native_envelope_text_span_is_placeholder(envelope_bytes);
     }
     if envelope_bytes
         .split(|byte| !is_text_byte(byte))
         .any(|decorated_text| {
             !decorated_text.is_empty()
                 && !decorated_text.iter().all(u8::is_ascii_whitespace)
-                && soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
-                    decorated_text,
-                    SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
-                )
+                && soracloud_fhe_stark_native_envelope_text_span_is_placeholder(decorated_text)
         })
     {
         return true;
     }
-    soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(
-        envelope_bytes,
-        SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
-    )
+    soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(envelope_bytes)
 }
-fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(
-    text: &[u8],
-    markers: &[&[u8]],
-) -> bool {
+fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(text: &[u8]) -> bool {
     let mut lower = Vec::with_capacity(text.len());
     lower.extend(text.iter().map(u8::to_ascii_lowercase));
-    soracloud_ascii_text_contains_placeholder_marker(&lower, markers)
+    soracloud_ascii_text_contains_placeholder_marker(&lower)
 }
-fn soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(
-    bytes: &[u8],
-    markers: &[&[u8]],
-) -> bool {
+fn soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(bytes: &[u8]) -> bool {
     let mut collapsed_text = Vec::with_capacity(bytes.len());
     collapsed_text.extend(
         bytes
@@ -1023,13 +1008,13 @@ fn soracloud_fhe_stark_native_envelope_fragmented_text_is_placeholder(
             .map(u8::to_ascii_lowercase),
     );
     !collapsed_text.is_empty()
-        && soracloud_collapsed_placeholder_markers(markers)
+        && soracloud_collapsed_placeholder_markers()
             .iter()
             .any(|marker| ascii_windows_contains(&collapsed_text, marker))
 }
 const SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES: usize = 5;
-fn soracloud_ascii_text_contains_placeholder_marker(normalized: &[u8], markers: &[&[u8]]) -> bool {
-    if markers
+fn soracloud_ascii_text_contains_placeholder_marker(normalized: &[u8]) -> bool {
+    if SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS
         .iter()
         .any(|marker| ascii_windows_contains(normalized, marker))
     {
@@ -1039,18 +1024,14 @@ fn soracloud_ascii_text_contains_placeholder_marker(normalized: &[u8], markers: 
     if collapsed_text.is_empty() {
         return false;
     }
-    soracloud_collapsed_placeholder_markers(markers)
+    soracloud_collapsed_placeholder_markers()
         .iter()
         .any(|marker| ascii_windows_contains(&collapsed_text, marker))
 }
-fn soracloud_collapsed_placeholder_markers(markers: &[&[u8]]) -> &'static [Vec<u8>] {
-    debug_assert!(std::ptr::eq(
-        markers,
-        SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
-    ));
+fn soracloud_collapsed_placeholder_markers() -> &'static [Vec<u8>] {
     static SORACLOUD_COLLAPSED_PLACEHOLDER_MARKERS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
     SORACLOUD_COLLAPSED_PLACEHOLDER_MARKERS.get_or_init(|| {
-        markers
+        SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS
             .iter()
             .map(|marker| ascii_alnum_collapsed(marker))
             .filter(|marker| marker.len() >= SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES)

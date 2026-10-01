@@ -162,7 +162,7 @@ for owner in (verifier.NATIVE_OWNER, verifier.SDK_OWNER):
     results.append(owner.package + ':actual-current-source')
 print('PACKAGE_SOURCE_CONTROLS=' + json.dumps(results, separators=(',', ':')))
 '''
-    result = subprocess.run((sys.executable, "-I", "-B", "-c", source,
+    result = subprocess.run((sys.executable, "-I", "-S", "-B", "-c", source,
                              str(ROOT), str(HELPER), str(tmp_path / "fixture")),
                             capture_output=True, text=True, timeout=120, check=False)
     (tmp_path / "original-package-source-harness.log").write_text(result.stdout + result.stderr)

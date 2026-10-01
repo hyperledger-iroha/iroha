@@ -52,6 +52,12 @@ const KECCAK_RHO_V1: [u32; 25] = [
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Sha3Digest256V1([u8; 32]);
 
+impl zeroize::Zeroize for Sha3Digest256V1 {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 impl Sha3Digest256V1 {
     /// Fixed number of raw commitment bytes.
     pub const BYTES: usize = 32;
@@ -208,6 +214,15 @@ impl Sha3_256V1 {
     pub fn update(&mut self, bytes: &[u8]) {
         self.0.update(bytes);
     }
+    /// Borrow the exact absorbed lanes and partial rate position for a bounded
+    /// deterministic accelerator. The 25 lanes use FIPS 202 `x + 5*y` order;
+    /// position is a byte offset strictly below 136. This is not a digest or a
+    /// protocol encoding. The caller must give any copied private lanes a
+    /// clearing owner and retain device-visible copies until proven completion.
+    pub fn with_absorbed_state_v1<T>(&self, visitor: impl FnOnce(&[u64; 25], usize) -> T) -> T {
+        visitor(&self.0.state, self.0.position)
+    }
+
     /// Consume the state with the SHA3 delimited suffix 0x06.
     #[must_use]
     pub fn finalize(self) -> Sha3Digest256V1 {
@@ -289,3 +304,26 @@ fn observe_cleared(words: &[u64]) {
 #[cfg(test)]
 #[path = "keccak256/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod absorbed_state_tests {
+    use super::*;
+    #[test]
+    fn borrowed_state_preserves_exact_rate_position_without_consuming_prefix() {
+        for length in [0, 1, 135, 136, 137, 272, 4096] {
+            let bytes = vec![0xA7; length];
+            let mut hash = Sha3_256V1::new();
+            hash.update(&bytes);
+            hash.with_absorbed_state_v1(|state, position| {
+                assert_eq!(position, length % KECCAK_RATE_256_V1);
+                assert_eq!(state, &*hash.0.state);
+            });
+            let mut copy = hash.clone();
+            copy.update(b"tail");
+            let mut reference = Sha3_256V1::new();
+            reference.update(&bytes);
+            reference.update(b"tail");
+            assert_eq!(copy.finalize(), reference.finalize());
+        }
+    }
+}

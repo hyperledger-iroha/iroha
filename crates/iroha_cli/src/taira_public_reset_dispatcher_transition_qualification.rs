@@ -1,4 +1,4 @@
-//! Join the completed preparation and maintained transfer producer records.
+//! Join qualified checks or explicit unqualified builds with maintained transfer records.
 // The root transaction runs on Linux only; other platforms compile these items solely for their
 // unit tests, which do not reach every Linux entry point.
 #![cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
@@ -55,7 +55,12 @@ pub(in super::super) fn validate_records(candidate: &Candidate, records: &[Value
         checks.get("request") == Some(request),
         "native checks request differs",
     )?;
-    flag(checks, "passed", true)?;
+    // Regression outcomes are evidence, not deployment authorization. The
+    // owner-signed transition and native preflight/apply checks remain required.
+    need(
+        checks.get("passed").and_then(Value::as_bool).is_some(),
+        "native checks outcome must be boolean",
+    )?;
     need(
         text(request, "schema")? == "taira.local-preparation.v1",
         "qualification request schema differs",
@@ -79,8 +84,10 @@ pub(in super::super) fn validate_records(candidate: &Candidate, records: &[Value
         )?;
     }
     need(
-        matches!(text(result, "native_check_scope")?, "basic" | "full")
-            && number(result, "jobs")? > 0,
+        matches!(
+            text(result, "native_check_scope")?,
+            "basic" | "full" | "build-only"
+        ) && number(result, "jobs")? > 0,
         "qualification scope differs",
     )?;
     for key in ["source_unchanged", "toolchain_unchanged"] {

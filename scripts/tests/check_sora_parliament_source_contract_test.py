@@ -278,6 +278,90 @@ def test_encrypted_beacon_dkg_rejects_partial_finalization(
         )
 
 
+@pytest.mark.parametrize("old,new", (
+    ("validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;", ""),
+    ("validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;",
+     "validation::DkgSnapshotRef::from(transcript).validate_with_admission(other)?;"),
+    ("validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;",
+     "let _ = validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit);"),
+    ("|| transcript.encrypted_shares.len() != all_edges",
+     "&& transcript.encrypted_shares.len() != all_edges"),
+    ("return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());", "return Ok(());"),
+    (") != transcript.event_hash", ") != record.transcript_hash"),
+))
+def test_encrypted_beacon_dkg_retains_original_admission_and_event_commitment(
+    old: str, new: str,
+) -> None:
+    """Readback retains the caller's resource refusal and complete signed edge commitment."""
+    model = guard.read("crates/iroha_data_model/src/consensus.rs")
+    core = guard.read(BEACON_CORE_PATH)
+    guard.require_encrypted_beacon_dkg_source(model, core)
+    body = guard.rust_item(core, "fn validate_adaptive_dkg_shape<E>(", BEACON_CORE_PATH)
+    assert body.count(old) == 1
+    changed = core.replace(body, body.replace(old, new, 1), 1)
+    assert changed != core
+    with pytest.raises(RuntimeError, match=re.escape(BEACON_CORE_PATH)):
+        guard.require_encrypted_beacon_dkg_source(model, changed + "\n/* " + old + " */\n")
+
+
+RUNTIME_DEPS_PATH = "crates/irohad/src/main/runtime_deps.rs"
+EXPIRED_READINESS_TEST = (
+    "fn threshold_signer_startup_readiness_skips_expired_history_and_rejects_mismatch() {"
+)
+
+
+def test_threshold_signer_readiness_source_baseline_and_entrypoint() -> None:
+    """The current active and retained custody checks remain connected to the full guard."""
+    guard.require_threshold_signer_startup_readiness(guard.read(RUNTIME_DEPS_PATH))
+    body = ast.parse(inspect.getsource(guard.main))
+    calls = [node.func.id for node in ast.walk(body)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    assert calls.count("require_threshold_signer_startup_readiness") == 1
+
+
+@pytest.mark.parametrize("declaration,old,new", (
+    (EXPIRED_READINESS_TEST, "threshold_signer_readiness_fixture_v1(14)",
+     "threshold_signer_readiness_fixture_v1(13)"),
+    (EXPIRED_READINESS_TEST, "fixture.active_key_session_id,", "fixture.retained_key_session_id,"),
+    (EXPIRED_READINESS_TEST, "fixture.active_participant_index,", "fixture.retained_participant_index,"),
+    (EXPIRED_READINESS_TEST, "vec![(", "vec![(fixture.retained_key_session_id, 2), ("),
+    (EXPIRED_READINESS_TEST, "exact_signer.sign_calls.load(Ordering::Acquire), 0",
+     "exact_signer.sign_calls.load(Ordering::Acquire), 1"),
+    (EXPIRED_READINESS_TEST, "mismatched_signer.sign_calls.load(Ordering::Acquire), 0",
+     "mismatched_signer.sign_calls.load(Ordering::Acquire), 1"),
+    (EXPIRED_READINESS_TEST, "CapabilityMode::MismatchedSeat", "CapabilityMode::Exact"),
+    ("fn threshold_signer_startup_readiness_scans_active_and_deadline_retained_frozen_rosters() {",
+     "fixture.retained_participant_index,", "fixture.active_participant_index,"),
+    ("fn threshold_signer_startup_readiness_scans_active_and_deadline_retained_frozen_rosters() {",
+     "expected.sort_unstable();", ""),
+    ("fn require_parliament_tle_capability_for_local_seat_v1(",
+     ".attest_partial_release_capability(session, participant_index)",
+     ".sign_partial_release(context)"),
+))
+def test_threshold_signer_readiness_rejects_lost_exact_custody_controls(
+    declaration: str, old: str, new: str,
+) -> None:
+    """Expiry, exact seat, mismatch and no-signing assertions cannot move to unrelated text."""
+    source = guard.read(RUNTIME_DEPS_PATH)
+    guard.require_threshold_signer_startup_readiness(source)
+    body = guard.rust_item(source, declaration, RUNTIME_DEPS_PATH)
+    assert old in body
+    changed = source.replace(body, body.replace(old, new), 1)
+    assert changed != source
+    with pytest.raises(RuntimeError, match=re.escape(RUNTIME_DEPS_PATH)):
+        guard.require_threshold_signer_startup_readiness(changed + "\n/* " + old + " */\n")
+
+
+def test_threshold_signer_readiness_allows_historical_id_in_a_negative_assertion() -> None:
+    """An unrelated owner or explicit inequality is not an expired-session expected call."""
+    source = guard.read(RUNTIME_DEPS_PATH)
+    body = guard.rust_item(source, EXPIRED_READINESS_TEST, RUNTIME_DEPS_PATH)
+    negative = "\n        assert_ne!(fixture.active_key_session_id, fixture.retained_key_session_id);\n"
+    changed = source.replace(body, body[:-1] + negative + "}", 1)
+    assert changed != source
+    guard.require_threshold_signer_startup_readiness(changed)
+
+
 def test_signed_staking_fee_boundary_baseline() -> None:
     """Opaque nested staking is rejected before the optional fee-policy return."""
     guard.require_signed_staking_fee_boundary(
@@ -525,6 +609,22 @@ def test_block_start_phase_helpers_preserve_original_order_and_custody() -> None
     calls = [node.func.id for node in ast.walk(body)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
     assert calls.count("require_block_start_enactment_phases") == 1
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("            world_cut_capture: None,", "            world_cut_capture: Some(foreign_capture),"),
+    ("                    drop(self.world_cut_capture.take());", "                    // lost original World-cut capture retirement"),
+    ("                    mv::BlockRetirement::release_writers(self);", "                    drop(self.world_cut_capture.take()); mv::BlockRetirement::release_writers(self);"),
+), ids=("foreign-world-cut-capture", "lost-world-cut-capture-retirement", "world-cut-refund-before-writer-release"))
+def test_shared_start_construction_retains_world_cut_capture_retirement(original: str, replacement: str) -> None:
+    """The new journal capture remains empty at construction and retires after original writers."""
+    source = guard.read(STATE_PATH)
+    guard.require_block_start_construction(source)
+    assert source.count(original) == 1
+    changed = source.replace(original, replacement, 1) + "\n/* " + original + " */\n"
+    assert changed != source
+    with pytest.raises(RuntimeError, match="original armed State owner"):
+        guard.require_block_start_construction(changed)
 
 
 CONSTRUCTION_PATH = "crates/iroha_core/src/state/state_block_construction.rs"
@@ -1043,12 +1143,22 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
      "false"),
     (guard.EPOCH_BEACON_PATH, "pulse: Some(pulse),", "pulse: None,"),
     (guard.BEACON_PRODUCER_PATH,
-     "let parent = committed_block(state, applied.0)",
-     "let parent = committed_block(other, applied.0)"),
+     "let parent = state.native_execution_tip().ok_or_else(|| {",
+     "let parent = other.native_execution_tip().ok_or_else(|| {"),
     (guard.BEACON_PRODUCER_PATH,
      "if parent.core_hash() != context.parent_hash || parent.result() != context.parent_result",
      "if false"),
-    (guard.BEACON_PRODUCER_PATH, "block_hash: parent.block_hash(),", "block_hash: other.block_hash(),"),
+    (guard.BEACON_PRODUCER_PATH, "block_hash: parent.iroha_hash(),", "block_hash: other.iroha_hash(),"),
+    (guard.BEACON_PRODUCER_PATH,
+     "state.block_hashes().last() == Some(&parent.iroha_hash())", "true"),
+    (guard.BEACON_PRODUCER_PATH, "parent.height() != applied.0", "false"),
+    (guard.BEACON_PRODUCER_PATH, "|| !journal_matches", "|| false"),
+    (guard.BEACON_PRODUCER_PATH,
+     "let parent = self.parent_source(state, context, applied)?;",
+     "let parent = self.parent_source(other, context, applied)?;"),
+    (guard.BEACON_PRODUCER_PATH,
+     "let parent = self.parent_source(state, context, applied)?;",
+     "let parent = self.parent_source(state, context, applied).unwrap();"),
     (guard.EPOCH_BEACON_PATH, "(current.mode == ConsensusMode::Npos\n",
      "(current.mode != ConsensusMode::Npos\n"),
     (guard.EPOCH_BEACON_PATH, "height.checked_add(1) == Some(current.authorization.last_height))",
@@ -1057,9 +1167,9 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
      "Some(current.authorization.last_height))\n        &&"),
     (guard.EPOCH_BEACON_PATH, ".get(&(BeaconSessionId::for_network_v1(&current.network_id), height))",
      ".get(&(BeaconSessionId::for_network_v1(&current.network_id), height + 1))"),
-    (guard.EPOCH_BEACON_PATH, "            .is_some_and(|attempts| !attempts.is_empty())\n}",
-     "            .is_some_and(|attempts| attempts.is_empty())\n}"),
-    (guard.EPOCH_BEACON_PATH, "let demanded = required(world, current, height);",
+    (guard.EPOCH_BEACON_PATH, "            .is_some_and(|attempts| !attempts.is_empty()))\n}",
+     "            .is_some_and(|attempts| attempts.is_empty()))\n}"),
+    (guard.EPOCH_BEACON_PATH, "let demanded = required(scope, world, current, height)?;",
      "let demanded = false;"),
     (guard.EPOCH_BEACON_PATH, "        return if demanded {", "        return if false {"),
     (guard.EPOCH_BEACON_PATH,
@@ -1075,7 +1185,7 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
      ".parliament_unavailable_beacon_pulse_slots()\n        .get(&slot)\n"
      "        .is_some_and(|attempts| attempts.is_empty())"),
     (guard.BEACON_PRODUCER_PATH,
-     "let active = if super::required(state.world(), current, context.height) {",
+     "let active = if required {",
      "let active = if true {"),
     (guard.BEACON_PRODUCER_PATH,
      "            super::validate_pending_slot(state.world(), current, context.height)\n"
@@ -1090,8 +1200,8 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
     (guard.BEACON_PRODUCER_PATH,
      "        if self.prepared.as_ref() != Some(&source) {\n"
      "            return Err(NativeBeaconError::Context);\n        }\n", ""),
-    (guard.BEACON_PRODUCER_PATH, "        let active = if super::required(",
-     "        let _ = attempt.requires_beacon_pulse_at(slot);\n        let active = if super::required("),
+    (guard.BEACON_PRODUCER_PATH, "        let active = if required {",
+     "        let _ = attempt.requires_beacon_pulse_at(slot);\n        let active = if required {"),
 ))
 def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(
     path: str, old: str, new: str,
@@ -1102,6 +1212,81 @@ def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(
     assert sources[path].count(old) == 1
     sources[path] = sources[path].replace(old, new, 1)
     with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_parliament_beacon_requirement(*sources.values())
+
+
+@pytest.mark.parametrize("path,old,new", (
+    (guard.EPOCH_BEACON_PATH, "scope.validate().map_err(|error| error.to_string())?;", ""),
+    (guard.EPOCH_BEACON_PATH, "if matches!(scope, SumeragiRootScope::Global)", "if true"),
+    (guard.EPOCH_BEACON_PATH, "current.mode != ConsensusMode::Permissioned", "false"),
+    (guard.EPOCH_BEACON_PATH,
+     "        || current.authorization.beacon != BeaconEpochBindingV1::Bootstrap", "        || false"),
+    (guard.EPOCH_BEACON_PATH,
+     "            .parliament_required_beacon_pulse_slots()\n"
+     "            .iter()\n            .next()\n            .is_some()", "            false"),
+    (guard.EPOCH_BEACON_PATH, "world.active_global_beacon_key_session().is_some()", "false"),
+    (guard.EPOCH_BEACON_PATH, "        || world.global_beacon_pulses().iter().next().is_some()", "        || false"),
+    (guard.EPOCH_BEACON_PATH, "if !owns_global_control(scope, world, current)?", "if false"),
+    (guard.EPOCH_BEACON_PATH, "(1, None) if supplied.is_none() => {}", "(1, None) => {}"),
+    (guard.EPOCH_BEACON_PATH, "context.validate().map_err(str::to_owned)?;", ""),
+    (guard.EPOCH_BEACON_PATH, "context.epoch != current.authorization.epoch", "false"),
+    (guard.EPOCH_BEACON_PATH, "context.epoch_context_id != current.context_id()?", "false"),
+    (guard.EPOCH_BEACON_PATH, "height < current.authorization.first_height", "false"),
+    (guard.EPOCH_BEACON_PATH, "height > current.authorization.last_height", "false"),
+    (guard.EPOCH_BEACON_PATH, "u64::try_from(hashes.hash_count())", "u64::try_from(other.hash_count())"),
+    (guard.EPOCH_BEACON_PATH, "pulse.network_id != current.network_id", "false"),
+    (guard.EPOCH_BEACON_PATH, "pulse.height != height", "false"),
+    (guard.EPOCH_BEACON_PATH,
+     "pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1", "false"),
+    (guard.EPOCH_BEACON_PATH, ".hash_at(index)", ".hash_at(0)"),
+    (guard.BEACON_PRODUCER_PATH,
+     "crate::sumeragi::lanes::routing::committed_root_scope(state.world())",
+     "Some(SumeragiRootScope::Global)"),
+    (guard.BEACON_PRODUCER_PATH,
+     "let required = super::required(root_scope, state.world(), current, context.height)",
+     "let required = super::required(SumeragiRootScope::Global, state.world(), current, context.height)"),
+    (guard.BEACON_PRODUCER_PATH,
+     "                NativeBeaconError::Source(\"native control requires immutable root scope\".into())",
+     "                NativeBeaconError::Context"),
+))
+def test_beacon_requirement_preserves_authenticated_root_scope_and_parent_cut(
+    path: str, old: str, new: str,
+) -> None:
+    """Private control custody, native context and exact parent source cannot be substituted."""
+    sources = _beacon_sources()
+    guard.require_parliament_beacon_requirement(*sources.values())
+    assert sources[path].count(old) == 1
+    sources[path] = sources[path].replace(old, new, 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_parliament_beacon_requirement(*sources.values())
+
+
+def test_beacon_requirement_checks_root_before_reusing_prepared_context() -> None:
+    """A cached reducer cannot bypass immutable scope selection or its error propagation."""
+    sources = _beacon_sources()
+    producer = sources[guard.BEACON_PRODUCER_PATH]
+    guard.require_parliament_beacon_requirement(*sources.values())
+    early_return = "        if self.prepared.as_ref() == Some(context) {\n            return Ok(());\n        }\n"
+    scope_start = "        let root_scope = crate::sumeragi::lanes::routing::committed_root_scope(state.world())"
+    assert producer.count(early_return) == producer.count(scope_start) == 1
+    moved = producer.replace(early_return, "").replace(scope_start, early_return + scope_start)
+    sources[guard.BEACON_PRODUCER_PATH] = moved
+    with pytest.raises(RuntimeError, match=re.escape(guard.BEACON_PRODUCER_PATH)):
+        guard.require_parliament_beacon_requirement(*sources.values())
+
+
+def test_beacon_requirement_checks_original_parent_before_committed_demand() -> None:
+    """Neither schedule selection nor a cached round may precede current tip authentication."""
+    sources = _beacon_sources()
+    producer = sources[guard.BEACON_PRODUCER_PATH]
+    guard.require_parliament_beacon_requirement(*sources.values())
+    admission = "        let parent = self.parent_source(state, context, applied)?;\n"
+    cached = "        if self.prepared.as_ref() == Some(context) {"
+    assert producer.count(admission) == producer.count(cached) == 1
+    moved = producer.replace(admission, "").replace(cached, admission + cached, 1)
+    sources[guard.BEACON_PRODUCER_PATH] = moved
+    assert moved != producer
+    with pytest.raises(RuntimeError, match=re.escape(guard.BEACON_PRODUCER_PATH)):
         guard.require_parliament_beacon_requirement(*sources.values())
 
 
@@ -1278,3 +1463,26 @@ def test_borrowed_storage_iterator_gate_is_connected_to_main() -> None:
     calls = [node.func.id for node in ast.walk(ast.parse(inspect.getsource(guard.main)))
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
     assert calls.count("require_storage_borrowed_iterators") == 1
+
+
+@pytest.mark.parametrize("old,new", (
+    ("iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)",
+     "iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(other)"),
+    ("crate::sumeragi::lanes::routing::committed_root_scope(&self.world)",
+     "Some(SumeragiRootScope::Global)"),
+    ("                ScheduleError::Epoch(\"native control requires immutable root scope\".into())",
+     "                ScheduleError::Malformed"),
+    ("                root_scope,\n                &self.world,",
+     "                SumeragiRootScope::Global,\n                &self.world,"),
+))
+def test_native_beacon_application_requires_signed_or_committed_original_root(
+    old: str, new: str,
+) -> None:
+    """Genesis and successors supply authenticated root ownership to both capture branches."""
+    sources = _pulse_application_sources()
+    guard.require_native_beacon_pulse_application(*sources.values())
+    expected_count = 2 if old.startswith("                root_scope,") else 1
+    assert sources[guard.SCHEDULE_EXECUTION_PATH].count(old) == expected_count
+    sources[guard.SCHEDULE_EXECUTION_PATH] = sources[guard.SCHEDULE_EXECUTION_PATH].replace(old, new)
+    with pytest.raises(RuntimeError, match=re.escape(guard.SCHEDULE_EXECUTION_PATH)):
+        guard.require_native_beacon_pulse_application(*sources.values())

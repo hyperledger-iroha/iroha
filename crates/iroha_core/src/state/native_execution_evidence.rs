@@ -5,7 +5,7 @@
 //! Genesis execution remains untrusted until its actual H2 successor is fully verified.
 
 use super::NativeExecutionProjectionV1;
-use crate::sumeragi::certified_chain::{CertifiedPrefix, CommittedBlock};
+use crate::sumeragi::certified_chain::{CertifiedPrefix, CommittedBlock, PrefixArtifacts};
 use iroha_data_model::{NetworkId, block::SignedBlock, sumeragi_lanes::SumeragiLaneState};
 use iroha_model_base::chain::ChainId;
 use std::{collections::BTreeMap, sync::Arc};
@@ -32,11 +32,42 @@ struct RetainedCarrier {
 pub struct VerifiedNativeExecutionCarrier {
     block: Arc<SignedBlock>,
     lanes: Arc<SumeragiLaneState>,
+    ordinary_writes_root: iroha_crypto::Hash,
+    core_hash: iroha_sumeragi::types::Hash32,
+    result: iroha_sumeragi::types::Hash32,
 }
 impl VerifiedNativeExecutionCarrier {
     /// Borrow the exact carrier authenticated by its native certificate.
     pub fn block(&self) -> &SignedBlock {
         &self.block
+    }
+    /// Original complete-write root from the same independently authenticated execution.
+    pub(crate) fn ordinary_writes_root(&self) -> iroha_crypto::Hash {
+        self.ordinary_writes_root
+    }
+    /// Match the complete original native execution cut without turning local certificate
+    /// bytes into a new State tip capability.
+    pub(crate) fn matches_original_tip(&self, tip: super::NativeExecutionTip) -> bool {
+        self.matches_claimed_cut(
+            tip.height(),
+            tip.iroha_hash(),
+            tip.core_hash(),
+            tip.result(),
+        )
+    }
+    /// Compare a claimed historical cut only after authenticating its actual carrier. This
+    /// predicate never constructs a State tip or substitutes for the independent prefix anchor.
+    pub(crate) fn matches_claimed_cut(
+        &self,
+        height: u64,
+        carrier: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+        core_hash: iroha_sumeragi::types::Hash32,
+        result: iroha_sumeragi::types::Hash32,
+    ) -> bool {
+        self.block.header().height().get() == height
+            && self.block.hash() == carrier
+            && self.core_hash == core_hash
+            && self.result == result
     }
     /// Borrow the complete post-execution global lane state committed in this carrier's R.
     pub fn lanes(&self) -> &SumeragiLaneState {
@@ -108,11 +139,48 @@ impl NativeExecutionEvidenceVerifier {
         block: Arc<SignedBlock>,
         context_evidence: &[u8],
     ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
+        self.push_shared_height_with_genesis(block, context_evidence, |_| Ok(()))
+    }
+
+    /// Deliver the original genesis receipt only when its actual successor authenticates it.
+    /// A rejected callback poisons this same interval; it cannot grant prefix completion.
+    pub(crate) fn push_shared_height_with_genesis(
+        &mut self,
+        block: Arc<SignedBlock>,
+        context_evidence: &[u8],
+        genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
+    ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
+        self.push_original_height(block, context_evidence, None, genesis)
+    }
+
+    /// The production history reader acquires exact original bulk owners before entering the
+    /// verification interval. Local refusal therefore cannot advance or poison this cursor.
+    pub(crate) fn push_prepared_height_with_genesis(
+        &mut self,
+        artifacts: PrefixArtifacts,
+        context_evidence: &[u8],
+        genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
+    ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
+        self.push_original_height(
+            Arc::clone(artifacts.source()),
+            context_evidence,
+            Some(artifacts),
+            genesis,
+        )
+    }
+
+    fn push_original_height(
+        &mut self,
+        block: Arc<SignedBlock>,
+        context_evidence: &[u8],
+        artifacts: Option<PrefixArtifacts>,
+        genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
+    ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
         if self.poisoned {
             return Err("native evidence interval is poisoned".into());
         }
         self.poisoned = true;
-        let result = self.push_height_inner(block, context_evidence);
+        let result = self.push_height_inner(block, context_evidence, artifacts, genesis);
         if result.is_ok() {
             self.poisoned = false;
         }
@@ -123,6 +191,8 @@ impl NativeExecutionEvidenceVerifier {
         &mut self,
         block: Arc<SignedBlock>,
         context_evidence: &[u8],
+        artifacts: Option<PrefixArtifacts>,
+        accept_genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
     ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
         let body_bytes = u64::try_from(
             norito::canonical_frame_len(block.as_ref()).map_err(|error| error.to_string())?,
@@ -160,6 +230,9 @@ impl NativeExecutionEvidenceVerifier {
             return Err("native context projection changes its exact carrier identity".into());
         }
         let Some(finality) = self.finality.as_mut() else {
+            if artifacts.is_some() {
+                return Err("native genesis must use its result-only original certificate".into());
+            }
             self.finality = Some(
                 CertifiedPrefix::new(&self.chain_id, self.network, block)
                     .map_err(|error| error.to_string())?,
@@ -168,16 +241,18 @@ impl NativeExecutionEvidenceVerifier {
             self.retained_bytes = retained;
             return Ok(None);
         };
-        let (verified, genesis) = finality
-            .push(block)
-            .map_err(|error| error.to_string())?
-            .into_parts();
+        let verified = match artifacts {
+            Some(artifacts) => finality.push_prepared(artifacts),
+            None => finality.push(block),
+        }
+        .map_err(|error| error.to_string())?;
+        let (verified, genesis) = verified.into_parts();
         if let Some(genesis) = genesis {
             let projection = self
                 .pending_genesis
                 .take()
                 .ok_or("native genesis projection is missing")?;
-            self.accept_verified(genesis.into_committed(), projection)?;
+            accept_genesis(self.accept_verified(genesis.into_committed(), projection)?)?;
         } else if self.pending_genesis.is_some() {
             return Err("native successor did not authenticate the original genesis result".into());
         }
@@ -234,7 +309,13 @@ impl NativeExecutionEvidenceVerifier {
             },
         );
         self.lanes = Some(Arc::clone(&lanes));
-        Ok(VerifiedNativeExecutionCarrier { block, lanes })
+        Ok(VerifiedNativeExecutionCarrier {
+            block,
+            lanes,
+            ordinary_writes_root: committed.commitment().execution.ordinary_writes_root,
+            core_hash: committed.core_hash(),
+            result: committed.result(),
+        })
     }
 }
 

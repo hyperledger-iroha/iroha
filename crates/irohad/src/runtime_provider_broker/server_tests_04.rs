@@ -1016,7 +1016,8 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
     );
     assert_eq!(
         validate_operation_request(&malformed_submit),
-        Err(BrokerError::Rejected)
+        Err(BrokerError::Protocol),
+        "the missing mandatory typed instruction fails canonical decoding before request validation"
     );
     for outcome in [
         ReputationJournalTransactionSubmitOutcomeV1::Queued {

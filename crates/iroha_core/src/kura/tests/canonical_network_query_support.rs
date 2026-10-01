@@ -35,26 +35,6 @@ impl CanonicalQueryStore {
         ));
     }
 
-    /// Open a detached query-permission fixture over the original authenticated history.
-    pub(crate) fn reader_state(&self, world: World) -> State {
-        let mut state = State::try_new_with_chain_and_network_id(
-            crate::state::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-            ),
-            world,
-            Arc::clone(&self.kura),
-            LiveQueryStore::start_test(),
-            self.state.view().chain_id.clone(),
-            *self.state.network_id_ref(),
-            #[cfg(feature = "telemetry")]
-            Default::default(),
-        )
-        .expect("reader opens original native custody");
-        for block in &self.blocks {
-            state.push_block_hash_for_testing(block.hash());
-        }
-        state
-    }
     /// Exact expected bytes for the selected complete physical bodies, without reading storage.
     pub(crate) fn wire_bytes(&self, heights: impl IntoIterator<Item = usize>) -> u64 {
         heights

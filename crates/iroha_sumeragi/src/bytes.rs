@@ -72,9 +72,15 @@ impl<'de, S: ByteStorage> ncore::DecodeFromSlice<'de> for ByteSequence<S> {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
         let (length, prefix) = ncore::read_seq_len_slice(bytes)?;
         if !(S::MIN..=S::MAX).contains(&length) {
-            return Err(ncore::Error::FieldLengthExceeded {
-                length: u64::try_from(length).unwrap_or(u64::MAX),
-                limit: S::MAX as u64,
+            // Static wire-domain bounds describe malformed bytes. They must not become
+            // a retryable local decode-budget refusal at the native evidence boundary.
+            return Err(if cfg!(all(test, sumeragi_mutation = "MS50")) {
+                ncore::Error::FieldLengthExceeded {
+                    length: length as u64,
+                    limit: S::MAX as u64,
+                }
+            } else {
+                ncore::Error::LengthMismatch
             });
         }
         let used = prefix
@@ -261,5 +267,46 @@ mod tests {
                 index == 2
             );
         }
+    }
+
+    #[test]
+    fn protocol_byte_lengths_are_terminal_codec_errors() {
+        use norito::codec::{DecodeAll, Encode};
+        fn invalid<T: DecodeAll + std::fmt::Debug>(length: usize) {
+            let bytes = vec![7_u8; length].encode();
+            let error = T::decode_all(&mut bytes.as_slice()).unwrap_err();
+            assert!(
+                !error.is_decode_resource_limit(),
+                "protocol length {length} must be malformed, got {error:?}"
+            );
+            assert!(matches!(
+                crate::message::CodecError::from(error),
+                crate::message::CodecError::Norito(_)
+            ));
+        }
+        invalid::<ResultWitness>(0);
+        invalid::<ResultWitness>(crate::message::MAX_RESULT_WITNESS_BYTES + 1);
+        invalid::<AttestationSignature>(257);
+    }
+
+    #[test]
+    fn valid_witness_local_sequence_limit_remains_retryable() {
+        use norito::codec::{DecodeAll, Encode};
+        let value = ResultWitness::from_untrusted(vec![9; 8]).unwrap();
+        let bytes = value.encode();
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(7, usize::MAX, usize::MAX, usize::MAX, usize::MAX),
+            || ResultWitness::decode_all(&mut bytes.as_slice()),
+        )
+        .unwrap_err();
+        assert!(error.is_decode_resource_limit(), "{error:?}");
+        assert!(matches!(
+            crate::message::CodecError::from(error),
+            crate::message::CodecError::Resource(_)
+        ));
+        assert_eq!(
+            ResultWitness::decode_all(&mut bytes.as_slice()).unwrap(),
+            value
+        );
     }
 }

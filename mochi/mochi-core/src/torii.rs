@@ -3547,6 +3547,17 @@ fn account_recovery_event_summary(event: &AccountRecoveryEvent) -> (String, Stri
                 payload.request.approvals.len()
             ),
         ),
+        AccountRecoveryEvent::CancellationApproved(payload) => (
+            "Account recovery cancellation approved".to_owned(),
+            format!(
+                "account={} alias={} approver={} cancellation_approvals={} status={:?}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.approver,
+                payload.request.cancellation_approvals.len(),
+                payload.request.status
+            ),
+        ),
         AccountRecoveryEvent::Cancelled(payload) => (
             "Account recovery cancelled".to_owned(),
             format!(

@@ -40,7 +40,7 @@ fn small_trace_v1() -> ZkX509P256ArithmeticTraceV1 {
 #[test]
 fn validated_arithmetic_owner_rejects_invalid_constraints_and_clears_input() {
     let mut trace = small_trace_v1();
-    trace.base[0][0] = F(u64::MAX);
+    trace.base[0][0] = F::canonical(4).expect("canonical wrong A limb");
     assert!(trace.validate().is_err());
     assert!(
         P256ArithmeticAggregateRowsV1::new_v1(P256EcdsaRoleV1::CertificateOrCrl, &trace,).is_err()

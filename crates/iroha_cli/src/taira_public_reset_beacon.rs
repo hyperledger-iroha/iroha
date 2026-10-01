@@ -2380,6 +2380,11 @@ mod tests {
         use iroha_crypto::{Algorithm, ExposedPrivateKey};
         use std::os::unix::fs::PermissionsExt as _;
 
+        // Four authentic signed requests and context/pool setup are checked here;
+        // this fixture does not qualify production HTTP latency. Keep one absolute
+        // budget for the complete dispatch sequence, including debug crypto work.
+        const OPERATOR_DISPATCH_FIXTURE_ALLOWANCE: Duration = Duration::from_secs(30);
+
         let directory = reset::private_custody_test_dir("taira-beacon-operator-");
         let mut inventory = reset::sample_inventory_fixture();
         let operator = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519).unwrap();
@@ -2479,7 +2484,7 @@ mod tests {
             &config,
             &inventory,
             &admitted,
-            Instant::now() + Duration::from_secs(3),
+            Instant::now() + OPERATOR_DISPATCH_FIXTURE_ALLOWANCE,
         )
         .unwrap()
         {
@@ -2492,7 +2497,7 @@ mod tests {
                 admitted.public_key()
             );
             let error = client.get_sumeragi_status().unwrap_err();
-            assert!(error.to_string().contains("401"));
+            assert!(error.to_string().contains("401"), "{error:?}");
         }
         server.join().unwrap();
     }

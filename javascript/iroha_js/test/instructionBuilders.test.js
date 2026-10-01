@@ -2314,6 +2314,7 @@ baseTest("ReportKaigiRelayHealth native instruction adapter preserves canonical 
 
 baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {
   const codeHashBytes = Buffer.alloc(32, 0xaa);
+  codeHashBytes[31] |= 1;
   const abiHashBytes = Buffer.alloc(32, 0xbb);
   const signer = `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`;
   const signature = `ed25519:${"22".repeat(64)}`;
@@ -2349,7 +2350,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
       entrypoints: [
         {
           name: "upgrade_ledger",
-          kind: "Kaizen",
+          kind: "Kotoage",
           ...UNIT_RETURN_DESCRIPTOR,
           permission: "can_upgrade",
         },
@@ -2408,7 +2409,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         entrypoints: [
           {
             name: "upgrade_ledger",
-            kind: { kind: "Kaizen", value: null },
+            kind: { kind: "Kotoage", value: null },
             params: [],
             argument_schema: null,
             return_type: "()",
@@ -2429,9 +2430,13 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         error_types: [
           { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
         ],
+<<<<<<< HEAD
         error_messages: [
           { error_type: "LedgerError", code: 7, message: "The transfer amount is invalid." },
         ],
+=======
+        error_messages: null,
+>>>>>>> origin/optimizations
         kotoba: [
           {
             msg_id: "contract.title",
@@ -2862,7 +2867,12 @@ baseTest("smart-contract entrypoint kinds use only the V1 interface names", () =
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
-        entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
+        entrypoints: [{
+          name: canonical === "Hajimari" ? "hajimari" : canonical === "Kaizen" ? "kaizen" : "run",
+          kind: canonical,
+          permission: canonical === "Kotoage" ? "can_run" : null,
+          ...UNIT_RETURN_DESCRIPTOR,
+        }],
       },
     }));
     assert.equal(
@@ -2888,7 +2898,12 @@ baseTest("smart-contract branded entrypoint kinds preserve their Norito tag orde
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
       manifest: {
-        entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
+        entrypoints: [{
+          name: canonical === "Hajimari" ? "hajimari" : canonical === "Kaizen" ? "kaizen" : "run",
+          kind: canonical,
+          permission: canonical === "Kotoage" ? "can_run" : null,
+          ...UNIT_RETURN_DESCRIPTOR,
+        }],
       },
     }));
     assert.equal(

@@ -12,6 +12,39 @@ mod attachment_installed;
 #[path = "installed_tests.rs"]
 mod installed;
 
+// These lifecycle fixtures reuse only immutable public bytes from genuine executed genesis.
+// They do not cache any runtime authority, current-state observation or finalized proof.
+fn standard_fixture_genesis() -> &'static (Vec<u8>, String, String) {
+    static GENESIS: std::sync::OnceLock<(Vec<u8>, String, String)> = std::sync::OnceLock::new();
+    GENESIS.get_or_init(|| {
+        let temporary = tempfile::tempdir().unwrap();
+        let ports = LocalnetPorts::reserve().unwrap();
+        let prepared = crate::localnet::prepare_localnet(
+            "fixture-genesis",
+            &temporary.path().join("generation"),
+            &ports,
+        )
+        .unwrap();
+        assert!(prepared.stream_token_authorities().unwrap().is_none());
+        let genesis = iroha_fs::read_private(
+            prepared
+                .context
+                .client_config
+                .parent()
+                .unwrap()
+                .join("genesis.signed.nrt"),
+            iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1,
+        )
+        .unwrap();
+        // Only the public signed block is retained; the private reader zeroizes its buffer.
+        (
+            genesis.to_vec(),
+            prepared.context.network_id,
+            prepared.context.account_id,
+        )
+    })
+}
+
 pub(super) fn fixture(
     root: &Path,
     name: &str,
@@ -20,6 +53,10 @@ pub(super) fn fixture(
     let networks = PrivateDirectory::open(root.join("networks")).unwrap();
     let directory = networks.create_child(name).unwrap();
     let bundle = directory.create_child("generation").unwrap();
+    let (genesis, network_id, account_id) = standard_fixture_genesis();
+    bundle
+        .write_atomic("genesis.signed.nrt", genesis, PublishMode::CreateNew)
+        .unwrap();
     bundle
         .write_atomic("client.toml", b"private config", PublishMode::CreateNew)
         .unwrap();
@@ -36,11 +73,12 @@ pub(super) fn fixture(
         });
     }
     let prepared = PreparedLocalnet {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         context: ManagedContext {
             name: name.into(),
             chain_id: "local".into(),
-            network_id: "public-network-id".into(),
-            account_id: "public-account-id".into(),
+            network_id: network_id.clone(),
+            account_id: account_id.clone(),
             dataspace_id: 0,
             dataspace_alias: "universal".into(),
             torii_url: peers[0].torii_url.clone(),
@@ -581,4 +619,77 @@ fn symlinked_generation_config_is_rejected() {
     assert!(
         store::validate_prepared("local", directory.path(), &prepared, &RootKind::Global).is_err()
     );
+}
+
+#[test]
+fn retained_service_profile_mismatch_and_private_selection_refuse_before_generation() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let manifest = directory
+        .open_child("generation")
+        .unwrap()
+        .read(MANIFEST, MAX_METADATA)
+        .unwrap();
+    let binary = directory.path().join("fixture-executable");
+    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
+    assert!(
+        matches!(store.up(&request), Err(Error::Invalid(message)) if message.contains("service profile"))
+    );
+    assert_eq!(store.prepared("local").unwrap(), prepared);
+    assert_eq!(
+        directory
+            .open_child("generation")
+            .unwrap()
+            .read(MANIFEST, MAX_METADATA)
+            .unwrap()
+            .as_slice(),
+        manifest.as_slice()
+    );
+    assert!(!directory.path().join(".preparing").exists());
+    request.name = "private-service".into();
+    assert!(
+        matches!(store.up_private_root(&request, &private_spec()), Err(Error::Invalid(message)) if message.contains("global managed root"))
+    );
+    assert!(!store.root().join("networks/private-service").exists());
+}
+
+#[test]
+fn retained_standard_profile_requires_original_signed_genesis_and_identity() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let _parent_profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    assert!(prepared.stream_token_authorities().unwrap().is_none());
+    for literal in [
+        format!(" {}", prepared.context.account_id),
+        format!("{} ", prepared.context.account_id),
+    ] {
+        let mut noncanonical = prepared.clone();
+        noncanonical.context.account_id = literal;
+        assert!(noncanonical.stream_token_authorities().is_err());
+    }
+    let mut substituted = prepared.clone();
+    substituted.context.network_id.push('x');
+    assert!(substituted.stream_token_authorities().is_err());
+    substituted = prepared.clone();
+    substituted.context.account_id = iroha_test_samples::BOB_ID.to_string();
+    assert!(substituted.stream_token_authorities().is_err());
+    let bundle = directory.open_child("generation").unwrap();
+    let genesis = bundle
+        .read(
+            "genesis.signed.nrt",
+            iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1,
+        )
+        .unwrap();
+    std::fs::remove_file(bundle.path().join("genesis.signed.nrt")).unwrap();
+    assert!(
+        prepared.stream_token_authorities().is_err(),
+        "no absent-genesis fallback"
+    );
+    bundle
+        .write_atomic("genesis.signed.nrt", &genesis, PublishMode::CreateNew)
+        .unwrap();
+    assert!(prepared.stream_token_authorities().unwrap().is_none());
 }

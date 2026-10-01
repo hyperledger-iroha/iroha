@@ -262,7 +262,7 @@ fn native_delivery_rejected_admit_has_no_partial_source_watermark_or_gateway_wri
         Permission::from(CanRecordSorafsReputationJournal),
         account(4),
     );
-    assert!(fixture.commit(1, vec![revoke.into()]));
+    assert!(fixture.commit(4, vec![revoke.into()]));
     let instruction = fixture.instruction(Action::Admit(fixture.request("revoked-recorder")));
     let now = fixture.now();
     let state = fixture.chain.state();
@@ -314,7 +314,12 @@ fn native_delivery_signed_payload_substitution_and_extra_instruction_fail_closed
         match mutation {
             0 => payload.creation_time_ms += 1,
             1 => payload.nonce = None,
-            2 => payload.time_to_live_ms = std::num::NonZeroU64::new(1),
+            2 => {
+                // Change the original TTL while keeping ingress valid so native payload
+                // equality, rather than transaction expiry, rejects the substituted body.
+                payload.time_to_live_ms =
+                    std::num::NonZeroU64::new(original.payload.time_to_live_ms.unwrap().get() - 1);
+            }
             3 => {
                 payload.fee_payment =
                     FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(1))
@@ -325,10 +330,12 @@ fn native_delivery_signed_payload_substitution_and_extra_instruction_fail_closed
             .unwrap()
             .try_sign(key(4).private_key())
             .unwrap();
-        assert_eq!(
-            fixture.chain.commit_at(fixture.now(), vec![signed]),
-            [false]
+        let now = fixture.now();
+        assert!(
+            signed.creation_time() + signed.time_to_live().unwrap() > Duration::from_millis(now),
+            "the substituted envelope must reach native validation before its expiry"
         );
+        assert_eq!(fixture.chain.commit_at(now, vec![signed]), [false]);
         assert_eq!(
             source(&fixture, &record).1.disposition,
             Disposition::Pending

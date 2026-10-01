@@ -23,7 +23,7 @@ use core::{
     time::Duration,
 };
 use futures::executor::block_on;
-use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
+use hex::encode as hex_encode;
 use iroha_core_privacy::{
     privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
@@ -153,7 +153,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     json::Json,
     numeric::{NumericSpec, Quantity, XorQuantity},
@@ -2114,10 +2114,10 @@ fn sorafs_alias_proof_fixture_py(
             })?;
             parse_hex_bytes_py(&hex_str, "manifest_cid_hex")?
         } else {
-            vec![0xAA, 0xBB]
+            sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
         }
     } else {
-        vec![0xAA, 0xBB]
+        sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
     };
     if manifest_cid.is_empty() {
         return Err(PyValueError::new_err(
@@ -2137,7 +2137,13 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         now.saturating_sub(60)
     };
-    let expires_default = generated + sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS;
+    let expires_default = || {
+        generated
+            .checked_add(sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS)
+            .ok_or_else(|| {
+                PyValueError::new_err("generated_at_unix overflows the default alias expiry")
+            })
+    };
     let expires = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expires_at_unix")? {
             let secs: u64 = value.extract().map_err(|_| {
@@ -2145,10 +2151,10 @@ fn sorafs_alias_proof_fixture_py(
             })?;
             secs
         } else {
-            expires_default
+            expires_default()?
         }
     } else {
-        expires_default
+        expires_default()?
     };
     if expires <= generated {
         return Err(PyValueError::new_err(
@@ -2166,16 +2172,21 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         1
     };
+    let expiry_epoch_default = || {
+        bound_at.checked_add(100).ok_or_else(|| {
+            PyValueError::new_err("bound_at_epoch overflows the default alias expiry")
+        })
+    };
     let expiry_epoch = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expiry_epoch")? {
             value
                 .extract::<u64>()
                 .map_err(|_| PyValueError::new_err("expiry_epoch must be a non-negative integer"))?
         } else {
-            bound_at + 100
+            expiry_epoch_default()?
         }
     } else {
-        bound_at + 100
+        expiry_epoch_default()?
     };
     let binding = AliasBindingV1 {
         alias: alias.clone(),
@@ -6902,6 +6913,57 @@ mod tests {
         });
     }
     #[test]
+    fn alias_fixture_defaults_are_canonical_and_reject_overflow() {
+        ensure_python();
+        Python::attach(|py| {
+            let decode_fixture = |fixture: Py<PyDict>| {
+                let encoded: String = fixture
+                    .bind(py)
+                    .get_item("proof_b64")
+                    .unwrap()
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                let bytes = BASE64.decode(encoded).unwrap();
+                decode_alias_proof_untrusted_signers(&bytes).unwrap()
+            };
+            let default = decode_fixture(sorafs_alias_proof_fixture_py(py, None).unwrap());
+            assert_eq!(
+                default.binding.manifest_cid,
+                sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
+            );
+            assert_eq!(default.binding.bound_at, 1);
+            assert_eq!(default.binding.expiry_epoch, 101);
+            assert_eq!(
+                default.expires_at_unix - default.generated_at_unix,
+                sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS
+            );
+
+            for (field, diagnostic) in [
+                ("generated_at_unix", "generated_at_unix overflows"),
+                ("bound_at_epoch", "bound_at_epoch overflows"),
+            ] {
+                let options = PyDict::new(py);
+                options.set_item(field, u64::MAX).unwrap();
+                let error = sorafs_alias_proof_fixture_py(py, Some(&options)).unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+                assert!(error.to_string().contains(diagnostic));
+            }
+
+            let options = PyDict::new(py);
+            options.set_item("generated_at_unix", u64::MAX - 1).unwrap();
+            options.set_item("expires_at_unix", u64::MAX).unwrap();
+            options.set_item("bound_at_epoch", u64::MAX - 1).unwrap();
+            options.set_item("expiry_epoch", u64::MAX).unwrap();
+            let explicit =
+                decode_fixture(sorafs_alias_proof_fixture_py(py, Some(&options)).unwrap());
+            assert_eq!(explicit.generated_at_unix, u64::MAX - 1);
+            assert_eq!(explicit.expires_at_unix, u64::MAX);
+            assert_eq!(explicit.binding.bound_at, u64::MAX - 1);
+            assert_eq!(explicit.binding.expiry_epoch, u64::MAX);
+        });
+    }
+    #[test]
     fn verified_transaction_rejection_codes_use_typed_variants() {
         let validation = |error| {
             TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
@@ -6960,7 +7022,36 @@ mod tests {
                 "schema_hash": ("AB".repeat(32)),
                 "name": "BelowMinimum",
                 "code": 18,
+                "message": null,
             }))
+        );
+    }
+    #[test]
+    fn contract_rejection_projection_preserves_boxed_identity_and_message() {
+        let reason = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
+            iroha_data_model::executor::ContractRejection {
+                contract: "決済".into(),
+                error_type: "example/pay@1::Settlement::PaymentError".into(),
+                schema_hash: [7; 32],
+                name: "BelowMinimum".into(),
+                code: 18,
+                message: Some("  支払額が不足しています。  ".into()),
+            },
+        ));
+        let value = transaction_contract_rejection_json(&reason).unwrap();
+        assert_eq!(
+            value.get("contract").and_then(json::Value::as_str),
+            Some("決済")
+        );
+        assert_eq!(
+            value.get("message").and_then(json::Value::as_str),
+            Some("  支払額が不足しています。  ")
+        );
+        assert_eq!(
+            transaction_contract_rejection_json(&TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("denied".into())
+            )),
+            None
         );
     }
     #[test]
@@ -11849,6 +11940,15 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     value.insert("schema_hash".into(), norito::json!(rejection.schema_hash));
     value.insert("name".into(), json::Value::String(rejection.name.clone()));
     value.insert("code".into(), json::Value::from(rejection.code));
+    value.insert(
+        "message".into(),
+        rejection
+            .message
+            .as_deref()
+            .map_or(json::Value::Null, |message| {
+                json::Value::String(message.to_owned())
+            }),
+    );
     Some(json::Value::Object(value))
 }
 fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {
@@ -12941,7 +13041,7 @@ fn canonical_python_account_faucet_claim_v1(
     let nonce = claim.pow_nonce_hex.as_str();
     if nonce.is_empty()
         || nonce.len() > 64
-        || nonce.len() % 2 != 0
+        || !nonce.len().is_multiple_of(2)
         || !nonce
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -13043,6 +13143,10 @@ fn verify_python_prepared_faucet_context_v1(
 #[pyfunction]
 #[pyo3(name = "verify_prepared_transaction_context_v1")]
 /// Authenticate one fixed-V1 prepared transaction and its exact public operation context.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the Python verification boundary binds each independently supplied prepared context field"
+)]
 fn verify_prepared_transaction_context_v1_py(
     signed_transaction_versioned: &[u8],
     network_id: &PyNetworkId,
@@ -14700,7 +14804,7 @@ fn private_settlement_auditor_signing_key_v1(literal: &str) -> PyResult<PublicKe
     Ok(key)
 }
 
-fn private_settlement_response_bytes_v1<'a>(bytes: &'a [u8], maximum: usize) -> PyResult<&'a [u8]> {
+fn private_settlement_response_bytes_v1(bytes: &[u8], maximum: usize) -> PyResult<&[u8]> {
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(PyValueError::new_err(
             "atomic private settlement response is invalid",

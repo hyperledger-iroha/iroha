@@ -1,6 +1,6 @@
 #[test]
-fn conn_scheme_detects_norito_rpc() {
-    let request = axum::http::Request::builder()
+fn conn_scheme_detects_catalogued_norito_rpc() {
+    let mut request = axum::http::Request::builder()
         .method(axum::http::Method::POST)
         .header(
             axum::http::header::CONTENT_TYPE,
@@ -8,6 +8,16 @@ fn conn_scheme_detects_norito_rpc() {
         )
         .body(())
         .unwrap();
+    assert_eq!(
+        ConnScheme::from_request(&request),
+        ConnScheme::Http,
+        "a caller-supplied path or content type cannot substitute for matched route metadata"
+    );
+    request
+        .extensions_mut()
+        .insert(MatchedRouteMetadata::from_descriptor(
+            route_catalog::pipeline::TRANSACTION,
+        ));
     assert!(matches!(
         ConnScheme::from_request(&request),
         ConnScheme::NoritoRpc
@@ -15,11 +25,21 @@ fn conn_scheme_detects_norito_rpc() {
 }
 #[test]
 fn conn_scheme_marks_transaction_path_as_norito_rpc() {
-    let request = axum::http::Request::builder()
+    let mut request = axum::http::Request::builder()
         .method(axum::http::Method::POST)
         .uri(route_catalog::pipeline::TRANSACTION.path())
         .body(())
         .unwrap();
+    assert_eq!(
+        ConnScheme::from_request(&request),
+        ConnScheme::Http,
+        "a caller-supplied path or content type cannot substitute for matched route metadata"
+    );
+    request
+        .extensions_mut()
+        .insert(MatchedRouteMetadata::from_descriptor(
+            route_catalog::pipeline::TRANSACTION,
+        ));
     assert!(matches!(
         ConnScheme::from_request(&request),
         ConnScheme::NoritoRpc
@@ -92,10 +112,15 @@ fn conn_scheme_rejects_incomplete_or_uncatalogued_websocket_upgrades() {
         .insert(MatchedRouteMetadata::from_descriptor(
             route_catalog::streaming::SUBSCRIPTION_WS,
         ));
-    assert!(matches!(
+    assert_eq!(
         ConnScheme::from_request(&incomplete),
-        ConnScheme::Http
-    ));
+        ConnScheme::Ws,
+        "transport telemetry counts a rejected request under its matched route"
+    );
+    assert!(
+        !request_has_canonical_websocket_handshake(&incomplete),
+        "route classification does not authorize an incomplete upgrade"
+    );
 
     let uncatalogued = axum::http::Request::builder()
         .method(axum::http::Method::GET)

@@ -9,7 +9,7 @@ use crate::state::StateBlock;
 use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::staking::{
-        PublicLaneStakeIndex, apply_indexed_consensus_slash_to_validator,
+        ConsensusSlashLiability, PublicLaneStakeIndex, apply_indexed_consensus_slash_to_validator,
         apply_indexed_slash_to_validator_without_observability,
         indexed_slashable_validator_exposure, max_slash_amount, validator_tenure_contains_height,
     },
@@ -27,7 +27,7 @@ use iroha_crypto::{ChargedPublicKey, Hash, PublicKey, PublicKeyAllocationError};
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{Evidence, EvidencePenaltyStatus, EvidenceRecord, ValidatorIndex},
+        consensus::{Evidence, EvidencePenaltyStatus, EvidenceRecord, EvidenceScope},
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
@@ -62,6 +62,7 @@ struct ValidatorLocator {
     validator: AccountId,
     activation_height: u64,
     deactivation_height: Option<u64>,
+    root_authority: bool,
 }
 /// Immutable flat lookup. Concrete keys/accounts cannot unwind during destruction;
 /// row destruction releases every account before the final nested-charge ledger.
@@ -75,6 +76,23 @@ struct ValidatorMapDemand {
     rows: usize,
     account_charges: usize,
     nested_bytes: usize,
+}
+
+fn locator_is_needed(
+    view: &StateView<'_>,
+    record: &iroha_data_model::nexus::PublicLaneValidatorRecord,
+) -> bool {
+    (view.is_lane_active_for_authority(record.lane_id)
+        && view.staking_authority_lane(record.lane_id) == Some(record.lane_id))
+        || view.world().sumeragi_lanes().custody.iter().any(|row| {
+            row.signers.as_slice().iter().any(|entry| {
+                entry.binding.activation_height == record.activation_height
+                    && entry
+                        .binding
+                        .names_account(record.lane_id, &record.validator)
+                        .unwrap_or(true)
+            })
+        })
 }
 
 impl ValidatorMapDemand {
@@ -100,9 +118,7 @@ impl ValidatorMapDemand {
                     key.0
                 ));
             }
-            if !view.is_lane_active_for_authority(key.0)
-                || view.staking_authority_lane(key.0) != Some(key.0)
-            {
+            if !locator_is_needed(view, record) {
                 continue;
             }
             validator_tenure_contains_height(record, record.activation_height)
@@ -189,8 +205,7 @@ impl ValidatorMap {
             .map_err(validator_map_buffer_error)?;
         for (key, record) in view.world().public_lane_validators().iter() {
             if !public_lane_validator_record_matches_key(key, record)
-                || !view.is_lane_active_for_authority(key.0)
-                || view.staking_authority_lane(key.0) != Some(key.0)
+                || !locator_is_needed(view, record)
             {
                 continue;
             }
@@ -218,6 +233,8 @@ impl ValidatorMap {
                 validator,
                 activation_height: record.activation_height,
                 deactivation_height: record.deactivation_height,
+                root_authority: view.is_lane_active_for_authority(key.0)
+                    && view.staking_authority_lane(key.0) == Some(key.0),
             })
             .map_err(|_| EvidencePreparationError::Invariant)?;
         }
@@ -328,7 +345,7 @@ fn consensus_penalty_is_due(
 /// penalty metadata. `PublicKeyCompact` stores one algorithm tag and the
 /// borrowed payload in a `ConstVec<u8>` backed by `Box<[u8]>`.
 fn pending_peer_key_layout(peer: &PeerId) -> Result<Layout, EvidencePreparationError> {
-    let (_, payload) = peer
+    let (algorithm, payload) = peer
         .public_key()
         .try_to_bytes()
         .map_err(|_| EvidencePreparationError::Invariant)?;
@@ -338,6 +355,11 @@ fn pending_peer_key_layout(peer: &PeerId) -> Result<Layout, EvidencePreparationE
         .ok_or(EvidencePreparationError::Admission(
             AllocationRefusal::DemandOverflow,
         ))?;
+    if algorithm != iroha_crypto::Algorithm::BlsNormal
+        || bytes != iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES
+    {
+        return Err(EvidencePreparationError::Invariant);
+    }
     Layout::array::<u8>(bytes)
         .map_err(|_| EvidencePreparationError::Admission(AllocationRefusal::DemandOverflow))
 }
@@ -378,13 +400,16 @@ impl<'a> PenaltyApplier<'a> {
             )
             .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
         let due = |record: &EvidenceRecord| {
+            let admitted_at = if cfg!(all(test, sumeragi_core_mutation = "HC3"))
+                && matches!(record.attribution.scope, EvidenceScope::Lane(_))
+            {
+                record.attribution.height
+            } else {
+                record.recorded_at_height
+            };
             !record.penalty_status.is_terminal()
                 && record.recorded_at_height < current_height
-                && consensus_penalty_is_due(
-                    record.recorded_at_height,
-                    slashing_delay,
-                    current_height,
-                )
+                && consensus_penalty_is_due(admitted_at, slashing_delay, current_height)
         };
         // This borrowed count and the fill below read the same StateView.
         // Fund the exact original backing before constructing the stake index.
@@ -432,7 +457,10 @@ impl<'a> PenaltyApplier<'a> {
                 pending
                     .try_push(PendingPenaltyEvidence((
                         *key,
+                        record.attribution.scope,
                         record.attribution.height,
+                        record.recorded_at_height,
+                        record.attribution.instance,
                         None,
                     )))
                     .map_err(|_| EvidencePreparationError::Invariant)?;
@@ -445,8 +473,16 @@ impl<'a> PenaltyApplier<'a> {
                 pending
                     .try_push(PendingPenaltyEvidence((
                         *key,
+                        record.attribution.scope,
                         record.attribution.height,
-                        Some((offender.signer, offender.peer_id.clone(), charge)),
+                        record.recorded_at_height,
+                        record.attribution.instance,
+                        Some((
+                            offender.signer,
+                            offender.peer_id.clone(),
+                            offender.lane_stake,
+                            charge,
+                        )),
                     )))
                     .map_err(|_| EvidencePreparationError::Invariant)?;
             }
@@ -504,16 +540,16 @@ impl<'a> PenaltyApplier<'a> {
                 self.state.stake_index_budget(),
             )
             .and_then(|snapshot| {
+                drop(view);
                 let admissions = if include_admissions {
-                    super::evidence::pending_evidence_admissions_from_world(
+                    super::evidence::pending_evidence_admissions(
                         self.state,
                         block_header.height().get(),
-                        view.world(),
+                        generation_before,
                     )
                 } else {
                     Vec::new()
                 };
-                drop(view);
                 self.derive_consensus_penalty_actions(block_header, snapshot)
                     .map(|(actions, index)| (admissions, actions, index))
             });
@@ -544,19 +580,41 @@ impl<'a> PenaltyApplier<'a> {
             .consensus_effects_probe_block(block_header.clone())?;
         let mut actions = Vec::new();
         for record in pending.as_slice() {
-            let (key, offence_height, signer) = &record.0;
+            let (key, scope, offence_height, recorded_at, instance, signer) = &record.0;
             let key = *key;
             // Admission already validated and anchored this immutable context.
             // Re-reading mutable local Kura files here would make block
             // construction depend on node-local I/O after consensus admission.
             let slash_id = key;
-            if let Some((signer, peer_id, _peer_key_charge)) = signer.as_ref() {
-                if let Some(locators) = snapshot.validator_map.get(peer_id.public_key()) {
+            if let Some((signer, peer_id, binding, _peer_key_charge)) = signer.as_ref() {
+                let liability = match (scope, binding) {
+                    (EvidenceScope::Root, None) => {
+                        Some(ConsensusSlashLiability::Root(*offence_height))
+                    }
+                    (EvidenceScope::Root, Some(_)) => {
+                        return Err(eyre!("root evidence has lane custody"));
+                    }
+                    (EvidenceScope::Lane(scope), Some(binding)) => {
+                        Some(ConsensusSlashLiability::Lane {
+                            scope: *scope,
+                            instance: *instance,
+                            recorded_at: *recorded_at,
+                            signer: *signer,
+                            binding: *binding,
+                        })
+                    }
+                    (EvidenceScope::Lane(_), None) => None,
+                };
+                if let Some(liability) = liability
+                    && let Some(locators) = snapshot.validator_map.get(peer_id.public_key())
+                {
                     for locator in locators {
-                        if *offence_height < locator.activation_height
-                            || locator
-                                .deactivation_height
-                                .is_some_and(|height| *offence_height >= height)
+                        if matches!(liability, ConsensusSlashLiability::Root(_))
+                            && (!locator.root_authority
+                                || *offence_height < locator.activation_height
+                                || locator
+                                    .deactivation_height
+                                    .is_some_and(|height| *offence_height >= height))
                         {
                             continue;
                         }
@@ -572,6 +630,9 @@ impl<'a> PenaltyApplier<'a> {
                                     locator.lane_id
                                 )
                             })?;
+                        if !liability.names_registration(&scratch.world, current_record)? {
+                            continue;
+                        }
                         let share_keys = snapshot
                             .stake_index
                             .share_keys(locator.lane_id, &locator.validator);
@@ -580,7 +641,7 @@ impl<'a> PenaltyApplier<'a> {
                             locator.lane_id,
                             &locator.validator,
                             current_record,
-                            *offence_height,
+                            liability,
                             share_keys,
                         )
                         .wrap_err_with(|| {
@@ -620,7 +681,7 @@ impl<'a> PenaltyApplier<'a> {
                             slash.slash_id,
                             &slash.amount,
                             block_header.creation_time_ms,
-                            *offence_height,
+                            liability,
                             share_keys,
                         )
                         .wrap_err_with(|| {
@@ -867,8 +928,15 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                         "mandatory slash does not name an original proven signer"
                     ));
                 }
-                let offence_height = record.attribution.height;
-                if !tx.is_lane_active_for_authority(action.lane_id) {
+                let liability = ConsensusSlashLiability::from_attribution(
+                    &record.attribution,
+                    record.recorded_at_height,
+                    action.signer,
+                )
+                .ok_or_else(|| eyre!("mandatory slash has no original monetary custody"))?;
+                if matches!(liability, ConsensusSlashLiability::Root(_))
+                    && !tx.is_lane_active_for_authority(action.lane_id)
+                {
                     return Err(eyre!(
                         "consensus slash targets a lane made inactive by block execution"
                     ));
@@ -884,7 +952,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                         action.slash_id,
                         &action.amount,
                         now_ms,
-                        offence_height,
+                        liability,
                         share_keys,
                     )?,
                     #[cfg(test)]
@@ -896,7 +964,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                             action.slash_id,
                             &action.amount,
                             now_ms,
-                            offence_height,
+                            liability,
                             share_keys,
                         )?;
                     }
@@ -1152,7 +1220,7 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         block::{
             BlockHeader,
-            consensus::{Evidence, EvidenceRecord},
+            consensus::{Evidence, EvidenceRecord, ValidatorIndex},
         },
         nexus::{
             LaneCatalog, LaneConfig, LaneVisibility, PublicLaneStakeShare, PublicLaneUnbonding,
@@ -1347,12 +1415,14 @@ mod tests {
             panic!("component vote proof");
         };
         let attribution = iroha_data_model::block::consensus::EvidenceAttribution {
+            scope: iroha_data_model::block::consensus::EvidenceScope::Root,
             instance: first.instance.0,
             height: first.height,
             epoch: first.epoch.epoch,
             context_id: first.epoch.context.0,
             authority_generation: [0x44; 32],
             offenders: vec![iroha_data_model::block::consensus::EvidenceOffender {
+                lane_stake: None,
                 signer: first.signer,
                 peer_id: roster()[first.signer as usize].clone(),
             }],
@@ -2034,7 +2104,6 @@ mod tests {
     fn admitted_native_attribution_does_not_require_a_kura_reread() {
         let state = native_penalty_state();
         install_one_block_delay_npos(&state);
-        let frozen_roster = roster();
         let evidence = fixture_vote_evidence(1, 0);
         let key = insert_evidence(&state, evidence, 1);
         let applier = PenaltyApplier::new(
@@ -2078,13 +2147,14 @@ mod tests {
         .expect("bounded parent penalty metadata is valid");
         assert_eq!(snapshot.pending.as_slice().len(), 1);
         assert_eq!(snapshot.pending.as_slice()[0].0.0, due);
-        assert_eq!(snapshot.pending.as_slice()[0].0.1, 1);
+        assert_eq!(snapshot.pending.as_slice()[0].0.1, EvidenceScope::Root);
+        assert_eq!(snapshot.pending.as_slice()[0].0.2, 1);
         assert_eq!(
             snapshot.pending.as_slice()[0]
                 .0
-                .2
+                .5
                 .as_ref()
-                .map(|(index, _, _)| *index),
+                .map(|(index, _, _, _)| *index),
             Some(1)
         );
         let signer_key_layout =
@@ -2578,7 +2648,8 @@ mod tests {
     fn pending_penalty_backing_refusal_preserves_source_and_retries_after_original_release() {
         use iroha_allocation::AllocationRefusal;
 
-        let max_rows = super::super::evidence::MAX_COMMITTED_EVIDENCE_RECORDS * 31;
+        let max_rows = super::super::evidence::MAX_COMMITTED_EVIDENCE_RECORDS
+            * iroha_sumeragi::types::MAX_COMMITTEE_SIZE;
         let max_layout = std::alloc::Layout::array::<PendingPenaltyEvidence>(max_rows)
             .expect("bounded penalty metadata layout");
         assert_eq!(
@@ -2849,10 +2920,6 @@ mod tests {
     fn penalty_derivation_fails_closed_on_missing_staking_custody_definition() {
         let state = native_penalty_state();
         let frozen_roster = roster();
-        let source = state
-            .kura()
-            .get_block(core::num::NonZeroUsize::new(1).unwrap())
-            .unwrap();
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
         insert_evidence(&state, fixture_vote_evidence(1, 37), 1);
@@ -3236,5 +3303,264 @@ mod tests {
         assert!(witness.fastpq_transcripts.is_empty());
         assert!(witness.fastpq_batches.is_empty());
         assert!(state_block.drain_transfer_transcripts().is_empty());
+    }
+
+    /// Explicit admitted prestate for the monetary kernel. The separate native reader tests
+    /// authenticate branch/custody; this fixture does not pretend its World edits are history.
+    fn lane_penalty_fixture(bound: bool) -> (State, Hash, AccountId) {
+        use iroha_data_model::{
+            block::consensus::LaneEvidenceScope,
+            sumeragi_lanes::{
+                SumeragiLaneCustody, SumeragiLaneFrontier, SumeragiLaneSignerCustody,
+                SumeragiLaneStakeBinding,
+            },
+        };
+        let state = native_penalty_state();
+        install_one_block_delay_npos(&state);
+        state.nexus.write().staking.max_slash_bps = 1_000;
+        let owner = LaneId::new(42);
+        let validator = add_validator_record_on_lane(&state, owner, &roster()[1]);
+        let view = state.view();
+        assert!(!view.is_lane_active_for_authority(owner));
+        let key = (owner, validator.clone());
+        let record = view.world().public_lane_validators().get(&key).unwrap();
+        let escrow = &view
+            .world()
+            .public_lane_stake_custody()
+            .get(&key)
+            .unwrap()
+            .0;
+        let binding = SumeragiLaneStakeBinding::from_record(record, escrow).unwrap();
+        let params = view.world().sumeragi_npos_parameters().unwrap();
+        let obligation = SumeragiLaneCustody {
+            lane: LaneId::new(7),
+            incarnation: [0x71; 32],
+            instance: [0x41; 32],
+            created_at: 1,
+            merged: SumeragiLaneFrontier::default(),
+            signer_count: 4,
+            signers: if bound {
+                vec![SumeragiLaneSignerCustody { signer: 1, binding }]
+                    .try_into()
+                    .unwrap()
+            } else {
+                Default::default()
+            },
+            evidence_horizon: params.evidence_horizon_blocks(),
+            slashing_delay: params.slashing_delay_blocks(),
+            retired_at: Some(20),
+        };
+        let scope = LaneEvidenceScope {
+            lane: obligation.lane,
+            incarnation: obligation.incarnation,
+            created_at: 1,
+            admission_parent_height: 20,
+            admission_parent_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"monetary kernel parent",
+            )),
+            admission_parent_core_hash: [0x72; 32],
+            admission_parent_result: [0x73; 32],
+        };
+        drop(view);
+        let mut lanes = state.world.sumeragi_lanes.block();
+        lanes.get_mut().custody.push(obligation);
+        lanes.commit();
+        let iroha_sumeragi::message::Evidence::VoteEquivocation(mut first, mut second) =
+            fixture_vote_evidence(1, 0).decode_native().unwrap()
+        else {
+            panic!("vote fixture")
+        };
+        for vote in [&mut first, &mut second] {
+            vote.height = 1_000;
+            vote.sig = iroha_sumeragi::types::Signature(
+                Signature::new(roster_keys()[1].private_key(), &vote.preimage())
+                    .payload()
+                    .try_into()
+                    .unwrap(),
+            );
+        }
+        let proof = Evidence::from_native(&iroha_sumeragi::message::Evidence::VoteEquivocation(
+            first, second,
+        ))
+        .unwrap();
+        let key = insert_evidence(&state, proof, 21);
+        let mut rows = state.world.consensus_evidence.block();
+        let mut row = rows.get(&key).unwrap().clone();
+        row.attribution.scope = EvidenceScope::Lane(scope);
+        row.attribution.height = 1_000; // Native lane clock, intentionally above global carrier.
+        row.attribution.offenders[0].lane_stake = bound.then_some(binding);
+        rows.insert(key, row);
+        rows.commit();
+        (state, key, validator)
+    }
+
+    #[test]
+    fn original_lane_liability_checks_exact_registration_before_exposure() {
+        let (state, key, validator) = lane_penalty_fixture(true);
+        let view = state.view();
+        let evidence = view.world().consensus_evidence().get(&key).unwrap();
+        let liability = ConsensusSlashLiability::from_attribution(
+            &evidence.attribution,
+            evidence.recorded_at_height,
+            1,
+        )
+        .unwrap();
+        let original = view
+            .world()
+            .public_lane_validators()
+            .get(&(LaneId::new(42), validator))
+            .unwrap();
+        assert!(
+            liability
+                .names_registration(view.world(), original)
+                .unwrap()
+        );
+        let mut later = original.clone();
+        later.activation_height += 1;
+        assert!(
+            !liability.names_registration(view.world(), &later).unwrap(),
+            "the same account and peer cannot move a lien to a later registration"
+        );
+        let mut substituted = original.clone();
+        substituted.peer_id = roster()[0].clone();
+        assert!(
+            liability
+                .names_registration(view.world(), &substituted)
+                .is_err(),
+            "the exact retained peer is part of the original escrow binding"
+        );
+    }
+
+    #[test]
+    fn original_lane_liability_slashes_retired_owner_without_using_native_height() {
+        let (state, evidence_key, validator) = lane_penalty_fixture(true);
+        let applier = PenaltyApplier::new(&state, None);
+        let (early, _) = applier
+            .derive_npos_penalty_actions(&penalty_header(21))
+            .unwrap();
+        assert!(
+            early.is_empty(),
+            "the admission carrier cannot slash its own proof"
+        );
+        let (actions, index) = applier
+            .derive_npos_penalty_actions(&penalty_header(22))
+            .unwrap();
+        let slash = actions
+            .iter()
+            .find_map(|action| match action {
+                NposPenaltyAction::ConsensusSlash(slash) => Some(slash),
+                _ => None,
+            })
+            .expect("original custody remains liable after routing retirement");
+        assert_eq!(slash.evidence_key, evidence_key);
+        assert_eq!(slash.lane_id, LaneId::new(42));
+        assert_eq!(slash.validator, validator);
+        assert_eq!(slash.amount, Quantity::from(1_000_u64));
+        let before = state
+            .view()
+            .world()
+            .public_lane_stake_custody()
+            .get(&(slash.lane_id, validator.clone()))
+            .unwrap()
+            .1
+            .clone();
+        let mut block = state
+            .consensus_effects_probe_block(penalty_header(22))
+            .unwrap();
+        let mut tx = block.consensus_effects_transaction().unwrap();
+        let effects = NposConsensusEffects {
+            evidence_admissions: Vec::new(),
+            penalty_actions: actions,
+        };
+        apply_npos_consensus_effects_to_transaction(
+            &mut tx,
+            &effects,
+            Some(&index),
+            &[],
+            &[],
+            22,
+            0,
+            22_000,
+        )
+        .unwrap();
+        let after = &tx
+            .world
+            .public_lane_stake_custody
+            .get(&(LaneId::new(42), validator))
+            .unwrap()
+            .1;
+        assert_eq!(
+            before.checked_sub(after).unwrap(),
+            Quantity::from(1_000_u64)
+        );
+        assert!(
+            tx.world
+                .consensus_evidence
+                .get(&evidence_key)
+                .unwrap()
+                .penalty_status
+                .is_terminal()
+        );
+    }
+
+    #[test]
+    fn lane_liability_never_targets_later_registration_or_originally_unbound_member() {
+        for bound in [true, false] {
+            let (state, evidence_key, validator) = lane_penalty_fixture(bound);
+            if bound {
+                let mut records = state.world.public_lane_validators.block();
+                let key = (LaneId::new(42), validator);
+                let mut later = records.get(&key).unwrap().clone();
+                later.activation_height += 1;
+                records.insert(key, later);
+                records.commit();
+            }
+            let (actions, _) = PenaltyApplier::new(&state, None)
+                .derive_npos_penalty_actions(&penalty_header(22))
+                .unwrap();
+            assert_eq!(
+                actions,
+                vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
+                    NposMarkConsensusEvidenceAppliedAction {
+                        evidence_key,
+                        height: 22
+                    },
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn lane_liability_rejects_changed_incarnation_policy_and_same_tenure_escrow() {
+        for mutation in 0..3 {
+            let (state, _, validator) = lane_penalty_fixture(true);
+            match mutation {
+                0 | 1 => {
+                    let mut rows = state.world.sumeragi_lanes.block();
+                    if mutation == 0 {
+                        rows.get_mut().custody[0].incarnation = [0x99; 32];
+                    } else {
+                        rows.get_mut().custody[0].evidence_horizon += 1;
+                    }
+                    rows.commit();
+                }
+                _ => {
+                    let mut custody = state.world.public_lane_stake_custody.block();
+                    let key = (LaneId::new(42), validator);
+                    let (asset, amount) = custody.get(&key).unwrap().clone();
+                    let (_, _, sink) = penalty_staking_ids();
+                    custody.insert(
+                        key,
+                        (AssetId::new(asset.definition().clone(), sink), amount),
+                    );
+                    custody.commit();
+                }
+            }
+            assert!(
+                PenaltyApplier::new(&state, None)
+                    .derive_npos_penalty_actions(&penalty_header(22))
+                    .is_err()
+            );
+        }
     }
 }

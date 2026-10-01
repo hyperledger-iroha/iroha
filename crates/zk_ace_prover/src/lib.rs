@@ -22,8 +22,9 @@ use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
-        PrivacyConsensusLimitsV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
+        PrivacyConsensusLimitsV1, PrivacyExact12CatalogCommitmentV1, PrivacyPolicyIdV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProofWireMagicV1,
+        PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
         PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyZkAcePolicyLifecycleV1,
         PrivacyZkAcePolicyRecordV1, PrivacyZkAcePolicyRecordValidationErrorV1,
         PrivacyZkAceReplayNullifierV1, ZkAcePqAuthorizationStatementV1,
@@ -531,8 +532,8 @@ fn placeholder_envelope_v1(
     statement: PrivacyStatementV1,
 ) -> PrivacyProofEnvelopeV1 {
     PrivacyProofEnvelopeV1 {
-        wire_magic: Default::default(),
-        catalog_commitment: Default::default(),
+        wire_magic: PrivacyProofWireMagicV1::default(),
+        catalog_commitment: PrivacyExact12CatalogCommitmentV1::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,
@@ -596,7 +597,7 @@ where
         public_balance_scope: transfer.public_balance_scope,
         amount: transfer.amount,
         authorization_epoch: transfer.policy.authorization_epoch,
-        replay_nullifier: Default::default(),
+        replay_nullifier: PrivacyZkAceReplayNullifierV1::default(),
     };
     let draft_statement = PrivacyStatementV1::ZkAcePqAuthorizationV1(native_statement.clone());
     let draft_payload =
@@ -631,8 +632,8 @@ where
         return Err(ZkAcePrivacyActionBuildErrorV1::EnvelopeValidation);
     }
     let final_envelope = PrivacyProofEnvelopeV1 {
-        wire_magic: Default::default(),
-        catalog_commitment: Default::default(),
+        wire_magic: PrivacyProofWireMagicV1::default(),
+        catalog_commitment: PrivacyExact12CatalogCommitmentV1::default(),
         protocol_id: profile.protocol_id,
         proof_system_id: profile.proof_system_id,
         engine_id: profile.engine_id,

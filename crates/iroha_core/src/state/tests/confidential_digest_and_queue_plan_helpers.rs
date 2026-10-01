@@ -190,6 +190,17 @@ fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_
         .expect("four registered validators have current consensus keys");
     assert_eq!(expected.len(), 4);
 
+    assert_eq!(
+        crate::state::lane_authority::resolve_global_route(
+            state.view().world(),
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &state.nexus_snapshot(),
+            1,
+        )
+        .expect("original scheduled route authority")
+        .into_validators(),
+        expected,
+    );
     let component_keys = configure_commit_topology_preserving_world_peers(&state, 1);
     let view = state.view();
     assert_eq!(
@@ -197,8 +208,10 @@ fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_
         before
     );
     assert_eq!(
-        view.resolve_lane_committee_at_height(
+        crate::state::lane_authority::resolve_global_route(
+            view.world(),
             LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            &view.nexus,
             1,
         )
         .expect("component signing metadata does not alter route authority")
@@ -211,6 +224,20 @@ fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_
             .iter()
             .map(|key| PeerId::new(key.public_key().clone()))
             .collect::<Vec<_>>(),
+    );
+    assert!(
+        matches!(
+            view.resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                1,
+            ),
+            Err(LaneAuthorityError::UndersizedPool {
+                required: 4,
+                actual: 0,
+                ..
+            })
+        ),
+        "component signing keys do not invent independent lane authority"
     );
     for key in &component_keys {
         for id in [

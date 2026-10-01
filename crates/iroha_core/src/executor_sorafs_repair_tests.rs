@@ -248,13 +248,7 @@ mod sorafs_repair_admission {
     #[test]
     fn initial_executor_repair_revocation_and_reauthorization_do_not_restore_a_stale_lease() {
         let state = fixture(PROVIDER);
-        let mut block = state.block(BlockHeader::new(
-            nonzero!(2_u64),
-            None,
-            None,
-            2_000,
-            0,
-        ));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 2_000, 0));
         let mut transaction = block.transaction();
         for instruction in [submission(&ALICE_ID), claim(1, "alice-claim")] {
             Executor::Initial

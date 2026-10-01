@@ -637,8 +637,36 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
             SnapshotJsonMap::parse(&encoded, "world").unwrap(),
             &seed
         ),
-        Err(StateRestoreError::ExecutionDeferred(_))
+        Err(StateRestoreError::Admission(
+            crate::state::StateAdmissionError::Storage(
+                crate::state::StateStorageAdmissionError::World(
+                    mv::storage::AdmittedStorageError::Allocation(
+                        iroha_allocation::AllocationRefusal::ExceedsLimit { .. }
+                    )
+                )
+            )
+        ))
     ));
+    assert_eq!(budget.reserved_bytes(), 0);
+    // Complete World rollback acquisition now precedes Musubi scratch. Check
+    // the original scratch refusal at that exact validator boundary as well;
+    // neither local resource refusal becomes malformed snapshot content.
+    let Err(StateRestoreError::ExecutionDeferred(refusal)) =
+        validate_musubi_live_projections(&world, &budget)
+    else {
+        panic!("current Musubi projection must retain its typed scratch refusal");
+    };
+    assert_eq!(
+        refusal.allocation_refusal(),
+        Some(
+            &budget
+                .try_reserve_bytes(core::mem::size_of::<
+                    &iroha_data_model::musubi::MusubiOrderedPackageEntryV1,
+                >())
+                .unwrap_err()
+        )
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
     let mut malformed = SnapshotJsonMap::parse(&encoded, "world").unwrap();
     malformed.remove("account_aliases").unwrap();
     assert!(matches!(
@@ -646,12 +674,27 @@ fn musubi_restore_keeps_local_scratch_refusal_separate_from_malformed_world() {
         Err(StateRestoreError::Serialization(_))
     ));
     budget.set_limit_bytes(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES);
-    parse_world(
+    let restored = parse_world(
         &budget,
         SnapshotJsonMap::parse(&encoded, "world").unwrap(),
         &seed,
     )
     .unwrap();
+    let retired_generations =
+        mv::cell::Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts()
+            .iter()
+            .map(std::alloc::Layout::size)
+            .sum::<usize>();
+    let retirement_pin = crossbeam_epoch::pin();
+    drop(restored);
+    retirement_pin.flush();
+    assert_eq!(
+        budget.reserved_bytes(),
+        retired_generations,
+        "the restored shortfall scalar's two original generations remain epoch-protected",
+    );
+    drop(retirement_pin);
+    collect_musubi_restore_ebr_until(&budget, 0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -710,4 +753,17 @@ fn musubi_world_overlay_scratch_refusal_rolls_back_current_and_replacement_cuts(
     drop(block);
     assert_eq!(json::to_json(&world).unwrap(), original);
     assert_eq!(budget.reserved_bytes(), 0);
+}
+
+fn collect_musubi_restore_ebr_until(budget: &iroha_allocation::AllocationBudget, expected: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while budget.reserved_bytes() != expected {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "original EBR custody {} != {expected}",
+            budget.reserved_bytes(),
+        );
+        crossbeam_epoch::pin().flush();
+        std::thread::yield_now();
+    }
 }

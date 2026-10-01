@@ -61,6 +61,9 @@ compile_error!(
 compile_error!(
     "Native IPA helpers must remain enabled; `zk-ipa-native` is required for all builds"
 );
+// Test-only Core mutation controls must never enter a shipping library.
+mod mutation_guard;
+
 /// Randomness beacon scaffolding using BLS‑VRF outputs.
 pub mod alias;
 /// Declarative alias setup classification and planning primitives.
@@ -1416,3 +1419,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod test_allocations;

@@ -1,4 +1,4 @@
-//! Unused scalar F257 packing candidate; no keys, ciphertexts or wire profile.
+//! Test-only F257 packing and public admission grammar; no encryption profile.
 //!
 //! See `specs/ram_lfe_plaintext_packing.md`. The private owners clear their own
 //! allocated words. Borrowed input copies remain the caller's responsibility.
@@ -14,11 +14,17 @@ const RING_DEGREE: usize = 4096;
 const STRIDE: usize = RING_DEGREE / SLOTS;
 const ROOT: u16 = 3;
 const INVERSE_SLOTS: u16 = 255;
+const MAX_INPUT_BYTES: usize = 63;
+const MAX_OUTPUTS: usize = 64;
+/// Fixed key-switch roles shared with the test-only structural planner.
+pub(crate) const GALOIS_EXPONENTS: [u16; 7] = [5, 25, 625, 5601, 4033, 3969, 8191];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PackingError {
     Length,
     NonCanonical { index: usize },
+    Byte { index: usize },
+    Padding { index: usize },
     Slot,
     Automorphism,
 }
@@ -64,6 +70,307 @@ struct ScalarSlots(ClearingWords);
 impl ScalarSlots {
     fn copy_canonical(input: &[u16]) -> Result<Self, PackingError> {
         ClearingWords::copy_canonical(input).map(Self)
+    }
+}
+
+/// Canonical client byte input in the existing scalar allocation. No encryption
+/// relation is checked; caller-owned bytes and returned scalar copies stay private.
+struct ClientInput(ScalarSlots);
+
+impl ClientInput {
+    fn from_bytes(input: &[u8]) -> Result<Self, PackingError> {
+        if input.len() > MAX_INPUT_BYTES {
+            return Err(PackingError::Length);
+        }
+        let mut words = ClearingWords::zero();
+        words.0[0] = u16::try_from(input.len()).expect("bounded input");
+        for (dst, &byte) in words.0[1..].iter_mut().zip(input) {
+            *dst = u16::from(byte);
+        }
+        Ok(Self(ScalarSlots(words)))
+    }
+
+    fn from_slots(slots: ScalarSlots) -> Result<Self, PackingError> {
+        let count = usize::from(slots.0.0[0]);
+        if count > MAX_INPUT_BYTES {
+            return Err(PackingError::Length);
+        }
+        for (index, &word) in slots.0.0.iter().enumerate().skip(1) {
+            if index <= count && word > u16::from(u8::MAX) {
+                return Err(PackingError::Byte { index });
+            }
+            if index > count && word != 0 {
+                return Err(PackingError::Padding { index });
+            }
+        }
+        Ok(Self(slots))
+    }
+
+    fn encode(&self) -> SparsePlaintext {
+        SparsePlaintext::encode(&self.0)
+    }
+}
+
+impl fmt::Debug for ClientInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ClientInput([REDACTED])")
+    }
+}
+
+/// Ordered output snapshot with a private count; 256 remains a scalar, not a byte.
+/// Both constructors preserve the caller's source and own one existing slot buffer.
+struct ScalarOutput {
+    slots: ScalarSlots,
+    count: usize,
+}
+
+impl ScalarOutput {
+    fn from_values(values: &[u16]) -> Result<Self, PackingError> {
+        if values.is_empty() || values.len() > MAX_OUTPUTS {
+            return Err(PackingError::Length);
+        }
+        let mut words = ClearingWords::zero();
+        for (index, &word) in values.iter().enumerate() {
+            if word >= MODULUS {
+                return Err(PackingError::NonCanonical { index });
+            }
+            words.0[index] = word;
+        }
+        Ok(Self {
+            slots: ScalarSlots(words),
+            count: values.len(),
+        })
+    }
+
+    fn from_slots(count: usize, slots: ScalarSlots) -> Result<Self, PackingError> {
+        if count == 0 || count > MAX_OUTPUTS {
+            return Err(PackingError::Length);
+        }
+        for (index, &word) in slots.0.0.iter().enumerate().skip(count) {
+            if word != 0 {
+                return Err(PackingError::Padding { index });
+            }
+        }
+        Ok(Self { slots, count })
+    }
+
+    fn encode(&self) -> SparsePlaintext {
+        SparsePlaintext::encode(&self.slots)
+    }
+}
+
+impl fmt::Debug for ScalarOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ScalarOutput([REDACTED])")
+    }
+}
+
+impl Drop for ScalarOutput {
+    fn drop(&mut self) {
+        self.count.zeroize();
+        // The existing ScalarSlots/ClearingWords field clears its full allocation.
+        observe_cleared_count(self.count);
+    }
+}
+
+/// Public identities only. A future purpose verifier must derive these from
+/// authenticated policy state. Copying digests here authenticates no key/profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AdmissionContext {
+    policy_hash: crate::Hash,
+    parameter_digest: crate::Hash,
+    public_key_digest: crate::Hash,
+    evaluation_key_digest: crate::Hash,
+    encryption_profile_digest: crate::Hash,
+    semantic_context_hash: crate::Hash,
+}
+
+/// Candidate public grammar shared by the future input and execution relations.
+/// This binds opaque submitted ciphertext bytes, not their canonical encoding or
+/// plaintext. It is neither an admitted ciphertext nor a proof-verification token.
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(
+    name = "iroha_crypto::ram_lfe::InputAdmissionStatementCandidateV1",
+    frame = "iroha_crypto::ram_lfe::InputAdmissionStatementCandidateV1"
+)]
+struct InputAdmissionStatement {
+    version: u8,
+    policy_hash: crate::Hash,
+    parameter_digest: crate::Hash,
+    public_key_digest: crate::Hash,
+    evaluation_key_digest: crate::Hash,
+    encryption_profile_digest: crate::Hash,
+    semantic_context_hash: crate::Hash,
+    packing_contract_hash: crate::Hash,
+    associated_data_hash: crate::Hash,
+    input_ciphertext_hash: crate::Hash,
+    // Public length of the submitted ciphertext bytes, never encrypted slot 0.
+    // A selected fixed-profile codec must additionally enforce its fixed shape.
+    input_ciphertext_bytes: u64,
+}
+
+// Header 40; version field 2; nine raw Hash fields (1+32); u64 field (1+8).
+// All fields have alignment <=8, so the 40-byte header needs no extra padding.
+const ADMISSION_STATEMENT_BYTES: usize = 40 + 2 + 9 * 33 + 9;
+const ENCRYPTED_INPUT_BYTES: usize = 1_048_576;
+const PROOF_ENVELOPE_BYTES: usize = 1_048_576;
+const ASSOCIATED_DATA_BYTES: usize = 512;
+const COMPOUND_PROOF_BYTES: usize = 192 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AdmissionError {
+    InputLength,
+    AssociatedDataLength,
+    Metadata,
+    Codec,
+    StatementMismatch,
+    ArithmeticOverflow,
+    ProofBudget,
+    EnvelopeBudget,
+}
+
+#[derive(norito::Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_crypto::ram_lfe::ScalarPackingContractCandidateV1",
+    frame = "iroha_crypto::ram_lfe::ScalarPackingContractCandidateV1"
+)]
+// Encoding and logical key roles only. Refresh/sanitization, their extra keys
+// and physical scheduling belong to the unresolved encryption profile.
+struct PackingContract {
+    version: u8,
+    ring_degree: u16,
+    modulus: u16,
+    scalar_slots: u16,
+    maximum_input_bytes: u16,
+    maximum_outputs: u16,
+    galois_exponents: [u16; 7],
+    relinearization_required: bool,
+}
+
+fn packing_contract_hash() -> Result<crate::Hash, AdmissionError> {
+    let contract = PackingContract {
+        version: 1,
+        ring_degree: u16::try_from(RING_DEGREE).map_err(|_| AdmissionError::ArithmeticOverflow)?,
+        modulus: MODULUS,
+        scalar_slots: u16::try_from(SLOTS).map_err(|_| AdmissionError::ArithmeticOverflow)?,
+        maximum_input_bytes: u16::try_from(MAX_INPUT_BYTES)
+            .map_err(|_| AdmissionError::ArithmeticOverflow)?,
+        maximum_outputs: u16::try_from(MAX_OUTPUTS)
+            .map_err(|_| AdmissionError::ArithmeticOverflow)?,
+        galois_exponents: GALOIS_EXPONENTS,
+        relinearization_required: true,
+    };
+    norito::encode_canonical(&contract)
+        .map(crate::Hash::new)
+        .map_err(|_| AdmissionError::Codec)
+}
+
+impl InputAdmissionStatement {
+    fn for_input(
+        context: AdmissionContext,
+        associated_data: &[u8],
+        input_ciphertext: &[u8],
+    ) -> Result<Self, AdmissionError> {
+        if input_ciphertext.is_empty() || input_ciphertext.len() > ENCRYPTED_INPUT_BYTES {
+            return Err(AdmissionError::InputLength);
+        }
+        if associated_data.len() > ASSOCIATED_DATA_BYTES {
+            return Err(AdmissionError::AssociatedDataLength);
+        }
+        Ok(Self {
+            version: 1,
+            policy_hash: context.policy_hash,
+            parameter_digest: context.parameter_digest,
+            public_key_digest: context.public_key_digest,
+            evaluation_key_digest: context.evaluation_key_digest,
+            encryption_profile_digest: context.encryption_profile_digest,
+            semantic_context_hash: context.semantic_context_hash,
+            packing_contract_hash: packing_contract_hash()?,
+            associated_data_hash: crate::Hash::new(associated_data),
+            input_ciphertext_hash: crate::Hash::new(input_ciphertext),
+            input_ciphertext_bytes: u64::try_from(input_ciphertext.len())
+                .map_err(|_| AdmissionError::ArithmeticOverflow)?,
+        })
+    }
+
+    fn validate_metadata(&self) -> Result<(), AdmissionError> {
+        if self.version != 1 || self.packing_contract_hash != packing_contract_hash()? {
+            return Err(AdmissionError::Metadata);
+        }
+        if self.input_ciphertext_bytes == 0
+            || self.input_ciphertext_bytes > ENCRYPTED_INPUT_BYTES as u64
+        {
+            return Err(AdmissionError::InputLength);
+        }
+        Ok(())
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, AdmissionError> {
+        self.validate_metadata()?;
+        if norito::canonical_frame_len(self).map_err(|_| AdmissionError::Codec)?
+            != ADMISSION_STATEMENT_BYTES
+        {
+            return Err(AdmissionError::Codec);
+        }
+        norito::encode_canonical(self).map_err(|_| AdmissionError::Codec)
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, AdmissionError> {
+        // No variable-length fields or ciphertext/key copy enters this decoder.
+        if bytes.len() != ADMISSION_STATEMENT_BYTES {
+            return Err(AdmissionError::Codec);
+        }
+        let limits = norito::DecodeLimits::new(
+            32,
+            ADMISSION_STATEMENT_BYTES,
+            ADMISSION_STATEMENT_BYTES,
+            ADMISSION_STATEMENT_BYTES * 4,
+            8,
+        );
+        let statement: Self = norito::decode_canonical_with_limits(bytes, limits)
+            .map_err(|_| AdmissionError::Codec)?;
+        statement.validate_metadata()?;
+        Ok(statement)
+    }
+
+    /// Exact public-context comparison only. The expected value is not trusted
+    /// merely because it has this Rust type; both proof relations remain absent.
+    fn require_same_statement(&self, expected: &Self) -> Result<(), AdmissionError> {
+        self.validate_metadata()?;
+        expected.validate_metadata()?;
+        if self != expected {
+            return Err(AdmissionError::StatementMismatch);
+        }
+        Ok(())
+    }
+
+    /// Checked declared inventory, not a complete envelope codec or qualification.
+    /// `other_bytes` includes every remaining frame/instance and input/output/key
+    /// bytes ONLY when actually carried by this proof envelope. The encrypted-input
+    /// cap is independent; hash binding does not duplicate that owner. Policy-key loading,
+    /// algorithms and prover scratch remain unresolved; none are declared free.
+    fn checked_proof_envelope_bytes(
+        &self,
+        input_proof_bytes: usize,
+        execution_proof_bytes: usize,
+        other_bytes: usize,
+    ) -> Result<usize, AdmissionError> {
+        self.validate_metadata()?;
+        let proofs = input_proof_bytes
+            .checked_add(execution_proof_bytes)
+            .ok_or(AdmissionError::ArithmeticOverflow)?;
+        if input_proof_bytes == 0 || execution_proof_bytes == 0 || proofs > COMPOUND_PROOF_BYTES {
+            return Err(AdmissionError::ProofBudget);
+        }
+        let total = ADMISSION_STATEMENT_BYTES
+            .checked_add(proofs)
+            .and_then(|n| n.checked_add(other_bytes))
+            .ok_or(AdmissionError::ArithmeticOverflow)?;
+        if total > PROOF_ENVELOPE_BYTES {
+            return Err(AdmissionError::EnvelopeBudget);
+        }
+        Ok(total)
     }
 }
 
@@ -214,11 +521,17 @@ fn observe_cleared_cells(words: &[u16; SLOTS]) {
     });
 }
 
+fn observe_cleared_count(count: usize) {
+    WIPE_OBSERVATIONS.with_borrow_mut(|observations| {
+        if let Some(observations) = observations {
+            observations.push(count == 0);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const BROADCAST_EXPONENTS: [usize; 7] = [5, 25, 625, 5601, 4033, 3969, 8191];
 
     struct WipeObserver;
 
@@ -384,7 +697,7 @@ mod tests {
     fn fixed_automorphisms_broadcast_every_masked_slot() {
         for slot in 0..SLOTS {
             let mut encoded = SparsePlaintext::mask(slot).unwrap();
-            for exponent in BROADCAST_EXPONENTS {
+            for exponent in GALOIS_EXPONENTS.map(usize::from) {
                 let permuted = encoded.automorphism(exponent).unwrap();
                 let slots = encoded.decode();
                 assert_eq!(
@@ -435,5 +748,387 @@ mod tests {
         });
         assert!(result.is_err());
         WipeObserver::assert_cleared(3);
+    }
+    #[test]
+    fn typed_client_input_preserves_empty_maximum_bytes_and_scalar_encoding() {
+        for bytes in [Vec::new(), vec![0; 63], vec![255; 63]] {
+            let input = ClientInput::from_bytes(&bytes).unwrap();
+            assert_eq!(usize::from(input.0.0.0[0]), bytes.len());
+            assert!(input.0.0.0[bytes.len() + 1..].iter().all(|&x| x == 0));
+            let recovered = ClientInput::from_slots(input.encode().decode()).unwrap();
+            assert_eq!(*recovered.0.0.0, *input.0.0.0);
+            assert_eq!(
+                &input.0.0.0[1..bytes.len() + 1],
+                bytes.iter().copied().map(u16::from).collect::<Vec<_>>()
+            );
+        }
+        assert!(matches!(
+            ClientInput::from_bytes(&[1; 64]),
+            Err(PackingError::Length)
+        ));
+    }
+
+    #[test]
+    fn typed_input_rejects_length_byte_and_all_padding_positions() {
+        for length in [64, 128, 256] {
+            let mut words = [0; SLOTS];
+            words[0] = length;
+            assert!(matches!(
+                ClientInput::from_slots(ScalarSlots::copy_canonical(&words).unwrap()),
+                Err(PackingError::Length)
+            ));
+        }
+        for index in 1..=63 {
+            let mut words = [0; SLOTS];
+            words[0] = 63;
+            words[index] = 256;
+            assert!(
+                matches!(ClientInput::from_slots(ScalarSlots::copy_canonical(&words).unwrap()), Err(PackingError::Byte { index: found }) if found == index)
+            );
+        }
+        for index in 1..SLOTS {
+            let mut words = [0; SLOTS];
+            words[index] = 1;
+            assert!(
+                matches!(ClientInput::from_slots(ScalarSlots::copy_canonical(&words).unwrap()), Err(PackingError::Padding { index: found }) if found == index)
+            );
+        }
+    }
+
+    #[test]
+    fn typed_owners_transfer_existing_allocation_without_plaintext_copy() {
+        let slots = ScalarSlots::copy_canonical(&[0; SLOTS]).unwrap();
+        let ptr = slots.0.0.as_ptr();
+        let input = ClientInput::from_slots(slots).unwrap();
+        assert_eq!(input.0.0.0.as_ptr(), ptr);
+        let slots = ScalarSlots::copy_canonical(&[0; SLOTS]).unwrap();
+        let ptr = slots.0.0.as_ptr();
+        let output = ScalarOutput::from_slots(64, slots).unwrap();
+        assert_eq!(output.slots.0.0.as_ptr(), ptr);
+        assert_eq!(
+            format!("{input:?} {output:?}"),
+            "ClientInput([REDACTED]) ScalarOutput([REDACTED])"
+        );
+    }
+
+    #[test]
+    fn typed_output_preserves_scalar_256_order_count_and_snapshots() {
+        for count in [1, 64] {
+            let mut values: Vec<_> = (0..count)
+                .map(|i| if i % 2 == 0 { 256 } else { i as u16 })
+                .collect();
+            let output = ScalarOutput::from_values(&values).unwrap();
+            let recovered = ScalarOutput::from_slots(count, output.encode().decode()).unwrap();
+            assert_eq!(recovered.count, count);
+            assert_eq!(&recovered.slots.0.0[..count], values);
+            assert!(recovered.slots.0.0[count..].iter().all(|&x| x == 0));
+            values.fill(17);
+            assert_eq!(output.slots.0.0[0], 256, "owned output remains a snapshot");
+        }
+    }
+
+    #[test]
+    fn typed_output_rejects_bad_count_scalar_and_each_undeclared_slot() {
+        for count in [0, 65, usize::MAX] {
+            assert!(matches!(
+                ScalarOutput::from_slots(count, ScalarSlots::copy_canonical(&[0; SLOTS]).unwrap()),
+                Err(PackingError::Length)
+            ));
+        }
+        for values in [vec![], vec![0; 65], vec![0; 129]] {
+            assert!(matches!(
+                ScalarOutput::from_values(&values),
+                Err(PackingError::Length)
+            ));
+        }
+        for invalid in [257, u16::MAX] {
+            let mut values = [256; 64];
+            values[63] = invalid;
+            assert!(matches!(
+                ScalarOutput::from_values(&values),
+                Err(PackingError::NonCanonical { index: 63 })
+            ));
+        }
+        for count in 1..=MAX_OUTPUTS {
+            for index in count..SLOTS {
+                let mut words = [0; SLOTS];
+                words[index] = 256;
+                assert!(
+                    matches!(ScalarOutput::from_slots(count, ScalarSlots::copy_canonical(&words).unwrap()), Err(PackingError::Padding { index: found }) if found == index)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn typed_owners_clear_partial_complete_and_unwound_storage_and_output_count() {
+        let _observer = WipeObserver::start();
+        assert!(ClientInput::from_bytes(&[1; 64]).is_err());
+        assert!(ScalarOutput::from_values(&[1; 65]).is_err());
+        WipeObserver::assert_cleared(0);
+        drop(ClientInput::from_bytes(&[13; 63]).unwrap());
+        drop(ScalarOutput::from_values(&[256; 64]).unwrap());
+        WipeObserver::assert_cleared(3); // input words, output count, output words
+        let mut partial = [256; 64];
+        partial[63] = 257;
+        assert!(ScalarOutput::from_values(&partial).is_err());
+        let mut padded = [0; SLOTS];
+        padded[127] = 17;
+        assert!(ClientInput::from_slots(ScalarSlots::copy_canonical(&padded).unwrap()).is_err());
+        assert!(
+            ScalarOutput::from_slots(64, ScalarSlots::copy_canonical(&padded).unwrap()).is_err()
+        );
+        WipeObserver::assert_cleared(6);
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _input = ClientInput::from_bytes(&[41; 63]).unwrap();
+                let _output = ScalarOutput::from_values(&[256; 64]).unwrap();
+                panic!("public fixture unwind");
+            })
+            .is_err()
+        );
+        WipeObserver::assert_cleared(9);
+        assert_eq!(partial[0], 256, "caller copy is outside the owner");
+    }
+
+    fn admission_context() -> AdmissionContext {
+        AdmissionContext {
+            policy_hash: crate::Hash::new(b"policy"),
+            parameter_digest: crate::Hash::new(b"parameters"),
+            public_key_digest: crate::Hash::new(b"public key"),
+            evaluation_key_digest: crate::Hash::new(b"evaluation keys"),
+            encryption_profile_digest: crate::Hash::new(b"unqualified profile fixture"),
+            semantic_context_hash: crate::Hash::new(b"chain/program/owner/backend context"),
+        }
+    }
+
+    fn admission_statement() -> InputAdmissionStatement {
+        // These opaque public bytes are deliberately not an encryption fixture.
+        InputAdmissionStatement::for_input(admission_context(), b"context", b"opaque input")
+            .unwrap()
+    }
+
+    #[test]
+    fn admission_statement_has_one_exact_canonical_frame_and_ambient_independence() {
+        let statement = admission_statement();
+        let expected = statement.to_bytes().unwrap();
+        assert_eq!(expected.len(), 348);
+        assert_eq!(
+            InputAdmissionStatement::from_bytes(&expected).unwrap(),
+            statement
+        );
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(statement.to_bytes().unwrap(), expected);
+            assert_eq!(
+                InputAdmissionStatement::from_bytes(&expected).unwrap(),
+                statement
+            );
+        }
+        statement.require_same_statement(&statement).unwrap();
+    }
+
+    #[test]
+    fn admission_statement_binds_each_policy_key_profile_context_and_input_field() {
+        let statement = admission_statement();
+        let changed_hash = crate::Hash::new(b"different public identity");
+        for field in 0..9 {
+            let mut changed = statement.clone();
+            match field {
+                0 => changed.policy_hash = changed_hash,
+                1 => changed.parameter_digest = changed_hash,
+                2 => changed.public_key_digest = changed_hash,
+                3 => changed.evaluation_key_digest = changed_hash,
+                4 => changed.encryption_profile_digest = changed_hash,
+                5 => changed.semantic_context_hash = changed_hash,
+                6 => changed.associated_data_hash = changed_hash,
+                7 => changed.input_ciphertext_hash = changed_hash,
+                _ => {
+                    changed.input_ciphertext_bytes += 1;
+                }
+            }
+            let frame = changed.to_bytes().unwrap();
+            assert_ne!(frame, statement.to_bytes().unwrap());
+            let parsed = InputAdmissionStatement::from_bytes(&frame).unwrap();
+            assert_eq!(
+                parsed.require_same_statement(&statement),
+                Err(AdmissionError::StatementMismatch)
+            );
+        }
+        let different_ad =
+            InputAdmissionStatement::for_input(admission_context(), b"other", b"opaque input")
+                .unwrap();
+        let different_input =
+            InputAdmissionStatement::for_input(admission_context(), b"context", b"changed input")
+                .unwrap();
+        assert_ne!(
+            statement.associated_data_hash,
+            different_ad.associated_data_hash
+        );
+        assert_ne!(
+            statement.input_ciphertext_hash,
+            different_input.input_ciphertext_hash
+        );
+        // Hash values are commitments to public encodings, never Fp conversions.
+        let mut context = admission_context();
+        context.policy_hash = crate::Hash::prehashed([0; 32]);
+        assert!(InputAdmissionStatement::for_input(context, b"", b"x").is_ok());
+    }
+
+    #[test]
+    fn admission_statement_rejects_malformed_noncanonical_and_foreign_metadata() {
+        let statement = admission_statement();
+        let frame = statement.to_bytes().unwrap();
+        for length in [
+            0,
+            frame.len() - 1,
+            frame.len() + 1,
+            ENCRYPTED_INPUT_BYTES + 1,
+        ] {
+            assert_eq!(
+                InputAdmissionStatement::from_bytes(&vec![0; length]),
+                Err(AdmissionError::Codec)
+            );
+        }
+        for index in [0, 6, 22, 23, 31, 39, 40, frame.len() - 1] {
+            let mut bad = frame.clone();
+            bad[index] ^= 1;
+            assert!(InputAdmissionStatement::from_bytes(&bad).is_err());
+        }
+        let mut foreign = statement.clone();
+        foreign.version = 2;
+        let frame = norito::encode_canonical(&foreign).unwrap();
+        assert_eq!(
+            InputAdmissionStatement::from_bytes(&frame),
+            Err(AdmissionError::Metadata)
+        );
+        foreign = statement.clone();
+        foreign.packing_contract_hash = crate::Hash::new(b"other encoding/key-role contract");
+        assert_eq!(foreign.to_bytes(), Err(AdmissionError::Metadata));
+        assert_eq!(
+            foreign.require_same_statement(&statement),
+            Err(AdmissionError::Metadata)
+        );
+        assert_eq!(
+            statement.require_same_statement(&foreign),
+            Err(AdmissionError::Metadata)
+        );
+        assert_eq!(
+            InputAdmissionStatement::from_bytes(&norito::encode_canonical(&foreign).unwrap()),
+            Err(AdmissionError::Metadata)
+        );
+        for invalid in [0, ENCRYPTED_INPUT_BYTES as u64 + 1, u64::MAX] {
+            let mut bad = statement.clone();
+            bad.input_ciphertext_bytes = invalid;
+            assert_eq!(bad.to_bytes(), Err(AdmissionError::InputLength));
+            assert_eq!(
+                InputAdmissionStatement::from_bytes(&norito::encode_canonical(&bad).unwrap()),
+                Err(AdmissionError::InputLength)
+            );
+        }
+        let _guard = norito::core::DecodeFlagsGuard::enter(0);
+        let noncanonical = norito::core::to_bytes(&statement).unwrap();
+        assert_ne!(noncanonical, statement.to_bytes().unwrap());
+        assert!(InputAdmissionStatement::from_bytes(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn admission_input_and_associated_data_caps_precede_hashing() {
+        for input in [vec![], vec![0; ENCRYPTED_INPUT_BYTES + 1]] {
+            assert_eq!(
+                InputAdmissionStatement::for_input(admission_context(), b"", &input),
+                Err(AdmissionError::InputLength)
+            );
+        }
+        assert_eq!(
+            InputAdmissionStatement::for_input(
+                admission_context(),
+                &[0; ASSOCIATED_DATA_BYTES + 1],
+                b"x"
+            ),
+            Err(AdmissionError::AssociatedDataLength)
+        );
+        let statement = InputAdmissionStatement::for_input(
+            admission_context(),
+            &[0; ASSOCIATED_DATA_BYTES],
+            &vec![0; ENCRYPTED_INPUT_BYTES],
+        )
+        .unwrap();
+        assert_eq!(
+            statement.input_ciphertext_bytes,
+            ENCRYPTED_INPUT_BYTES as u64
+        );
+        assert_eq!(
+            statement.checked_proof_envelope_bytes(1, 1, 0),
+            Ok(ADMISSION_STATEMENT_BYTES + 2)
+        );
+        assert_eq!(
+            statement.checked_proof_envelope_bytes(1, 1, ENCRYPTED_INPUT_BYTES),
+            Err(AdmissionError::EnvelopeBudget),
+            "actual optional co-location still counts"
+        );
+    }
+
+    #[test]
+    fn separate_input_and_proof_envelope_caps_preserve_checked_sums() {
+        let statement = admission_statement();
+        let base = ADMISSION_STATEMENT_BYTES + COMPOUND_PROOF_BYTES;
+        assert_eq!(
+            statement.checked_proof_envelope_bytes(
+                1,
+                COMPOUND_PROOF_BYTES - 1,
+                PROOF_ENVELOPE_BYTES - base
+            ),
+            Ok(PROOF_ENVELOPE_BYTES)
+        );
+        assert_eq!(
+            statement.checked_proof_envelope_bytes(
+                1,
+                COMPOUND_PROOF_BYTES - 1,
+                PROOF_ENVELOPE_BYTES - base + 1
+            ),
+            Err(AdmissionError::EnvelopeBudget)
+        );
+        for proofs in [(0, 1), (1, 0), (1, COMPOUND_PROOF_BYTES)] {
+            assert_eq!(
+                statement.checked_proof_envelope_bytes(proofs.0, proofs.1, 0),
+                Err(AdmissionError::ProofBudget)
+            );
+        }
+        assert_eq!(
+            statement.checked_proof_envelope_bytes(usize::MAX, 1, 0),
+            Err(AdmissionError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            statement.checked_proof_envelope_bytes(1, 1, usize::MAX),
+            Err(AdmissionError::ArithmeticOverflow)
+        );
+        let mut bad = statement;
+        bad.input_ciphertext_bytes = u64::MAX;
+        assert_eq!(
+            bad.checked_proof_envelope_bytes(1, 1, 0),
+            Err(AdmissionError::InputLength)
+        );
+    }
+
+    #[test]
+    fn candidate_packing_descriptor_binds_the_shared_galois_roles() {
+        assert_eq!(GALOIS_EXPONENTS, [5, 25, 625, 5601, 4033, 3969, 8191]);
+        assert!(
+            GALOIS_EXPONENTS
+                .iter()
+                .all(|&x| x % 2 == 1 && usize::from(x) < 2 * RING_DEGREE)
+        );
+        assert_eq!(
+            GALOIS_EXPONENTS
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            7
+        );
+        assert_eq!(
+            admission_statement().packing_contract_hash,
+            packing_contract_hash().unwrap()
+        );
     }
 }

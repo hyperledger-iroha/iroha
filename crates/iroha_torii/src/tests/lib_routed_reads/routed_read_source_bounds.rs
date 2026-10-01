@@ -97,7 +97,7 @@ fn routed_read_source_payload_owns_only_after_bounded_decode() {
     assert!(budget.retained_decoded_bytes > 0);
 }
 #[test]
-fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
+fn asset_definition_borrowed_json_matches_owned_projection_at_exact_cap() {
     let authority = crate::tests_runtime_handlers::checked_torii_test_account_id(
         0x71,
         "derive routed asset-definition source fixture",
@@ -108,7 +108,7 @@ fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
         domain_id,
         "usd".parse().expect("asset name"),
     );
-    let definition = iroha_data_model::asset::AssetDefinition::numeric(
+    let mut definition = iroha_data_model::asset::AssetDefinition::numeric(
         definition_id,
         "Treasury USD".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
@@ -123,34 +123,71 @@ fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
         bound_at_ms: 10,
     };
     let observation_time_ms = 60;
-    let source = ToriiAssetDefinitionJsonSource {
-        definition: &definition,
-        alias_binding: Some(&binding),
-        observation_time_ms,
+    use iroha_data_model::asset::definition::{
+        AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
     };
-    let mut expected_value = norito::json::to_value(&definition).expect("legacy definition JSON");
-    let binding_dto = routing::asset_alias_binding_dto(&binding, observation_time_ms);
-    let norito::json::Value::Object(expected_object) = &mut expected_value else {
-        panic!("asset definition must serialize as an object");
+    let transition = ConfidentialPolicyTransition {
+        new_mode: ConfidentialPolicyMode::ShieldedOnly,
+        effective_height: 80,
+        previous_mode: ConfidentialPolicyMode::Convertible,
+        transition_id: iroha_crypto::Hash::new(b"source-equivalence transition"),
+        conversion_window: Some(20),
     };
-    expected_object.insert(
-        "alias".into(),
-        norito::json::Value::from(binding.alias.to_string()),
-    );
-    expected_object.insert(
-        "alias_binding".into(),
-        norito::json::to_value(&binding_dto).expect("legacy alias-binding JSON"),
-    );
-    let expected = norito::json::to_json_bounded_boxed(&expected_value, usize::MAX)
-        .expect("legacy projection has a compact encoding");
-    let actual = norito::json::to_json_bounded_boxed(&source, expected.len())
-        .expect("borrowed projection fits its exact boundary");
-    assert_eq!(actual, expected);
-    assert_eq!(
-        norito::json::to_json_bounded_boxed(&source, expected.len() - 1),
-        Err(norito::json::BoundedJsonError::BodyTooLarge)
-    );
+    let configured = AssetConfidentialPolicy {
+        mode: ConfidentialPolicyMode::Convertible,
+        vk_set_hash: Some(iroha_crypto::Hash::new(
+            b"source-equivalence verifying keys",
+        )),
+        poseidon_params_id: Some(3),
+        pedersen_params_id: Some(5),
+        pending_transition: Some(transition),
+    };
+    for policy in [
+        AssetConfidentialPolicy::default(),
+        configured,
+        AssetConfidentialPolicy {
+            pending_transition: Some(ConfidentialPolicyTransition {
+                conversion_window: None,
+                ..transition
+            }),
+            ..configured
+        },
+    ] {
+        definition.confidential_policy = policy;
+        for alias_binding in [None, Some(&binding)] {
+            let source = ToriiAssetDefinitionJsonSource {
+                definition: &definition,
+                alias_binding,
+                observation_time_ms,
+            };
+            let mut expected_value = norito::json::to_value(&definition).expect("definition JSON");
+            if let Some(binding) = alias_binding {
+                let binding_dto = routing::asset_alias_binding_dto(binding, observation_time_ms);
+                let norito::json::Value::Object(expected_object) = &mut expected_value else {
+                    panic!("asset definition must serialize as an object");
+                };
+                expected_object.insert(
+                    "alias".into(),
+                    norito::json::Value::from(binding.alias.to_string()),
+                );
+                expected_object.insert(
+                    "alias_binding".into(),
+                    norito::json::to_value(&binding_dto).expect("alias-binding JSON"),
+                );
+            }
+            let expected = norito::json::to_json_bounded_boxed(&expected_value, usize::MAX)
+                .expect("owned projection has a compact encoding");
+            let actual = norito::json::to_json_bounded_boxed(&source, expected.len())
+                .expect("borrowed projection fits its exact boundary");
+            assert_eq!(actual, expected);
+            assert_eq!(
+                norito::json::to_json_bounded_boxed(&source, expected.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+    }
 }
+
 #[test]
 fn asset_definition_source_lookup_never_calls_cloning_world_accessor() {
     let source = include_str!("../../torii_app_routed_read_source.rs");
@@ -269,7 +306,9 @@ fn contract_alias_source_borrows_subject_and_dataspace_catalog() {
         .expect("next source helper remains present");
     let helper = &source[start..end];
     assert!(helper.contains("borrow_bound_contract_subject_from_world"));
-    assert!(helper.contains("world.dataspace_catalog()"));
+    assert!(
+        helper.contains("dataspace_id_for_alias_segment(app, contract_alias.dataspace_segment())")
+    );
     assert!(!helper.contains("nexus_snapshot"));
     assert!(!helper.contains(".cloned()"));
 }
@@ -326,7 +365,12 @@ fn explorer_asset_definition_source_avoids_cloning_world_and_governance_snapshot
         .expect("next source helper remains present");
     let helper = &source[start..end];
     assert!(helper.contains("world.asset_definitions().get(definition_id)"));
-    assert!(helper.contains("world.assets_iter()"));
+    assert!(
+        helper
+            .split_whitespace()
+            .collect::<String>()
+            .contains("world.assets_iter()")
+    );
     assert!(!helper.contains(".asset_definition("));
     assert!(!helper.contains("governance_snapshot"));
     assert!(!helper.contains("AssetId::new"));

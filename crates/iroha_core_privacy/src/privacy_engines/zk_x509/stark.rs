@@ -21,7 +21,10 @@
 //! caller-selected parameter and the strict reader rejects every truncation and trailing suffix.
 mod main_aggregate;
 #[cfg(test)]
-use super::der_stark::ZkX509DerStarkChallengesV1;
+use super::der_stark::{
+    ZkX509DerStarkChallengesV1, ZkX509DerStarkTerminalClaimsV1,
+    evaluate_zk_x509_der_stark_residues_v1, zk_x509_der_stark_terminal_claims_v1,
+};
 #[cfg(test)]
 use super::fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -67,8 +70,8 @@ use super::{
         ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1, ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1,
         ZK_X509_DER_STARK_FIXED_WIDTH_V1, ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1,
         ZK_X509_DER_STARK_TRACE_LOG2_V1, ZK_X509_DER_STARK_TRACE_SIZE_V1, ZkX509DerStarkErrorV1,
-        ZkX509DerStarkPublicTerminalsV1, ZkX509DerStarkShapeV1, ZkX509DerStarkTerminalClaimsV1,
-        derive_zk_x509_der_stark_public_terminals_v1, evaluate_zk_x509_der_stark_residues_v1,
+        ZkX509DerStarkPublicTerminalsV1, ZkX509DerStarkShapeV1,
+        derive_zk_x509_der_stark_public_terminals_v1,
     },
     engine::construct_zk_x509_compiled_profile_v1,
     fixed_algebraic::{ZkX509FixedAlgebraicErrorV1, ZkX509FixedAlgebraicOpeningsV1},
@@ -105,16 +108,8 @@ use super::{
         P256ArithmeticCopyChallengesV1, P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1,
         P256CrossTraceTerminalRoleV1, P256MainAdapterV1, P256MainRegistrationV1,
         P256MainVerifierFixedSourceV1, P256ValueExecutionAggregateChallengesV1,
-        P256WindowAggregateChallengesV1, evaluate_p256_bus_terminal_claim_equalities_v1,
+        evaluate_p256_bus_terminal_claim_equalities_v1,
         evaluate_p256_cross_trace_terminal_claim_equalities_v1,
-        evaluate_p256_scalar_source_terminal_openings_v1, evaluate_p256_terminal_claim_binding_v1,
-        p256_arithmetic_last_selector_v1, p256_arithmetic_scalar_terminal_v1,
-        p256_arithmetic_value_copy_terminal_v1, p256_binding_sink_last_selector_v1,
-        p256_binding_sink_terminal_v1, p256_low_s_cross_terminal_v1, p256_low_s_last_selector_v1,
-        p256_reduction_cross_terminal_v1, p256_reduction_last_selector_v1,
-        p256_value_execution_arithmetic_copy_terminal_v1, p256_value_execution_cross_terminal_v1,
-        p256_value_execution_last_selector_v1, p256_window_cross_terminal_v1,
-        p256_window_last_selector_v1, p256_window_scalar_terminal_v1,
         validate_p256_main_registration_order_v1,
     },
     p256_air::{P256_ARITHMETIC_BASE_WIDTH_V1, P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1},
@@ -122,17 +117,15 @@ use super::{
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_reduction_air::{P256_LOW_S_BASE_WIDTH_V1, P256_REDUCTION_BASE_WIDTH_V1},
     p256_scalar_bit_bus::{
-        P256_SCALAR_BIT_BUS_LANES_V1, P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1,
-        P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1, P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1,
+        P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1, P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1,
+        P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1,
         P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_DEGREE_V1, P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1,
-        P256ScalarBitBusChallengesV1, p256_scalar_bit_bus_opened_terminals_v1,
-        p256_scalar_bit_bus_stark_last_active_selector_v1,
+        P256ScalarBitBusChallengesV1,
     },
     p256_value_bus::{
         P256_VALUE_BUS_STARK_AUX_WIDTH_V1, P256_VALUE_BUS_STARK_BASE_WIDTH_V1,
         P256_VALUE_BUS_STARK_CONSTRAINT_DEGREE_V1, P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
-        P256ValueBusChallengesV1, p256_value_bus_stark_last_domain_selector_v1,
-        p256_value_bus_stark_opened_terminal_v1,
+        P256ValueBusChallengesV1,
     },
     p256_window_air::{P256_WINDOW_BASE_WIDTH_V1, P256_WINDOW_STARK_CONSTRAINT_DEGREE_V1},
     profile::{
@@ -157,17 +150,15 @@ use super::{
         evaluate_zk_x509_projection_stark_residues_v1,
     },
     rfc5280_stark::{
-        ZK_X509_P256_TERMINAL_CLAIM_BYTES_V1, ZK_X509_RFC5280_STARK_AUX_WIDTH_V1,
-        ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1,
-        ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1, ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1,
-        ZK_X509_RFC5280_STARK_TRACE_LOG2_V1, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
-        ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1, ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1,
-        ZkX509P256TerminalClaimsV1, ZkX509Rfc5280OutputRoleV1, ZkX509Rfc5280StarkFixedRowV1,
-        ZkX509Rfc5280StarkFixedScheduleV1, ZkX509Rfc5280StarkShapeV1,
-        ZkX509Rfc5280StarkTerminalClaimsV1, ZkX509ShaSegmentTerminalClaimsV1,
-        compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
+        ZK_X509_RFC5280_STARK_AUX_WIDTH_V1, ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
+        ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1,
+        ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, ZK_X509_RFC5280_STARK_TRACE_LOG2_V1,
+        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1, ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1,
+        ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1, ZkX509P256PrivateProductsV1,
+        ZkX509Rfc5280OutputRoleV1, ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkFixedScheduleV1,
+        ZkX509Rfc5280StarkShapeV1, ZkX509Rfc5280StarkTerminalClaimsV1,
+        ZkX509ShaSegmentTerminalClaimsV1, compile_zk_x509_rfc5280_stark_fixed_schedule_v1,
         evaluate_zk_x509_rfc5280_stark_residues_v1,
-        validate_zk_x509_der_rfc_terminal_equalities_v1,
     },
     sha_call_bus_stark::{
         ZK_X509_SHA_BATCH_AUX_WIDTH_V1, ZK_X509_SHA_BATCH_BASE_CHUNKS_PER_SEGMENT_V1,
@@ -186,7 +177,7 @@ use super::{
         build_zk_x509_der_stark_native_aux_column_v1,
         build_zk_x509_der_stark_native_base_column_v1,
         build_zk_x509_der_stark_native_fixed_column_v1, build_zk_x509_der_stark_trace_v1,
-        compile_zk_x509_der_stark_fixed_schedule_v1, zk_x509_der_stark_terminal_claims_v1,
+        compile_zk_x509_der_stark_fixed_schedule_v1,
     },
     io_air::{
         IoAccessV1, ZkX509IoChannelWitnessV1, build_zk_x509_io_base_tables_v1,
@@ -214,7 +205,6 @@ use super::{
     engine::recompute_zk_x509_compiled_profile_digest_v1,
     io_air::derive_zk_x509_io_challenges_v1,
     p256_aggregate_adapter::{
-        P256_VALUE_EXECUTION_AGGREGATE_CONSTRAINT_COUNT_V1,
         derive_p256_arithmetic_copy_challenges_v1, p256_cross_trace_terminal_roles_v1,
     },
     p256_cross_trace_bus::derive_zk_x509_p256_cross_trace_challenges_v1,
@@ -230,7 +220,7 @@ use super::{
         ZkX509ProjectionCopyChallengesV1, ZkX509ProjectionWitnessV1,
         build_zk_x509_projection_trace_v1,
     },
-    rfc5280_stark::{ZkX509P256CertificateTerminalClaimsV1, ZkX509P256WalletTerminalClaimsV1},
+    rfc5280_stark::{ZkX509P256CertificatePrivateProductsV1, ZkX509P256WalletPrivateProductsV1},
     sha_call_bus_stark::ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -241,12 +231,11 @@ use crate::privacy_engines::transparent_stark::goldilocks_batch_invert_v1;
 use crate::privacy_engines::transparent_stark::goldilocks_evaluate_coset_v1;
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::{
-    PrivacyOuterMerkleTreeV1, masked_trace_lde_column_v1,
+    PrivacyOuterMerkleTreeV1, append_u64_v1, masked_trace_lde_column_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::{
-    append_u64_v1, goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_ifft_v1,
-    grind_nonce_v1,
+    goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_ifft_v1, grind_nonce_v1,
 };
 use crate::privacy_engines::{
     aggregate_stark::{self as aggregate, AggregateStarkErrorV1},
@@ -285,7 +274,7 @@ use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:rfc5280-calendar-and-numeric=base285-aux280-fixed102-constraints1681-degree4-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-30relation-bound:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:ca-complete-fp4-air1379-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
+pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:rfc5280-calendar-and-numeric=base285-aux280-fixed102-constraints1702-degree4-five-key-outputs-der-node-byte-lookups-length66-offset1-output-metadata-six-verifier-fixed-equations-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-30relation-bound:all-aux-roots-and-X5M1-terminal-claims-before-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:private-links-linear-quotients-at-shared-native-points-before-composition-commitment:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:canonical-quotient-stride=fri-cap-minus137:independent-fp4-adjacent-chunk-masks137-before-composition-root:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:ca-complete-fp4-air1379-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
 const QUERY_COUNT: usize = ZK_X509_FRI_QUERY_COUNT_V1 as usize;
@@ -299,8 +288,9 @@ const TERMINAL_DEGREE_BOUND: usize = ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1 as usi
 const COMPOSITION_DEGREE_CHUNKS: usize = ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 as usize;
 /// Inclusive degree of the trace mask multiplier.
 ///
-/// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4 extension degree four, one DEEP
-/// point, and 136 FRI queries, requires `h = 1816` randomizer coefficients.
+/// Retain the existing 1816-coefficient trace masks. Canonical quotient chunks now use
+/// independent adjacent-chunk masks; the earlier FFT-decomposition Equation (3) citation
+/// alone does not qualify this mixed-native-domain construction. Full hiding review remains open.
 const MASK_DEGREE: usize = ZK_X509_TRACE_MASK_DEGREE_V1 as usize;
 const _: () = assert!(MASK_DEGREE == 1_815);
 const DER_QUOTIENT_COSET_LOG2_V1: u8 = 22;
@@ -339,7 +329,7 @@ const P256_SIGNATURE_COUNT_V1: usize = 5;
 const P256_SIGNATURE_INSTANCE_STRIDE_V1: u16 = 3;
 const _: () = assert!(
     P256_SCALAR_BIT_BUS_REGISTERED_CONSTRAINT_COUNT_V1
-        == P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1 + 2 * P256_SCALAR_BIT_BUS_LANES_V1
+        == P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1
 );
 const CALCULATED_FULL_PROFILE_LOGICAL_REGISTRATIONS_V1: usize = 1
     + 1
@@ -506,21 +496,18 @@ const DER_PROOF_ENVELOPE_BYTES_V1: usize = DER_PROOF_LENGTH_OFFSET_V1 + 4;
 #[cfg(test)]
 const DER_SEGMENTED_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-segmented-proof-v1:wire=X5P1:version1:strict-der-adapter0:claim-count8:typed-lane-records=input-byte-type1-lanes0-3-then-node-type2-lanes0-3:no-duplicate-or-reordered-claims:canonical-goldilocks-u64be:exact-u32-length-prefixed-X5S1-payload:statement-frame=X5H1-document-count-u16-document-lengths-u16-parser-rows-u32-comparator-rows-u32:terminal-claim-transcript-frame=X5C1:query-only-verifier-fixed-columns:first-release";
 const MAIN_PROOF_MAGIC_V1: [u8; 4] = *b"X5M1";
-const MAIN_PROOF_ADAPTER_COUNT_V1: u16 = 4;
+const MAIN_PROOF_ADAPTER_COUNT_V1: u16 = 2;
 const MAIN_PROOF_HEADER_BYTES_V1: usize = 4 + 2 + 2;
-const MAIN_PROOF_DER_CLAIM_BYTES_V1: usize = DER_PROOF_CLAIM_COUNT_V1 * 8;
-const MAIN_PROOF_RFC_OFFSET_V1: usize = MAIN_PROOF_HEADER_BYTES_V1 + MAIN_PROOF_DER_CLAIM_BYTES_V1;
+const MAIN_PROOF_RFC_OFFSET_V1: usize = MAIN_PROOF_HEADER_BYTES_V1;
 const MAIN_PROOF_SHA_OFFSET_V1: usize =
     MAIN_PROOF_RFC_OFFSET_V1 + ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1;
-const MAIN_PROOF_P256_OFFSET_V1: usize =
-    MAIN_PROOF_SHA_OFFSET_V1 + ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1;
 const MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1: usize =
-    MAIN_PROOF_P256_OFFSET_V1 + ZK_X509_P256_TERMINAL_CLAIM_BYTES_V1;
+    MAIN_PROOF_SHA_OFFSET_V1 + ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1;
 /// Exact fixed framing and terminal-claim bytes around the inner X5S1.
 pub(crate) const ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1: usize =
     MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 + 4;
-pub(crate) const ZK_X509_MAIN_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-proof-v1-incompatible:wire=X5M1+version1+adapter-count4+eight-canonical-der-terminal-u64be-fields+exact-X5R1-1420+exact-X5Q1-4876+exact-X5V1-5580+u32be-inner-X5S1-length+exact-X5S1:no-fixed-sidecar:no-omitted-reordered-duplicated-or-trailing-records:der-rfc-equalities+all-rfc-output-role-products+exact-four-role-rfc-consumer-to-four-segment-sha-stream-union-equality-validated-before-alphas:fixed-openings-derived-by-verifier-only-after-main-transcript-grinding:no-proof-supplied-fixed-values:x5b1-shared-main-ca-pre-aux-challenges:all-terminal-claims-absorbed-after-aux-roots-before-constraint-alphas:first-release-no-legacy";
-const _: () = assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 11_952);
+pub(crate) const ZK_X509_MAIN_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-proof-v1-incompatible:wire=X5M1+version1+adapter-count2+exact-X5R1-1292+exact-X5Q1-4876+u32be-inner-X5S1-length+exact-X5S1:no-fixed-sidecar:no-omitted-reordered-duplicated-or-trailing-records:private-der-rfc8-and-p256184-linear-endpoint-quotients+all-rfc-output-role-products+exact-four-role-rfc-consumer-to-four-segment-sha-stream-union-equality-validated-before-alphas:fixed-openings-derived-by-verifier-only-after-main-transcript-grinding:no-proof-supplied-fixed-values:x5b1-shared-main-ca-pre-aux-challenges:aux-roots-then-remaining-public-claims-then-local-constraint-alphas-then-192-ordered-private-link-descriptors-and-link-alphas:first-release-no-legacy";
+const _: () = assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 6_180);
 const _: () = assert!(
     ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize
 );
@@ -679,14 +666,10 @@ impl From<P256AggregateAdapterErrorV1> for ZkX509StarkErrorV1 {
 /// All proof-carried MAIN terminal claims in canonical adapter order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509MainTerminalClaimsV1 {
-    /// Strict-DER byte and parsed-node bus terminals.
-    pub(crate) der: ZkX509DerStarkTerminalClaimsV1,
-    /// RFC 5280 DER/input-output bus terminals.
+    /// Remaining RFC 5280 output bus terminals.
     pub(crate) rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1,
     /// Four physical SHA segment terminals.
     pub(crate) sha: ZkX509ShaSegmentTerminalClaimsV1,
-    /// Five complete P-256 equation terminals.
-    pub(crate) p256: ZkX509P256TerminalClaimsV1,
 }
 /// RFC output roles consumed by the four SHA RFC-product streams.
 ///
@@ -741,17 +724,10 @@ pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
     if aggregate_proof.len() < PROOF_MAGIC_V1.len()
         || aggregate_proof[..4] != PROOF_MAGIC_V1
         || aggregate_proof.len() > u32::MAX as usize
-        || claims
-            .der
-            .input_byte
-            .iter()
-            .chain(&claims.der.node)
-            .any(|value| F::canonical(value.0).is_none())
     {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
-    validate_zk_x509_der_rfc_terminal_equalities_v1(claims.der, claims.rfc5280)
-        .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?;
+
     let rfc = claims
         .rfc5280
         .encode_x5r1_v1()
@@ -763,12 +739,7 @@ pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
     if !zk_x509_main_rfc_sha_terminal_products_match_v1(claims.rfc5280, claims.sha) {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
-    main_p256_terminal_registrations_v1(&claims.p256)
-        .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?;
-    let p256 = claims
-        .p256
-        .encode_x5v1_v1()
-        .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?;
+
     let encoded_len = zk_x509_main_proof_envelope_encoded_len_v1(aggregate_proof.len())
         .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
     if encoded_len > ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1 {
@@ -781,12 +752,9 @@ pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
     encoded.extend_from_slice(&MAIN_PROOF_MAGIC_V1);
     append_u16_v1(&mut encoded, ZK_X509_PROOF_VERSION_V1);
     append_u16_v1(&mut encoded, MAIN_PROOF_ADAPTER_COUNT_V1);
-    for value in claims.der.input_byte.into_iter().chain(claims.der.node) {
-        append_u64_v1(&mut encoded, value.0);
-    }
+
     encoded.extend_from_slice(&rfc);
     encoded.extend_from_slice(&sha);
-    encoded.extend_from_slice(&p256);
     append_u32_v1(
         &mut encoded,
         u32::try_from(aggregate_proof.len()).map_err(|_| ZkX509StarkErrorV1::ProofTooLarge)?,
@@ -802,8 +770,6 @@ pub(crate) fn absorb_zk_x509_main_terminal_claims_v1(
     transcript: &mut TransparentTranscriptV1,
     claims: ZkX509MainTerminalClaimsV1,
 ) -> Result<(), ZkX509StarkErrorV1> {
-    validate_zk_x509_der_rfc_terminal_equalities_v1(claims.der, claims.rfc5280)
-        .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
     let rfc = claims
         .rfc5280
         .encode_x5r1_v1()
@@ -815,23 +781,11 @@ pub(crate) fn absorb_zk_x509_main_terminal_claims_v1(
     if !zk_x509_main_rfc_sha_terminal_products_match_v1(claims.rfc5280, claims.sha) {
         return Err(ZkX509StarkErrorV1::InvalidStatement);
     }
-    main_p256_terminal_registrations_v1(&claims.p256)
-        .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
-    let p256 = claims
-        .p256
-        .encode_x5v1_v1()
-        .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
-    let mut der = [0_u8; MAIN_PROOF_DER_CLAIM_BYTES_V1];
-    for (encoded, value) in der
-        .chunks_exact_mut(8)
-        .zip(claims.der.input_byte.into_iter().chain(claims.der.node))
-    {
-        encoded.copy_from_slice(&value.0.to_be_bytes());
-    }
+
     transcript
         .absorb(
             MAIN_TERMINAL_CLAIMS_DOMAIN_V1,
-            &[ZK_X509_MAIN_PROOF_DESCRIPTOR_V1, &der, &rfc, &sha, &p256],
+            &[ZK_X509_MAIN_PROOF_DESCRIPTOR_V1, &rfc, &sha],
         )
         .map_err(map_transparent_error_v1)
 }
@@ -871,39 +825,13 @@ pub(crate) fn decode_zk_x509_main_proof_envelope_v1<'a>(
     {
         return Err(ZkX509StarkErrorV1::MalformedProof);
     }
-    let mut der_fields = [F::ZERO; DER_PROOF_CLAIM_COUNT_V1];
-    for (index, target) in der_fields.iter_mut().enumerate() {
-        let start = MAIN_PROOF_HEADER_BYTES_V1
-            .checked_add(
-                index
-                    .checked_mul(8)
-                    .ok_or(ZkX509StarkErrorV1::MalformedProof)?,
-            )
-            .ok_or(ZkX509StarkErrorV1::MalformedProof)?;
-        let raw = u64::from_be_bytes(
-            encoded[start..start + 8]
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?,
-        );
-        *target = F::canonical(raw).ok_or(ZkX509StarkErrorV1::NonCanonicalField)?;
-    }
     let rfc_end = MAIN_PROOF_RFC_OFFSET_V1 + ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1;
     let sha_end = MAIN_PROOF_SHA_OFFSET_V1 + ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1;
-    let p256_end = MAIN_PROOF_P256_OFFSET_V1 + ZK_X509_P256_TERMINAL_CLAIM_BYTES_V1;
+
     let rfc5280 = ZkX509Rfc5280StarkTerminalClaimsV1::decode_x5r1_v1(
         &encoded[MAIN_PROOF_RFC_OFFSET_V1..rfc_end],
     )
     .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?;
-    let der = ZkX509DerStarkTerminalClaimsV1 {
-        input_byte: der_fields[..ZK_X509_DER_STARK_BUS_LANES_V1]
-            .try_into()
-            .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?,
-        node: der_fields[ZK_X509_DER_STARK_BUS_LANES_V1..]
-            .try_into()
-            .map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?,
-    };
-    validate_zk_x509_der_rfc_terminal_equalities_v1(der, rfc5280)
-        .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?;
     let sha = ZkX509ShaSegmentTerminalClaimsV1::decode_x5q1_v1(
         &encoded[MAIN_PROOF_SHA_OFFSET_V1..sha_end],
     )
@@ -911,10 +839,6 @@ pub(crate) fn decode_zk_x509_main_proof_envelope_v1<'a>(
     if !zk_x509_main_rfc_sha_terminal_products_match_v1(rfc5280, sha) {
         return Err(ZkX509StarkErrorV1::MalformedProof);
     }
-    let p256 =
-        ZkX509P256TerminalClaimsV1::decode_x5v1_v1(&encoded[MAIN_PROOF_P256_OFFSET_V1..p256_end])
-            .map_err(|_| ZkX509StarkErrorV1::MalformedProof)?;
-    main_p256_terminal_registrations_v1(&p256).map_err(|_| ZkX509StarkErrorV1::MalformedProof)?;
     let aggregate_len = main_envelope_u32_v1(encoded, MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1)?;
     let aggregate_start = MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1
         .checked_add(4)
@@ -932,12 +856,7 @@ pub(crate) fn decode_zk_x509_main_proof_envelope_v1<'a>(
         return Err(ZkX509StarkErrorV1::MalformedProof);
     }
     Ok(ZkX509MainProofEnvelopeV1 {
-        claims: ZkX509MainTerminalClaimsV1 {
-            der,
-            rfc5280,
-            sha,
-            p256,
-        },
+        claims: ZkX509MainTerminalClaimsV1 { rfc5280, sha },
         aggregate_proof,
     })
 }
@@ -1184,7 +1103,8 @@ fn checked_segment_degree_capacity_for_profile_v1(
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
     let maximum_composition_degree = maximum_fri_input_degree
         .checked_add(1)
-        .and_then(|chunk_size| chunk_size.checked_mul(profile.composition_degree_chunks))
+        .and_then(|chunk_size| chunk_size.checked_sub(QUERY_COUNT + 1))
+        .and_then(|stride| stride.checked_mul(profile.composition_degree_chunks))
         .and_then(|coefficient_capacity| coefficient_capacity.checked_sub(1))
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
     if maximum_masked_trace_degree > maximum_fri_input_degree
@@ -1311,6 +1231,11 @@ impl SegmentLayoutV1 {
                 .div_ceil(usize::from(ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1)),
         }
         .with_checked_main_degree_capacity_v1()
+    }
+    fn for_der_main_v1(active_rows: usize) -> Result<Self, ZkX509StarkErrorV1> {
+        let mut layout = Self::for_der(active_rows)?;
+        layout.constraint_count = super::der_stark::ZK_X509_DER_STARK_LOCAL_CONSTRAINT_COUNT_V1;
+        Ok(layout)
     }
     fn for_rfc5280(active_rows: usize) -> Result<Self, ZkX509StarkErrorV1> {
         let lde_log2 = ZK_X509_RFC5280_STARK_TRACE_LOG2_V1
@@ -1508,7 +1433,11 @@ impl SegmentLayoutV1 {
                     && self.base_width == ZK_X509_DER_STARK_BASE_WIDTH_V1
                     && self.aux_width == ZK_X509_DER_STARK_AUX_WIDTH_V1
                     && self.fixed_width == ZK_X509_DER_STARK_FIXED_WIDTH_V1
-                    && self.constraint_count == ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1
+                    && matches!(
+                        self.constraint_count,
+                        ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1
+                            | super::der_stark::ZK_X509_DER_STARK_LOCAL_CONSTRAINT_COUNT_V1
+                    )
                     && self.constraint_degree == ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1 => {}
             SegmentAdapterIdV1::Rfc5280
                 if self.instance == 0
@@ -1800,7 +1729,9 @@ fn canonical_full_profile_segment_layouts_v1() -> Result<Vec<SegmentLayoutV1>, Z
     segments.push(SegmentLayoutV1::for_rfc5280(
         ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
     )?);
-    segments.push(SegmentLayoutV1::for_der(ZK_X509_DER_STARK_TRACE_SIZE_V1)?);
+    segments.push(SegmentLayoutV1::for_der_main_v1(
+        ZK_X509_DER_STARK_TRACE_SIZE_V1,
+    )?);
     segments.extend(canonical_sha_segment_layouts_v1()?);
     segments
         .sort_unstable_by_key(|segment| (segment.trace_log2, segment.adapter, segment.instance));
@@ -2730,21 +2661,6 @@ impl P256TerminalRegistrationV1 {
             return Err(ZkX509StarkErrorV1::P256Witness);
         }
         Ok(())
-    }
-    fn cross_claim(
-        &self,
-        role: P256CrossTraceTerminalRoleV1,
-    ) -> Result<P256CrossTraceTerminalClaimV1, ZkX509StarkErrorV1> {
-        let mut matches = self
-            .cross_sources
-            .iter()
-            .copied()
-            .filter(|claim| claim.role == role);
-        let claim = matches.next().ok_or(ZkX509StarkErrorV1::P256Witness)?;
-        if matches.next().is_some() {
-            return Err(ZkX509StarkErrorV1::P256Witness);
-        }
-        Ok(claim)
     }
 }
 impl Drop for P256TerminalRegistrationV1 {
@@ -4475,44 +4391,22 @@ fn composition_coefficient_chunks_v1(
     {
         return Err(ZkX509StarkErrorV1::ConstraintOpening);
     }
-    let chunk_size = shared_layout
-        .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
-        .map_err(map_aggregate_error_v1)?;
-    let mut chunks = ZeroizingExtensionChunksV1::new(Vec::new(), zeroize_extension_chunks_v1);
-    chunks
-        .try_reserve_exact(COMPOSITION_DEGREE_CHUNKS)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
-        let start = chunk
-            .checked_mul(chunk_size)
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        if start >= quotient_coefficients.len() {
-            chunks.push(Vec::new());
-            continue;
-        }
-        let end = start
-            .checked_add(chunk_size)
-            .map(|end| end.min(quotient_coefficients.len()))
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        let source = quotient_coefficients
-            .get(start..end)
-            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-        let retained_length = source
-            .iter()
-            .rposition(|coefficient| *coefficient != E::ZERO)
-            .map_or(0, |degree| degree + 1);
-        let mut coefficients = Vec::new();
-        coefficients
-            .try_reserve_exact(retained_length)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        coefficients.extend_from_slice(
-            source
-                .get(..retained_length)
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-        );
-        chunks.push(coefficients);
+    let geometry = super::composition_masking::QuotientChunkGeometryV1::new_v1(
+        shared_layout,
+        AGGREGATE_PARAMETERS_V1,
+    )
+    .map_err(map_aggregate_error_v1)?;
+    if maximum_quotient_degree
+        >= geometry
+            .stride_v1()
+            .checked_mul(COMPOSITION_DEGREE_CHUNKS)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    Ok(chunks.into_vec())
+    geometry
+        .split_v1(quotient_coefficients)
+        .map_err(map_aggregate_error_v1)
 }
 #[cfg(test)]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -4633,22 +4527,38 @@ fn der_composition_material_from_polynomials_v1(
             )
             .map_err(map_aggregate_error_v1)?,
         );
-        let coefficients = fp4_coset_coefficients_v1(&quotient, plan.quotient_coset_log2)?;
-        coefficient_chunks.push(composition_coefficient_chunks_v1(
-            &coefficients,
+        let chunks = aggregate::composition_chunks_from_quotient_coset_v1(
+            &quotient,
+            plan.quotient_coset_log2,
             plan.maximum_quotient_degree,
+            AGGREGATE_PARAMETERS_V1,
             &shared_layout,
-        )?);
-        evaluations.push(
-            aggregate::composition_chunks_from_quotient_coset_v1(
-                &quotient,
-                plan.quotient_coset_log2,
-                plan.maximum_quotient_degree,
-                AGGREGATE_PARAMETERS_V1,
-                &shared_layout,
-            )
-            .map_err(map_aggregate_error_v1)?,
-        );
+        )
+        .map_err(map_aggregate_error_v1)?;
+        // This standalone cfg(test) producer exercises the generic aggregate
+        // relation, whose decomposition uses the full FRI cap. Derive its
+        // coefficient view from those exact codewords; production MAIN uses
+        // the independently blinded decomposition and matching OODS stride.
+        let mut lane_coefficients =
+            ZeroizingExtensionChunksV1::new(Vec::new(), zeroize_extension_chunks_v1);
+        for chunk in &chunks {
+            let coefficients = fp4_coset_coefficients_v1(chunk, layout.lde_log2)?;
+            let cap = shared_layout
+                .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+                .map_err(map_aggregate_error_v1)?;
+            if coefficients.0[cap..].iter().any(|value| *value != E::ZERO) {
+                return Err(ZkX509StarkErrorV1::ConstraintOpening);
+            }
+            let mut retained = ZeroizingExtensionColumnV1(Vec::new());
+            retained
+                .0
+                .try_reserve_exact(cap)
+                .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+            retained.0.extend_from_slice(&coefficients[..cap]);
+            lane_coefficients.push(core::mem::take(&mut retained.0));
+        }
+        coefficient_chunks.push(lane_coefficients.into_vec());
+        evaluations.push(chunks);
     }
     Ok(RetainedCompositionMaterialV1 {
         evaluations,
@@ -7686,7 +7596,6 @@ struct MainP256Log5ProverConstraintSourceV1<'a> {
     source: &'a P256MainBoundSourceV1,
     bindings: Vec<MainP256RegistrationBindingV1>,
     challenges: P256AggregateChallengesV1,
-    terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256Log5ProverConstraintSourceV1<'a> {
@@ -7700,7 +7609,6 @@ impl<'a> MainP256Log5ProverConstraintSourceV1<'a> {
             source,
             bindings: canonical_p256_main_log5_bindings_v1(layout)?,
             challenges: p256_aggregate_challenges_from_post_base_v1(source.post_base_v1()?)?,
-            terminals: main_p256_terminal_registrations_v1(&source.terminal_claims_v1()?)?,
         })
     }
     fn binding_v1(
@@ -7747,7 +7655,7 @@ impl<'a> MainP256Log5ProverConstraintSourceV1<'a> {
         opening: RegisteredOpenedRowsV1<'_>,
         fixed: &[F],
     ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-        let binding = self.binding_v1(registration)?;
+        let _binding = self.binding_v1(registration)?;
         if fixed.len() != registration.segment.fixed_width
             || opening.base_current.len() != registration.segment.base_width
             || opening.base_next.len() != registration.segment.base_width
@@ -7764,15 +7672,7 @@ impl<'a> MainP256Log5ProverConstraintSourceV1<'a> {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        p256_opened_residues_v1(
-            registration,
-            opening,
-            fixed,
-            self.challenges,
-            self.terminals
-                .get(binding.p256.signature_v1())
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-        )
+        p256_opened_residues_v1(registration, opening, fixed, self.challenges)
     }
     #[cfg(test)]
     fn composition_value_v1(
@@ -7806,7 +7706,6 @@ struct MainP256Log5VerifierConstraintSourceV1<'a> {
     bindings: Vec<MainP256RegistrationBindingV1>,
     common_lde_log2: u8,
     challenges: P256AggregateChallengesV1,
-    terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
     fixed: &'a P256MainVerifierFixedSourceV1,
     fixed_openings: Vec<BTreeMap<usize, Vec<F>>>,
 }
@@ -7815,7 +7714,6 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
         layout: &AggregateProofLayoutV1,
         fixed: &'a P256MainVerifierFixedSourceV1,
         post_base: ZkX509CredentialMainPostBaseChallengesV1,
-        claims: ZkX509P256TerminalClaimsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         let bindings = canonical_p256_main_log5_bindings_v1(layout)?;
         if bindings
@@ -7833,7 +7731,7 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
             bindings,
             common_lde_log2: layout.common_lde_log2,
             challenges: p256_aggregate_challenges_from_post_base_v1(post_base)?,
-            terminals: main_p256_terminal_registrations_v1(&claims)?,
+
             fixed,
             fixed_openings,
         })
@@ -7966,7 +7864,7 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
         opening: RegisteredOpenedRowsV1<'_>,
     ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
         let registration_index = self.binding_index_v1(registration)?;
-        let binding = *self
+        let _binding = *self
             .bindings
             .get(registration_index)
             .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
@@ -8015,11 +7913,8 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
         {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
-        let terminals = self
-            .terminals
-            .get(binding.p256.signature_v1())
-            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-        p256_opened_residues_v1(registration, opening, current, self.challenges, terminals)
+
+        p256_opened_residues_v1(registration, opening, current, self.challenges)
     }
     #[cfg(test)]
     fn cached_openings_v1(&self, registration_index: usize) -> Option<usize> {
@@ -8133,7 +8028,6 @@ struct MainP256Log16ProverConstraintSourceV1<'a> {
     source: &'a P256MainBoundSourceV1,
     bindings: Vec<MainP256RegistrationBindingV1>,
     challenges: P256AggregateChallengesV1,
-    terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
@@ -8147,7 +8041,6 @@ impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
             source,
             bindings: canonical_p256_main_log16_bindings_v1(layout)?,
             challenges: p256_aggregate_challenges_from_post_base_v1(source.post_base_v1()?)?,
-            terminals: main_p256_terminal_registrations_v1(&source.terminal_claims_v1()?)?,
         })
     }
     fn binding_v1(
@@ -8194,7 +8087,7 @@ impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
         opening: RegisteredOpenedRowsV1<'_>,
         fixed: &[F],
     ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-        let binding = self.binding_v1(registration)?;
+        let _binding = self.binding_v1(registration)?;
         if fixed.len() != registration.segment.fixed_width
             || opening.base_current.len() != registration.segment.base_width
             || opening.base_next.len() != registration.segment.base_width
@@ -8211,15 +8104,7 @@ impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        p256_opened_residues_v1(
-            registration,
-            opening,
-            fixed,
-            self.challenges,
-            self.terminals
-                .get(binding.p256.signature_v1())
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-        )
+        p256_opened_residues_v1(registration, opening, fixed, self.challenges)
     }
     #[cfg(test)]
     fn composition_value_v1(
@@ -8248,7 +8133,6 @@ struct MainP256Log16VerifierConstraintSourceV1<'a> {
     common_lde_log2: u8,
     fixed: &'a P256MainVerifierFixedSourceV1,
     challenges: P256AggregateChallengesV1,
-    terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
     fixed_openings: Vec<BTreeMap<usize, Vec<F>>>,
 }
 #[cfg(test)]
@@ -8258,7 +8142,6 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
         layout: &AggregateProofLayoutV1,
         fixed: &'a P256MainVerifierFixedSourceV1,
         post_base: ZkX509CredentialMainPostBaseChallengesV1,
-        claims: &ZkX509P256TerminalClaimsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         let bindings = canonical_p256_main_log16_bindings_v1(layout)?;
         if bindings.iter().any(|binding| {
@@ -8277,7 +8160,7 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
             common_lde_log2: layout.common_lde_log2,
             fixed,
             challenges: p256_aggregate_challenges_from_post_base_v1(post_base)?,
-            terminals: main_p256_terminal_registrations_v1(claims)?,
+
             fixed_openings,
         })
     }
@@ -8408,7 +8291,7 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
         opening: RegisteredOpenedRowsV1<'_>,
     ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
         let registration_index = self.binding_index_v1(registration)?;
-        let binding = *self
+        let _binding = *self
             .bindings
             .get(registration_index)
             .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
@@ -8457,15 +8340,7 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
         {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
-        p256_opened_residues_v1(
-            registration,
-            opening,
-            current,
-            self.challenges,
-            self.terminals
-                .get(binding.p256.signature_v1())
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-        )
+        p256_opened_residues_v1(registration, opening, current, self.challenges)
     }
     #[cfg(test)]
     fn cached_openings_v1(&self, registration_index: usize) -> Option<usize> {
@@ -8671,9 +8546,6 @@ impl ZeroizingMainDerTraceGuardV1 {
     fn new_v1(trace: ZkX509DerStarkTraceV1) -> Self {
         Self(Some(trace))
     }
-    fn trace_v1(&self) -> Result<&ZkX509DerStarkTraceV1, ZkX509StarkErrorV1> {
-        self.0.as_ref().ok_or(ZkX509StarkErrorV1::InternalInvariant)
-    }
     fn take_v1(&mut self) -> Result<ZkX509DerStarkTraceV1, ZkX509StarkErrorV1> {
         self.0.take().ok_or(ZkX509StarkErrorV1::InternalInvariant)
     }
@@ -8805,18 +8677,14 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
                 ZkX509StarkErrorV1::InternalInvariant
             })?;
         let claims = ZkX509MainTerminalClaimsV1 {
-            der: zk_x509_der_stark_terminal_claims_v1(der.trace_v1()?)
-                .map_err(ZkX509StarkErrorV1::from)?,
             rfc5280: rfc.terminal_claims_v1(),
             sha: ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(
                 sha_segments,
                 ca_calls,
             )
             .map_err(map_main_rfc_source_error_v1)?,
-            p256: p256.terminal_claims_v1()?,
         };
-        validate_zk_x509_der_rfc_terminal_equalities_v1(claims.der, claims.rfc5280)
-            .map_err(map_main_rfc_source_error_v1)?;
+
         if !zk_x509_main_rfc_sha_terminal_products_match_v1(claims.rfc5280, claims.sha) {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
@@ -8999,7 +8867,6 @@ struct MainLog19ProverConstraintSourceV1<'a, 'source> {
     source: &'source MainLog19BoundTraceGroupSourceV1<'a>,
     der_public: ZkX509DerStarkPublicTerminalsV1,
     p256_challenges: P256AggregateChallengesV1,
-    p256_terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
@@ -9020,7 +8887,6 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
             )
             .map_err(ZkX509StarkErrorV1::from)?,
             p256_challenges: p256_aggregate_challenges_from_post_base_v1(source.post_base)?,
-            p256_terminals: main_p256_terminal_registrations_v1(&source.claims.p256)?,
         })
     }
     fn stream_fixed_polynomials_v1(
@@ -9072,7 +8938,7 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         let residues = match registration_index {
-            0 => evaluate_zk_x509_der_stark_residues_v1(
+            0 => super::der_stark::evaluate_zk_x509_der_stark_local_residues_v1(
                 opening
                     .base_current
                     .try_into()
@@ -9097,7 +8963,6 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                     .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 self.source.post_base.der(),
                 self.der_public,
-                self.source.claims.der,
             )
             .map_err(ZkX509StarkErrorV1::from)?,
             1 => evaluate_zk_x509_rfc5280_stark_residues_v1(
@@ -9155,16 +9020,8 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                 .map_err(map_main_sha_source_error_v1)?
             }
             _ => {
-                let binding = self.source.p256_binding_v1(registration)?;
-                p256_opened_residues_v1(
-                    registration,
-                    opening,
-                    fixed_current,
-                    self.p256_challenges,
-                    self.p256_terminals
-                        .get(binding.p256.signature_v1())
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-                )?
+                let _binding = self.source.p256_binding_v1(registration)?;
+                p256_opened_residues_v1(registration, opening, fixed_current, self.p256_challenges)?
             }
         };
         if residues.len() != registration.segment.constraint_count {
@@ -9206,7 +9063,6 @@ impl MainP256Log19VerifierConstraintSourceV1 {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
         post_base: ZkX509CredentialMainPostBaseChallengesV1,
-        claims: ZkX509P256TerminalClaimsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         let bindings = canonical_p256_main_log19_bindings_v1(layout)?;
         if layout.common_lde_log2 != ZK_X509_MAIN_COMMON_LDE_LOG2_V1
@@ -9217,7 +9073,7 @@ impl MainP256Log19VerifierConstraintSourceV1 {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         p256_aggregate_challenges_from_post_base_v1(post_base)?;
-        main_p256_terminal_registrations_v1(&claims)?;
+
         Ok(Self {
             fixed_openings: None,
         })
@@ -9892,8 +9748,7 @@ impl MainLog19VerifierConstraintSourceV1 {
         claims: ZkX509MainTerminalClaimsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         canonical_main_log19_registrations_v1(layout)?;
-        validate_zk_x509_der_rfc_terminal_equalities_v1(claims.der, claims.rfc5280)
-            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+
         if !zk_x509_main_rfc_sha_terminal_products_match_v1(claims.rfc5280, claims.sha) {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -9916,8 +9771,7 @@ impl MainLog19VerifierConstraintSourceV1 {
         };
         let sha_fixed = ZkX509ShaBatchFixedProviderV1::new_v1(sha_shape)
             .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
-        let p256 =
-            MainP256Log19VerifierConstraintSourceV1::for_main_v1(layout, post_base, claims.p256)?;
+        let p256 = MainP256Log19VerifierConstraintSourceV1::for_main_v1(layout, post_base)?;
         Ok(Self {
             post_base,
             claims,
@@ -10153,7 +10007,7 @@ fn main_p256_scalar_registration_v1(
     Ok(matched)
 }
 fn main_p256_terminal_registration_v1(
-    claims: &ZkX509P256TerminalClaimsV1,
+    claims: &ZkX509P256PrivateProductsV1,
     signature: usize,
 ) -> Result<P256TerminalRegistrationV1, ZkX509StarkErrorV1> {
     let (buses, cross_sources, sink, role) =
@@ -10188,7 +10042,7 @@ fn main_p256_terminal_registration_v1(
     Ok(terminals)
 }
 fn main_p256_terminal_registrations_v1(
-    claims: &ZkX509P256TerminalClaimsV1,
+    claims: &ZkX509P256PrivateProductsV1,
 ) -> Result<[P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1], ZkX509StarkErrorV1> {
     let mut registrations = Vec::new();
     registrations
@@ -10327,7 +10181,6 @@ struct MainP256ScalarProverConstraintSourceV1<'a> {
     registrations: [MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1],
     source: &'a P256MainBoundSourceV1,
     challenges: P256ScalarBitBusChallengesV1,
-    terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> MainP256ScalarProverConstraintSourceV1<'a> {
@@ -10342,12 +10195,11 @@ impl<'a> MainP256ScalarProverConstraintSourceV1<'a> {
         challenges
             .validate_v1()
             .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-        let terminals = main_p256_terminal_registrations_v1(&source.terminal_claims_v1()?)?;
+
         Ok(Self {
             registrations,
             source,
             challenges,
-            terminals,
         })
     }
     fn stream_fixed_polynomials_v1(
@@ -10377,16 +10229,8 @@ impl<'a> MainP256ScalarProverConstraintSourceV1<'a> {
         opening: RegisteredOpenedRowsV1<'_>,
         fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
     ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-        let matched = main_p256_scalar_registration_v1(&self.registrations, registration)?;
-        p256_scalar_opened_residues_v1(
-            registration,
-            opening,
-            fixed,
-            self.challenges,
-            self.terminals
-                .get(matched.p256.signature_v1())
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-        )
+        let _matched = main_p256_scalar_registration_v1(&self.registrations, registration)?;
+        p256_scalar_opened_residues_v1(registration, opening, fixed, self.challenges)
     }
     #[cfg(test)]
     fn composition_value_v1(
@@ -10412,7 +10256,6 @@ struct MainP256ScalarVerifierConstraintSourceV1<'a> {
     common_lde_log2: u8,
     fixed: &'a P256MainVerifierFixedSourceV1,
     challenges: P256ScalarBitBusChallengesV1,
-    terminals: [P256TerminalRegistrationV1; P256_SIGNATURE_COUNT_V1],
     fixed_openings:
         [BTreeMap<usize, [F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1]>; P256_SIGNATURE_COUNT_V1],
 }
@@ -10423,7 +10266,6 @@ impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
         layout: &AggregateProofLayoutV1,
         fixed: &'a P256MainVerifierFixedSourceV1,
         post_base: ZkX509CredentialMainPostBaseChallengesV1,
-        claims: &ZkX509P256TerminalClaimsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         let registrations = main_p256_scalar_registrations_v1(layout)?;
         if registrations
@@ -10441,7 +10283,7 @@ impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
             common_lde_log2: layout.common_lde_log2,
             fixed,
             challenges,
-            terminals: main_p256_terminal_registrations_v1(claims)?,
+
             fixed_openings: core::array::from_fn(|_| BTreeMap::new()),
         })
     }
@@ -10583,15 +10425,7 @@ impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
         {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
-        p256_scalar_opened_residues_v1(
-            registration,
-            opening,
-            fixed,
-            self.challenges,
-            self.terminals
-                .get(matched.p256.signature_v1())
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
-        )
+        p256_scalar_opened_residues_v1(registration, opening, fixed, self.challenges)
     }
 }
 fn validate_main_io_registration_v1(

@@ -222,3 +222,54 @@ fn stage_cleanup_rejects_symlink_substitution() {
         b"unrelated custody"
     );
 }
+
+#[test]
+fn staged_service_authorities_publish_exact_identity_and_private_custody() {
+    let _resources = super::super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
+    let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
+    let directory = networks.create_child("native-authorities").unwrap();
+    directory
+        .write_atomic("binary", b"fixture bytes", PublishMode::CreateNew)
+        .unwrap();
+    let binary = directory.path().join("binary");
+    let pin = store::pin_binary(&binary).unwrap();
+    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    request.name = "native-authorities".into();
+    request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
+    let _operation = store::acquire(&directory, "operation.lock", &request.name).unwrap();
+    let ports = LocalnetPorts::reserve().unwrap();
+    let retained = prepare(
+        &directory,
+        &request,
+        RootKind::Global,
+        pin.clone(),
+        pin,
+        &ports,
+    )
+    .unwrap();
+    let original = encode(&retained).unwrap();
+    assert_eq!(retained.prepared.service_profile, request.service_profile);
+    let manifest = retained
+        .prepared
+        .stream_token_authorities()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        manifest.network_id.to_string(),
+        retained.prepared.context.network_id
+    );
+    assert_eq!(store.prepared(&request.name).unwrap(), retained.prepared);
+    assert!(!directory.path().join(STAGING).exists());
+    reconcile_publication(&directory, &retained).unwrap();
+    assert_eq!(encode(&read(&directory).unwrap()).unwrap(), original);
+    assert_eq!(
+        read(&directory)
+            .unwrap()
+            .prepared
+            .stream_token_authorities()
+            .unwrap(),
+        Some(manifest)
+    );
+}

@@ -7085,12 +7085,49 @@ mod tests {
             );
             stx.world.take_external_events();
             let internal_len = stx.world.internal_event_buf.len();
+            let registration = load_relay_registration(stx, &domain, &retired_relay);
+            let call_before_retirement = load_call_record(stx, &call_id);
+            let error = UnregisterKaigiRelay {
+                relay_id: retired_relay.clone(),
+            }
+            .execute(&retired_relay, stx)
+            .expect_err("an active manifest must retain its registered HPKE route");
+            assert_smart_contract_error(error, "active Kaigi");
+            assert_eq!(
+                load_relay_registration(stx, &domain, &retired_relay),
+                registration
+            );
+            assert_eq!(load_call_record(stx, &call_id), call_before_retirement);
+            assert_eq!(
+                load_relay_feedback(stx, &retired_relay).unwrap(),
+                Some(feedback)
+            );
+            assert!(stx.world.take_external_events().is_empty());
+            assert_eq!(stx.world.internal_event_buf.len(), internal_len);
+
+            EndKaigi {
+                call_id: call_id.clone(),
+                ended_at_ms: None,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("the authenticated host ends the original call");
+            assert_eq!(load_call_record(stx, &call_id).status, KaigiStatus::Ended);
+            assert_eq!(
+                load_call_record(stx, &call_id).relay_manifest,
+                Some(manifest.clone())
+            );
+            stx.world.take_external_events();
+            let internal_len = stx.world.internal_event_buf.len();
 
             UnregisterKaigiRelay {
                 relay_id: retired_relay.clone(),
             }
             .execute(&retired_relay, stx)
-            .expect("relay may retire while an existing manifest pins its descriptor");
+            .expect("relay may retire after the host ends its active call");
             let events = stx.world.take_external_events();
             assert_eq!(events.len(), 1, "removal metadata must remain internal");
             let summary = extract_unregistration_summary(&events)
@@ -7104,16 +7141,18 @@ mod tests {
                 .world
                 .kaigi_account_dependencies
                 .get(&retired_relay)
-                .expect("active manifest dependency remains");
+                .cloned()
+                .unwrap_or_default();
             assert!(!remaining_dependencies.contains(&registration_dependency));
             assert!(!remaining_dependencies.contains(&feedback_dependency));
             assert!(
-                remaining_dependencies
+                !remaining_dependencies
                     .iter()
-                    .any(|(kind, _, _)| { *kind == KAIGI_DEPENDENCY_ACTIVE_CALL })
+                    .any(|(kind, _, _)| { *kind == KAIGI_DEPENDENCY_ACTIVE_CALL }),
+                "the ended call must release its live relay dependency"
             );
             ensure_kaigi_relay_home_change_allowed(stx, &retired_relay, &domain, None)
-                .expect("active-call relay references alone must not pin relay metadata home");
+                .expect("retained historical manifests do not pin relay metadata home");
             assert_eq!(
                 load_relay_feedback(stx, &retired_relay).expect("load removed feedback"),
                 None
@@ -7121,12 +7160,23 @@ mod tests {
             assert_eq!(
                 load_call_record(stx, &call_id).relay_manifest,
                 Some(manifest.clone()),
-                "retirement must not rewrite an active call's pinned manifest"
+                "retirement must not rewrite the original historical call's pinned manifest"
             );
 
-            let error = SetKaigiRelayManifest {
-                call_id: call_id.clone(),
-                relay_manifest: Some(manifest.clone()),
+            let mut future = NewKaigi::with_defaults(
+                KaigiId::new(
+                    domain.clone(),
+                    Name::from_str("retired-relay-future").unwrap(),
+                ),
+                host.clone(),
+            );
+            future.relay_manifest = Some(manifest.clone());
+            let error = CreateKaigi {
+                call: future,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }
             .execute(&host, stx)
             .expect_err("retired descriptors must be unavailable to future manifest admission");

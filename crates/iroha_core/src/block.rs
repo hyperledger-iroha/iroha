@@ -44,24 +44,26 @@ use iroha_data_model::block::consensus::ValidatorIndex;
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, rekey::AccountAlias},
-    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionAlias, AssetDefinitionId},
     block::*,
     confidential::ConfidentialFeatureDigest,
-    consensus::{ConsensusKeyRole, NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{ConsensusKeyRole, NposConsensusEffects},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
     events::prelude::*,
     nexus::{
-        AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig,
+        AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog,
         LaneSettlementBufferPolicy, ProofBlob,
     },
     transaction::{SignedTransaction, TransactionEntrypoint, error::TransactionLimitError},
 };
 #[cfg(test)]
 use iroha_data_model::{
+    asset::AssetId,
     isi::InstructionBox,
+    nexus::LaneConfig,
     transaction::{Executable, error::TransactionRejectionReason, signed::TransactionResultInner},
 };
 #[cfg(feature = "bls")]
@@ -75,6 +77,7 @@ use iroha_primitives::numeric::Quantity;
 #[cfg(test)]
 use iroha_primitives::small::SmallVec;
 use mv::storage::StorageReadOnly;
+#[cfg(test)]
 use norito::codec::Encode;
 #[cfg(feature = "bls")]
 use norito::json::Value as JsonValue;
@@ -399,14 +402,14 @@ impl SettlementBufferSnapshot {
 use crate::{
     kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
     pipeline::{overlay::TxOverlay, smallset::sort_dedup_u32_in_place},
+    state::StateBlock,
     tx::is_quarantine_transaction,
 };
 use crate::{
     prelude::*,
-    queue::{resolve_routing_decision, routing_plan_from_execution_context},
+    queue::routing_plan_from_execution_context,
     state::{
-        State, StateBlock, StatelessValidationContext, WorldReadOnly,
-        compute_confidential_feature_digest,
+        State, StatelessValidationContext, WorldReadOnly, compute_confidential_feature_digest,
     },
     sumeragi::network_topology::Topology,
     tx::{AcceptTransactionFail, SignatureRejectionCode, SignatureVerificationFail},
@@ -4741,10 +4744,9 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, (tx, prepared)) in Self::collect_external_signed_transactions(&block)
+                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
                     .into_iter()
                     .zip(prepared_txs.iter())
-                    .enumerate()
                 {
                     let expires_at_ms = tx
                         .time_to_live()
@@ -6931,6 +6933,49 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             (state, topology, time_source, new_block.into())
         }
+        /// Build an ordinary successor from original genesis before removing its routing context.
+        fn signed_contextless_routing_fixture(
+            label: &str,
+            workers: usize,
+        ) -> (crate::sumeragi::test_chain::CertifiedTestChain, SignedBlock) {
+            use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
+            let (authority, signer) = gen_account_in(label);
+            let account = Account::new(authority.clone()).build(&authority);
+            let mut key_pairs = (0..4)
+                .map(|_| crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+                .collect::<Vec<_>>();
+            key_pairs.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+            let mut config = TestChainConfig::new(World::with([], [account], []), 0);
+            config.chain_id = label
+                .parse()
+                .expect("canonical routing fixture chain label");
+            config.pipeline.workers = workers;
+            config.validator_keys = Some(key_pairs.clone());
+            let chain =
+                CertifiedTestChain::start(config).expect("original routing fixture genesis");
+            let state = chain.state();
+            let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let transaction = TransactionBuilder::new_with_time_source(
+                chain.network_id(),
+                authority,
+                &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, format!("{label}-0"))])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+            let previous = state
+                .view()
+                .latest_block()
+                .expect("original genesis parent");
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source)
+                .chain(0, Some(&previous));
+            let block = with_current_state_da_sidecars(builder, state)
+                .sign(key_pairs[0].private_key())
+                .unpack(|_| {});
+            (chain, block.into())
+        }
         fn assert_contextless_unknown_default_route_is_pristine(
             state: &State,
             block: &mut SignedBlock,
@@ -6967,8 +7012,9 @@ pub(crate) mod valid {
                 "a missing authenticated route must refuse the source before policy routing",
             );
             assert!(
-                matches!(error, BlockValidationError::ExecutionContextInvalid(reason)
-                if reason == "Network source lacks its authenticated execution route")
+                matches!(&error, BlockValidationError::ExecutionContextInvalid(reason)
+                if reason == "Network source has an invalid execution context"),
+                "contextless source must fail before routing or execution: {error:?}"
             );
             assert_eq!(
                 state_block.transactions.get(&entrypoint_hash),
@@ -6990,21 +7036,10 @@ pub(crate) mod valid {
         }
         #[test]
         fn contextless_parallel_validation_fails_before_routing_metadata_or_index_mutation() {
-            let (mut state, _, _, mut block) = signed_default_lane_block_with_execution_context(
-                "contextless-parallel-routing-failure",
-                1,
-                |transactions, _, _| {
-                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-                        transactions[0].hash_as_entrypoint(),
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                    )])
-                },
-            );
+            let (chain, mut block) =
+                signed_contextless_routing_fixture("contextless-parallel-routing-failure", 2);
+            let state = chain.state();
             let unknown_dataspace = DataSpaceId::new(4_242);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.workers = 2;
-            state.set_pipeline(pipeline);
             block.set_execution_context(None);
 
             assert_contextless_unknown_default_route_is_pristine(
@@ -7015,17 +7050,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn contextless_sealed_source_fails_before_routing_metadata_or_index_mutation() {
-            let (state, _, _, mut block) = signed_default_lane_block_with_execution_context(
-                "contextless-sequential-routing-failure",
-                1,
-                |transactions, _, _| {
-                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-                        transactions[0].hash_as_entrypoint(),
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                    )])
-                },
-            );
+            let (chain, mut block) =
+                signed_contextless_routing_fixture("contextless-sequential-routing-failure", 1);
+            let state = chain.state();
             let unknown_dataspace = DataSpaceId::new(4_243);
             let signed = block
                 .external_transactions()
@@ -8954,6 +8981,7 @@ pub(crate) mod tests {
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
         prelude::*,
+        smart_contract::ContractArtifactId,
         transaction::{
             ExecutableBatchItem,
             signed::{
@@ -9667,11 +9695,16 @@ seiyaku GuardedOverlay {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
+<<<<<<< HEAD
         let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
             &contract_address,
             code_hash,
         )
         .expect("fixture address selects its exact artifact scope");
+=======
+        let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
+            .expect("contract address retains its exact artifact dataspace");
+>>>>>>> origin/optimizations
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
@@ -9845,11 +9878,16 @@ seiyaku DynamicAccessCounter {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
+<<<<<<< HEAD
         let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
             &contract_address,
             code_hash,
         )
         .expect("fixture address selects its exact artifact scope");
+=======
+        let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
+            .expect("contract address retains its exact artifact dataspace");
+>>>>>>> origin/optimizations
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
@@ -10049,11 +10087,16 @@ seiyaku DynamicTarget {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
+<<<<<<< HEAD
         let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
             &contract_address,
             code_hash,
         )
         .expect("fixture address selects its exact artifact scope");
+=======
+        let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
+            .expect("contract address retains its exact artifact dataspace");
+>>>>>>> origin/optimizations
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests

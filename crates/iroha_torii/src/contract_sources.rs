@@ -3763,10 +3763,17 @@ mod tests {
         let _guard = TestDataDirGuard::new();
         let program = kotodama_lang::session::CompilerSession::default()
             .build(kotodama_lang::session::CompileRequest {
+<<<<<<< HEAD
                 source: "seiyaku Demo { view fn main() -> int { return 1; } }",
                 source_name: Some("instruction_view.ko"),
             })
             .expect("compile callable source fixture")
+=======
+                source: "seiyaku Demo { view fn main() {} }",
+                source_name: Some("instruction-view.ko"),
+            })
+            .expect("compile an artifact with an authenticated view entrypoint")
+>>>>>>> origin/optimizations
             .artifact;
         let code_hash = canonical_code_hash(&program).expect("canonical hash");
         let instruction = dm::InstructionBox::from(RegisterSmartContractBytes {

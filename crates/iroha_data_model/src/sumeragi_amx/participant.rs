@@ -65,10 +65,22 @@ pub trait AmxEscrow {
 pub enum AmxParticipantError<E> {
     /// The protocol input or participant state rejected the requested transition.
     #[error(transparent)]
-    Protocol(#[from] AmxError),
+    Protocol(AmxError),
+    /// A local proof decoder refused before changing escrow or participant state.
+    #[error("local AMX participant decoder resource refusal: {0}")]
+    Resource(norito::core::DecodeResourceError),
     /// The host refused without changing escrow or participant state.
     #[error("AMX escrow operation failed: {0}")]
     Escrow(E),
+}
+
+impl<E> From<AmxError> for AmxParticipantError<E> {
+    fn from(error: AmxError) -> Self {
+        match error {
+            AmxError::Resource(resource) => Self::Resource(resource),
+            other => Self::Protocol(other),
+        }
+    }
 }
 
 /// A prepared transaction: its deadline, this participant's vote and, once settled, the global

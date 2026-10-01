@@ -82,6 +82,29 @@ def test_model_json_feature_cannot_return_as_an_empty_alias() -> None:
     )
 
 
+def test_production_prover_keeps_exact_shipping_context_and_rejects_test_forwarders() -> None:
+    """The bridge prover uses IPA without inheriting fixture or key-generation features."""
+
+    package = "iroha_core_zk"
+    feature = "kagemusha-production-prover"
+    document = _guarded_document(package)
+    assert _guarded_errors(package, document) == []
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES[package][feature] == ("zk-halo2-ipa",)
+    assert feature in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES[package]
+    assert feature not in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES[package]
+    for forwarders in (["kagemusha-real-proof-harness"], ["zk-halo2-ipa", "test-utils"], []):
+        changed = copy.deepcopy(document)
+        changed["features"][feature] = forwarders
+        errors = _guarded_errors(package, changed)
+        assert errors and any(feature in error for error in errors), forwarders
+    changed = copy.deepcopy(document)
+    changed["features"]["default"].append(feature)
+    assert any(
+        f"contextual shipping feature `{feature}` is reachable from local" in error
+        for error in _guarded_errors(package, changed)
+    )
+
+
 def test_rejects_unclassified_explicit_feature_omitted_from_default() -> None:
     document = copy.deepcopy(_guarded_document("iroha_core"))
     document["features"]["new-portable-production-capability"] = []
@@ -198,15 +221,16 @@ def test_rejects_contextual_shipping_feature_reachable_from_default() -> None:
 
 
 def test_rejects_explicit_opt_in_reachable_from_default() -> None:
-    document = copy.deepcopy(_guarded_document("iroha_core"))
-    document["features"]["default"].append("quic")
+    for feature in ("quic", "mutation-testing"):
+        document = copy.deepcopy(_guarded_document("iroha_core"))
+        document["features"]["default"].append(feature)
 
-    errors = _guarded_errors("iroha_core", document)
+        errors = _guarded_errors("iroha_core", document)
 
-    assert any(
-        "explicit opt-in feature `quic` is reachable from `default`" in error
-        for error in errors
-    )
+        assert any(
+            f"explicit opt-in feature `{feature}` is reachable from `default`" in error
+            for error in errors
+        ), errors
 
 
 def test_rejects_stale_explicit_opt_in_name(monkeypatch) -> None:

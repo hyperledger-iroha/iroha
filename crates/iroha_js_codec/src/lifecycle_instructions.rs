@@ -72,6 +72,12 @@ fn render_model<T: JsonSerialize>(value: &T) -> CodecResult<Value> {
 }
 
 /// Parse the SDK's exact decimal dataspace projection without narrowing u64.
+<<<<<<< HEAD
+=======
+///
+/// # Errors
+/// Rejects missing/extra fields, noncanonical u64 decimal strings and noncanonical hashes.
+>>>>>>> origin/optimizations
 pub(crate) fn parse_artifact_id(
     value: Value,
     context: &str,
@@ -92,6 +98,12 @@ pub(crate) fn parse_artifact_id(
 }
 
 /// Render the SDK's exact decimal dataspace projection.
+<<<<<<< HEAD
+=======
+///
+/// # Errors
+/// Returns an error if the model-owned code hash cannot be serialized to JSON.
+>>>>>>> origin/optimizations
 pub(crate) fn render_artifact_id(
     value: &iroha_data_model::smart_contract::ContractArtifactId,
 ) -> CodecResult<Value> {

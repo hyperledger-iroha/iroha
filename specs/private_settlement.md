@@ -805,7 +805,7 @@ Release execution first requires a completed
 `scripts/private_settlement_smoke_campaign.py` campaign: ten consecutive fresh
 N=3 runs, each with sixteen distinct validators, explicit governed protocol
 activation, continuous financial-state observations, signed RS16
-finality, replay rejection, and restart of every validator. The driver builds
+finality, idempotent acknowledgment of the exact finalized carrier, and restart of every validator. The driver builds
 the exact signed clean source and retains requests, process inventories,
 state/certificate/finality artifacts, command logs, and source/executable
 digests outside the checkout. Skipped tests, failed runs, reused identities,
@@ -844,7 +844,9 @@ N=2,3,4,8,16 matrix across at least ten seeds per N, one validator restart in
 every committee, coordinator/global restarts, acknowledged 5/10/20-percent
 loss for restricted DA, Prepare, and Commit, all phase cuts and persistence
 boundaries, convergence, byte-identical invalid-leg state, exactly-once success,
-replay rejection, and zero partial visibility or spendability observations.
+`exact_retry_idempotent` evidence (the original acknowledgment, unchanged fees,
+receipt and complete financial state), and zero partial visibility or spendability
+observations.
 Every run binds the same full source commit and archived hardware-description
 SHA-256, plus the archived N-specific configuration SHA-256. A canonical
 configuration manifest covers N=2,3,4,8,16 in order and binds every exact

@@ -3669,11 +3669,12 @@ impl Iroha {
                 let local_consensus_peer = config.common.trusted_peers.value().myself.id().clone();
                 // Active Parliament TLE custody is mandatory: private timed-OVN has no alternate
                 // ballot-opening path when this validator owns a release-share seat.
-                validate_threshold_signer_startup_readiness_v1(
-                    &state,
-                    &local_consensus_peer,
-                    &runtime_deps,
+                preflight_threshold_signer_startup_readiness_v1(
+                    Arc::clone(&state),
+                    local_consensus_peer.clone(),
+                    runtime_deps.clone(),
                 )
+                .await
                 .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
                 log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
                 let node = prepared

@@ -653,7 +653,19 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn("atomicity_observer.begin()", harness)
         self.assertIn("atomicity_observer.finish(3)", harness)
         self.assertIn('"benchmark-before"', private_benchmark)
-        self.assertIn('"benchmark-after"', private_benchmark)
+        self.assertIn(
+            "observe_idempotent_finalized_retry(&sponsor, &network, &final_manifest, &submit, &receipt)?",
+            private_benchmark,
+        )
+        retry = harness[
+            harness.index("fn observe_idempotent_finalized_retry(") : harness.index(
+                "fn finalized_retry_acknowledgment_rejects_wrong_identity_or_height"
+            )
+        ]
+        self.assertIn('"before-finalized-retry"', retry)
+        self.assertIn('"after-finalized-retry"', retry)
+        self.assertIn("ensure_finalized_retry_acknowledgment(", retry)
+        self.assertIn("ensure_fault_state_reverted(&before, &after)?", retry)
         self.assertIn(
             "FaultContinuousObserverV1::start", private_benchmark
         )

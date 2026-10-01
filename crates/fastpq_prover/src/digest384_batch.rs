@@ -4,33 +4,36 @@
 //! accelerator only resumes a fresh final field; CPU execution remains an
 //! explicit policy choice; required-device failures are returned to the caller.
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
 #[cfg(any(test, feature = "fastpq-gpu"))]
 use fastpq_isi::GoldilocksDigest384V1;
-#[cfg(any(test, feature = "fastpq-gpu"))]
+#[cfg(test)]
 use rayon::prelude::*;
 
+use crate::DigestExecutionV1;
 #[cfg(test)]
 use crate::backend::GpuBackend;
+#[cfg(any(test, feature = "fastpq-gpu"))]
 use crate::digest_executor::{MAX_DIGEST384_BATCH_FRAMES_V1, MAX_DIGEST384_BATCH_WORDS_V1};
 #[cfg(feature = "fastpq-gpu")]
 use crate::digest384_gpu::{
     Digest384GpuBackendV1, Digest384GpuErrorV1, Digest384ReadinessV1, backend_readiness_v1,
 };
-use crate::{DigestExecutionV1, gpu::GpuError};
+#[cfg(any(test, feature = "fastpq-gpu"))]
+use crate::gpu::GpuError;
 
 /// Maximum final byte payload admitted to one continuation dispatch.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
-/// Eight CPU/device known answers and one CPU/device public probe.
-/// The enclosing prover charges this cold bound even for CPU or warm execution.
-pub const MAX_PREFLIGHT_HASH_CALLS: usize = 18;
-
 /// Bound shared backing buffers, retained/oversized pool pages, returned digests
 /// and fixed readiness payload. Count the full pool even on CPU for stable admission.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
 /// The same bound applies to CPU policy; it does not include driver/allocator overhead.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub fn last_fields_payload_charge(
     job_count: usize,
     total_final_field_bytes: usize,
@@ -38,6 +41,7 @@ pub fn last_fields_payload_charge(
     last_fields_charge(job_count, total_final_field_bytes).map_err(native_error)
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 fn last_fields_charge(job_count: usize, bytes: usize) -> Result<usize, GpuError> {
     if job_count > MAX_DIGEST384_BATCH_FRAMES_V1 || bytes > MAX_LAST_FIELD_BYTES {
         return Err(GpuError::InvalidInput(
@@ -80,9 +84,12 @@ fn last_fields_charge(job_count: usize, bytes: usize) -> Result<usize, GpuError>
     // Pool::take can reuse a larger capacity than this request. The complete
     // retained-pool allowance covers those borrowed excess pages plus all idle
     // entries; it is added once, independently of the four active requests.
+    // Root-specific public FFT tables can remain from an earlier dispatch in
+    // the same process; their complete independent cache is also always charged.
     Ok(total.max(4 * STAGING_PAGE_BYTES + 8 * 48)
         + 2 * STAGING_PAGE_BYTES
-        + crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES)
+        + crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES
+        + crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE)
 }
 
 #[cfg(any(test, feature = "fastpq-gpu"))]
@@ -103,6 +110,7 @@ fn validate_jobs(jobs: &[Digest384LastFieldJob<'_>]) -> Result<usize, GpuError> 
     Ok(bytes)
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 fn native_error(error: impl core::fmt::Display) -> crate::Error {
     crate::Error::NativeDigestExecution {
         details: error.to_string(),
@@ -154,7 +162,7 @@ pub fn preflight_last_fields_execution(execution: DigestExecutionV1) -> crate::R
 /// Common geometry and payload charging precede either policy. Only required
 /// device execution constructs typed jobs; CPU preserves the optimized prefix
 /// owner without repeating its suffix absorption for unused device state.
-#[cfg(any(test, feature = "fastpq-gpu"))]
+#[cfg(test)]
 pub fn execute_last_fields_with_cpu<'a>(
     job_count: usize,
     total_final_field_bytes: usize,
@@ -228,12 +236,14 @@ pub fn execute_last_fields(
 }
 
 /// A fresh canonical typed prefix and its exact final byte field.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 #[derive(Clone)]
 pub struct Digest384LastFieldJob<'a> {
     prefix: GoldilocksDigest384LastFieldStreamV1,
     final_field: &'a [u8],
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 impl core::fmt::Debug for Digest384LastFieldJob<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Digest384LastFieldJob")
@@ -504,7 +514,8 @@ mod tests {
     #[test]
     fn exact_batch_charge_includes_page_rounding_and_public_readiness() {
         let context = 2 * STAGING_PAGE_BYTES;
-        let retained_pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES;
+        let retained_pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES
+            + crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE;
         assert!(
             (6 * 65 * 3 + 9) * 8
                 + 256

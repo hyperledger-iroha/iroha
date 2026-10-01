@@ -333,6 +333,15 @@ fn assert_complete_semantic_queue_matches_original(
     candidate.transition_effect_digest = normalized.transition_effect_digest;
     candidate.lifecycle_binding_digest = lifecycle_digest;
     candidate.prepared_transition_binding_digest = prepared;
+    // This prefix-only arithmetic fixture carries explicit synthetic public digests. It does
+    // not open sealed streams or authenticate a native prepared intent or State proof.
+    candidate.prepared_intent = Some(
+        crate::kagemusha_v1_recursion::KagemushaPreparedIntentCommitmentsV1 {
+            preparation_id: digest(b"terminal-semantic-fixture-preparation", intent_variant),
+            sealed_transition_inputs_digest: digest(b"terminal-semantic-fixture-sealed-inputs", 0),
+            sealed_recovery_seeds_digest: digest(b"terminal-semantic-fixture-sealed-seeds", 0),
+        },
+    );
     candidate.peer_credit_id = normalized.peer_credit_id;
     candidate.recipient_encryption_key_binding = normalized.recipient_encryption_key_binding;
     candidate.transport_semantic_digest = send
@@ -439,7 +448,15 @@ fn assert_complete_semantic_queue_matches_original(
             .unwrap_or([0; 32]),
         400,
         terminal_output_binding,
-        [0; 32],
+        if operation == KagemushaOperationV1::SendSplit {
+            [0; 32]
+        } else {
+            material
+                .authorization_relation
+                .statement
+                .context
+                .artifact_manifest_digest
+        },
         encode_pasta(Fp::from(3)),
         encode_pasta(Fq::from(4)),
         encode_pasta(Fp::from(1)),

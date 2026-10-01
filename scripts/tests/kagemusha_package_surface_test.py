@@ -73,7 +73,7 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
         self.assertIn("try bridge.acknowledgeCommittedAppAttest(", adapter)
 
     def test_coordinator_methods_match_exact_c_rust_swift_kotlin_and_fixture_inventory(self) -> None:
-        # The probe's ten output words are independent of the fourteen method codes.
+        # The probe's twelve output words are independent of the 21 method codes.
         # Preserve each language's exact public spelling, including Swift's ID.
         names = (
             ("RESERVE_OPERATION_ID", "ReserveOperationId", "reserveOperationID"),
@@ -90,6 +90,13 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             ("INITIAL_ENROLLMENT", "InitialEnrollment", "initialEnrollment"),
             ("ACKNOWLEDGE_COMMITTED_APP_ATTEST", "AcknowledgeCommittedAppAttest", "acknowledgeCommittedAppAttest"),
             ("EXPORT_OUTGOING_STATE_PROOF", "ExportOutgoingStateProof", "exportOutgoingStateProof"),
+            ("PREPARE_INCOMING_FOLD", "PrepareIncomingFold", "prepareIncomingFold"),
+            ("COMPLETE_INCOMING_FOLD", "CompleteIncomingFold", "completeIncomingFold"),
+            ("STAGE_INCOMING_ORIGINAL", "StageIncomingOriginal", "stageIncomingOriginal"),
+            ("AUTHENTICATED_HARDWARE_POLICY", "AuthenticatedHardwarePolicy", "authenticatedHardwarePolicy"),
+            ("PREPARED_APP_OPERATION_APPROVAL", "PreparedAppOperationApproval", "appOperationApproval"),
+            ("PREPARED_APP_ENROLLMENT_POSSESSION", "PreparedAppEnrollmentPossession", "appEnrollmentPossession"),
+            ("PREPARED_ORDINARY_APP_IDENTITY", "PreparedOrdinaryAppIdentity", "preparedOrdinaryAppIdentity"),
         )
         contracts = {
             "c": "crates/connect_norito_bridge/include/connect_norito_bridge.h",
@@ -112,7 +119,7 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             int(line.split("\t")[1]) for line in fixture.read_text().splitlines()
             if line and not line.startswith("#")
         }
-        self.assertEqual(methods, set(range(1, 15)))
+        self.assertEqual(methods, set(range(1, 22)))
 
     def test_coordinator_frame_schema_matches_c_rust_swift_and_shared_fixtures(self) -> None:
         contracts = (
@@ -128,18 +135,21 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
                 self.assertEqual(re.findall(pattern, (ROOT / path).read_text()), ["2"])
         fixture = ROOT / "fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"
         rows = 0
+        names = set()
         for line in fixture.read_text().splitlines():
             if not line or line.startswith("#"):
                 continue
             name, method, request, response = line.split("\t")
-            self.assertIn(int(method), range(1, 15))
+            self.assertNotIn(name, names, "duplicate fixture case")
+            names.add(name)
+            self.assertIn(int(method), range(1, 22))
             for direction, encoded in (("request", request), ("response", response)):
                 with self.subTest(name=name, direction=direction):
                     frame = bytes.fromhex(encoded)
                     self.assertEqual(frame[:8], b"IKGMCOR1")
                     self.assertEqual(int.from_bytes(frame[8:10], "little"), 2)
             rows += 1
-        self.assertGreaterEqual(rows, 13)
+        self.assertGreaterEqual(rows, 21)
 
     def test_superseded_facade_files_are_absent(self) -> None:
         pairs = (

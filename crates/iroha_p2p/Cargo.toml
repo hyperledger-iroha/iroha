@@ -44,7 +44,7 @@ base64 = { workspace = true }
 socket2 = "0.6.3"
 # Authenticated transports. TLS-over-TCP is mandatory in the first release;
 # QUIC is the only optional transport.
-quinn = { version = "0.11.9", optional = true }
+quinn = { version = "0.11.12", optional = true }
 rcgen = "0.14.5"
 rustls = { version = "0.23.35", default-features = false, features = ["ring", "std"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }

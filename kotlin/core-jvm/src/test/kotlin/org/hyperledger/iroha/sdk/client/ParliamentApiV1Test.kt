@@ -491,6 +491,47 @@ class ParliamentApiV1Test {
         val fixture = "kagemusha_verifier_release_install_v1.json"
         ParliamentApiV1.Proposal.fromJson(Files.readAllBytes(fixturePath().resolveSibling(fixture)))
 
+        // DTO tag coverage does not produce native qualification or signed release evidence.
+        for (role in listOf(
+            "ordinary_app_guard_pk_eq", "ordinary_app_guard_vk_eq",
+            "ordinary_app_guard_pk_ep", "ordinary_app_guard_vk_ep",
+        )) {
+            val payload = releaseProposalPayload(fixture)
+            @Suppress("UNCHECKED_CAST")
+            val artifacts = releaseNested(payload, "manifest")["artifacts"] as MutableList<MutableMap<String, Any?>>
+            val taggedRole = releaseNested(artifacts[0], "role")
+            taggedRole["role"] = role
+            KagemushaVerifierProposalValidatorV1.install(payload)
+            taggedRole.remove("value")
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaVerifierProposalValidatorV1.install(payload)
+            }
+        }
+        val helperPayload = releaseProposalPayload(fixture)
+        val helperManifest = releaseNested(helperPayload, "manifest")
+        val helperReceipt = releaseNested(helperPayload, "receipt")
+        @Suppress("UNCHECKED_CAST")
+        val protocolRows = listOf(helperManifest, helperReceipt).map {
+            (it["helper_protocols"] as MutableList<MutableMap<String, Any?>>)[0]
+        }
+        @Suppress("UNCHECKED_CAST")
+        val qualificationRows = (helperReceipt["profile_qualifications"] as MutableList<MutableMap<String, Any?>>).map {
+            (it["helper_circuits"] as MutableList<MutableMap<String, Any?>>)[0]
+        }
+        for (row in protocolRows + qualificationRows) {
+            releaseNested(row, "helper")["helper"] = "ordinary_app_guard"
+        }
+        KagemushaVerifierProposalValidatorV1.install(helperPayload)
+        releaseNested(protocolRows[0], "helper")["helper"] = "ordinary_app_guard_unknown"
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(helperPayload)
+        }
+        releaseNested(protocolRows[0], "helper")["helper"] = "ordinary_app_guard"
+        releaseNested(protocolRows[0], "helper").remove("value")
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaVerifierProposalValidatorV1.install(helperPayload)
+        }
+
         assertReleaseMutationRejected(fixture, "missing network identity") { proposal ->
             releaseNested(proposal, "manifest").remove("network_id")
         }

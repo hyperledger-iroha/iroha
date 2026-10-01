@@ -161,6 +161,13 @@ impl ManagedStore {
         allow_preparation: bool,
         retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
     ) -> Result<ManagedStatus> {
+        if matches!(root_kind, RootKind::Private { .. })
+            && request.service_profile != crate::localnet::LocalnetServiceProfile::Standard
+        {
+            return Err(Error::Invalid(
+                "service-authority profiles require a global managed root".into(),
+            ));
+        }
         transport::supported()?;
         validate_name(&request.name)?;
         if request.startup_timeout.is_zero() || request.startup_timeout > Duration::from_secs(600) {
@@ -176,6 +183,11 @@ impl ManagedStore {
         let mut reservations = None;
         let retained = match generation::read(&directory) {
             Ok(retained) => {
+                if retained.prepared.service_profile != request.service_profile {
+                    return Err(Error::Invalid(
+                        "managed generation has a different immutable service profile".into(),
+                    ));
+                }
                 if retained.root_kind != root_kind {
                     return Err(Error::Invalid(
                         "managed generation has a different immutable root identity".into(),
@@ -628,6 +640,11 @@ pub(super) fn validate_prepared(
             ));
         }
         RootKind::Private { spec } => {
+            if prepared.service_profile != crate::localnet::LocalnetServiceProfile::Standard {
+                return Err(Error::Invalid(
+                    "private roots cannot retain a service-authority profile".into(),
+                ));
+            }
             spec.validate()
                 .map_err(|_| Error::Invalid("invalid retained private-root SNS identity".into()))?;
             if prepared.context.dataspace_id != spec.dataspace_id.as_u64()
@@ -691,6 +708,8 @@ pub(super) fn validate_prepared(
                 Error::Invalid("private context has no generation directory".into())
             })?;
         crate::localnet::verify_private_root(generation, prepared, spec)?;
+    } else {
+        crate::localnet::service_authorities::validate_retained(prepared)?;
     }
     Ok(())
 }

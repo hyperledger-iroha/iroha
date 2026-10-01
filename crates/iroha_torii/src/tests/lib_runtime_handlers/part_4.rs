@@ -1046,7 +1046,9 @@ async fn runtime_metrics_and_node_capabilities_ok() {
         State(app.clone()),
         headers.clone(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            HeaderValue::from_static("application/json"),
+        )),
     )
     .await
     .expect("ok");
@@ -1059,7 +1061,9 @@ async fn runtime_metrics_and_node_capabilities_ok() {
         State(app.clone()),
         headers,
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            HeaderValue::from_static("application/json"),
+        )),
     )
     .await
     .expect("ok");
@@ -1346,21 +1350,34 @@ async fn core_info_handlers_ok() {
     let peer_bytes = torii_body_bytes(resp, "peers body").await;
     let peers: HashSet<Peer> = norito::json::from_slice(&peer_bytes).expect("peers JSON");
     assert!(peers.is_empty());
-    // A generic test state intentionally has no authenticated ABI-21/V4
-    // release, issuer, or escrow catalog. `/health` is readiness (not
-    // liveness), so it must fail closed for this fixture.
-    // For ConnectInfo we can pass a dummy loopback address by constructing the extractor arg manually is not possible here.
-    // Instead, rely on non-allowlist path (headers don't carry the internal x-iroha-remote-addr), which doesn't need ConnectInfo IP.
+    // Ordinary process health does not evaluate wallet or asset readiness.
     let resp = super::handler_health(
-        State(app),
+        State(app.clone()),
         headers,
         axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
     )
     .await
     .expect("ok")
     .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
-    let health = decode_torii_json(resp, "health body", "decode health payload").await;
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        torii_body_bytes(resp, "health body").await.as_ref(),
+        b"Healthy"
+    );
+    // The separate public wallet route advertises the universal V1 capability.
+    let resp = crate::utils::with_current_response_format(
+        crate::utils::ResponseFormat::Json,
+        super::handler_kagemusha_readiness(
+            State(app),
+            HeaderMap::new(),
+            "/v1/kagemusha/readiness".parse().expect("readiness URI"),
+            crate::loopback_connect_info(),
+        ),
+    )
+    .await
+    .expect("wallet capability response");
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let health = decode_torii_json(resp, "capability body", "decode capability payload").await;
     assert_eq!(
         health
             .get("kagemusha_handoff_capability")
@@ -1381,7 +1398,7 @@ async fn core_info_handlers_ok() {
     );
     assert_eq!(
         health.get("ready").and_then(norito::json::Value::as_bool),
-        Some(false)
+        Some(true)
     );
 }
 #[tokio::test]

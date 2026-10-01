@@ -151,13 +151,18 @@ fn execution_pool_handle_preserves_original_identity_and_reservations() {
             LiveQueryStore::start_test(),
         );
         let original = state.ivm_execution_budget();
+        // State retains its admitted native execution identity in this same pool.
+        let retained_bytes = original.reserved_bytes();
         let borrowed = state.ivm_execution_budget();
         assert!(borrowed.same_pool(&original));
+        assert_eq!(borrowed.reserved_bytes(), retained_bytes);
         let held = borrowed.try_reserve_bytes(1).expect("original pool charge");
         assert!(held.belongs_to(&original));
-        assert_eq!(original.reserved_bytes(), 1);
+        assert_eq!(original.reserved_bytes(), retained_bytes + 1);
+        assert_eq!(borrowed.reserved_bytes(), retained_bytes + 1);
         drop(held);
-        assert_eq!(original.reserved_bytes(), 0);
+        assert_eq!(original.reserved_bytes(), retained_bytes);
+        assert_eq!(borrowed.reserved_bytes(), retained_bytes);
     });
 }
 
@@ -169,8 +174,9 @@ fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isola
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
+        let retained_bytes = state.ivm_execution_budget().reserved_bytes();
         let mut pipeline = state.pipeline.clone();
-        pipeline.ivm_execution_max_bytes = 137;
+        pipeline.ivm_execution_max_bytes = retained_bytes + 137;
         state.set_pipeline(pipeline);
         let prepared = state.pipeline_ivm_prepared_cache.read().clone();
         let trigger = state.trigger_ivm_cache.lock().prepared_contract_cache();
@@ -178,7 +184,10 @@ fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isola
             .contract_query_ivm_cache
             .lock()
             .prepared_contract_cache();
-        assert_eq!(prepared.execution_budget().limit_bytes(), 137);
+        assert_eq!(
+            prepared.execution_budget().limit_bytes(),
+            retained_bytes + 137
+        );
         let held = prepared.execution_budget().try_reserve_bytes(137).unwrap();
         assert!(held.belongs_to(trigger.execution_budget()));
         assert!(held.belongs_to(query.execution_budget()));
@@ -187,8 +196,8 @@ fn pipeline_execution_pool_is_shared_while_query_and_consensus_caches_stay_isola
             Err(iroha_allocation::AllocationRefusal::Capacity { .. })
         ));
         drop(held);
-        assert_eq!(trigger.execution_budget().reserved_bytes(), 0);
-        assert_eq!(query.execution_budget().reserved_bytes(), 0);
+        assert_eq!(trigger.execution_budget().reserved_bytes(), retained_bytes);
+        assert_eq!(query.execution_budget().reserved_bytes(), retained_bytes);
     });
 }
 
@@ -200,15 +209,16 @@ fn pipeline_reload_keeps_borrowed_execution_pool_across_shrink_and_growth() {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
+        let retained_bytes = state.ivm_execution_budget().reserved_bytes();
         let mut pipeline = state.pipeline.clone();
-        pipeline.ivm_execution_max_bytes = 137;
+        pipeline.ivm_execution_max_bytes = retained_bytes + 137;
         state.set_pipeline(pipeline.clone());
         let borrowed_cache = state.pipeline_ivm_prepared_cache.read().clone();
         let original_budget = borrowed_cache.execution_budget().clone();
         let held = original_budget.try_reserve_bytes(120).unwrap();
         assert!(held.belongs_to(&state.ivm_execution_budget()));
 
-        pipeline.ivm_execution_max_bytes = 80;
+        pipeline.ivm_execution_max_bytes = retained_bytes + 80;
         state.set_pipeline(pipeline.clone());
         assert!(held.belongs_to(&state.ivm_execution_budget()));
         let fresh_cache = state.pipeline_ivm_prepared_cache.read().clone();
@@ -223,33 +233,39 @@ fn pipeline_reload_keeps_borrowed_execution_pool_across_shrink_and_growth() {
             query.execution_budget(),
         ] {
             assert!(held.belongs_to(budget));
-            assert_eq!(budget.limit_bytes(), 80);
-            assert_eq!(budget.reserved_bytes(), 120);
+            assert_eq!(budget.limit_bytes(), retained_bytes + 80);
+            assert_eq!(budget.reserved_bytes(), retained_bytes + 120);
             assert!(matches!(
                 budget.try_reserve_bytes(1),
                 Err(iroha_allocation::AllocationRefusal::Capacity {
                     requested_bytes: 1,
-                    reserved_bytes: 120,
-                    limit_bytes: 80,
+                    reserved_bytes,
+                    limit_bytes,
                     ..
-                })
+                }) if reserved_bytes == retained_bytes + 120 && limit_bytes == retained_bytes + 80
             ));
         }
-        assert_eq!(original_budget.limit_bytes(), 80);
+        assert_eq!(original_budget.limit_bytes(), retained_bytes + 80);
         drop(held);
         let within_shrunken_limit = original_budget.try_reserve_bytes(80).unwrap();
         assert!(within_shrunken_limit.belongs_to(fresh_cache.execution_budget()));
 
-        pipeline.ivm_execution_max_bytes = 160;
+        pipeline.ivm_execution_max_bytes = retained_bytes + 160;
         state.set_pipeline(pipeline);
         assert!(within_shrunken_limit.belongs_to(&state.ivm_execution_budget()));
         let enlarged = state.pipeline_ivm_prepared_cache.read().clone();
         assert!(within_shrunken_limit.belongs_to(enlarged.execution_budget()));
         let newly_available = enlarged.execution_budget().try_reserve_bytes(80).unwrap();
-        assert_eq!(enlarged.execution_budget().reserved_bytes(), 160);
+        assert_eq!(
+            enlarged.execution_budget().reserved_bytes(),
+            retained_bytes + 160
+        );
         drop(within_shrunken_limit);
         drop(newly_available);
-        assert_eq!(borrowed_cache.execution_budget().reserved_bytes(), 0);
+        assert_eq!(
+            borrowed_cache.execution_budget().reserved_bytes(),
+            retained_bytes
+        );
     });
 }
 
@@ -721,19 +737,36 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
             LiveQueryStore::start_test(),
         );
         let snapshot = norito::json::to_value(&state).unwrap();
-        let budget = iroha_allocation::AllocationBudget::new(137);
+        let restore = |execution_budget, snapshot| {
+            deserialize::KuraSeed {
+                operation_index_budget: state.world.operation_index_budget().clone(),
+                execution_budget,
+                lane_manifests: state.lane_manifests.read().clone(),
+                kura: state.kura_handle(),
+                query_handle: state.query_handle.clone(),
+                #[cfg(feature = "telemetry")]
+                telemetry: StateTelemetry::default(),
+            }
+            .into_state_from_json(snapshot)
+        };
+        // A restored State retains scalar and native-tip owners in the same
+        // startup pool. Measure both retained owners and transient restore
+        // demand independently, preserving the original exact 137-byte window
+        // above the real peak while the startup reservation remains held.
+        let probe_budget = iroha_allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        );
+        let probe = restore(probe_budget.clone(), snapshot.clone()).unwrap();
+        let retained_bytes = probe_budget.reserved_bytes();
+        let restore_peak = probe_budget.peak_reserved_bytes();
+        assert!(retained_bytes > 0);
+        assert!(restore_peak >= retained_bytes);
+        drop(probe);
+        assert_eq!(probe_budget.reserved_bytes(), 0);
+        let budget = iroha_allocation::AllocationBudget::new(restore_peak + 137);
         let held = budget.try_reserve_bytes(120).unwrap();
-        let mut restored = deserialize::KuraSeed {
-            operation_index_budget: state.world.operation_index_budget().clone(),
-            execution_budget: budget.clone(),
-            lane_manifests: state.lane_manifests.read().clone(),
-            kura: state.kura_handle(),
-            query_handle: state.query_handle.clone(),
-            #[cfg(feature = "telemetry")]
-            telemetry: StateTelemetry::default(),
-        }
-        .into_state_from_json(snapshot)
-        .unwrap();
+        let mut restored = restore(budget.clone(), snapshot).unwrap();
+        assert_eq!(budget.peak_reserved_bytes(), restore_peak + 120);
         let prepared = restored.pipeline_ivm_prepared_cache.read().clone();
         let trigger = restored.trigger_ivm_cache.lock().prepared_contract_cache();
         let query = restored
@@ -746,11 +779,11 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
             query.execution_budget(),
         ] {
             assert!(held.belongs_to(owner));
-            assert_eq!(owner.reserved_bytes(), 120);
-            assert_eq!(owner.limit_bytes(), 137);
+            assert_eq!(owner.reserved_bytes(), retained_bytes + 120);
+            assert_eq!(owner.limit_bytes(), restore_peak + 137);
         }
         let mut pipeline = restored.pipeline.clone();
-        pipeline.ivm_execution_max_bytes = 80;
+        pipeline.ivm_execution_max_bytes = retained_bytes + 80;
         restored.set_pipeline(pipeline);
         assert!(held.belongs_to(&restored.ivm_execution_budget()));
         assert!(
@@ -760,7 +793,7 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
                 .is_err()
         );
         drop(held);
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), retained_bytes);
         let retry = restored
             .ivm_execution_budget()
             .try_reserve_bytes(80)

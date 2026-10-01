@@ -19,7 +19,7 @@ class KagemushaCoreCoordinatorExportDeviceTest {
         val contract = KagemushaCoreCoordinatorJniV1.contract()
         assertNotNull(contract)
         assertEquals(12, contract!!.size)
-        assertEquals(14, contract[11])
+        assertEquals(21, contract[11])
         assertNull(KagemushaCoreCoordinatorJniV1.invoke(
             1L,
             KagemushaCoreCoordinatorMethodV1.EXPORT_OUTGOING_STATE_PROOF.code,

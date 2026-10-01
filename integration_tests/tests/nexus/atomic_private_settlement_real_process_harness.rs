@@ -5551,6 +5551,115 @@ fn ensure_fault_state_reverted(
     Ok(())
 }
 
+fn ensure_finalized_retry_acknowledgment(
+    acknowledgment: &iroha::client::PrivateSettlementBundleSubmitResponseV1,
+    bundle_id: Hash,
+    carrier_id: Hash,
+    observed_height: u64,
+    expiry_height: u64,
+) -> Result<()> {
+    ensure!(
+        acknowledgment.bundle_id == bundle_id && acknowledgment.carrier_id == carrier_id,
+        "exact finalized retry acknowledgment changed the bundle or signed carrier identity"
+    );
+    ensure!(
+        acknowledgment.accepted_at_height >= observed_height
+            && acknowledgment
+                .accepted_at_height
+                .checked_add(1)
+                .is_some_and(|candidate| candidate <= expiry_height),
+        "exact finalized retry acknowledgment is outside the original carrier's live height window"
+    );
+    Ok(())
+}
+
+/// Retry the same signed carrier and verify acknowledgment without any repeated effect.
+fn observe_idempotent_finalized_retry(
+    sponsor: &Client,
+    network: &Network,
+    manifest: &AtomicPrivateSettlementV1,
+    request: &PrivateSettlementBundleSubmitRequestV1,
+    receipt: &iroha::data_model::nexus::PrivateSettlementReceiptV1,
+) -> Result<FaultStateSnapshotV1> {
+    let before = wait_for_converged_fault_state_snapshot(network, "before-finalized-retry")?;
+    let fee_before = sponsor_nexus_fee_balance(sponsor)?;
+    let observed_height = sponsor.client().get_privacy_capabilities()?.committed_height;
+    ensure!(
+        observed_height >= receipt.finalized_height
+            && observed_height >= manifest.authority_context_height
+            && observed_height
+                .checked_add(1)
+                .is_some_and(|candidate| candidate <= manifest.expiry_height),
+        "exact finalized retry is outside the original carrier's live height window"
+    );
+    let acknowledgment = sponsor
+        .client()
+        .submit_private_settlement_bundle_v1(request)
+        .wrap_err("live exact finalized retry must acknowledge its immutable admission owner")?;
+    ensure_finalized_retry_acknowledgment(
+        &acknowledgment,
+        manifest.bundle_id,
+        Hash::from(request.transaction.hash()),
+        observed_height,
+        manifest.expiry_height,
+    )?;
+    ensure!(
+        sponsor_nexus_fee_balance(sponsor)? == fee_before,
+        "acknowledged finalized retry charged another carrier fee"
+    );
+    ensure!(
+        wait_for_identical_receipt(network, manifest.bundle_id)? == *receipt,
+        "acknowledged finalized retry changed the terminal receipt"
+    );
+    let after = wait_for_converged_fault_state_snapshot(network, "after-finalized-retry")?;
+    ensure_fault_state_reverted(&before, &after)?;
+    Ok(after)
+}
+
+#[test]
+fn finalized_retry_acknowledgment_rejects_wrong_identity_or_height() {
+    let bundle_id = Hash::new(b"finalized bundle");
+    let carrier_id = Hash::new(b"original signed carrier");
+    let expected = iroha::client::PrivateSettlementBundleSubmitResponseV1 {
+        bundle_id,
+        carrier_id,
+        accepted_at_height: 10,
+    };
+    assert!(ensure_finalized_retry_acknowledgment(&expected, bundle_id, carrier_id, 10, 11).is_ok());
+    for changed in [
+        iroha::client::PrivateSettlementBundleSubmitResponseV1 {
+            bundle_id: Hash::new(b"substituted bundle"),
+            ..expected
+        },
+        iroha::client::PrivateSettlementBundleSubmitResponseV1 {
+            carrier_id: Hash::new(b"new signed carrier"),
+            ..expected
+        },
+        iroha::client::PrivateSettlementBundleSubmitResponseV1 {
+            accepted_at_height: 9,
+            ..expected
+        },
+        iroha::client::PrivateSettlementBundleSubmitResponseV1 {
+            accepted_at_height: 11,
+            ..expected
+        },
+        iroha::client::PrivateSettlementBundleSubmitResponseV1 {
+            accepted_at_height: u64::MAX,
+            ..expected
+        },
+    ] {
+        assert!(ensure_finalized_retry_acknowledgment(&changed, bundle_id, carrier_id, 10, 11).is_err());
+    }
+    let overflow = iroha::client::PrivateSettlementBundleSubmitResponseV1 {
+        accepted_at_height: u64::MAX,
+        ..expected
+    };
+    assert!(
+        ensure_finalized_retry_acknowledgment(&overflow, bundle_id, carrier_id, u64::MAX, u64::MAX)
+            .is_err()
+    );
+}
+
 fn ensure_fault_state_converged(snapshot: &FaultStateSnapshotV1) -> Result<()> {
     let first = snapshot
         .validators
@@ -7346,13 +7455,7 @@ fn run_fresh_route_fault_trial(
             .client()
             .submit_private_settlement_bundle_v1(&submit)?;
         let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
-        ensure!(
-            sponsor
-                .client()
-                .submit_private_settlement_bundle_v1(&replay)
-                .is_err(),
-            "fault campaign accepted an exact finalized carrier replay"
-        );
+        observe_idempotent_finalized_retry(sponsor, network, &bundle.manifest, &replay, &receipt)?;
         inventory = Some(collect_process_inventory(
             network,
             runtime,
@@ -7640,7 +7743,7 @@ fn materialize_fault_campaign_payload(
             "successful_leg_applications": (request.participants),
             "each_leg_applied_exactly_once": true,
             "invalid_leg_state_byte_identical": true,
-            "replay_rejected": true,
+            "exact_retry_idempotent": true,
         },
         "all_nodes_converged": true,
     }))
@@ -9833,22 +9936,16 @@ fn run_real_process_private_benchmark(
         &fee_after_finalization,
         "benchmark financial finalization",
     )?;
-    ensure!(
-        sponsor
-            .client()
-            .submit_private_settlement_bundle_v1(&submit)
-            .is_err(),
-        "replaying the exact finalized carrier was accepted"
-    );
+    let atomicity_after =
+        observe_idempotent_finalized_retry(&sponsor, &network, &final_manifest, &submit, &receipt)?;
     ensure!(
         sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
-        "rejected benchmark replay charged a third carrier fee"
+        "acknowledged benchmark retry charged a third carrier fee"
     );
     ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
         "replay changed the terminal receipt"
     );
-    let atomicity_after = wait_for_converged_fault_state_snapshot(&network, "benchmark-after")?;
     ensure_fault_state_finalized_once(&atomicity_before, &atomicity_after, request.participants)?;
     let atomicity_observations = atomicity_observer.finish(&atomicity_after)?;
     ensure!(

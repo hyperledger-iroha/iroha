@@ -52,7 +52,7 @@ fn contract_code_management_manager_sponsors_registration_and_meters_every_instr
             ]),
         );
         let state = State::new_for_testing(
-            world,
+            component_world_for_testing(world),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
         );
@@ -72,6 +72,8 @@ fn contract_code_management_manager_sponsors_registration_and_meters_every_instr
         let mut state_transaction = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
             transaction.hash_as_entrypoint(),
         ));
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         executor
             .execute_transaction(
                 &mut state_transaction,
@@ -169,7 +171,7 @@ fn contract_code_management_management_uses_exact_effective_role_and_borrowed_ga
                 );
             }
             let state = State::new_for_testing(
-                world,
+                component_world_for_testing(world),
                 Kura::blank_kura_for_testing(),
                 query::store::LiveQueryStore::start_test(),
             );
@@ -264,7 +266,7 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
     let code_hash = Hash::new(b"default user-provided deployment bootstrap replay");
     let account = Account::new(authority.clone()).build(&authority);
     let state = State::new_with_chain(
-        World::with([], [account], []),
+        component_world_for_testing(World::with([], [account], [])),
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
         chain,
@@ -294,6 +296,8 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
         let mut state_transaction = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
             transaction.hash_as_entrypoint(),
         ));
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let mut ivm_cache = IvmCache::new();
         executor
             .execute_transaction(
@@ -387,7 +391,7 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         ("reordered prefix", reordered, 2),
     ] {
         let state = State::new_with_chain(
-            World::new(),
+            component_world_for_testing(World::new()),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             chain.clone(),
@@ -409,6 +413,8 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
             let mut state_transaction = block.transaction_for_fastpq_testing(
                 iroha_crypto::Hash::from(transaction.hash_as_entrypoint()),
             );
+            state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let mut ivm_cache = IvmCache::new();
             executor
                 .execute_transaction(
@@ -459,7 +465,7 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
     let authority = checked_account_id();
     let account = Account::new(authority.clone()).build(&authority);
     let state = State::new_for_testing(
-        World::with([], [account], []),
+        component_world_for_testing(World::with([], [account], [])),
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
@@ -504,7 +510,7 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
     let code_hash = Hash::new(b"contract deployment bootstrap existing authority");
     let account = Account::new(authority.clone()).build(&authority);
     let state = State::new_with_chain(
-        World::with([], [account], []),
+        component_world_for_testing(World::with([], [account], [])),
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
         chain,
@@ -527,6 +533,8 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_transaction = block
         .transaction_for_fastpq_testing(iroha_crypto::Hash::from(transaction.hash_as_entrypoint()));
+    state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let mut ivm_cache = IvmCache::new();
     assert!(
         !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),
@@ -578,7 +586,7 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
         .account_permissions
         .insert(authority.clone(), BTreeSet::from([canonical.clone()]));
     let state = State::new_for_testing(
-        world,
+        component_world_for_testing(world),
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
@@ -627,7 +635,7 @@ fn initial_executor_denies_post_genesis_governed_kagemusha_self_grants() {
     let authority = checked_account_id();
     let account = Account::new(authority.clone()).build(&authority);
     let state = State::new_for_testing(
-        World::with([], [account], []),
+        component_world_for_testing(World::with([], [account], [])),
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );

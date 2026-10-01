@@ -124,12 +124,14 @@ fn snapshot_evidence_fixture(network_id: NetworkId) -> (Evidence, EvidenceAttrib
     let evidence =
         Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(0x61), vote(0x62))).unwrap();
     let attribution = EvidenceAttribution {
+        scope: iroha_data_model::block::consensus::EvidenceScope::Root,
         instance: *network_id.as_bytes(),
         height: 1,
         epoch: 0,
         context_id: [0x51; 32],
         authority_generation: [0x53; 32],
         offenders: vec![EvidenceOffender {
+            lane_stake: None,
             signer,
             peer_id: PeerId::new(key.public_key().clone()),
         }],

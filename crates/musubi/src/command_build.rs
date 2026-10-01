@@ -287,6 +287,7 @@ pub(super) fn build_runtime_package(
     let (outcome, registry, cached_source) = if let Some(outcome) = local {
         (outcome, None, None)
     } else {
+<<<<<<< HEAD
         let resolved_registry = registry_resolver
             .map(|resolve| {
                 resolve().map_err(|error| {
@@ -318,6 +319,22 @@ pub(super) fn build_runtime_package(
             archive_transport = Some(transport.clone());
         }
         let cache_root = platform_cache_root_v1().map_err(cache_maintenance_diagnostic_ref)?;
+=======
+        let client = iroha::client::Client::builder(config.clone())
+            .build()
+            .map_err(|error| Diagnostic::new(ErrorCode::Network, format!("{error:#}")))?;
+        let registry = RegistryReadClientV1::new(
+            &client,
+            config
+                .torii_request_timeout
+                .min(std::time::Duration::from_secs(60)),
+            config.account_chain_discriminant,
+        )
+        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+        ensure_network_identity(config.network_id, registry.network_id())?;
+        let cache_root =
+            platform_cache_root_v1().map_err(|error| cache_maintenance_diagnostic(&error))?;
+>>>>>>> origin/optimizations
         let resolver_cache = ResolverIndexCacheV1::open(&cache_root)
             .map_err(|error| Diagnostic::new(ErrorCode::CacheCorrupt, error.to_string()))?;
         let cached = if previous.is_some() {
@@ -427,10 +444,6 @@ pub(super) fn build_runtime_package(
     let artifact = deploy::select_artifact(&execution.artifacts, contract)?;
     crate::deployment_runtime::BuiltArtifact::from_bytes(deploy::read_selected_artifact(artifact)?)
         .map_err(|error| Diagnostic::new(ErrorCode::PackageInvalid, format!("{error:#}")))
-}
-
-fn cache_maintenance_diagnostic_ref(error: CacheError) -> Diagnostic {
-    cache_maintenance_diagnostic(&error)
 }
 
 fn artifact_json(artifact: &CompilerArtifactV1) -> Value {

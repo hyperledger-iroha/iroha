@@ -62,8 +62,8 @@ steps. Follow it whenever you promote a new npm version or re-issue a hotfix.
 
    The helper runs `npm pack`, records the tarball checksum, and writes a JSON
    summary listing the package’s total unpacked bytes plus the top offenders.
-   Attach the report to the release evidence bundle so roadmap JS-04’s
-   “bundle-size impact” gate stays satisfied without waiting for CI artifacts.
+   Attach the informational size report to the release evidence bundle so
+   package growth can be reviewed alongside the recorded artifacts.
    The publish workflow also writes `dist/bundle-size.json` automatically so
    every CI artifact set carries a fresh report.
 

@@ -28,6 +28,16 @@ enum Failure {
 }
 
 impl SignatureVerificationError {
+    #[cfg(feature = "bls")]
+    pub(crate) fn bad_signature() -> Self {
+        Self(Failure::Signature)
+    }
+
+    #[cfg(feature = "bls")]
+    pub(crate) fn from_bls(error: super::bls::uncached::Rejection) -> Self {
+        Self(Failure::Bls(error))
+    }
+
     /// Materialize the existing public crypto diagnostic at a completed boundary.
     ///
     /// This adapter can allocate a String. Callers requiring fixed error custody
@@ -49,6 +59,28 @@ impl SignatureVerificationError {
     }
 }
 
+/// Verify normal-BLS wire fields without constructing signature or public-key owners.
+///
+/// This preserves the ordinary signature facade's canonical key-first relation
+/// and geometry checks, with no positive cache or formatted diagnostic.
+///
+/// # Errors
+/// Returns the original fixed canonical parse or signature rejection.
+#[cfg(feature = "bls")]
+pub fn verify_bls_normal_signature_borrowed(
+    public_key: &[u8],
+    signature: &[u8],
+    message: &[u8],
+) -> Result<(), SignatureVerificationError> {
+    super::bls::uncached::verify_facade(
+        super::bls::uncached::Orientation::Normal,
+        public_key,
+        signature,
+        message,
+    )
+    .map_err(SignatureVerificationError::from_bls)
+}
+
 /// Verify borrowed signature inputs without persistent caches or formatted errors.
 ///
 /// This is the same admission relation used by `verify_signature_for_admission`.
@@ -65,6 +97,40 @@ pub fn verify_signature_borrowed(
     message: &[u8],
 ) -> Result<(), SignatureVerificationError> {
     verify(proof, public_key, message).map_err(SignatureVerificationError)
+}
+
+/// Verify a borrowed BLS-normal proof of possession without retained caches.
+///
+/// The exact original `PoP` domain and typed key/proof parser order are retained.
+/// Neither success nor failure copies the key/proof, owns a diagnostic String,
+/// or consults/populates the ordinary positive-verdict caches.
+///
+/// # Errors
+/// Returns the original unformatted envelope, canonical parser or relation rejection.
+#[cfg(feature = "bls")]
+pub fn verify_bls_normal_pop_borrowed(
+    public_key: &PublicKey,
+    proof: &[u8],
+) -> Result<(), SignatureVerificationError> {
+    verify_bls_normal_pop_key_borrowed(public_key, proof).map(drop)
+}
+
+#[cfg(feature = "bls")]
+pub(crate) fn verify_bls_normal_pop_key_borrowed(
+    public_key: &PublicKey,
+    proof: &[u8],
+) -> Result<blstrs::G1Affine, SignatureVerificationError> {
+    let verify = || {
+        let (algorithm, payload) = public_key.borrowed_parts().map_err(Failure::Envelope)?;
+        if algorithm != Algorithm::BlsNormal {
+            return Err(Failure::Signature);
+        }
+        let message = crate::bls_pop_message_hash(payload);
+        // The ordinary PoP API uses the typed proof parser. The generic
+        // Signature facade rejects proof geometry earlier with BadSignature.
+        super::bls::verified_normal_key_borrowed(payload, proof, &message).map_err(Failure::Bls)
+    };
+    verify().map_err(SignatureVerificationError)
 }
 
 fn verify(proof: &Signature, public_key: &PublicKey, message: &[u8]) -> Result<(), Failure> {

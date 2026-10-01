@@ -598,6 +598,42 @@ fn initial_admission_authenticates_full_catalog_and_three_signatures_and_retains
 }
 
 #[test]
+fn admission_deadline_retains_original_expiry_and_requires_its_owner() {
+    let f = Fixture::new();
+    let pending = f.begin();
+    let original_expiry = pending.deadline().unwrap().expiry_continuous_ms().unwrap();
+    let proof = f.proof(pending.client_nonce().unwrap());
+    let certificate = f.certificate(&proof);
+    let mut admission = pending
+        .complete(
+            &proof.canonical_bytes().unwrap(),
+            &certificate.canonical_bytes().unwrap(),
+            &f.verified_app(&proof.challenge),
+        )
+        .unwrap();
+    assert_eq!(
+        admission
+            .deadline()
+            .unwrap()
+            .expiry_continuous_ms()
+            .unwrap(),
+        original_expiry
+    );
+    // The structural fixture has no live journal selection. Removing its test-only
+    // clock must fail closed rather than manufacturing a new native deadline.
+    assert!(admission.pending.live_selection.is_none());
+    admission.pending.deadline = None;
+    assert_eq!(
+        admission.pending.deadline().err(),
+        Some(InitialEnrollmentErrorV1::Binding)
+    );
+    assert_eq!(
+        admission.deadline().err(),
+        Some(InitialEnrollmentErrorV1::Binding)
+    );
+}
+
+#[test]
 fn initial_admission_rejects_another_governed_app_policy_or_signed_binding() {
     let f = Fixture::new();
     let mut other_policy = f.app_policy.as_ref().clone();
@@ -765,6 +801,27 @@ fn wrong_issuer_and_changed_proof_commitment_are_rejected() {
             Some(InitialEnrollmentErrorV1::Authority)
         );
     }
+}
+
+#[test]
+fn missing_native_deadline_cannot_be_replaced_at_admission_handoff() {
+    let f = Fixture::new();
+    let pending = f.begin();
+    let proof = f.proof(pending.client_nonce().unwrap());
+    let certificate = f.certificate(&proof);
+    let mut admission = pending
+        .complete(
+            &proof.canonical_bytes().unwrap(),
+            &certificate.canonical_bytes().unwrap(),
+            &f.verified_app(&proof.challenge),
+        )
+        .unwrap();
+    admission.pending.deadline = None;
+    assert!(admission.pending.live_selection.is_none());
+    assert_eq!(
+        admission.deadline().err(),
+        Some(InitialEnrollmentErrorV1::Binding)
+    );
 }
 
 #[test]

@@ -1,3 +1,4 @@
+import { validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1, validateManifestFieldsV1 } from "./contractManifestRules.js";
 import { parseGovernanceReferendumResponseV1, parseGovernanceTallyResponseV1, parseGovernanceLocksResponseV1 } from "./governancePlainV1.js";
 import { parseElectionTallyResponseV1 } from "./electionTallyV1.js";
 import { createSorafsAliasResponseNormalizers } from "./sorafsAliasResponses.js";
@@ -155,8 +156,18 @@ import {
 import { computeIvmArtifactHashes, IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
+import {
+  assertSorafsOrderbookFixedHeaders,
+  createSorafsOrderbookSubmissionDeadline,
+  prepareSorafsOrderbookSubmission,
+  sorafsOrderbookHeaderFingerprint,
+  validateSorafsOrderbookSubmissionTransport,
+} from "./sorafsOrderbookPreflight.js";
+import {
+  normalizeValidationFeeCheckpointV1,
+  normalizeValidationFeeLedgerBindingV1,
+} from "./validationFeeTrust.js";
 import { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
-import { snapshotSorafsOrderbookSubmissionBytes } from "./sorafsOrderbookSubmissionBytes.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
 
 const CANONICAL_AUTH_FIELD = "canonicalAuth";
@@ -3358,17 +3369,6 @@ export class ToriiClient {
     options,
   ) {
     const signingContext = requireLocalDraftSigningContext(this._localSigningContext, "getValidationFeeCurrentPolicyProofPage");
-    const {
-      VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
-      VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
-      createValidationFeeConsensusApi,
-      normalizeValidationFeeCheckpointV1,
-      normalizeValidationFeeLedgerBindingV1,
-    } = await loadToriiOptionalModule();
-    const {
-      encodeValidationFeeCurrentPolicyProofRequestV1,
-      verifyValidationFeeCurrentPolicyProofV1,
-    } = createValidationFeeConsensusApi(this._nativeRuntime);
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedCheckpoint =
       checkpoint === null || checkpoint === undefined
@@ -3378,10 +3378,21 @@ export class ToriiClient {
       options,
       "getValidationFeeCurrentPolicyProofPage",
     );
+    const sendRequest = this._request.bind(this);
+    const nativeRuntime = this._nativeRuntime;
+    const {
+      VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+      VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+      createValidationFeeConsensusApi,
+    } = await loadToriiOptionalModule();
+    const {
+      encodeValidationFeeCurrentPolicyProofRequestV1,
+      verifyValidationFeeCurrentPolicyProofV1,
+    } = createValidationFeeConsensusApi(nativeRuntime);
     const request = encodeValidationFeeCurrentPolicyProofRequestV1(
       normalizedCheckpoint,
     );
-    const response = await this._request(
+    const response = await sendRequest(
       "POST",
       VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
       {
@@ -3429,10 +3440,6 @@ export class ToriiClient {
    * promotion is required; this convenience method promotes only in memory.
    */
   async catchUpValidationFeeCurrentPolicyProof(binding, options) {
-    const {
-      normalizeValidationFeeCheckpointV1,
-      normalizeValidationFeeLedgerBindingV1,
-    } = await loadToriiOptionalModule();
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedOptions = ensureRecord(
       options,
@@ -3443,15 +3450,22 @@ export class ToriiClient {
       new Set(["checkpoint", "maxPages", "signal", CANONICAL_AUTH_FIELD]),
       "catchUpValidationFeeCurrentPolicyProof options",
     );
+    const selectedCheckpoint = normalizedOptions.checkpoint;
+    const selectedMaxPages = normalizedOptions.maxPages;
+    const { signal } = normalizeSignalOption(normalizedOptions, "catchUpValidationFeeCurrentPolicyProof");
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+      normalizedOptions.canonicalAuth, "catchUpValidationFeeCurrentPolicyProof.canonicalAuth",
+    );
+    const readPage = this.getValidationFeeCurrentPolicyProofPage.bind(this);
     let checkpoint =
-      normalizedOptions.checkpoint === undefined
+      selectedCheckpoint === undefined
         ? normalizedBinding.checkpoint
-        : normalizeValidationFeeCheckpointV1(normalizedOptions.checkpoint);
+        : normalizeValidationFeeCheckpointV1(selectedCheckpoint);
     const maxPages =
-      normalizedOptions.maxPages === undefined
+      selectedMaxPages === undefined
         ? 4096
         : ToriiClient._normalizeUnsignedInteger(
-            normalizedOptions.maxPages,
+            selectedMaxPages,
             "catchUpValidationFeeCurrentPolicyProof.maxPages",
             { allowZero: false },
           );
@@ -3459,10 +3473,10 @@ export class ToriiClient {
       rejectType("catchUpValidationFeeCurrentPolicyProof.maxPages must not exceed 4096");
     }
     for (let pagesVerified = 1; pagesVerified <= maxPages; pagesVerified += 1) {
-      const page = await this.getValidationFeeCurrentPolicyProofPage(
+      const page = await readPage(
         normalizedBinding,
         checkpoint,
-        { signal: normalizedOptions.signal, canonicalAuth: normalizedOptions.canonicalAuth },
+        { signal, canonicalAuth },
       );
       if (
         page.projection.evaluated_block_height < page.projection.trusted_checkpoint_height ||
@@ -10983,43 +10997,32 @@ export class ToriiClient {
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
-    const normalized = requirePlainObjectOption(options, `${context} options`);
-    assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
-    const { signal } = normalizeSignalOption(normalized, context);
-    if (!(this._localSigningContext instanceof LocalSigningContext)) {
+    const normalized = requirePlainObjectOption(options, `${context} options`); assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
+    const { signal } = normalizeSignalOption(normalized, context); if (!(this._localSigningContext instanceof LocalSigningContext)) {
       rejectType(`${context} requires ToriiClient options.localSigningContext`);
     }
-    // The lazy import yields: take custody of caller input and dispatch methods first.
-    const transactionBytes = snapshotSorafsOrderbookSubmissionBytes(signedTransaction, context);
-    const expectedReceiptSigner = normalized.expectedReceiptSigner;
-    const request = this._request.bind(this);
-    const validateDataModel = this._ensureDataModelValidation.bind(this);
-    const fixedHeaders = { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO, "Accept-Encoding": "identity" };
-    const requestHeaders = this._createHeaders(fixedHeaders);
-    const {
-      assertSorafsOrderbookFixedHeaders,
-      createSorafsOrderbookSubmissionDeadline,
-      prepareSorafsOrderbookSubmission,
-      sorafsOrderbookHeaderFingerprint,
-      SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
-      validateSorafsOrderbookSubmissionTransport,
-      validateSorafsOrderbookSubmissionHeaders,
-      verifySorafsOrderbookSubmissionReceipt,
-    } = await loadToriiOptionalModule();
+    const request = this._request.bind(this); const validateDataModel = this._ensureDataModelValidation.bind(this);
     validateSorafsOrderbookSubmissionTransport(this._baseUrl, this.#allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
     assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
+    const fixedHeaders = { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO, "Accept-Encoding": "identity" };
+    const requestHeaders = this._createHeaders(fixedHeaders);
     const headerFingerprint = sorafsOrderbookHeaderFingerprint(requestHeaders);
     const prepared = prepareSorafsOrderbookSubmission({
-      route, signedTransaction: transactionBytes,
+      route, signedTransaction,
       expectedNetworkIdBytes: networkIdBytes(this._localSigningContext.networkId, `${context}.networkId`),
       expectedChainDiscriminant: this._localSigningContext.chainDiscriminant,
-      expectedReceiptSigner,
+      expectedReceiptSigner: normalized.expectedReceiptSigner,
       native: resolveOptionalNativeBinding(this._nativeRuntime), context,
     });
     const operation = createSorafsOrderbookSubmissionDeadline(signal, this.#config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted, abortReason: signalAbortReason });
     try {
       throwIfAborted(operation.signal);
       await waitForPromiseWithSignal(validateDataModel(operation.signal), operation.signal);
+      const {
+        SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+        validateSorafsOrderbookSubmissionHeaders,
+        verifySorafsOrderbookSubmissionReceipt,
+      } = await waitForPromiseWithSignal(loadToriiOptionalModule(), operation.signal);
       throwIfAborted(operation.signal);
       assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
       if (sorafsOrderbookHeaderFingerprint(this._createHeaders(fixedHeaders)) !== headerFingerprint) {
@@ -19368,42 +19371,13 @@ function normalizeManifestPayload(manifest, context) {
   if (!isPlainObject(manifest)) {
     rejectType(`${context} must be an object`);
   }
-  const allowedFields = new Set([
-    "seiyaku_name",
-    "seiyakuName",
-    "code_hash",
-    "codeHash",
-    "abi_hash",
-    "abiHash",
-    "compiler_fingerprint",
-    "compilerFingerprint",
-    "features_bitmap",
-    "featuresBitmap",
-    "access_set_hints",
-    "accessSetHints",
-    "entrypoints",
-    "entryPoints",
-    "states",
-    "error_types",
-    "errorTypes",
-    "error_messages",
-    "errorMessages",
-    "kotoba",
-    "provenance",
-  ]);
-  const unknownFields = Object.keys(manifest).filter((field) => !allowedFields.has(field));
-  if (unknownFields.length !== 0) {
-    rejectType(`${context} contains unsupported fields: ${unknownFields.sort().join(", ")}`);
-  }
+  validateManifestFieldsV1(manifest, context);
   const hasField = (...keys) =>
     keys.some((key) => Object.prototype.hasOwnProperty.call(manifest, key));
   const getField = (...keys) => {
     const present = keys.filter((key) =>
       Object.prototype.hasOwnProperty.call(manifest, key),
     );
-    if (present.length > 1) {
-      rejectType(`${context} contains conflicting aliases: ${present.join(", ")}`);
-    }
     return present.length === 0 ? undefined : manifest[present[0]];
   };
   const normalized = {
@@ -19518,62 +19492,7 @@ function normalizeManifestPayload(manifest, context) {
 }
 
 function validateNormalizedManifestPayload(manifest, context) {
-  const entrypointKinds = new Map();
-  const entrypointNames = new Set();
-  const lifecycleKinds = new Set();
-  const triggerIds = new Set();
-  for (const [index, entrypoint] of (manifest.entrypoints ?? []).entries()) {
-    if (entrypointNames.has(entrypoint.name)) {
-      rejectType(`${context}.entrypoints contains duplicate name ${entrypoint.name}`);
-    }
-    entrypointNames.add(entrypoint.name);
-    entrypointKinds.set(entrypoint.name, entrypoint.kind.kind);
-    if (entrypoint.kind.kind === "Hajimari" || entrypoint.kind.kind === "Kaizen") {
-      if (lifecycleKinds.has(entrypoint.kind.kind)) {
-        rejectType(`${context}.entrypoints contains duplicate ${entrypoint.kind.kind} declarations`);
-      }
-      lifecycleKinds.add(entrypoint.kind.kind);
-    }
-    for (const trigger of entrypoint.triggers) {
-      if (triggerIds.has(trigger.id)) {
-        rejectType(`${context}.entrypoints contains duplicate trigger ${trigger.id}`);
-      }
-      triggerIds.add(trigger.id);
-    }
-    if (
-      entrypoint.access_hints_complete === true &&
-      entrypoint.access_hints_skipped.length !== 0
-    ) {
-      rejectType(`${context}.entrypoints[${index}] marks access hints complete but records skipped reasons`);
-    }
-    if (
-      entrypoint.access_hints_complete === false &&
-      entrypoint.access_hints_skipped.length === 0
-    ) {
-      rejectType(`${context}.entrypoints[${index}] marks access hints incomplete without a reason`);
-    }
-  }
-  for (const [entrypointIndex, entrypoint] of (manifest.entrypoints ?? []).entries()) {
-    for (const [triggerIndex, trigger] of entrypoint.triggers.entries()) {
-      if (trigger.callback.namespace === null) {
-        const targetKind = entrypointKinds.get(trigger.callback.entrypoint);
-        if (targetKind === undefined) {
-          rejectType(`${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] targets an undeclared local entrypoint`);
-        }
-        if (targetKind !== "Kotoage") {
-          rejectType(`${context}.entrypoints[${entrypointIndex}].triggers[${triggerIndex}] local callback must target kotoage/言挙げ`);
-        }
-      }
-    }
-  }
-
-  const stateNames = new Set();
-  for (const state of manifest.states ?? []) {
-    if (stateNames.has(state.name)) {
-      rejectType(`${context}.states contains duplicate name ${state.name}`);
-    }
-    stateNames.add(state.name);
-  }
+  validateManifestDeclarationsV1(manifest, context);
   validateManifestDynamicAccessHintStateMaps(
     manifest.access_set_hints,
     manifest.states,
@@ -19581,21 +19500,6 @@ function validateNormalizedManifestPayload(manifest, context) {
   );
 
   validateManifestErrorTypeBindingsV1(manifest, context);
-
-  const messageIds = new Set();
-  for (const [entryIndex, entry] of (manifest.kotoba ?? []).entries()) {
-    if (messageIds.has(entry.msg_id)) {
-      rejectType(`${context}.kotoba contains duplicate msg_id ${entry.msg_id}`);
-    }
-    messageIds.add(entry.msg_id);
-    const languages = new Set();
-    for (const translation of entry.translations) {
-      if (languages.has(translation.lang)) {
-        rejectType(`${context}.kotoba[${entryIndex}] contains duplicate language ${translation.lang}`);
-      }
-      languages.add(translation.lang);
-    }
-  }
 }
 
 function validateManifestDynamicAccessHintStateMaps(accessSetHints, states, context) {
@@ -19855,28 +19759,11 @@ function normalizeManifestEntrypointPayload(value, context) {
   const record = ensureRecord(value, context);
   const name = requireCanonicalKotodamaEntrypoint(record.name, `${context}.name`);
   const kind = normalizeManifestEntrypointKind(record.kind, `${context}.kind`);
-  const lifecycleKind =
-    name === "hajimari" || name === "始まり"
-      ? "Hajimari"
-      : name === "kaizen" || name === "改善"
-        ? "Kaizen"
-        : null;
-  if (
-    (lifecycleKind !== null && kind.kind !== lifecycleKind) ||
-    (lifecycleKind === null && (kind.kind === "Hajimari" || kind.kind === "Kaizen"))
-  ) {
-    rejectType(`${context}.kind does not match its branded lifecycle selector`);
-  }
   const permission = normalizeOptionalManifestString(
     record.permission,
     `${context}.permission`,
   );
-  if (kind.kind === "Kotoage" && permission === null) {
-    rejectType(`${context}.permission is required for kotoage/言挙げ`);
-  }
-  if ((kind.kind === "Hajimari" || kind.kind === "Kaizen") && permission !== null) {
-    rejectType(`${context}.permission must be null for hajimari/始まり and kaizen/改善`);
-  }
+  validateManifestEntrypointIdentityV1(name, kind.kind, permission, context);
   const params = normalizeManifestEntrypointParams(record.params, `${context}.params`);
   const argumentSchema = normalizeManifestArgumentSchema(
     record.argument_schema ?? record.argumentSchema,
@@ -30209,8 +30096,12 @@ function normalizeSumeragiEvidenceRecord(value, context) {
   if (!EVIDENCE_CLASS_VALUES.has(evidenceClass)) {
     rejectRange(`${context}.class must be one of ${Array.from(EVIDENCE_CLASS_VALUES).join(", ")}`);
   }
-  if (!Array.isArray(record.offenders) || record.offenders.length < 1 || record.offenders.length > 1024) {
-    rejectRange(`${context}.offenders must contain between 1 and 1024 entries`);
+  // Different-view CommitQC conflicts establish a safety violation without attributing signers.
+  const permitsUnattributedSafetyViolation =
+    evidenceClass === "conflicting_certificates" && record.safety_violation === true;
+  if (!Array.isArray(record.offenders) || record.offenders.length > 1024 ||
+      (record.offenders.length === 0 && !permitsUnattributedSafetyViolation)) {
+    rejectRange(`${context}.offenders must contain between 1 and 1024 entries, or be empty for a conflicting-certificate safety violation`);
   }
   let previousSigner = -1;
   const peers = new Set();

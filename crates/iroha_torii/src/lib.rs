@@ -59,6 +59,8 @@
 mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
+#[cfg(feature = "app_api")]
+mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
 mod game;
@@ -28101,6 +28103,13 @@ account_recovery_command_handlers!(
         "v1/accounts/recovery/finalize",
         handle_post_account_recovery_finalize
     ),
+    (
+        handler_post_account_recovery_cancel,
+        crate::routing::AccountRecoveryCancelDto,
+        "account_recovery_cancel",
+        "v1/accounts/recovery/cancel",
+        handle_post_account_recovery_cancel
+    ),
 );
 #[cfg(feature = "app_api")]
 async fn handler_post_account_recovery_status(
@@ -38486,6 +38495,7 @@ impl Torii {
             ACCOUNT_RECOVERY_PROPOSE_POST => layered_canonical_account_post(handler_post_account_recovery_propose, app_state, contracts_body_limit, transaction_max_content_len);
             ACCOUNT_RECOVERY_APPROVE_POST => layered_canonical_account_post(handler_post_account_recovery_approve, app_state, contracts_body_limit, transaction_max_content_len);
             ACCOUNT_RECOVERY_FINALIZE_POST => layered_canonical_account_post(handler_post_account_recovery_finalize, app_state, contracts_body_limit, transaction_max_content_len);
+            ACCOUNT_RECOVERY_CANCEL_POST => layered_canonical_account_post(handler_post_account_recovery_cancel, app_state, contracts_body_limit, transaction_max_content_len);
             ACCOUNT_RECOVERY_STATUS_POST => limited_canonical_account_post(handler_post_account_recovery_status, app_state, MULTISIG_READ_MAX_BODY_BYTES, MULTISIG_READ_MAX_BODY_BYTES);
             CONTROLS_ASSET_TRANSFER_QUERY_POST => layered_canonical_account_post(handler_post_asset_transfer_control_get, app_state, contracts_body_limit, transaction_max_content_len);
             ZK_VK_REGISTER_POST => layered_canonical_account_post(handler_post_vk_register, app_state, contracts_body_limit, transaction_max_content_len);
@@ -38805,6 +38815,8 @@ impl Torii {
             REDEEM => limited_canonical_signed_post(handler_kagemusha_redeem, kagemusha_redeem_body_limit_bytes);
             OPERATION => public_get(handler_kagemusha_operation_status);
             AUTHORITY_STATE => public_get(kagemusha_state::handler);
+            RESOURCE_NAMES_STATE => canonical_signature_get(kagemusha_state::handle_resource_names);
+            AUTHORITY_ORIGINALS => limited_canonical_signature_post(authority_originals::handler, iroha_torii_shared::authority_originals::NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1);
         );
         mount_catalog_route_rows!(
             builder, application_api;

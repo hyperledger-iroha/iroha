@@ -22,7 +22,7 @@ use iroha_data_model::{
 use iroha_sumeragi::{
     crypto::{AttestOutcome, AttestationVerifier, Attestor, verify_attestations},
     message::{AttestationSignature, BlockHeader, CommitAttestation, Qc, ResultWitness},
-    preimage::{AttestationStatement, att_preimage},
+    preimage::AttestationStatement,
     types::{Committee, Hash32, PublicKey, ValidatorIndex},
 };
 use std::sync::{Mutex, TryLockError};
@@ -50,6 +50,42 @@ impl NativePastaVerifier {
     pub const fn new(instance: Hash32, network: NetworkId) -> Self {
         Self { instance, network }
     }
+
+    /// Check the same native seal relation against an already-decoded original result.
+    /// The caller must independently bind this immutable graph to the exact witness bytes
+    /// and result hash. This relation does not authenticate the enclosing certificate.
+    pub(super) fn verify_decoded_share(
+        &self,
+        height: u64,
+        signer: ValidatorIndex,
+        key: &PublicKey,
+        source: AttestationStatement,
+        result: &ExecutionResultCommitment,
+        signature: &[u8],
+    ) -> bool {
+        if source.instance != self.instance || source.height != height {
+            return false;
+        }
+        let Ok(message) = message_from_result(self.instance, self.network, source, result) else {
+            return false;
+        };
+        let Some(member) = result.schedule.current.committee.get(signer as usize) else {
+            return false;
+        };
+        if core_key(member.validator.public_key()).ok().as_ref() != Some(key) {
+            return false;
+        }
+        let Some(seal) = decode_seal(signature) else {
+            return false;
+        };
+        seal.validator_index == signer
+            && verify_kagemusha_mint_finality_validator_seal_v1(
+                &result.schedule.current.authority,
+                &message,
+                &seal,
+            )
+            .is_ok()
+    }
 }
 impl AttestationVerifier for NativePastaVerifier {
     fn verify(
@@ -73,25 +109,7 @@ impl AttestationVerifier for NativePastaVerifier {
         let Ok(result) = ExecutionResultCommitment::decode(witness.as_slice()) else {
             return false;
         };
-        let Ok(message) = message_from_result(self.instance, self.network, source, &result) else {
-            return false;
-        };
-        let Some(member) = result.schedule.current.committee.get(signer as usize) else {
-            return false;
-        };
-        if core_key(member.validator.public_key()).ok().as_ref() != Some(key) {
-            return false;
-        }
-        let Some(seal) = decode_seal(signature) else {
-            return false;
-        };
-        seal.validator_index == signer
-            && verify_kagemusha_mint_finality_validator_seal_v1(
-                &result.schedule.current.authority,
-                &message,
-                &seal,
-            )
-            .is_ok()
+        self.verify_decoded_share(height, signer, key, source, &result, signature)
     }
 }
 
@@ -586,6 +604,7 @@ mod tests {
         test_chain::{CertifiedTestChain, Signers},
     };
     use iroha_crypto::{Hash, HashOf};
+    use iroha_sumeragi::preimage::att_preimage;
 
     #[test]
     fn native_mint_witness_requires_independent_tip_and_actual_pasta_equations() {

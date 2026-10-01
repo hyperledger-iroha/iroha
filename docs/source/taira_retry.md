@@ -8,27 +8,19 @@ and apply. It then verifies seed continuity and boot persistence. It does not
 build or transfer unchanged binaries or source.
 
 For a changed release, freeze the source once and run `scripts/taira_release.py
-prepare` with the existing repository `target/` lane. Preparation runs the native
-configuration checks first from the combined native test build, then MV ownership,
-startup and priority CLI/Torii groups before the four-peer gate. The remaining
-independent tests run after that gate; every selected test completes before the
-Linux build.
-Use the routine development check while
-editing; a separate cold development check adds a second dependency build to a
-release that already runs the same gate. Keep each lane's Cargo home, profile and
-source location consistent so subsequent builds reuse its artifacts.
+prepare` with the existing warm Cargo lane. Preparation builds the signed source
+and captures the release artifacts without running regression tests. It records
+`native_check_scope: "build-only"` and `checks.passed: false`; optional Basic,
+Full and focused diagnostics use the standalone `check` command. Regression
+success is not a deployment prerequisite. Keep each lane's Cargo home, profile
+and source location consistent so subsequent builds reuse its artifacts.
 
-Preparation records a pre-network checkpoint for the groups that pass before the
-four-peer check, and a complete independent-test checkpoint, including the six
-proof regressions and canonical Kagami projection, only after that check and the
-remaining groups pass. After a shipping-build, capacity or network failure,
-retrying the same request still acquires and checks the actual Cargo artifacts
-but reuses the exact pre-network pass. Reuse requires the exact source, tools,
-native environment, selected test census and executable identities. All shipping
-entry points must compile again, and network checks and the remaining groups run
-again after partial failure; changed inputs cannot inherit either checkpoint.
-Completed preparation remains a separate receipt and does not establish
-deployment readiness.
+Preparation retains exact source, tool, environment and artifact identities.
+Only an immutable completed capture can reuse a successful build; partial
+attempts remain retained while Cargo reuses its warm cache. No pre-network or
+independent-test checkpoint is produced. Completed preparation does not establish
+deployment readiness: signed native authorization, preflight, canary, finality,
+readiness and restart checks still run during deployment.
 
 Retirement joins the coordinator and host-action locks, then the shared
 `/var/lib/taira-deployment/.deployment.lock`. The root-owned mode0600 lock must

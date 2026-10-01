@@ -286,7 +286,7 @@ fn print_fee_quote_text<C: RunContext + ?Sized>(
 }
 /// Norito JSON derive macros exported for CLI data definitions.
 pub(crate) mod json_macros {
-    pub use norito::derive::{FastJsonWrite, JsonDeserialize, JsonSerialize};
+    pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
 /// Output format for CLI responses.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]

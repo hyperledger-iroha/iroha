@@ -6516,8 +6516,8 @@ mod bls_key_response_bounds_tests {
     routing_test! { sync bls_key_snapshot_is_capped_at_the_voting_roster_protocol_bound
         let peers: Vec<_> = (1..=BLS_KEY_RESPONSE_CAP + 2)
             .map(|seed| {
-                let seed = u8::try_from(seed).expect("test roster cap fits u8");
-                let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                let seed = u64::try_from(seed).expect("test roster cap fits u64");
+                let key_pair = KeyPair::try_from_seed(seed.to_le_bytes().repeat(4), Algorithm::Ed25519)
                     .expect("checked peer fixture key");
                 PeerId::new(key_pair.public_key().clone())
             })
@@ -7700,6 +7700,88 @@ impl TryFrom<EvidenceListStringQuery> for EvidenceListQuery {
 #[cfg(test)]
 mod evidence_list_query_contract_tests {
     use super::*;
+    #[test]
+    fn evidence_projection_preserves_decode_refusal_and_retries_original_frame() {
+        use iroha_data_model::block::consensus::{Evidence, EvidenceAttribution, EvidenceOffender};
+        use iroha_sumeragi::{
+            message::{Evidence as NativeEvidence, Vote, VoteKind},
+            types::{EpochId, Hash32, Signature},
+        };
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![23; 32], iroha_crypto::Algorithm::BlsNormal)
+                .unwrap();
+        let vote = |hash| {
+            let mut vote = Vote {
+                kind: VoteKind::Prepare,
+                instance: Hash32([1; 32]),
+                epoch: EpochId {
+                    epoch: 0,
+                    context: Hash32([2; 32]),
+                },
+                height: 2,
+                view: 0,
+                block_hash: Hash32([hash; 32]),
+                result: Hash32([3; 32]),
+                attest: false,
+                signer: 0,
+                sig: Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
+                attestation: None,
+            };
+            vote.sig = Signature(
+                iroha_crypto::Signature::new(key.private_key(), &vote.preimage())
+                    .payload()
+                    .try_into()
+                    .unwrap(),
+            );
+            vote
+        };
+        // Transport projection only; original history remains responsible for attribution.
+        let mut record = EvidenceRecord {
+            evidence: Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(4), vote(5)))
+                .unwrap(),
+            attribution: EvidenceAttribution {
+                scope: iroha_data_model::block::consensus::EvidenceScope::Root,
+                instance: [1; 32],
+                height: 2,
+                epoch: 0,
+                context_id: [2; 32],
+                authority_generation: [6; 32],
+                safety_violation: false,
+                offenders: vec![EvidenceOffender {
+                    signer: 0,
+                    peer_id: PeerId::new(key.public_key().clone()),
+                    lane_stake: None,
+                }],
+            },
+            recorded_at_height: 3,
+            recorded_at_view: 0,
+            recorded_at_ms: 3000,
+            penalty_status: EvidencePenaltyStatus::Pending,
+        };
+        let frame = record.evidence.native.clone();
+        let expected = evidence_to_json(&record).unwrap();
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, usize::MAX),
+            || evidence_to_json(&record),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+            ))
+        ));
+        assert_eq!(record.evidence.native, frame);
+        assert_eq!(evidence_to_json(&record).unwrap(), expected);
+        record.evidence.native[0] ^= 1;
+        let error = evidence_to_json(&record).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
+            ))
+        ));
+    }
     fn assert_safe_evidence_response_encoding_error(error: Error) {
         let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
             panic!("bounded evidence response returned the wrong error");
@@ -8229,12 +8311,20 @@ mod zk_roots_selector_tests {
         .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::with([domain], [account], [definition]),
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        ));
-        bind_permanent_asset_alias_for_test(&state, &authority, &definition_id, "usd#main");
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(
+                iroha_core::state::World::with([domain], [account], [definition]),
+                1_000,
+            ),
+        )
+        .expect("signed genesis anchors the selector snapshot");
+        let state = chain.state().clone();
+        bind_permanent_asset_alias_for_test(
+            &state,
+            &authority,
+            &definition_id,
+            "usd#issuer.universal",
+        );
         (state, definition_id)
     }
     fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
@@ -8311,12 +8401,15 @@ mod zk_roots_selector_tests {
             .expect("commit frontier checkpoints for test");
     }
     fn assert_query_conversion_contains(err: Error, expected: &str) {
-        assert!(matches!(
-            err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-            )) if message.contains(expected)
-        ));
+        assert!(
+            matches!(
+                &err,
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+                )) if message.contains(expected)
+            ),
+            "unexpected query error: {err:?}"
+        );
     }
     fn assert_profile_anchored_empty_roots(payload: &ZkRootsGetResponseDto) {
         let empty_root = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1.empty_root();
@@ -8375,7 +8468,13 @@ mod zk_roots_selector_tests {
         asset_id: String,
         max: u32,
     ) -> ZkRootsGetResponseDto {
-        let response = roots_response(state, accept, asset_id, max).await;
+        let response = roots_response(
+            state,
+            accept.or_else(|| Some(HeaderValue::from_static("application/json"))),
+            asset_id,
+            max,
+        )
+        .await;
         assert_response(&response, StatusCode::OK, Some("application/json"));
         norito::json::from_slice(&response_bytes(response).await).expect("json response payload")
     }
@@ -8383,13 +8482,13 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved =
-            resolve_asset_definition_selector(&view, "usd#main", 0).expect("alias should resolve");
+            resolve_asset_definition_selector(&view, "usd#issuer.universal", 0).expect("alias should resolve");
         assert_eq!(resolved, definition_id);
     }
     routing_test! { sync resolve_asset_definition_selector_accepts_trimmed_alias_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
-        let resolved = resolve_asset_definition_selector(&view, "  usd#main  ", 0)
+        let resolved = resolve_asset_definition_selector(&view, "  usd#issuer.universal  ", 0)
             .expect("trimmed alias should resolve");
         assert_eq!(resolved, definition_id);
     }
@@ -8449,10 +8548,10 @@ mod zk_roots_selector_tests {
         ));
     }
     routing_test! { sync parse_tx_history_asset_selector_accepts_asset_alias_literal
-        let parsed = parse_tx_history_asset_selector("usd#main").expect("selector should parse");
+        let parsed = parse_tx_history_asset_selector("usd#issuer.universal").expect("selector should parse");
         match parsed {
             TxHistoryAssetSelectorInput::DefinitionSelector(value) => {
-                assert_eq!(value, "usd#main")
+                assert_eq!(value, "usd#issuer.universal")
             }
             other => panic!("unexpected selector variant: {other:?}"),
         }
@@ -8460,7 +8559,7 @@ mod zk_roots_selector_tests {
     routing_test! { sync resolve_tx_history_asset_selector_accepts_asset_alias_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
-        let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), None)
+        let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#issuer.universal"), None)
             .expect("selector should resolve");
         assert!(matches!(
             resolved,
@@ -8473,7 +8572,7 @@ mod zk_roots_selector_tests {
         let other_definition =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee");
         let err =
-            resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), Some(&other_definition))
+            resolve_tx_history_asset_selector(&view, 0, Some("usd#issuer.universal"), Some(&other_definition))
                 .expect_err("mismatched selector should fail");
         assert!(matches!(
             err,
@@ -8684,7 +8783,7 @@ mod zk_roots_selector_tests {
     }
     routing_test! { async handle_v1_zk_roots_accepts_alias_literal_and_returns_profile_empty_root
         let (state, _) = selector_state();
-        let payload = json_roots_payload(state, None, "usd#main".to_owned(), 5).await;
+        let payload = json_roots_payload(state, None, "usd#issuer.universal".to_owned(), 5).await;
         assert_profile_anchored_empty_roots(&payload);
     }
     routing_test! { async handle_v1_zk_roots_prefers_norito_when_accept_quality_ties
@@ -8886,9 +8985,9 @@ mod zk_roots_selector_tests {
             seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
         let response = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
-                asset_id: "usd#main".to_owned(),
+                asset_id: "usd#issuer.universal".to_owned(),
                 commitments: vec![
                     hex::encode(commitments[2]),
                     format!("0x{}", hex::encode(commitments[0])),
@@ -9005,7 +9104,7 @@ mod zk_roots_selector_tests {
             seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
         let response = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: Vec::new(),
@@ -9036,7 +9135,7 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state_without_zk();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x66; 32])],
@@ -9056,7 +9155,7 @@ mod zk_roots_selector_tests {
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x27; 32]], None);
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x28; 32])],
@@ -9075,7 +9174,7 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x88; 32]), hex::encode([0x88; 32])],
@@ -9090,7 +9189,7 @@ mod zk_roots_selector_tests {
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x29; 32], [0x29; 32]], None);
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x29; 32])],
@@ -9104,7 +9203,7 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec!["0x1234".to_owned()],
@@ -9121,7 +9220,7 @@ mod zk_roots_selector_tests {
             .collect();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments,
@@ -9136,7 +9235,7 @@ mod zk_roots_selector_tests {
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x2a; 32]], None);
         let response = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x2a; 32])],
@@ -9165,7 +9264,7 @@ mod zk_roots_selector_tests {
         );
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x2b; 32])],
@@ -9234,8 +9333,9 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
 }
 fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
     use iroha_sumeragi::message::Evidence as NativeEvidence;
-    let native = rec.evidence.decode_native().map_err(|error| {
-        conversion_error(format!("stored native evidence is not canonical: {error}"))
+    let native = rec.evidence.decode_native().map_err(|error| match error {
+        iroha_sumeragi::message::CodecError::Resource(_) => history_capacity_error(),
+        other => conversion_error(format!("stored native evidence is not canonical: {other}")),
     })?;
     let class = match native {
         NativeEvidence::ProposalEquivocation(..) => "proposal",
@@ -14563,10 +14663,14 @@ mod asset_transfer_request_tests {
                 .as_object_mut()
                 .expect("fixture request JSON object")
                 .insert("amount".to_owned(), Value::String(amount.to_owned()));
-            assert!(
-                norito::json::from_value::<AssetTransferRequestDto>(request).is_err(),
-                "amount `{amount}` must fail"
-            );
+            let decoded = norito::json::from_value::<AssetTransferRequestDto>(request);
+            if amount == "0" {
+                // Zero is a canonical Quantity, but an invalid transfer amount.
+                let request = decoded.expect("canonical zero quantity decodes");
+                assert!(normalize(request).is_err(), "zero transfer must fail validation");
+            } else {
+                assert!(decoded.is_err(), "amount `{amount}` must fail decoding");
+            }
         }
         for memo in [String::new(), "line\nbreak".to_owned(), "x".repeat(257)] {
             let mut request = fixture_request(&authority_keypair);
@@ -20533,14 +20637,26 @@ mod multisig_selector_tests {
             receiver,
         )
     }
-    fn install_paynet_routing_state(state: &State) {
+    fn build_paynet_routing_state(world: World) -> Arc<State> {
         let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
-        let mut nexus = state.nexus.write();
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.routing_policy = paynet_routing_policy();
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
         nexus.dataspace_catalog = dataspace_catalog;
+        // Bind the configured catalog before State captures its native routing authority,
+        // retaining the same zero-fee component defaults as build_state.
+        let network_id = dm::NetworkId::from_genesis_hash(HashOf::<dm::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"torii-multisig-routing-fixture"),
+        ));
+        let (state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+            world,
+            nexus,
+            LiveQueryStore::start_test(),
+            "torii-multisig-routing-fixture".parse().unwrap(),
+            network_id,
+        );
+        Arc::new(state)
     }
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
@@ -20784,48 +20900,14 @@ mod multisig_selector_tests {
             signer,
         )
     }
-    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let meta = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            vector_length: 0,
-            max_cycles: 1,
-            abi_version,
-        };
-        let mut out = meta.encode();
-        let interface = ivm::EmbeddedContractInterfaceV1 {
-            callables: Vec::new(),
-            seiyaku_name: "TestContract".to_owned(),
-            compiler_fingerprint: "torii-tests".to_owned(),
-            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: 0,
-            access_set_hints: None,
-            kotoba: Vec::new(),
-            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-                name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
-                params: Vec::new(),
-                argument_schema: None,
-                return_type: Some("()".to_owned()),
-                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
-                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
-                }),
-                permission: Some("CanEnactGovernance".to_owned()),
-                read_keys: Vec::new(),
-                write_keys: Vec::new(),
-                access_hints_complete: Some(true),
-                access_hints_skipped: Vec::new(),
-                triggers: Vec::new(),
-                entry_pc: 0,
-            }],
-            error_messages: Vec::new(),
-            error_types: Vec::new(),
-            states: Vec::new(),
-        };
-        out.extend_from_slice(&interface.encode_section());
-        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        out
+    fn minimal_ivm_program() -> Vec<u8> {
+        kotodama_lang::compiler::Compiler::new()
+            .compile_source(
+                r#"seiyaku TestContract {
+                    kotoage fn main() authorize("CanEnactGovernance") {}
+                }"#,
+            )
+            .expect("compile complete ABI V1 multisig contract fixture")
     }
     fn multisig_contract_test_fixture() -> (
         Arc<State>,
@@ -20907,7 +20989,7 @@ mod multisig_selector_tests {
             authority,
             authority_keypair,
             contract_address,
-            minimal_ivm_program(1),
+            minimal_ivm_program(),
             None,
         );
     }
@@ -21570,13 +21652,13 @@ mod multisig_selector_tests {
     routing_test! { sync contract_call_detached_submission_rejects_changed_or_noncanonical_payload
         let (state, queue, key, request) = public_contract_call_fixture();
         let (exact, builder) = detached_public_contract_call(&state, &queue, &key, &request);
-        let retired = builder.clone();
-        let signature = Signature::try_new(key.private_key(), &retired.payload_hash_bytes()).expect("sign other intent");
+        let changed_builder = builder.clone().with_instructions([dm::Log::new(dm::Level::INFO, "different signed invocation".to_owned())]);
+        let signature = Signature::try_new(key.private_key(), &changed_builder.payload_hash_bytes()).expect("sign other intent");
         let mut changed = exact.clone();
-        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(retired.encode_payload()));
+        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(changed_builder.encode_payload()));
         changed.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
         let error = prepare_contract_call_request(queue.clone(), state.clone(), changed)
-            .expect_err("even a valid retired-admission signature cannot enter the public contract surface");
+            .expect_err("a valid signature over another invocation must fail exact payload binding");
         assert!(expect_conversion(error).contains("exact requested invocation"));
         let mut bytes = builder.encode_payload();
         bytes.push(0);
@@ -23443,7 +23525,7 @@ seiyaku BytesPayloadNormalizeTest {
         )
         .await
         .expect_err("all-zero detached signature must be rejected");
-        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
+        assert!(expect_conversion(err).contains("invalid signature_b64: Ed25519 signature failed admission"));
     }
     routing_test! { async multisig_generic_immediate_propose_routes_inner_dataspace
         use base64::Engine as _;
@@ -23465,8 +23547,7 @@ seiyaku BytesPayloadNormalizeTest {
             BTreeSet::new(),
             None,
         );
-        let state = build_state(world);
-        install_paynet_routing_state(state.as_ref());
+        let state = build_paynet_routing_state(world);
         let (queue, mut event_receiver) = build_paynet_routing_queue();
         let fee_payment = dm::FeePaymentIntent::authority(Vec::new(), None);
         let direct_plan = multisig_immediate_execution_routing_plan(
@@ -23655,8 +23736,7 @@ seiyaku BytesPayloadNormalizeTest {
     routing_test! { sync multisig_immediate_contract_call_plan_routes_contract_dataspace
         let (world, _multisig_account_id, signer_account_id, _alias_literal, _signer_keypair) =
             quorum_one_multisig_world();
-        let state = build_state(world);
-        install_paynet_routing_state(state.as_ref());
+        let state = build_paynet_routing_state(world);
         let (queue, _event_receiver) = build_paynet_routing_queue();
         let paynet_dataspace_id = DataSpaceId::new(10);
         let paynet_lane_id = LaneId::new(2);
@@ -25269,6 +25349,7 @@ pub async fn handle_post_account_recovery_propose(
     let instruction = iroha_data_model::isi::ProposeAccountRecovery {
         alias,
         new_controller: request.new_controller,
+        request_generation: request.request_generation,
     };
     execute_account_recovery_mutation(
         queue,
@@ -25294,7 +25375,10 @@ pub async fn handle_post_account_recovery_approve(
         resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
     let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
     recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
-    let instruction = iroha_data_model::isi::ApproveAccountRecovery { alias };
+    let instruction = iroha_data_model::isi::ApproveAccountRecovery {
+        alias,
+        request_generation: request.request_generation,
+    };
     execute_account_recovery_mutation(
         queue,
         state,
@@ -25319,7 +25403,10 @@ pub async fn handle_post_account_recovery_finalize(
         resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
     let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
     recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
-    let instruction = iroha_data_model::isi::FinalizeAccountRecovery { alias };
+    let instruction = iroha_data_model::isi::FinalizeAccountRecovery {
+        alias,
+        request_generation: request.request_generation,
+    };
     execute_account_recovery_mutation(
         queue,
         state,
@@ -25329,6 +25416,91 @@ pub async fn handle_post_account_recovery_finalize(
         instruction.into(),
         "FINALIZE",
         ENDPOINT_ACCOUNT_RECOVERY_FINALIZE,
+    )
+    .await
+}
+fn validate_account_recovery_cancellation_authority(
+    policy: &iroha_data_model::account::AccountRecoveryPolicy,
+    request: &iroha_data_model::account::AccountRecoveryRequest,
+    active: &AccountId,
+    signer: &AccountId,
+) -> Result<()> {
+    if !request.is_pending() {
+        return Err(conversion_error("account recovery request is not pending".to_owned()));
+    }
+    if signer == active {
+        return Ok(());
+    }
+    recovery_guardian_authorized(policy, signer)?;
+    if request.cancellation_approvals.contains(&signer.subject_id()) {
+        return Err(conversion_error(
+            "guardian already approved cancellation of this native request".to_owned(),
+        ));
+    }
+    Ok(())
+}
+/// POST /v1/accounts/recovery/cancel — prepare or submit exact-request cancellation.
+#[iroha_futures::telemetry_future]
+pub async fn handle_post_account_recovery_cancel(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(request): NoritoJson<AccountRecoveryCancelDto>,
+) -> Result<impl IntoResponse> {
+    let (alias, active) =
+        resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
+    let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
+    let native_request = state
+        .world_view()
+        .account_recovery_requests()
+        .get(&alias)
+        .cloned()
+        .ok_or_else(|| conversion_error("account recovery request does not exist".to_owned()))?;
+    if native_request.alias != alias
+        || native_request.request_generation != request.request_generation
+    {
+        return Err(conversion_error(
+            "account recovery cancellation does not match the exact native request generation"
+                .to_owned(),
+        ));
+    }
+    let now_ms = state.latest_block_header_fast().map_or(0, |header| header.creation_time_ms);
+    let nexus = state.nexus_snapshot();
+    let lineage = iroha_core::sns::resolve_active_account_id_rekey_lineage_for_alias(
+        &state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias,
+        &native_request.active_account_id_at_proposal,
+        now_ms,
+    )
+    .map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(error.to_string()))
+    })?;
+    if lineage.as_ref() != Some(&active) {
+        return Err(conversion_error(
+            "account recovery cancellation is not bound to the active controller lineage"
+                .to_owned(),
+        ));
+    }
+    validate_account_recovery_cancellation_authority(
+        &policy,
+        &native_request,
+        &active,
+        &request.auth.signer_account_id,
+    )?;
+    let instruction = iroha_data_model::isi::CancelAccountRecovery {
+        alias,
+        request_generation: request.request_generation,
+    };
+    execute_account_recovery_mutation(
+        queue,
+        state,
+        telemetry,
+        request.selector,
+        request.auth,
+        instruction.into(),
+        "CANCEL",
+        ENDPOINT_ACCOUNT_RECOVERY_CANCEL,
     )
     .await
 }
@@ -25408,6 +25580,59 @@ fn account_recovery_invalidation_evidence(
     Ok((evidence, true))
 }
 /// POST /v1/accounts/recovery/status — query authoritative alias-bound recovery evidence.
+fn validate_account_recovery_status_policy(
+    state: &CoreState,
+    policy: Option<&iroha_data_model::account::AccountRecoveryPolicy>,
+    request: Option<&iroha_data_model::account::AccountRecoveryRequest>,
+) -> Result<()> {
+    // A terminal request retains its original identity and votes independently
+    // of a later policy update. Current mutation authorization never uses this path.
+    if request.is_some_and(|request| !request.is_pending()) {
+        return Ok(());
+    }
+    if let Some(policy) = policy {
+        regulated_account_recovery_policy(state, policy)?;
+    } else if request.is_some() {
+        return Err(conversion_error(
+            "pending account recovery request is missing its regulated policy".to_owned(),
+        ));
+    }
+    Ok(())
+}
+fn validate_account_recovery_status_lineage(
+    world: &impl iroha_core::state::WorldReadOnly,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    alias: &iroha_data_model::account::AccountAlias,
+    active: &AccountId,
+    request: &iroha_data_model::account::AccountRecoveryRequest,
+    now_ms: u64,
+) -> Result<()> {
+    let resolve = |account: &AccountId| {
+        iroha_core::sns::resolve_active_account_id_rekey_lineage_for_alias(
+            world, catalog, alias, account, now_ms,
+        )
+        .map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(error.to_string()))
+        })
+    };
+    if resolve(&request.active_account_id_at_proposal)?.as_ref() != Some(active) {
+        return Err(conversion_error(
+            "account recovery request is not bound to the active alias controller lineage"
+                .to_owned(),
+        ));
+    }
+    if request.status == iroha_data_model::account::AccountRecoveryStatus::Finalized
+        && resolve(&recovered_company_account_id(&request.proposed_controller))?.as_ref()
+            != Some(active)
+    {
+        return Err(conversion_error(
+            "finalized account recovery controller is not in the active alias controller lineage"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+/// POST /v1/accounts/recovery/status — query authoritative alias-bound recovery evidence.
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_account_recovery_status(
     state: Arc<CoreState>,
@@ -25425,14 +25650,9 @@ pub async fn handle_post_account_recovery_status(
         .get(&account_alias)
         .cloned();
     drop(world);
-    if let Some(policy) = policy.as_ref() {
-        regulated_account_recovery_policy(state.as_ref(), policy)?;
-    }
-    if recovery_request.is_some() && policy.is_none() {
-        return Err(conversion_error(
-            "account recovery request is missing its regulated policy".to_owned(),
-        ));
-    }
+    validate_account_recovery_status_policy(
+        state.as_ref(), policy.as_ref(), recovery_request.as_ref(),
+    )?;
     if let Some(recovery_request) = recovery_request.as_ref() {
         if recovery_request.alias != account_alias {
             return Err(conversion_error(
@@ -25445,31 +25665,14 @@ pub async fn handle_post_account_recovery_status(
             .map_or(0, |header| header.creation_time_ms);
         let nexus = state.nexus_snapshot();
         let world = state.world_view();
-        let lineage = iroha_core::sns::resolve_active_account_id_rekey_lineage_for_alias(
+        validate_account_recovery_status_lineage(
             &world,
             &nexus.dataspace_catalog,
             &account_alias,
-            &recovery_request.active_account_id_at_proposal,
+            &active_account,
+            recovery_request,
             now_ms,
-        )
-        .map_err(|error| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                error.to_string(),
-            ))
-        })?;
-        if lineage.as_ref() != Some(&active_account) {
-            return Err(conversion_error(
-                "account recovery request is not bound to the active alias controller lineage"
-                    .to_owned(),
-            ));
-        }
-        if recovery_request.status == iroha_data_model::account::AccountRecoveryStatus::Finalized
-            && recovered_company_account_id(&recovery_request.proposed_controller) != active_account
-        {
-            return Err(conversion_error(
-                "finalized account recovery controller does not match the active alias".to_owned(),
-            ));
-        }
+        )?;
     }
     let (invalidated_proposals, invalidation_evidence_complete) = match recovery_request.as_ref() {
         Some(recovery_request) => account_recovery_invalidation_evidence(
@@ -25522,6 +25725,152 @@ mod account_recovery_route_tests {
             creation_time_ms: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
         }
+    }
+    #[test]
+    fn recovery_cancellation_accepts_independent_guardian_votes_only_for_pending_request() {
+        use iroha_data_model::account::{AccountAlias, AccountRecoveryRequest};
+        use iroha_model_base::topology::DataSpaceId;
+        let owner = single_account(&ed25519_keypair());
+        let guardians = (0..3)
+            .map(|_| RecoveryGuardian::new(single_account(&ed25519_keypair()), 1))
+            .collect::<Vec<_>>();
+        let policy = AccountRecoveryPolicy::new(
+            guardians.clone(),
+            REGULATED_RECOVERY_GUARDIAN_QUORUM,
+            NonZeroU64::new(REGULATED_RECOVERY_TIMELOCK_MS).unwrap(),
+        )
+        .unwrap();
+        let mut request = AccountRecoveryRequest::new(
+            AccountAlias::domainless("cancel-fixture".parse().unwrap(), DataSpaceId::UNIVERSAL),
+            NonZeroU64::new(1).unwrap(),
+            owner.clone(),
+            AccountController::single(ed25519_keypair().public_key().clone()),
+            guardians[0].account.clone(),
+            REGULATED_RECOVERY_TIMELOCK_MS,
+        );
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &owner
+        ).is_ok());
+        request.approve(&guardians[0].account);
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[0].account
+        ).is_ok(), "cancellation must not require approval of a stale replacement");
+        request.approve(&guardians[1].account);
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[2].account
+        ).is_ok(), "any configured guardian can cast an independent cancellation vote");
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &single_account(&ed25519_keypair())
+        ).is_err());
+        request.cancellation_approvals.insert(guardians[0].account.subject_id());
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[0].account
+        ).is_err(), "one guardian cannot be quoted a second cancellation vote");
+        request.cancel();
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &owner
+        ).is_err());
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[0].account
+        ).is_err());
+    }
+    #[test]
+    fn recovery_cancel_dto_requires_positive_exact_request_generation() {
+        let request = AccountRecoveryCancelDto {
+            selector: AccountRecoverySelectorDto { account_alias: "cancel-fixture@universal".to_owned() },
+            auth: recovery_auth(single_account(&ed25519_keypair())),
+            request_generation: NonZeroU64::new(7).unwrap(),
+        };
+        let value = norito::json::to_value(&request).expect("serialize exact cancellation intent");
+        let decoded: AccountRecoveryCancelDto = norito::json::from_value(value.clone())
+            .expect("decode current cancellation intent");
+        assert_eq!(decoded.request_generation.get(), 7);
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("request_generation");
+        assert!(norito::json::from_value::<AccountRecoveryCancelDto>(missing).is_err());
+        let mut zero = value;
+        zero.as_object_mut().unwrap().insert("request_generation".to_owned(), norito::json::Value::from(0_u64));
+        assert!(norito::json::from_value::<AccountRecoveryCancelDto>(zero).is_err());
+    }
+    #[test]
+    fn terminal_recovery_readback_survives_policy_clear_or_replacement() {
+        use iroha_data_model::account::{AccountAlias, AccountRecoveryRequest};
+        use iroha_model_base::topology::DataSpaceId;
+        let owner = single_account(&ed25519_keypair());
+        let mut request = AccountRecoveryRequest::new(
+            AccountAlias::domainless("terminal-fixture".parse().unwrap(), DataSpaceId::UNIVERSAL),
+            NonZeroU64::new(9).unwrap(), owner.clone(),
+            AccountController::single(ed25519_keypair().public_key().clone()),
+            owner.clone(), REGULATED_RECOVERY_TIMELOCK_MS,
+        );
+        let state = test_state();
+        let replacement_policy = AccountRecoveryPolicy::new(
+            vec![RecoveryGuardian::new(owner, 1)], 1, NonZeroU64::new(1).unwrap(),
+        ).unwrap();
+        assert!(validate_account_recovery_status_policy(&state, None, Some(&request)).is_err());
+        assert!(validate_account_recovery_status_policy(&state, Some(&replacement_policy), Some(&request)).is_err());
+        request.cancel();
+        assert!(validate_account_recovery_status_policy(&state, None, Some(&request)).is_ok());
+        assert!(validate_account_recovery_status_policy(&state, Some(&replacement_policy), Some(&request)).is_ok());
+        request.finalize();
+        assert!(validate_account_recovery_status_policy(&state, None, Some(&request)).is_ok());
+        assert!(validate_account_recovery_status_policy(&state, Some(&replacement_policy), Some(&request)).is_ok());
+    }
+    #[test]
+    fn terminal_recovery_readback_requires_proven_controller_rekey_continuity() {
+        use iroha_data_model::account::{AccountAlias, AccountRecoveryRequest, rekey::AccountRekeyRecord};
+        use iroha_model_base::topology::DataSpaceId;
+        let original = single_account(&ed25519_keypair());
+        let replacement_controller = || AccountController::multisig(
+            MultisigPolicy::new(2, (0..2).map(|_| {
+                MultisigMember::new(ed25519_keypair().public_key().clone(), 1).unwrap()
+            }).collect()).unwrap(),
+        );
+        let proposed_controller = replacement_controller();
+        let proposed = recovered_company_account_id(&proposed_controller);
+        let active = recovered_company_account_id(&replacement_controller());
+        let alias = AccountAlias::domainless("history-fixture".parse().unwrap(), DataSpaceId::UNIVERSAL);
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+        ]).unwrap();
+        let build_world = |record: AccountRekeyRecord| {
+            let account = iroha_data_model::account::Account::new(active.clone()).build(&active);
+            let mut world = World::with([], [account], []);
+            {
+                let mut block = world.block();
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(), 0,
+                );
+                insert_account_alias_binding_for_test(&mut transaction, &active, alias.clone(), &catalog);
+                transaction.replace_account_rekey_record_for_testing(record);
+                transaction.apply();
+                block.commit();
+            }
+            world
+        };
+        let world = build_world(AccountRekeyRecord::new(alias.clone(), original.clone())
+            .repoint_for_account_id_rekey(proposed).unwrap()
+            .repoint_for_account_id_rekey(active.clone()).unwrap());
+        let mut request = AccountRecoveryRequest::new(
+            alias.clone(), NonZeroU64::new(9).unwrap(), original.clone(),
+            proposed_controller, original, REGULATED_RECOVERY_TIMELOCK_MS,
+        );
+        request.finalize();
+        assert!(validate_account_recovery_status_lineage(
+            &world.view(), &catalog, &alias, &active, &request, 0,
+        ).is_ok(), "finalized history survives a later proven controller rekey");
+        request.proposed_controller = replacement_controller();
+        assert!(validate_account_recovery_status_lineage(
+            &world.view(), &catalog, &alias, &active, &request, 0,
+        ).is_err(), "an unrelated proposed controller cannot authenticate finalized history");
+        request.cancel();
+        assert!(validate_account_recovery_status_lineage(
+            &world.view(), &catalog, &alias, &active, &request, 0,
+        ).is_ok(), "canceled history only requires its original controller lineage");
+        let reassigned = build_world(AccountRekeyRecord::new(alias.clone(), active.clone()));
+        assert!(validate_account_recovery_status_lineage(
+            &reassigned.view(), &catalog, &alias, &active, &request, 0,
+        ).is_err(), "ordinary alias reassignment does not prove historical continuity");
     }
     #[test]
     fn regulated_recovery_policy_rejects_any_shape_other_than_two_of_three_for_72_hours() {
@@ -28082,6 +28431,8 @@ pub struct AccountRecoveryProposeDto {
     pub auth: AccountRecoveryDetachedAuthDto,
     /// Exact replacement controller requested for the stable alias.
     pub new_controller: iroha_data_model::account::AccountController,
+    /// Exact next generation of the alias-bound native recovery request.
+    pub request_generation: std::num::NonZeroU64,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[derive(norito::NoritoSchema)]
@@ -28095,6 +28446,8 @@ pub struct AccountRecoveryApproveDto {
     pub selector: AccountRecoverySelectorDto,
     #[norito(flatten)]
     pub auth: AccountRecoveryDetachedAuthDto,
+    /// Immutable generation of the pending native recovery request.
+    pub request_generation: std::num::NonZeroU64,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[derive(norito::NoritoSchema)]
@@ -28108,6 +28461,21 @@ pub struct AccountRecoveryFinalizeDto {
     pub selector: AccountRecoverySelectorDto,
     #[norito(flatten)]
     pub auth: AccountRecoveryDetachedAuthDto,
+    /// Immutable generation of the pending native recovery request.
+    pub request_generation: std::num::NonZeroU64,
+}
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryCancelDto")]
+#[norito(deny_unknown_fields)]
+/// Cancel the exact pending regulated account-recovery request.
+pub struct AccountRecoveryCancelDto {
+    #[norito(flatten)]
+    pub selector: AccountRecoverySelectorDto,
+    #[norito(flatten)]
+    pub auth: AccountRecoveryDetachedAuthDto,
+    /// Immutable generation of the pending native recovery request.
+    pub request_generation: std::num::NonZeroU64,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[derive(norito::NoritoSchema)]
@@ -29492,8 +29860,14 @@ mod sorafs_pin_tests {
     {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let key = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
+        let account = dm::AccountId::new(key.public_key().clone());
         let mut state = iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
+            iroha_core::state::World::with(
+                [],
+                [dm::Account::new(account.clone()).build(&account)],
+                [],
+            ),
             kura,
             query,
         );
@@ -29839,10 +30213,7 @@ mod sorafs_pin_tests {
         );
     }
     routing_test! { async register_manifest_accepts_alias_binding
-        use crate::mk_app_state_for_tests;
-        let app = mk_app_state_for_tests();
-        let queue = Arc::clone(&app.queue);
-        let state = Arc::clone(&app.state);
+        let (queue, state, telemetry) = handler_context(|_| {});
         let manifest = default_manifest();
         let proof_bytes = b"alias-proof";
         let transaction = transaction_from_instructions(
@@ -29861,40 +30232,30 @@ mod sorafs_pin_tests {
                 ),
             )],
         );
-        #[cfg(feature = "telemetry")]
-        let telemetry = app.telemetry.clone();
-        #[cfg(not(feature = "telemetry"))]
-        let telemetry = app.telemetry.clone();
-        let resp = handle_post_sorafs_register_manifest(queue, state, telemetry, transaction)
+        let expected_hash = transaction.hash();
+        let expected_transaction = transaction.clone();
+        let resp = handle_post_sorafs_register_manifest(queue.clone(), state.clone(), telemetry, transaction)
             .await
             .expect("handler ok")
             .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
         let bytes = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .unwrap()
             .to_bytes();
         let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        let alias = v
-            .get("alias")
-            .and_then(|value| value.as_object())
-            .expect("alias response present");
-        assert_eq!(
-            alias.get("namespace").and_then(norito::json::Value::as_str),
-            Some("sora")
-        );
-        assert_eq!(
-            alias.get("name").and_then(norito::json::Value::as_str),
-            Some("docs")
-        );
-        let expected_proof_b64 =
-            base64::engine::general_purpose::STANDARD.encode(proof_bytes.as_slice());
-        assert_eq!(
-            alias
-                .get("proof_base64")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_proof_b64.as_str())
-        );
+        assert_eq!(v.get("status").and_then(norito::json::Value::as_str), Some("submitted"));
+        assert_eq!(v.get("tx_hash_hex").and_then(norito::json::Value::as_str), Some(hex::encode(expected_hash.as_ref()).as_str()));
+        let state_view = state.view();
+        let queued = queue.all_transactions(&state_view).collect::<Vec<_>>();
+        assert_eq!(queued.len(), 1, "one original signed registration must remain pending");
+        assert_eq!(queued[0].as_ref(), &expected_transaction);
+        let register = validate_sorafs_pin_register_transaction(state.network_id_ref(), queued[0].as_ref())
+            .expect("queued signature and registration remain valid");
+        let alias = register.alias.as_ref().expect("queued registration retains alias");
+        assert_eq!(alias.namespace, "sora");
+        assert_eq!(alias.name, "docs");
+        assert_eq!(alias.proof, proof_bytes);
     }
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -29990,13 +30351,21 @@ mod sorafs_capacity_tests {
         signing_key: &iroha_crypto::KeyPair,
         instructions: impl IntoIterator<Item = dm::InstructionBox>,
     ) -> SignedTransaction {
-        dm::TransactionBuilder::new(
+        let mut transaction = dm::TransactionBuilder::new(
             network_id,
             dm::AccountId::new(authority_key.public_key().clone()).into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
-        .sign(signing_key.private_key())
+        .sign(authority_key.private_key());
+        // Construct the hostile envelope explicitly: the signing builder correctly
+        // refuses to sign an authority using a different private key.
+        if signing_key.public_key() != authority_key.public_key() {
+            transaction.set_signature(iroha_data_model::transaction::TransactionSignature(
+                iroha_crypto::SignatureOf::new(signing_key.private_key(), transaction.payload()),
+            ));
+        }
+        transaction
     }
     fn signed_capacity_declaration_transaction(
         network_id: NetworkId,
@@ -30168,7 +30537,9 @@ mod sorafs_capacity_tests {
             deadline_at: issued_at + 600,
         }
     }
-    fn test_state_components() -> (
+    fn test_state_components(
+        accounts: impl IntoIterator<Item = dm::AccountId>,
+    ) -> (
         Arc<CoreState>,
         Arc<iroha_core::queue::Queue>,
         MaybeTelemetry,
@@ -30176,7 +30547,13 @@ mod sorafs_capacity_tests {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
+            iroha_core::state::World::with(
+                [],
+                accounts
+                    .into_iter()
+                    .map(|account| dm::Account::new(account.clone()).build(&account)),
+                [],
+            ),
             kura,
             query,
         ));
@@ -30217,12 +30594,18 @@ mod sorafs_capacity_tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(
+                temp_dir
+                    .path()
+                    .canonicalize()
+                    .expect("canonical storage parent")
+                    .join("storage"),
+            )
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
     }
     routing_test! { async transaction_signature_limit_rejects_and_records_metrics
-        let (state, queue, telemetry) = test_state_components();
+        let (state, queue, telemetry) = test_state_components([]);
         #[cfg(feature = "telemetry")]
         let before = telemetry.metrics().await.torii_signature_limit_total.get();
         // Build a multisig transaction with more signatures than the default cap (16).
@@ -30277,8 +30660,9 @@ mod sorafs_capacity_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn capacity_declaration_handler_queues_caller_signed_transaction() {
-        let (state, queue, telemetry) = test_state_components();
         let kp = checked_capacity_keypair(0x91, "derive capacity declaration fixture key");
+        let (state, queue, telemetry) =
+            test_state_components([dm::AccountId::new(kp.public_key().clone())]);
         let transaction = signed_capacity_declaration_transaction(
             *state.network_id_ref(),
             &kp,
@@ -30484,10 +30868,11 @@ mod sorafs_capacity_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn capacity_telemetry_handler_queues_caller_signed_record() {
-        let (state, queue, telemetry) = test_state_components();
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
         let kp = checked_capacity_keypair(0x95, "derive capacity telemetry fixture key");
+        let (state, queue, telemetry) =
+            test_state_components([dm::AccountId::new(kp.public_key().clone())]);
         let transaction = signed_capacity_telemetry_transaction(
             *state.network_id_ref(),
             &kp,
@@ -30521,8 +30906,8 @@ mod sorafs_capacity_tests {
         );
     }
     routing_test! { async capacity_mutation_replay_is_rejected_by_the_transaction_queue
-        let (state, queue, telemetry) = test_state_components();
         let key_pair = checked_capacity_keypair(0x97, "derive capacity replay fixture key");
+        let (state, queue, telemetry) = test_state_components([dm::AccountId::new(key_pair.public_key().clone())]);
         let transaction = signed_capacity_telemetry_transaction(
             *state.network_id_ref(),
             &key_pair,
@@ -30614,7 +30999,7 @@ mod sorafs_capacity_tests {
                 Ok(intent.repair_task_id())
             }
         }
-        let (_state, _queue, telemetry) = test_state_components();
+        let (_state, _queue, telemetry) = test_state_components([]);
         let (node, _dir) = sorafs_node_with_temp_storage();
         let por_coordinator = Arc::new(sorafs::PorCoordinator::new());
         seed_capacity_declaration(&node);
@@ -30830,10 +31215,16 @@ mod sorafs_capacity_tests {
         padded
             .auditor_signatures
             .push(padded.auditor_signatures[0].clone());
-        expect_por_forbidden_code(
-            verify_authenticated_por_verdict(&padded, &auditor_signer, &trusted, 1)
-                .expect_err("duplicate auditor signer padding must fail"),
-            "sorafs_por_verdict_signature_invalid",
+        let error = verify_authenticated_por_verdict(&padded, &auditor_signer, &trusted, 1)
+            .expect_err("duplicate auditor signer padding must fail structural validation");
+        assert!(
+            matches!(
+                error,
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)
+                )) if message.contains("repeats an earlier signer")
+            ),
+            "{error:?}"
         );
     }
     #[tokio::test]
@@ -34339,6 +34730,8 @@ pub const ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET: &str = "/v1/accounts/recovery/po
 pub const ENDPOINT_ACCOUNT_RECOVERY_PROPOSE: &str = "/v1/accounts/recovery/propose";
 pub const ENDPOINT_ACCOUNT_RECOVERY_APPROVE: &str = "/v1/accounts/recovery/approve";
 pub const ENDPOINT_ACCOUNT_RECOVERY_FINALIZE: &str = "/v1/accounts/recovery/finalize";
+/// Prepare or submit exact-request native recovery cancellation.
+pub const ENDPOINT_ACCOUNT_RECOVERY_CANCEL: &str = "/v1/accounts/recovery/cancel";
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
@@ -34821,7 +35214,7 @@ mod stateful_account_path_parser_tests {
     use iroha_model_base::domain::DomainId;
     use iroha_test_samples::ALICE_ID;
     use std::sync::Arc;
-    routing_test! { async stateful_account_path_parser_resolves_bound_alias_literal
+    routing_test! { async stateful_account_path_parser_requires_canonical_id_even_when_alias_is_bound
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let authority = ALICE_ID.clone();
         let scoped_account_id = authority.clone();
@@ -34837,13 +35230,23 @@ mod stateful_account_path_parser_tests {
         ));
         bind_account_alias_for_test(&state, &scoped_account_id, "operator@banka.universal");
         let telemetry = MaybeTelemetry::for_tests();
-        let (resolved, canonical) = parse_account_path_segment_with_state(
+        let error = parse_account_path_segment_with_state(
             &state,
             "operator@banka.universal",
             &telemetry,
             ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
         )
-        .expect("bound alias literal should resolve on account_id paths");
+        .expect_err("generic account paths must not bypass permissioned alias resolution");
+        assert!(matches!(error, Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)
+        )) if message.contains("canonical I105 literal")));
+        let (resolved, canonical) = parse_account_path_segment_with_state(
+            &state,
+            &authority.to_string(),
+            &telemetry,
+            ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+        )
+        .expect("canonical account identity remains valid with its separate bound alias");
         assert_eq!(resolved, authority);
         assert_eq!(canonical, authority.to_string());
     }
@@ -58994,7 +59397,7 @@ mod asset_definitions_query_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &authority, &cbdc_id, "CBDC#centralbank");
+        bind_permanent_asset_alias_for_test(&state, &authority, &cbdc_id, "CBDC#wonderland.universal");
         state
     }
     async fn response_json(response: impl IntoResponse) -> norito::json::Value {
@@ -59045,7 +59448,7 @@ mod asset_definitions_query_tests {
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
-        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#centralbank"));
+        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#wonderland.universal"));
         assert_eq!(items[1]["name"].as_str(), Some("USD"));
         assert!(items[1]["alias"].is_null());
     }
@@ -59084,7 +59487,7 @@ mod asset_definitions_query_tests {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("alias".into()),
-                norito::json::Value::from("CBDC#centralbank"),
+                norito::json::Value::from("CBDC#wonderland.universal"),
             )),
             select: None,
             aggregate: None,
@@ -59108,7 +59511,7 @@ mod asset_definitions_query_tests {
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
-        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#centralbank"));
+        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#wonderland.universal"));
         let null_alias = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::IsNull(crate::filter::FieldPath(

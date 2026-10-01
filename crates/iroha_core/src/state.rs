@@ -3,6 +3,8 @@
 /// Original finite allocation pool passed from startup into State and restore.
 pub use iroha_allocation::AllocationBudget;
 
+#[cfg(test)]
+use crate::block::ValidBlock;
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 use crate::private_settlement::{
@@ -23,7 +25,9 @@ use crate::private_settlement::{
     },
     state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
 };
-use eyre::{Result, WrapErr, eyre};
+use eyre::Result;
+#[cfg(test)]
+use eyre::{WrapErr, eyre};
 use iroha_config::parameters::actual::{
     LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
 };
@@ -49,7 +53,6 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus::ConsensusMode,
     block::{
         BlockHeader, SignedBlock,
         consensus::{EvidenceRecord, ExecKv, ExecWitness},
@@ -73,7 +76,7 @@ use iroha_data_model::{
             governance as governance_events, prelude as data_pre,
             space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestExpired},
         },
-        pipeline::{BlockEvent, PipelineEventBox},
+        pipeline::BlockEvent,
         time::{ExecutionTime, TimeEvent, TimeEventFilter},
         trigger_completed::TriggerCompletedOutcome,
     },
@@ -170,7 +173,12 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
-    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::signed::{SignedTransaction, TransactionEntrypoint},
+};
+#[cfg(test)]
+use iroha_data_model::{
+    block::consensus::ConsensusMode, events::pipeline::PipelineEventBox,
+    transaction::signed::TransactionResult,
 };
 #[cfg(test)]
 use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
@@ -188,9 +196,10 @@ use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
-    numeric::{Numeric, NumericSpec, Quantity},
-    time::TimeSource,
+    numeric::{NumericSpec, Quantity},
 };
+#[cfg(test)]
+use iroha_primitives::{numeric::Numeric, time::TimeSource};
 use iroha_schema::Ident;
 use mv::{
     Key as MvKey, Value as MvValue,
@@ -214,6 +223,8 @@ pub use range_bounds::{
     AssetByAccountDefinitionBounds, RoleIdByAccountBounds,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
+#[cfg(test)]
+use std::str::FromStr;
 use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
@@ -221,7 +232,6 @@ use std::{
     mem,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -442,7 +452,7 @@ use crate::{
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
-    block::{CommittedBlock, ValidBlock},
+    block::CommittedBlock,
     compliance::LaneComplianceEngine,
     executor::Executor,
     governance::{
@@ -1475,6 +1485,9 @@ pub(crate) fn inspect_trigger_world_capture_for_testing(
 pub(crate) mod block_field;
 use block_field::{CellField, StorageField};
 #[cfg(test)]
+#[path = "state/lane_sample_owner_tests.rs"]
+mod lane_sample_owner_tests;
+#[cfg(test)]
 #[path = "state/world_attached_publication_tests.rs"]
 mod world_attached_publication_tests;
 
@@ -2422,6 +2435,9 @@ pub(crate) fn committed_entrypoint_hashes(
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
+    /// Original lane signer/sample storage could not be admitted before fresh State construction.
+    #[error("local native lane custody admission failed: {0}")]
+    NativeLaneCustodyAdmission(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
     /// Local World storage admission refused before executing State effects.
     #[error(transparent)]
     StateStorageAdmission(#[from] StateStorageAdmissionError),
@@ -2778,6 +2794,12 @@ pub enum EvidencePreparationError {
         /// Maximum cumulative bytes permitted by the active decode scope.
         limit_bytes: u64,
     },
+    /// Exact local Norito ceiling or allocator refusal while decoding an original proof.
+    #[error("consensus evidence decoder resource refusal: {0}")]
+    DecodeResource(norito::core::DecodeResourceError),
+    /// Original native history or its funded read owner cannot complete yet.
+    #[error("original native evidence history is pending")]
+    OriginalHistoryPending,
     /// A bounded append violated the count proved by the borrowed scan.
     #[error("consensus penalty preparation plan exceeded its fixed capacity")]
     Invariant,
@@ -12050,6 +12072,9 @@ pub struct State {
     /// Process-lived finite owner for committed-evidence preparation allocations.
     /// Funded slices cover fixed prune keys and pending penalty metadata only.
     evidence_preparation_budget: iroha_allocation::AllocationBudget,
+    /// One bounded pristine-parent evidence read, retaining original jobs across local refusal.
+    pub(crate) native_evidence_admission:
+        parking_lot::Mutex<crate::sumeragi::evidence::admission::AdmissionCache>,
     /// Original process-local owner for flat consensus stake-index key backing.
     stake_index_budget: iroha_allocation::AllocationBudget,
     /// Tiered state backend coordinating hot/cold snapshots.
@@ -13854,6 +13879,9 @@ pub struct StateTransaction<'block, 'state> {
     pub network_id: iroha_data_model::NetworkId,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::status::NexusFeeEvent>,
+    /// Actual charge awaiting its bounded, source-owned consensus result leaf.
+    pub(crate) pending_nexus_fee_receipt:
+        Option<iroha_data_model::block::consensus::NexusFeeReceipt>,
     /// Parent block's slash-observability buffer.
     block_pending_public_lane_slash_observability:
         &'block mut Vec<PendingPublicLaneSlashObservability>,
@@ -26628,6 +26656,10 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -26724,6 +26756,10 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -27377,6 +27413,8 @@ impl State {
         network_id: iroha_data_model::NetworkId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> core::result::Result<Self, MergeLedgerCommitError> {
+        crate::sumeragi::lanes::custody::admit_world_state(&mut world, &execution_budget)
+            .map_err(MergeLedgerCommitError::NativeLaneCustodyAdmission)?;
         let transactions = TransactionsStorage::try_new(kura.transaction_history_budget())
             .map_err(MergeLedgerCommitError::MembershipAdmission)?;
         world
@@ -27385,7 +27423,7 @@ impl State {
         world
             .validate_quantity_ledger_invariants()
             .expect("initial world contains invalid quantity ledger state");
-        let committed_height = u64::try_from(exact_durable_height).map_err(|_| {
+        u64::try_from(exact_durable_height).map_err(|_| {
             MergeLedgerCommitError::ExecutionStatePublication(
                 "persisted block height exceeds u64 during startup".to_owned(),
             )
@@ -27620,6 +27658,9 @@ impl State {
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
             evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
+            ),
+            native_evidence_admission: parking_lot::Mutex::new(
+                crate::sumeragi::evidence::admission::AdmissionCache::default(),
             ),
             stake_index_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
@@ -37084,6 +37125,62 @@ impl<'state> StateBlock<'state> {
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.try_transaction().expect("test State child admission")
     }
+    /// Open a native bootstrap component child for one exact authenticated genesis input.
+    ///
+    /// The caller must have captured this same signed carrier before any start effects.
+    /// This retains the production source/index/header/signature and physical-route checks;
+    /// it does not authenticate substituted instructions or grant publication authority.
+    #[cfg(test)]
+    pub(crate) fn transaction_for_original_genesis_testing(
+        &mut self,
+        source: &SignedBlock,
+        index: usize,
+        configured_account: &AccountId,
+        tested_instruction: &InstructionBox,
+    ) -> Result<StateTransaction<'_, 'state>, String> {
+        let authenticated =
+            crate::block::authenticate_genesis_block_intents(source, configured_account)
+                .map_err(|error| error.to_string())?;
+        let original = authenticated.transaction_for(source, index)?;
+        if self.network_id != NetworkId::from_genesis_hash(source.hash()) {
+            return Err("original genesis component belongs to another State network".into());
+        }
+        if self._curr_block != source.header() {
+            return Err("original genesis component belongs to another block header".into());
+        }
+        if !self.block_hashes.is_empty() {
+            return Err("committed history cannot regain original genesis component scope".into());
+        }
+        let (_, route) = self
+            .network_policy_routes
+            .as_ref()
+            .ok_or("original genesis has no captured physical policy owner")?
+            .get(source, index)
+            .map_err(str::to_owned)?;
+        let Some(TransactionEntrypoint::External(signed)) = source.network_entrypoint_at(index)
+        else {
+            return Err("original genesis input is not an external signed transaction".into());
+        };
+        let Executable::Instructions(instructions) = signed.instructions() else {
+            return Err("original genesis component input is not native instructions".into());
+        };
+        if !instructions.iter().eq(core::iter::once(tested_instruction)) {
+            return Err(
+                "component instruction differs from its exact original genesis input".into(),
+            );
+        }
+        let mut transaction = self.try_transaction().map_err(|error| error.to_string())?;
+        transaction.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
+        transaction.current_entrypoint_index =
+            Some(u64::try_from(index).map_err(|_| "original genesis input index exceeds u64")?);
+        transaction.genesis_execution_scope = Some(
+            route
+                .genesis_execution_scope(signed, &transaction, Some(&original))
+                .map_err(|error| error.to_string())?
+                .ok_or("original input has no authenticated genesis execution scope")?,
+        );
+        Ok(transaction)
+    }
     /// Open an isolated callback component fixture with an explicit root owner.
     ///
     /// The root identifies this block's direct execution slot. This does not
@@ -37251,6 +37348,7 @@ impl<'state> StateBlock<'state> {
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,
             pending_nexus_fee_event: None,
+            pending_nexus_fee_receipt: None,
             block_pending_public_lane_slash_observability: &mut fields
                 .pending_public_lane_slash_observability,
             pending_public_lane_slash_observability: Vec::new(),
@@ -39232,8 +39330,27 @@ mod tiered_snapshot_diff_tests {
     }
     #[tokio::test]
     async fn restored_snapshot_publishes_to_new_frontier_waiters() {
-        let state =
-            decode_world_snapshot(World::default()).expect("restore a canonical State snapshot");
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        let config = || {
+            let mut config = TestChainConfig::new(World::default(), 1_000);
+            config.chain_id = ChainId::from(SNAPSHOT_CHAIN_ID);
+            config
+        };
+        let mut source = CertifiedTestChain::start(config()).expect("original signed genesis");
+        source.commit(Vec::new());
+        assert!(matches!(
+            decode_state_snapshot_value(norito::json::to_value(source.state().as_ref()).unwrap()),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
+        let mut replay = CertifiedTestChain::start(config()).expect("same signed genesis");
+        replay
+            .replay_from(&source)
+            .expect("replay original certified carrier");
+        let state = Arc::clone(replay.state());
+        assert_eq!(
+            state.view().latest_block_hash(),
+            source.state().view().latest_block_hash()
+        );
         let restored_height = u64::try_from(state.committed_height()).unwrap();
         let required_height = restored_height.checked_add(1).unwrap();
         let wait = state.wait_for_committed_height(required_height);
@@ -39242,13 +39359,14 @@ mod tiered_snapshot_diff_tests {
         // Finish the read statement before the append takes the write lock.
         let previous_hash = state.block_hashes.view().last().copied();
         assert!(state.block_hashes.writer_available());
-        state.append_committed_block_header_for_tests(BlockHeader::new(
-            NonZeroU64::new(required_height).unwrap(),
+        assert_eq!(
             previous_hash,
-            None,
-            1_700_000_000_001,
-            0,
-        ));
+            Some(replay.committed(restored_height).block().hash())
+        );
+        // The original replayed owner publishes a real successor, including its
+        // signed input and certified result, to the new process-local frontier.
+        replay.commit(Vec::new());
+        assert_eq!(replay.height(), required_height);
         tokio::time::timeout(Duration::from_secs(1), wait)
             .await
             .expect("restored State must initialize a fresh process-local publication owner");
@@ -39276,14 +39394,19 @@ mod tiered_snapshot_diff_tests {
         world
             .contract_code_upload_chunks
             .insert(chunk_key.clone(), vec![7, 8, 9]);
-        let decoded = decode_world_snapshot(world).expect("decode pending upload snapshot");
+        let decoded = deserialize::decode_world_component_for_testing(&world)
+            .expect("decode pending upload projection");
+        assert!(matches!(
+            decode_world_snapshot(world),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
         let view = decoded.view();
         assert_eq!(
-            view.world.contract_code_uploads.get(&upload_key),
+            view.contract_code_uploads.get(&upload_key),
             Some(&descriptor)
         );
         assert_eq!(
-            view.world.contract_code_upload_chunks.get(&chunk_key),
+            view.contract_code_upload_chunks.get(&chunk_key),
             Some(&vec![7, 8, 9])
         );
         for field in ["contract_code_uploads", "contract_code_upload_chunks"] {
@@ -39320,11 +39443,15 @@ mod tiered_snapshot_diff_tests {
         world
             .provider_ingest_completion_authorities
             .insert(provider_id, authority.clone());
-        let decoded = decode_world_snapshot(world).expect("decode completion-authority snapshot");
+        let decoded = deserialize::decode_world_component_for_testing(&world)
+            .expect("decode completion-authority projection");
+        assert!(matches!(
+            decode_world_snapshot(world),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
         assert_eq!(
             decoded
                 .view()
-                .world
                 .provider_ingest_completion_authorities
                 .get(&provider_id),
             Some(&authority)
@@ -39362,16 +39489,19 @@ mod tiered_snapshot_diff_tests {
         world
             .musubi_domain_ownership_generations
             .insert(domain.clone(), 4);
-        let decoded =
-            decode_world_snapshot(world).expect("decode canonical Musubi generation snapshot");
+        let decoded = deserialize::decode_world_component_for_testing(&world)
+            .expect("decode canonical Musubi generation component");
         assert_eq!(
             decoded
                 .view()
-                .world
                 .musubi_domain_ownership_generations
                 .get(&domain),
             Some(&4)
         );
+        assert!(matches!(
+            decode_world_snapshot(world),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
         let mut missing = state_snapshot_value(World::default(), SNAPSHOT_CHAIN_ID);
         assert!(
             state_snapshot_world_mut(&mut missing)
@@ -39439,25 +39569,38 @@ mod tiered_snapshot_diff_tests {
         original
             .musubi_pin_outbox_high_waters
             .insert(owner.clone(), record.clone());
-        let restored = decode_world_snapshot(original)
-            .expect("canonical pin-outbox high-water survives snapshot restore");
+        let restored = deserialize::decode_world_component_for_testing(&original)
+            .expect("canonical pin-outbox high-water survives component decoding");
         assert_eq!(
-            restored
-                .view()
-                .world
-                .musubi_pin_outbox_high_waters
-                .get(&owner),
+            restored.view().musubi_pin_outbox_high_waters.get(&owner),
             Some(&record)
         );
+        assert!(matches!(
+            decode_world_snapshot(original),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
 
-        let decode_substituted_high_waters = |world: World| {
-            let mut snapshot = state_snapshot_value(World::default(), SNAPSHOT_CHAIN_ID);
-            let encoded = norito::json::to_value(&world.musubi_pin_outbox_high_waters)
-                .expect("encode substituted high-water table");
-            state_snapshot_world_mut(&mut snapshot)
-                .insert("musubi_pin_outbox_high_waters".to_owned(), encoded);
-            decode_state_snapshot_value(snapshot)
+        let decode_substituted_high_waters = |world: World| -> Result<(), String> {
+            let decoded = deserialize::decode_world_component_for_testing(&world)
+                .map_err(|error| error.to_string())?;
+            // Exercise the actual authoritative-network validator separately
+            // from the closed committed-State snapshot installation path.
+            let mut component = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            assert_eq!(component.network_id, *DEFAULT_TEST_NETWORK_ID);
+            assert!(component.view().native_execution_tip().is_none());
+            component.world = decoded;
+            component.validate_musubi_pin_outbox_high_waters()
         };
+        let mut canonical = World::default();
+        canonical
+            .musubi_pin_outbox_high_waters
+            .insert(owner.clone(), record.clone());
+        decode_substituted_high_waters(canonical)
+            .expect("canonical high-water matches the actual State network");
 
         let mut mismatch = World::default();
         mismatch
@@ -39668,8 +39811,7 @@ mod fastpq_tx_set_hash_tests {
             )),
         };
         {
-            let mut tx = state_block.transaction();
-            tx.tx_call_hash = Some(batch_hash);
+            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
             tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
             tx.apply();
         }
@@ -39809,8 +39951,7 @@ mod fastpq_tx_set_hash_tests {
             )),
         };
         {
-            let mut tx = state_block.transaction();
-            tx.tx_call_hash = Some(batch_hash);
+            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
             tx.current_dataspace_id = Some(DataSpaceId::new(7));
             tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
             tx.apply();
@@ -39888,8 +40029,7 @@ mod fastpq_tx_set_hash_tests {
             )),
         };
         {
-            let mut tx = state_block.transaction();
-            tx.tx_call_hash = Some(batch_hash);
+            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
             tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
             tx.apply();
         }
@@ -41301,6 +41441,7 @@ impl StateTransaction<'_, '_> {
             execution_effects: _,
             execution_deferral: _,
             pending_nexus_fee_event,
+            pending_nexus_fee_receipt: _,
             block_pending_public_lane_slash_observability,
             mut pending_public_lane_slash_observability,
             #[cfg(feature = "telemetry")]
@@ -43470,33 +43611,34 @@ pub(crate) use telemetry_status::{
 };
 
 #[cfg(test)]
-/// Execute all canonical phases with no Network inputs for component tests.
-pub(crate) fn run_empty_network_owner_fixture(
-    block: &mut crate::state::StateBlock<'_>,
-    source: Option<&SignedBlock>,
-) -> Vec<iroha_data_model::block::execution_output::ExecutionOutputV1> {
-    let source = source.map_or_else(
-        || {
-            iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
-                .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key())
-        },
-        |source| {
-            source
-                .canonical_resultless_proposal()
-                .expect("valid fixture proposal projection")
-        },
-    );
+/// Execute canonical phases from an original recorder acquired before block creation.
+/// The caller retains the recorder for the entire component block lifetime;
+/// neither the component carrier nor this helper grants publication authority.
+pub(crate) fn run_empty_network_owner_fixture<'state>(
+    state: &'state State,
+    source: &SignedBlock,
+) -> (
+    Box<StateBlock<'state>>,
+    crate::exec_witness::ExecWitnessGuard,
+    Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+    usize,
+) {
     assert_eq!(
         source.network_entrypoint_count(),
         0,
         "empty Network fixture source"
     );
-    let _guard = crate::exec_witness::exec_witness_guard();
-    crate::exec_witness::start_block();
-    block.reserve_ordinary_execution_outputs(&source).unwrap();
-    block.execute_ordinary_output_plan(&source, None).unwrap();
-    block
+    let (mut block, recorder) = crate::block::ValidBlock::start_component_execution(source, state)
+        .expect("record original pristine component before any effects");
+    let fragments_before = block.committed_fragment_count();
+    block.reserve_ordinary_execution_outputs(source).unwrap();
+    block.execute_ordinary_output_plan(source, None).unwrap();
+    let outputs = block
         .retained_execution_outputs_for_test()
         .unwrap()
-        .to_vec()
+        .to_vec();
+    (block, recorder, outputs, fragments_before)
 }
+
+#[path = "state/nexus_fee_receipt.rs"]
+mod nexus_fee_receipt;

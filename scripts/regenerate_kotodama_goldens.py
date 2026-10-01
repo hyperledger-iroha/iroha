@@ -2,11 +2,16 @@
 """Build, validate, and publish the canonical Kotodama V1 goldens.
 
 Prerequisites are freshly built ``koto`` and ``iroha`` binaries. The script
-never invokes Cargo or accepts signing material. Scratch files are confined to
+never invokes Cargo or accepts signing material. Tool children create private files;
+compiler staging stays mode 0600 and reviewed public outputs publish as 0644.
+Scratch files are confined to
 the selected staging root. ``--write`` requires an absent absolute output root
 outside the source workspace and can only create one sealed publication there.
 The checked-in ``ivm_artifacts.tsv`` file is the authoritative ownership and
-source-to-artifact map for every IVM program in the repository.
+source-to-artifact map for every IVM program in the repository. Compiler staging
+outputs retain the native writer's mode 0600; reviewed public renderings use
+mode 0644. Independent runtime manifests may use 0600 or 0644 and must match
+compiler bytes exactly. This does not change checked-tree or publication modes.
 
 ``--check`` is the safe default: compile everything in two independent
 temporary staging trees and fail unless their canonical path sets, bytes, and
@@ -416,7 +421,7 @@ def unique_builds(rows: Sequence[Golden]) -> list[Golden]:
 
 
 def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
-    """Run one non-secret tool command and return its UTF-8 stdout."""
+    """Run a tool with private child outputs without changing the parent umask."""
 
     rendered = [os.fspath(part) for part in command]
     result = subprocess.run(
@@ -426,6 +431,7 @@ def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        umask=0o077,
     )
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip()
@@ -709,11 +715,26 @@ def compare_payload(expected: bytes, destination: Path, expected_mode: int = 0o6
         raise GoldenError(f"stale Kotodama generated output: {destination}")
 
 
-def compare_file(source: Path, destination: Path) -> None:
-    """Require a checked-in destination to exactly match its staged source."""
+def read_compiler_output(source: Path) -> bytes:
+    """Authenticate the native compiler's private staging output without chmod."""
 
-    expected, metadata = _read_sealed_regular(source, "staged generated output")
-    compare_payload(expected, destination, stat.S_IMODE(metadata.st_mode))
+    payload, metadata = _read_sealed_regular(source, "staged compiler output")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise GoldenError(f"staged compiler output must use mode 0600: {source}")
+    return payload
+
+
+def compare_runtime_manifest(source: Path, destination: Path) -> None:
+    """Compare private compiler bytes with an independently produced CLI manifest."""
+
+    expected = read_compiler_output(source)
+    actual, metadata = _read_sealed_regular(destination, "runtime manifest")
+    # The CLI's regular-file writer honors the caller's private or public umask.
+    # Neither accepted staging mode allows execution or group/other mutation.
+    if stat.S_IMODE(metadata.st_mode) not in {0o600, 0o644}:
+        raise GoldenError(f"runtime manifest must use mode 0600 or 0644: {destination}")
+    if actual != expected:
+        raise GoldenError(f"runtime manifest differs from compiler output: {destination}")
 
 
 def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, ...]:
@@ -733,6 +754,7 @@ def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, .
 
     rendered: list[RenderedFile] = []
     for destination in sorted(sources, key=lambda value: value.as_posix()):
+<<<<<<< HEAD
         payload, metadata = _read_sealed_regular(
             sources[destination], "staged generated output"
         )
@@ -744,6 +766,9 @@ def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, .
         # Compiler and admission work products stay owner-private. This owner explicitly
         # publishes public checked-in fixtures; the descriptor-bound publisher creates
         # separate files in the declared public mode without relaxing staging custody.
+=======
+        payload = read_compiler_output(sources[destination])
+>>>>>>> origin/optimizations
         rendered.append(RenderedFile(destination, 0o644, payload))
     return tuple(rendered)
 
@@ -1108,7 +1133,7 @@ def verify_runtime_manifests(
             ],
             root,
         )
-        compare_file(generated, runtime_manifest)
+        compare_runtime_manifest(generated, runtime_manifest)
 
 
 def build_and_validate(

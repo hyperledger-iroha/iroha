@@ -98,7 +98,11 @@ pub(super) fn finalize_base_params_v1<F: ScalarField>(
     Ok(())
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Verify declared gate capacity and return the actual maximum assigned row count.
 pub(super) fn validate_base_gate_capacity_v1<F: ScalarField>(
     builder: &BaseCircuitBuilder<F>,

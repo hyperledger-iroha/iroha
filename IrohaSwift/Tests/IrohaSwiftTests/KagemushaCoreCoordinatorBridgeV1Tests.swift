@@ -35,6 +35,28 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.events, [])
   }
 
+  func testRetiredCoordinatorMethodCeilingsRejectBeforeInstallation() {
+    for ceiling:UInt32 in [18,19,20,22] {
+      let endpoint=Endpoint();endpoint.contractWords[11]=ceiling
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+        storagePath:"/durable/store",endpoint:endpoint))
+      XCTAssertEqual(endpoint.events,[]);XCTAssertEqual(endpoint.openCalls,0)
+    }
+  }
+
+  func testRetiredOrSubstitutedReleaseInventoriesRejectBeforeInstallation() {
+    let mismatches: [(Int, UInt32)] = [(4, 50), (4, 53), (4, 55), (6, 6), (6, 8)]
+    for (index, count) in mismatches {
+      let endpoint = Endpoint()
+      endpoint.contractWords[index] = count
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+        storagePath: "/durable/store", endpoint: endpoint))
+      XCTAssertEqual(endpoint.events, [])
+      XCTAssertEqual(endpoint.installedPaths, [])
+      XCTAssertEqual(endpoint.openCalls, 0)
+    }
+  }
+
   func testTransportCorrelatesCallerIdentity() throws {
     let endpoint = Endpoint()
     let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: endpoint)
@@ -118,8 +140,66 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.invokeCalls, 0)
   }
 
+  func testTypedRecoveredAdapterSendsExactDualProofsAndSameAttemptCancellation() throws {
+    var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    var fixture: [String: Any]?
+    while directory.path != "/" {
+      let path = directory.appendingPathComponent("fixtures/offline/kagemusha_enrolled_open_challenge_v1.json")
+      if FileManager.default.fileExists(atPath: path.path) {
+        fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any]; break
+      }
+      directory.deleteLastPathComponent()
+    }
+    let root = try XCTUnwrap(fixture)
+    let canonical = try XCTUnwrap(Data(hexString: XCTUnwrap(root["recovery_challenge_canonical_hex"] as? String)))
+    let challenge = try KagemushaEnrolledOpenAccountChallengeV1.decodeCanonicalExact(canonical)
+    let signature = try XCTUnwrap(Data(hexString: XCTUnwrap(root["recovery_account_signature_hex"] as? String)))
+    let original = Data("IKGMJRS1-scripted-original-response".utf8)
+    let ticket = Data([7, 0, 0, 0, 0, 0, 0, 0])
+    let endpoint = Endpoint()
+    var requests: [[Data]] = []
+    var completed = false
+    endpoint.scriptedInvoke = { method, frame in
+      XCTAssertEqual(method, 12)
+      let fields = try KagemushaCoreCoordinatorFrameV1.decodeRequest(.initialEnrollment, frame: frame)
+      requests.append(fields)
+      let response: [Data]
+      switch fields[0] {
+      case KagemushaCoreCoordinatorFrameV1.u32(9):
+        response = [ticket, canonical, challenge.accountSigningMessage(),
+          try KagemushaDeviceOperationCodecV1.encodeControlCommand(.readActiveHardwareCredential), challenge.nonce]
+      case KagemushaCoreCoordinatorFrameV1.u32(10):
+        XCTAssertEqual(fields, [KagemushaCoreCoordinatorFrameV1.u32(10), ticket, signature, original])
+        completed = true; response = [ticket]
+      case KagemushaCoreCoordinatorFrameV1.u32(11):
+        XCTAssertFalse(completed, "Only an outstanding native attempt can use phase11")
+        XCTAssertEqual(fields, [KagemushaCoreCoordinatorFrameV1.u32(11), ticket]); response = []
+      default: throw KagemushaCoreCoordinatorErrorV1.unavailable
+      }
+      return try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment, requestFrame: frame, fields: response)
+    }
+    let adapter = KagemushaNativeCoreCoordinatorAdapterV1(bridge:
+      try .openEndpoint(storagePath: "/durable/store", endpoint: endpoint))
+    let attempt = try adapter.beginEnrolledRecovery()
+    try adapter.completeEnrolledRecovery(attempt, accountSignature: signature, originalDeviceResponse: original)
+    XCTAssertEqual(requests.count, 2); XCTAssertEqual(endpoint.closeCalls, 0)
+    try adapter.close(); XCTAssertEqual(endpoint.closeCalls, 1)
+
+    // Completed leases retire their original handle. Cancellation phase11 belongs
+    // only to a fresh outstanding challenge, matching the canonical native owner.
+    completed = false
+    let pendingEndpoint = Endpoint()
+    pendingEndpoint.scriptedInvoke = endpoint.scriptedInvoke
+    let pending = KagemushaNativeCoreCoordinatorAdapterV1(bridge:
+      try .openEndpoint(storagePath: "/durable/store", endpoint: pendingEndpoint))
+    let outstanding = try pending.beginEnrolledRecovery()
+    try pending.cancelEnrolledRecovery(outstanding)
+    XCTAssertEqual(requests.count, 4); XCTAssertEqual(pendingEndpoint.closeCalls, 0)
+    try pending.close(); XCTAssertEqual(pendingEndpoint.closeCalls, 1)
+  }
+
   private final class Endpoint: KagemushaCoreCoordinatorEndpointV1 {
-    var contractWords: [UInt32] = [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
+    var contractWords: [UInt32] = [2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21]
     var returnedHandle = UInt64.max
     var openCalls = 0
     var invokeCalls = 0
@@ -131,6 +211,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     var installedPaths: [Data] = []
     var openedPaths: [Data] = []
     var events: [String] = []
+    var scriptedInvoke: ((UInt8, Data) throws -> Data)?
     func contract() throws -> [UInt32] { contractWords }
     func install(storagePath: Data) throws {
       events.append("install")
@@ -148,6 +229,7 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {
       invokeCalls += 1
       XCTAssertEqual(handle, returnedHandle)
+      if let scriptedInvoke { return try scriptedInvoke(method, request) }
       XCTAssertEqual(method, 1)
       if failInvoke { throw KagemushaCoreCoordinatorErrorV1.invalidFrame("scripted dispatch failure") }
       let fields = try KagemushaCoreCoordinatorFrameV1.decodeRequest(.reserveOperationID, frame: request)

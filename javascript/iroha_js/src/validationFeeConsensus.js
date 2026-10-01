@@ -9,10 +9,17 @@ import {
 import { networkIdBytes } from "./networkId.js";
 import { ensureCanonicalAccountId } from "./normalizers.js";
 import { normalizeParliamentGovernanceCertificateV1 } from "./parliamentApiV1.js";
+import { snapshotBoundedBytes as boundedBytes } from "./boundedByteSnapshot.js";
+import {
+  record, exactKeys, lowerHex32, irohaHash32,
+  normalizeValidationFeeCheckpointV1, normalizeValidationFeeLedgerBindingV1,
+} from "./validationFeeTrust.js";
+export {
+  VALIDATION_FEE_LEDGER_BINDING_SCHEMA,
+  normalizeValidationFeeCheckpointV1, normalizeValidationFeeLedgerBindingV1,
+} from "./validationFeeTrust.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
-export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA =
-  "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA =
   "iroha.validation_fee.verified_policy_projection.v1";
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH =
@@ -20,16 +27,6 @@ export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH =
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 25;
 
-const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
-const BINDING_KEYS = Object.freeze([
-  "checkpoint",
-  "networkId",
-  "policyChainGenesisHash",
-  "schema",
-]);
-// Mirrors the sole bounded native checkpoint codec: two 32 MiB frames plus 4 MiB context.
-const MAX_CHECKPOINT_BYTES = 68 * 1024 * 1024;
-const CHECKPOINT_KEYS = Object.freeze(["checkpointNorito"]);
 const VERIFIED_PAGE_KEYS = Object.freeze(["projectionJson", "promotedCheckpointNorito"]);
 const PROJECTION_KEYS = Object.freeze([
   "current_policy",
@@ -99,49 +96,6 @@ const MAX_U128 = (1n << 128n) - 1n;
 const VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS = 120_960n;
 const VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT = 4;
 const VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE_BASIS_POINTS = 2_500;
-
-function record(value, label) {
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    (
-      Object.getPrototypeOf(value) !== Object.prototype &&
-      Object.getPrototypeOf(value) !== null
-    )
-  ) {
-    throw new TypeError(`${label} must be a plain object`);
-  }
-  return value;
-}
-
-function exactKeys(value, expected, label) {
-  const keys = Object.keys(value).sort();
-  if (
-    keys.length !== expected.length ||
-    keys.some((key, index) => key !== expected[index])
-  ) {
-    throw new TypeError(`${label} must contain exactly ${expected.join(", ")}`);
-  }
-}
-
-function lowerHex32(value, label) {
-  if (typeof value !== "string" || !LOWER_HEX_32.test(value)) {
-    throw new TypeError(`${label} must be exactly 64 lowercase hexadecimal digits`);
-  }
-  if (/^0+$/u.test(value)) {
-    throw new TypeError(`${label} must be non-zero`);
-  }
-  return value;
-}
-
-function irohaHash32(value, label) {
-  const normalized = lowerHex32(value, label);
-  if ((Number.parseInt(normalized.slice(-2), 16) & 1) === 0) {
-    throw new TypeError(`${label} must carry the canonical Iroha hash marker`);
-  }
-  return normalized;
-}
 
 function positiveU64(value, label) {
   let parsed;
@@ -406,54 +360,6 @@ function validateCurrentPolicy(value, label) {
   ) {
     throw new TypeError(`${label} differs from its Parliament or payout binding`);
   }
-}
-
-/** Validate the exact immutable Iroha deployment binding. */
-export function normalizeValidationFeeLedgerBindingV1(value) {
-  const binding = record(value, "validation-fee ledger binding");
-  exactKeys(binding, BINDING_KEYS, "validation-fee ledger binding");
-  if (binding.schema !== VALIDATION_FEE_LEDGER_BINDING_SCHEMA) {
-    throw new TypeError(
-      `validation-fee ledger binding.schema must be ${VALIDATION_FEE_LEDGER_BINDING_SCHEMA}`,
-    );
-  }
-  const checkpoint = normalizeValidationFeeCheckpointV1(binding.checkpoint);
-  networkIdBytes(binding.networkId, "validation-fee ledger binding.networkId");
-  return Object.freeze({
-    schema: binding.schema,
-    networkId: binding.networkId,
-    policyChainGenesisHash: irohaHash32(
-      binding.policyChainGenesisHash,
-      "validation-fee ledger binding.policyChainGenesisHash",
-    ),
-    checkpoint,
-  });
-}
-
-function boundedBytes(value, label, maximum) {
-  let view;
-  if (ArrayBuffer.isView(value)) {
-    view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  } else if (value instanceof ArrayBuffer) {
-    view = new Uint8Array(value);
-  } else {
-    throw new TypeError(`${label} must be an ArrayBuffer or ArrayBufferView`);
-  }
-  if (view.byteLength === 0 || view.byteLength > maximum) {
-    throw new TypeError(`${label} must contain 1..${maximum} bytes`);
-  }
-  return Buffer.from(view);
-}
-
-/** Retain full independently selected canonical native checkpoint bytes for page promotion.
- * Canonical decoding and native verification occur in the native owner, never in JavaScript.
- */
-export function normalizeValidationFeeCheckpointV1(value) {
-  const checkpoint = record(value, "validation-fee checkpoint");
-  exactKeys(checkpoint, CHECKPOINT_KEYS, "validation-fee checkpoint");
-  const bytes = boundedBytes(checkpoint.checkpointNorito, "validation-fee checkpoint.checkpointNorito", MAX_CHECKPOINT_BYTES);
-  // Neither the caller's original view nor a returned view can mutate the retained binding.
-  return Object.freeze({ get checkpointNorito() { return Buffer.from(bytes); } });
 }
 
 function nativeBinding(nativeRuntime) {

@@ -41,6 +41,14 @@ fn finalized_admission_expiry_cannot_be_reopened_by_a_lagging_local_clock() {
 #[test]
 fn finalized_admission_revocation_and_tombstones_share_one_native_history() {
     let mut f = Fixture::new();
+    assert_eq!(f.chain().height(), 1);
+    assert!(
+        native::read_finalized_provider_admission_v1(&f.state.view(), f.provider(), NOW + 1)
+            .is_err(),
+        "signed genesis alone cannot export finalized execution, including an absent admission"
+    );
+    f.commit(|_| {}, true);
+    assert_eq!(f.chain().height(), 2);
     assert!(
         native::read_finalized_provider_admission_v1(&f.state.view(), f.provider(), NOW + 1)
             .unwrap()
@@ -141,9 +149,36 @@ fn native_head_needs_durable_qc_and_exact_owner_and_retained_predecessor() {
     f.admit();
     let provider = f.provider();
     // A tip whose local CommitQC does not verify is not a finalized cut.
-    f.commit(|_| {}, false);
+    f.commit(|_| {}, true);
+    let original = f.chain().committed(3);
+    f.chain()
+        .corrupt_local_quorum_for_test(3, crate::sumeragi::test_chain::Signers::BelowQuorum);
     assert!(
         native::read_finalized_provider_admission_v1(&f.state.view(), provider, NOW + 3).is_err()
+    );
+    // Recover the exact original local QC; a new successor cannot repair a
+    // missing or invalid historical certificate in the verifier's prefix.
+    f.state
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            std::num::NonZeroUsize::new(3).unwrap(),
+            Some(
+                original
+                    .block()
+                    .commit_certificate()
+                    .unwrap()
+                    .commit_qc()
+                    .to_vec(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        f.chain()
+            .committed(3)
+            .block()
+            .executed_block_wire_identity()
+            .unwrap(),
+        original.block().executed_block_wire_identity().unwrap()
     );
     f.commit(|_| {}, true);
     assert!(

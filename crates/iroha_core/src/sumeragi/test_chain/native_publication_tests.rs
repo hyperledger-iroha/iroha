@@ -156,6 +156,7 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         SumeragiConsensusMode::Permissioned,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         1000,
+        std::num::NonZeroU64::MIN,
     )
     .unwrap();
     // Express a supported raw manifest whose first transaction is the exact account
@@ -202,6 +203,7 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         1000,
         &iroha_config::parameters::actual::Pipeline::default(),
         &iroha_config::parameters::actual::FraudMonitoring::default(),
+        None,
         None,
         None,
         None,

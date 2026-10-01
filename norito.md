@@ -17,6 +17,13 @@ does not change the V1 header, payload layout, checksum or signed bytes.
 `DeserializePayload<'a>` owns `deserialize` and `try_deserialize` within the
 active bounded payload context. Both typed frame directions are blanket
 implementations over the corresponding payload trait and `NoritoSchema`.
+`NoritoSchema::static_nominal_name()` may expose a complete literal nominal
+identity without copying it. `schema::identity::nominal_name::<T>()` borrows that
+literal or retains the existing owned generic composition. Derives expose a
+literal only when there are no type, const, or erased lifetime arguments. This
+changes no identity bytes, frame projection, payload layout, or schema hash;
+generic-name and serializer resource admission remain separate obligations.
+
 `NoritoSchema` declares one nominal identity and one root-frame projection;
 `schema::identity::frame_hash` computes the fixed digest used by every typed
 reader and writer. Neither direction has an independent hash method.
@@ -321,6 +328,13 @@ temporary storage and returns typed resource-limit errors on violation.
 Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
+
+Rust error adapters retain these refusals through
+`core::Error::decode_resource_error` and the copyable `core::DecodeResourceError`.
+Conversion back to `Error` preserves every original variant and field without
+allocating a diagnostic. Sumeragi's native codec and the model evidence decoder
+preserve this category, so a scoped refusal is not reported as malformed evidence.
+This error representation changes no V1 frame, schema or signed bytes.
 
 Both `Ok` and `Err` branches of the result slice decoder enter the shared
 nesting guard before decoding their bounded child. The guard restores the

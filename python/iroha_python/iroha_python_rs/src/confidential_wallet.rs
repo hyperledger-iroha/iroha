@@ -105,7 +105,7 @@ pub(super) fn secret_bytes(
 fn secret_hex(text: &str, maximum: usize) -> PyResult<Zeroizing<Vec<u8>>> {
     let text = text.trim();
     let text = text.strip_prefix("0x").unwrap_or(text);
-    if text.len() % 2 != 0 || text.len() / 2 > maximum {
+    if !text.len().is_multiple_of(2) || text.len() / 2 > maximum {
         return Err(PyValueError::new_err(
             "private hex input has invalid length",
         ));
@@ -415,6 +415,10 @@ impl PyConfidentialProver {
     }
 
     #[pyo3(signature = (*, root, inputs, public_amount, change_note=None, tree_commitments=None, input_paths=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "PyO3 exposes the exact keyword-only proving inputs plus self and the Python token"
+    )]
     fn prove_unshield(
         &self,
         py: Python<'_>,

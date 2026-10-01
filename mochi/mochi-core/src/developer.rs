@@ -176,9 +176,12 @@ impl DeveloperWorkspace {
     /// Generation, custody, startup, or readiness failure.
     pub fn start(&self, name: &str) -> Result<ManagedStatus> {
         let store = ManagedStore::open(&self.root)?;
-        let request = self.runtime.localnet_request(name, Duration::from_secs(30));
+        let mut request = self.runtime.localnet_request(name, Duration::from_secs(30));
         match store.context(Some(name)) {
-            Ok(_) => Ok(store.up_retained(&request)?),
+            Ok(_) => {
+                request.service_profile = store.prepared(name)?.service_profile;
+                Ok(store.up_retained(&request)?)
+            }
             Err(iroha_deploy::managed::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::NotFound =>
             {

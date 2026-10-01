@@ -630,6 +630,39 @@ fn schema_binds_declared_codec_and_semantic_identities() {
 }
 
 #[test]
+fn schema_fingerprint_preserves_wire_identity_across_borrowed_and_owned_names() {
+    use crate::state::authority_registry::V1_LAYOUT;
+    use std::borrow::Cow;
+
+    const IDENTITY: &str = "world.test.schema.v1";
+    let borrowed = Schema::Norito {
+        nominal_name: || Cow::Borrowed(IDENTITY),
+        layout: V1_LAYOUT,
+    };
+    let owned = Schema::Norito {
+        nominal_name: || Cow::Owned(IDENTITY.to_owned()),
+        layout: V1_LAYOUT,
+    };
+    let semantic = Schema::Semantic {
+        identity: IDENTITY,
+        encoder: "test-only semantic projection",
+        layout: V1_LAYOUT,
+    };
+    let norito = schema_fingerprint(borrowed).unwrap();
+    assert_eq!(norito, schema_fingerprint(owned).unwrap());
+    // Independent Python hashlib BLAKE2b-256 vectors include the exact tag,
+    // layout, little-endian byte length, identity and canonical hash marker.
+    assert_eq!(
+        hex::encode(norito.as_ref()),
+        "95fc70558378fcd4b3a8e1fd1c5b5177f386375e1ca4144d7b263944c4115ee9"
+    );
+    assert_eq!(
+        hex::encode(schema_fingerprint(semantic).unwrap().as_ref()),
+        "c4168c21568c3d022a1d8fb983c148d19ef2491b40762c4012c4511a6b3feedf"
+    );
+}
+
+#[test]
 fn musubi_availability_uses_its_semantic_anchor_while_publication_binds_full_row() {
     use iroha_data_model::musubi::{
         ArchiveId, MusubiArchiveAvailabilityV1, MusubiStorageAvailabilityV1,

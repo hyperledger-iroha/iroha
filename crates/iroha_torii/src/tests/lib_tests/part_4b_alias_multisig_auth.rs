@@ -619,18 +619,27 @@ async fn alias_resolve_index_returns_on_chain_alias_record() {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
         .build(&authority);
-    let account = Account::new(authority.clone())
-        .with_label(Some(alias_label.clone()))
-        .build(&authority);
-    let app =
-        mk_app_state_for_tests_with_world(World::with([domain], [authority_account, account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [domain],
+        [authority_account],
+        [],
+    ));
+    bind_primary_account_alias_for_test(&app, &authority, &alias_label);
+    grant_alias_resolve_permissions(&app, &authority, &alias_label);
     let request = routing::AliasResolveIndexRequestDto { index: 0 };
     let body = norito::json::to_vec(&request).expect("encode request");
     let method = axum::http::Method::POST;
     let uri: axum::http::Uri = "/v1/aliases/resolve-index"
         .parse()
         .expect("alias resolve-index uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_resolve_index(
         State(app),
         method,
@@ -651,7 +660,7 @@ async fn alias_resolve_index_returns_on_chain_alias_record() {
     assert_eq!(dto.index, 0);
     assert_eq!(dto.alias, "banking@centralbank.universal");
     assert_eq!(dto.account_id, authority.to_string());
-    assert_eq!(dto.source.as_deref(), Some("on_chain"));
+    assert_eq!(dto.source.as_deref(), Some("active_sns"));
 }
 #[tokio::test]
 async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspace() {
@@ -764,14 +773,25 @@ async fn alias_resolve_index_returns_not_found_when_index_is_missing() {
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [],
+        [authority_account],
+        [],
+    ));
     let request = routing::AliasResolveIndexRequestDto { index: 0 };
     let body = norito::json::to_vec(&request).expect("encode request");
     let method = axum::http::Method::POST;
     let uri: axum::http::Uri = "/v1/aliases/resolve-index"
         .parse()
         .expect("alias resolve-index uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_resolve_index(
         State(app),
         method,

@@ -432,3 +432,202 @@ fn exact_limits_empty_entries_and_duplicate_typed_keys() {
     let scoped = materialize(&tape(vec![transfer(1, 10, 0), second])).unwrap();
     assert_eq!(check(&scoped.statement).unwrap().keys().len(), 4);
 }
+
+#[test]
+#[ignore = "requires retained output of the genuine Core signed-effect producer"]
+fn genuine_core_capture_preserves_all_effects_and_refuses_substitution() {
+    use std::io::Read;
+    let path = std::env::var_os("IROHA_FASTPQ_GENUINE_EFFECT_CAPTURE_PATH")
+        .expect("explicit genuine Core capture path is required");
+    let expected_frame_hash = std::env::var("IROHA_FASTPQ_GENUINE_EFFECT_CAPTURE_HASH")
+        .expect("exact retained Core frame hash is required");
+    assert_eq!(expected_frame_hash.len(), 64);
+    assert!(
+        expected_frame_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .take(1_048_577)
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert!(
+        bytes.len() <= 1_048_576,
+        "capture exceeds its complete frame bound"
+    );
+    assert_eq!(hex::encode(Hash::new(&bytes).as_ref()), expected_frame_hash);
+    let (effects, inputs): (FastpqExecutionEffectsV1, FastpqPublicInputs) =
+        norito::decode_canonical_with_limits(
+            &bytes,
+            norito::DecodeLimits::new(4096, 1_048_576, 16384, 4_194_304, 64),
+        )
+        .unwrap();
+    assert_eq!(
+        norito::encode_canonical(&(effects.clone(), inputs)).unwrap(),
+        bytes
+    );
+    assert_eq!(effects.context.source.height, 2);
+    assert_eq!(effects.effects.len(), 4);
+    assert_eq!(inputs.slot, 2_000_000);
+    assert_eq!(inputs.old_root, [0; 32]);
+    assert_eq!(inputs.new_root, [0; 32]);
+    let [first, mint, burn, last] = effects.effects.as_slice() else {
+        panic!("all four native effects are required")
+    };
+    let FastpqExecutionEffectKindV1::Transfer(first) = &first.kind else {
+        panic!("first transfer")
+    };
+    let FastpqExecutionEffectKindV1::Mint(mint) = &mint.kind else {
+        panic!("actual mint")
+    };
+    let FastpqExecutionEffectKindV1::Burn(burn) = &burn.kind else {
+        panic!("actual burn")
+    };
+    let FastpqExecutionEffectKindV1::Transfer(last) = &last.kind else {
+        panic!("last transfer")
+    };
+    assert_eq!(
+        (&first.source.account, &first.destination.account),
+        (&*ALICE_ID, &*BOB_ID)
+    );
+    assert_eq!(
+        (&last.source, &last.destination),
+        (&first.source, &first.destination)
+    );
+    assert_eq!(
+        (&mint.balance, &burn.balance),
+        (&first.source, &first.source)
+    );
+    assert_eq!(first.source.scope, AssetBalanceScope::Global);
+    assert_eq!(
+        (
+            first.amount.clone(),
+            mint.amount.clone(),
+            burn.amount.clone(),
+            last.amount.clone()
+        ),
+        (1_u32.into(), 5_u32.into(), 1_u32.into(), 2_u32.into())
+    );
+    assert_eq!(
+        (
+            first.source_before.clone(),
+            first.source_after.clone(),
+            mint.balance_after.clone(),
+            burn.balance_after.clone(),
+            last.source_after.clone()
+        ),
+        (
+            10_u32.into(),
+            9_u32.into(),
+            14_u32.into(),
+            13_u32.into(),
+            11_u32.into()
+        )
+    );
+    assert_eq!(
+        (
+            mint.supply_before.clone(),
+            mint.supply_after.clone(),
+            burn.supply_before.clone(),
+            burn.supply_after.clone()
+        ),
+        (10_u32.into(), 15_u32.into(), 15_u32.into(), 14_u32.into())
+    );
+    assert_eq!(last.destination_after, Quantity::from(3_u32));
+
+    // This expected tape is retained from the separately authenticated Core
+    // producer. Re-hashing an offered mutant below cannot change that baseline.
+    // No finality or production source authority is claimed by this test.
+    let effects_digest = execution_effects_digest_v1(&effects).unwrap();
+    let limits = ExecutionEffectLimits::default();
+    let tree_limits = TransferSmtBuildLimits::for_update_limit(8).unwrap();
+    let built = materialize_execution_effect_statement(
+        &effects,
+        effects_digest,
+        inputs,
+        limits,
+        tree_limits,
+    )
+    .unwrap();
+    assert_eq!(built.statement.effects, effects);
+    let expected = expected(&built.statement);
+    let prepared = prepare_execution_effect_statement(&built.statement, expected, limits).unwrap();
+    assert_eq!(prepared.rows().len(), 8);
+    assert_eq!(prepared.keys().len(), 3);
+    assert_eq!(
+        prepared.build_smt_witnesses(tree_limits).unwrap(),
+        built.witnesses
+    );
+    let intermediate: Vec<_> = built.witnesses.intermediate_roots().collect();
+    let compact = prepared.compact_statements(&intermediate).unwrap();
+    assert_eq!(compact.len(), 4);
+    for pair in compact.windows(2) {
+        assert_eq!(pair[0].new_root, pair[1].old_root);
+    }
+    for ordinal in 0..4 {
+        for leg in 0..2 {
+            assert_eq!(
+                prepared
+                    .rows()
+                    .iter()
+                    .filter(|row| row.effect_ordinal == ordinal && row.leg == leg)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    for mutation in 0..6 {
+        let mut offered = built.statement.clone();
+        match mutation {
+            0 => {
+                offered.effects.effects.remove(1);
+            }
+            1 => offered.effects.effects.swap(1, 2),
+            2 => offered.effects.effects[0].authority_digest = Hash::new(b"substituted authority"),
+            3 => {
+                offered.effects.effects[1].authorization_context =
+                    Hash::new(b"substituted mint owner")
+            }
+            4 => {
+                offered.effects.context.entry.entry_hash =
+                    Hash::new(b"substituted signed invocation")
+            }
+            5 => offered.public_inputs.tx_set_hash = Hash::new(b"substituted source wires").into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            prepare_execution_effect_statement(&offered, expected, limits).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    // Recomputed diagnostic tape digests must not hide a chronology or supply
+    // error, independently of the fixed producer commitment checks above.
+    for mutation in 0..3 {
+        let mut changed = effects.clone();
+        match mutation {
+            0 => {
+                changed.effects.remove(1);
+            }
+            1 => changed.effects.swap(1, 2),
+            2 => {
+                let FastpqExecutionEffectKindV1::Burn(burn) = &mut changed.effects[2].kind else {
+                    unreachable!()
+                };
+                burn.supply_before = Quantity::from(16_u32);
+                burn.supply_after = Quantity::from(15_u32);
+            }
+            _ => unreachable!(),
+        }
+        for (index, effect) in changed.effects.iter_mut().enumerate() {
+            effect.ordinal = u32::try_from(index).unwrap();
+        }
+        assert!(
+            matches!(materialize_execution_effect_statement(&changed, execution_effects_digest_v1(&changed).unwrap(), inputs, limits, tree_limits), Err(crate::Error::TransferInvariant { details }) if details.contains("repeated-key")),
+            "semantic mutation {mutation}"
+        );
+    }
+    assert_eq!(norito::encode_canonical(&(effects, inputs)).unwrap(), bytes);
+}

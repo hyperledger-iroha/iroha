@@ -875,9 +875,9 @@ fn production_sampler_sources_exclude_native_float_and_transcendental_paths() {
         .next()
         .expect("production marker");
     let params = include_str!("params.rs")
-        .split("#[cfg(test)]")
-        .next()
-        .expect("parameter production section");
+        .split_once("#[cfg(test)]\nmod tests {")
+        .expect("parameter production/test module boundary")
+        .0;
     let proof = include_str!("proof.rs")
         .split("// INTEGER_ONLY_PROOF_PRODUCTION_END")
         .next()

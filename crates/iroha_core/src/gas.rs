@@ -1877,6 +1877,7 @@ mod tests {
                 new_controller: replacement.controller().clone(),
             }),
             InstructionBox::from(FinalizeAccountRecovery {
+                request_generation: std::num::NonZeroU64::MIN,
                 alias: AccountAlias::domainless(
                     "gas-recovery".parse().expect("valid account alias"),
                     DataSpaceId::UNIVERSAL,

@@ -149,6 +149,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
+        "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
         *APPROVED_KAGEMUSHA_C_EXPORTS,
         "connect_norito_validation_fee_hijiri_quote_request_v1",
@@ -160,10 +161,6 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
-        "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion",
-        "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
-        "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
-        "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
@@ -201,6 +198,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_confidential_note_commitment_derive_v3",
         "connect_norito_confidential_merkle_path_derive_v3",
         "connect_norito_bridge_abi_version",
+        "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
         # Durable journal-backed testnet admission has no Windows C declaration
         # or Rust export. Keep the cross-platform C# inventory exact per host.
@@ -787,6 +785,7 @@ def validate_retired_protocol_symbols(symbols: Sequence[str], *, sdk: str) -> No
             symbol
             for symbol in symbols
             if symbol in explicitly_retired
+            or (sdk == "c-jni" and symbol.startswith("Java_org_hyperledger_iroha_android_"))
             or symbol.startswith(RETIRED_KAGEMUSHA_C_PREFIX)
             or (
                 symbol.startswith("connect_norito_kagemusha_")

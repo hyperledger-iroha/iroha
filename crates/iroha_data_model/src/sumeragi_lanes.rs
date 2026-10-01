@@ -7,10 +7,13 @@
 //! governed policy ([`SumeragiLanePolicy`]) are committed global-chain state.
 
 mod custody;
+mod samples;
 pub use custody::{
-    MAX_LANE_CUSTODY_OBLIGATIONS, MAX_LANE_CUSTODY_SIGNERS, SumeragiLaneCustody,
-    SumeragiLaneCustodySigners, SumeragiLaneSignerCustody, SumeragiLaneStakeBinding,
+    CustodySignersAdmissionError, MAX_LANE_CUSTODY_OBLIGATIONS, MAX_LANE_CUSTODY_SIGNERS,
+    SumeragiLaneCustody, SumeragiLaneCustodySigners, SumeragiLaneSignerCustody,
+    SumeragiLaneStakeBinding,
 };
+pub use samples::{LaneSamplesAdmissionError, LaneStateAdmissionError, SumeragiLaneSamples};
 
 use iroha_model_base::{
     peer::PeerId,
@@ -269,16 +272,7 @@ pub struct SumeragiLaneSample {
 
 /// The committed lane set of the global chain and its autoscale history.
 #[derive(
-    Clone,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
+    Clone, Debug, Default, PartialEq, Eq, Encode, Decode, DeriveJsonSerialize, DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -289,7 +283,7 @@ pub struct SumeragiLaneState {
     /// Original signer custody, sorted by incarnation and retained through delayed penalties.
     pub custody: Vec<SumeragiLaneCustody>,
     /// Recent load samples, oldest first.
-    pub samples: Vec<SumeragiLaneSample>,
+    pub samples: SumeragiLaneSamples,
     /// Global height of the last autoscale transition (`0`: none yet).
     pub last_transition: u64,
     /// Incarnations created so far; the next one derives from this counter, so none repeats.
@@ -932,3 +926,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod sample_tests;

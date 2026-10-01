@@ -123,7 +123,7 @@ zk_ace_prover = { path = "../crates/zk_ace_prover", optional = true }
 
 [dev-dependencies]
 kotodama_lang = { workspace = true }
-irohad = { package = "irohad_lib", path = "../crates/irohad", default-features = false, features = ["daemon"] }
+irohad_lib = { path = "../crates/irohad", default-features = false, features = ["daemon"] }
 zeroize = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["node-api", "ws_integration_tests"] }
 iroha_service_model = { workspace = true }

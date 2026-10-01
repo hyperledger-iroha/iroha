@@ -4689,15 +4689,15 @@ fn native_control_and_recovery_builtins_reject_wrong_types_and_arity() {
         ),
         (
             include_str!("fixtures/v1/c114.ko"),
-            "ledger::account::recovery::propose expects (string, AccountId)",
+            "ledger::account::recovery::propose expects (string, AccountId, int)",
         ),
         (
             include_str!("fixtures/v1/c115.ko"),
-            "ledger::account::recovery::approve expects (string)",
+            "ledger::account::recovery::approve expects (string, int)",
         ),
         (
             include_str!("fixtures/v1/c116.ko"),
-            "call `ledger::account::recovery::cancel` expects at most 1 arguments",
+            "call `ledger::account::recovery::cancel` expects at most 2 arguments",
         ),
         (
             include_str!("fixtures/v1/c117.ko"),
@@ -4707,6 +4707,38 @@ fn native_control_and_recovery_builtins_reject_wrong_types_and_arity() {
         let parsed = parse(source).expect("parse invalid native control/recovery call");
         let error = analyze(&parsed)
             .expect_err("semantic analysis must reject invalid native control/recovery call");
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}`, got `{}`",
+            error.message
+        );
+    }
+}
+#[test]
+fn recovery_builtins_require_explicit_request_generation() {
+    for (call, expected) in [
+        (
+            "ledger::account::recovery::propose(alias: alias, replacement: replacement)",
+            "missing required argument `request_generation`",
+        ),
+        (
+            "ledger::account::recovery::approve(alias: alias)",
+            "missing required argument `request_generation`",
+        ),
+        (
+            "ledger::account::recovery::cancel(alias: alias, request_generation: \"one\")",
+            "expects (string, int)",
+        ),
+        (
+            "ledger::account::recovery::finalize(alias: alias, request_generation: true)",
+            "expects (string, int)",
+        ),
+    ] {
+        let source = format!(
+            "seiyaku RecoveryGeneration {{ fn apply(string alias, AccountId replacement) {{ {call}; }} }}"
+        );
+        let parsed = parse(&source).expect("parse recovery generation guard case");
+        let error = analyze(&parsed).expect_err("unbound recovery mutations must be rejected");
         assert!(
             error.message.contains(expected),
             "expected `{expected}`, got `{}`",

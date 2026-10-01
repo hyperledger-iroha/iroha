@@ -5,8 +5,7 @@ fn publication_assertion_requires_exact_live_assignment_and_all_completions() {
     use iroha_data_model::isi::sorafs::AssertSorafsPublicationV1;
     let state = make_state_with_completion_anchor();
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
     RegisterPinManifest {
         manifest_payload: default_manifest_payload(),

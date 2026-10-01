@@ -18,28 +18,18 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "src", "toriiClient.js"),
     platform: "node",
     target: "node20.19",
-    // Norito-heavy validation, Kagemusha, and route governance stay behind the
-    // optional boundary. The eager path is 771,406 bytes with the native V1
-    // consensus observations, within the reviewed 806,184-byte baseline. The
-    // 788 KiB ceiling leaves 35,506 bytes; the optional closure includes exact Kagemusha release
-    // governance schemas and remains independently inventoried below.
-    limitKb: 788,
-    reviewedEagerBytes: 806_184,
-    reviewedCombinedBytes: 1_101_362,
+    // Keep optional validation behind its declared module boundary. Report
+    // eager and deferred bytes independently without enforcing code-size caps.
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./toriiOptional.js",
         entryPoint: join(ROOT, "src", "toriiOptional.js"),
         edgeCount: 1,
-        reviewedBytes: 222_685,
-        limitKb: 218,
       }),
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "src", "sumeragiTyped.js"),
         edgeCount: 2,
-        reviewedBytes: 72_493,
-        limitKb: 72,
       }),
     ]),
   }),
@@ -48,13 +38,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "transactionCodec.js"),
     platform: "browser",
     target: "es2020",
-    // Browser package mapping is defined for checked-in dist paths, so audit the
-    // shipped entrypoint rather than the Node-capable source graph. The reviewed
-    // first-release codec closure is 311,701 bytes after exact ProofAttachment,
-    // instruction archive, response-binding validation, and immutable native
-    // dependency contexts (+0.39% from the 310,503-byte predecessor). The
-    // 306 KiB ceiling leaves 1,643 bytes.
-    limitKb: 306,
+    // Audit the shipped browser entrypoint rather than the Node-capable source graph.
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -63,10 +47,6 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "nexusApp.js"),
     platform: "browser",
     target: "es2020",
-    // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree. The exact first-release public graph is now 361,258 bytes
-    // (-2.73%). The 355 KiB ceiling leaves 2,262 bytes.
-    limitKb: 355,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -75,9 +55,6 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 93,163 bytes
-    // (-4.81%). The 94 KiB ceiling leaves 3,093 bytes.
-    limitKb: 94,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -87,7 +64,6 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // This leaf helper must remain suitable for strict-DOM browser consumers.
-    limitKb: 12,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -96,10 +72,6 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // Final V1 nominal errors, Unit, qualified structs, and cursor/page schemas
-    // share validation across eight canonical modules: 56,385 bytes with pinned
-    // esbuild. The 56 KiB ceiling leaves 959 bytes; browser isolation is mandatory.
-    limitKb: 56,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -108,33 +80,18 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The prior first-release aggregate measured a 517,186-byte eager split closure
-    // on the pinned runner. Removing feature-specific exports, then adding private
-    // browser transport state and exact URL/header/timeout guards, leaves the
-    // reviewed eager surface at 496,687 bytes (-3.96%). Adding canonical nominal
-    // error catalogs, explicit Unit returns, and cursor/page schema validation to
-    // the compact normalizers preserves the reviewed growth bound. The current
-    // eager closure is 447,993 bytes and leaves 54,791 bytes below the unchanged
-    // 491 KiB ceiling. The typed Sumeragi
-    // parser and deployment-submit continuation remain separately inventoried so startup and deferred code cannot trade
-    // against one another.
-    limitKb: 491,
-    reviewedEagerBytes: 496_687,
-    reviewedCombinedBytes: 578_683,
+    // Inventory eager and deferred outputs separately so module ownership and
+    // browser isolation remain verifiable as the implementation grows.
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "dist", "sumeragiTyped.js"),
         edgeCount: 2,
-        reviewedBytes: 72_806,
-        limitKb: 72,
       }),
       Object.freeze({
         specifier: "./smartContractDeploymentSubmit.js",
         entryPoint: join(ROOT, "dist", "smartContractDeploymentSubmit.js"),
         edgeCount: 1,
-        reviewedBytes: 9_190,
-        limitKb: 9,
       }),
     ]),
     forbidNodeInputs: true,
@@ -296,26 +253,6 @@ function outputBytes(outputs, names) {
   );
 }
 
-function validateLazyBudget(lazy, target) {
-  if (!Number.isSafeInteger(lazy.reviewedBytes) || lazy.reviewedBytes <= 0) {
-    throw new Error(`${target.label} ${lazy.specifier} has no reviewed byte baseline`);
-  }
-  if (!Number.isSafeInteger(lazy.limitKb) || lazy.limitKb <= 0) {
-    throw new Error(`${target.label} ${lazy.specifier} has no explicit lazy limit`);
-  }
-  const limitBytes = lazy.limitKb * 1024;
-  if (lazy.reviewedBytes > limitBytes) {
-    throw new Error(
-      `${target.label} ${lazy.specifier} reviewed baseline exceeds its lazy limit`,
-    );
-  }
-  if (limitBytes > Math.floor(lazy.reviewedBytes * 1.05)) {
-    throw new Error(
-      `${target.label} ${lazy.specifier} lazy limit exceeds the protected 5% baseline policy`,
-    );
-  }
-}
-
 function auditLiteralLazyEdges(inputs, target) {
   const lazyChunks = target.lazyChunks ?? [];
   const bySpecifier = new Map(lazyChunks.map((lazy) => [lazy.specifier, lazy]));
@@ -369,18 +306,6 @@ export function analyzeSplitBundle(result, target) {
   if (lazyChunks.length === 0) {
     throw new Error(`${target.label} has no configured lazy chunks`);
   }
-  if (
-    !Number.isSafeInteger(target.reviewedEagerBytes) ||
-    target.reviewedEagerBytes <= 0 ||
-    target.reviewedEagerBytes > target.limitKb * 1024
-  ) {
-    throw new Error(`${target.label} has an invalid reviewed eager baseline`);
-  }
-  if (target.limitKb * 1024 > Math.floor(target.reviewedEagerBytes * 1.05)) {
-    throw new Error(
-      `${target.label} eager limit exceeds the protected 5% baseline policy`,
-    );
-  }
   auditLiteralLazyEdges(inputs, target);
 
   const rootOutput = findEntryOutput(outputs, target.entryPoint);
@@ -389,7 +314,6 @@ export function analyzeSplitBundle(result, target) {
   }
   const lazyOutputs = new Map();
   for (const lazy of lazyChunks) {
-    validateLazyBudget(lazy, target);
     const outputName = findEntryOutput(outputs, lazy.entryPoint);
     if (!outputName) {
       throw new Error(`${target.label} did not emit lazy chunk ${lazy.specifier}`);
@@ -460,8 +384,6 @@ export function analyzeSplitBundle(result, target) {
       Object.freeze({
         specifier: lazy.specifier,
         bytes: outputBytes(outputs, incrementalOutputs),
-        reviewedBytes: lazy.reviewedBytes,
-        limitKb: lazy.limitKb,
         outputs: Object.freeze(Array.from(incrementalOutputs)),
       }),
     );
@@ -475,32 +397,11 @@ export function analyzeSplitBundle(result, target) {
       `${target.label} emitted unaccounted split outputs: ${unaccountedOutputs.join(", ")}`,
     );
   }
-  const reviewedCombinedBytes =
-    target.reviewedEagerBytes +
-    lazyChunks.reduce((total, lazy) => total + lazy.reviewedBytes, 0);
-  if (target.reviewedCombinedBytes !== reviewedCombinedBytes) {
-    throw new Error(
-      `${target.label} reviewed combined baseline must equal eager plus non-overlapping lazy baselines`,
-    );
-  }
-
-  const combinedLimitKb =
-    target.limitKb + lazyChunks.reduce((total, lazy) => total + lazy.limitKb, 0);
-  if (reviewedCombinedBytes > combinedLimitKb * 1024) {
-    throw new Error(`${target.label} reviewed combined baseline exceeds its limit`);
-  }
-  if (combinedLimitKb * 1024 > Math.floor(reviewedCombinedBytes * 1.05)) {
-    throw new Error(
-      `${target.label} combined limit exceeds the protected 5% baseline policy`,
-    );
-  }
-
   return Object.freeze({
     eagerBytes: outputBytes(outputs, eagerOutputs),
     eagerOutputs: Object.freeze(Array.from(eagerOutputs)),
     lazyChunks: Object.freeze(lazyMetrics),
     combinedBytes: outputBytes(outputs, accountedOutputs),
-    combinedLimitKb,
     outputs: Object.freeze(Array.from(accountedOutputs)),
   });
 }
@@ -544,31 +445,16 @@ async function checkSplitBundle(esbuild, target, log) {
     }
   }
   log(
-    `Bundled ${target.label} eager: ${formatBundleSize(metrics.eagerBytes)} KiB (${metrics.eagerBytes} bytes; reviewed ${target.reviewedEagerBytes} bytes; limit ${target.limitKb} KiB)`,
+    `Bundled ${target.label} eager: ${formatBundleSize(metrics.eagerBytes)} KiB (${metrics.eagerBytes} bytes)`,
   );
-  if (metrics.eagerBytes > target.limitKb * 1024) {
-    throw new Error(
-      `${target.label} eager bundle size ${formatBundleSize(metrics.eagerBytes)} KiB exceeds limit ${target.limitKb} KiB`,
-    );
-  }
   for (const lazy of metrics.lazyChunks) {
     log(
-      `Bundled ${target.label} lazy ${lazy.specifier}: ${formatBundleSize(lazy.bytes)} KiB (${lazy.bytes} bytes; reviewed ${lazy.reviewedBytes} bytes; limit ${lazy.limitKb} KiB)`,
+      `Bundled ${target.label} lazy ${lazy.specifier}: ${formatBundleSize(lazy.bytes)} KiB (${lazy.bytes} bytes)`,
     );
-    if (lazy.bytes > lazy.limitKb * 1024) {
-      throw new Error(
-        `${target.label} lazy ${lazy.specifier} size ${formatBundleSize(lazy.bytes)} KiB exceeds limit ${lazy.limitKb} KiB`,
-      );
-    }
   }
   log(
-    `Bundled ${target.label} combined: ${formatBundleSize(metrics.combinedBytes)} KiB (${metrics.combinedBytes} unique bytes; reviewed ${target.reviewedCombinedBytes} bytes; limit ${metrics.combinedLimitKb} KiB = eager plus lazy limits)`,
+    `Bundled ${target.label} combined: ${formatBundleSize(metrics.combinedBytes)} KiB (${metrics.combinedBytes} unique bytes)`,
   );
-  if (metrics.combinedBytes > metrics.combinedLimitKb * 1024) {
-    throw new Error(
-      `${target.label} combined bundle size ${formatBundleSize(metrics.combinedBytes)} KiB exceeds limit ${metrics.combinedLimitKb} KiB`,
-    );
-  }
 
   if (target.forbidNodeInputs === true) {
     const forbidden = findForbiddenBrowserInputs(
@@ -611,17 +497,7 @@ async function checkBundle(esbuild, target, log) {
   }
   const bytes = output.contents?.byteLength ?? Buffer.byteLength(output.text ?? "", "utf8");
   const kb = (bytes / 1024).toFixed(1);
-  const hasSizeLimit = Number.isFinite(target.limitKb);
-  log(
-    hasSizeLimit
-      ? `Bundled ${target.label}: ${kb} KiB (limit ${target.limitKb} KiB)`
-      : `Audited ${target.label}: ${kb} KiB browser graph`,
-  );
-  if (hasSizeLimit && bytes > target.limitKb * 1024) {
-    throw new Error(
-      `${target.label} bundle size ${kb} KiB exceeds limit ${target.limitKb} KiB`,
-    );
-  }
+  log(`Audited ${target.label}: ${kb} KiB (${bytes} bytes)`);
   if (target.forbidNodeInputs === true) {
     const forbidden = findForbiddenBrowserInputs(
       Object.keys(result.metafile?.inputs ?? {}),

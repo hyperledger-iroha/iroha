@@ -25,7 +25,10 @@ fn demand(owner: &BlockHashes, replacement: bool) -> (usize, usize) {
         key,
         hash(91),
         |existing, additional| {
-            observed = Some((existing.bytes(), additional.bytes()));
+            observed = Some((
+                existing.bytes() + ChargedBlockHashMap::layout().size(),
+                additional.bytes(),
+            ));
             Err::<BlockHashPolicy, _>(())
         },
     );

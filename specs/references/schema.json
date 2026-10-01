@@ -814,6 +814,7 @@
       }
     ]
   },
+<<<<<<< HEAD
   "AmxWriteProofV1": {
     "Struct": [
       {
@@ -826,6 +827,8 @@
       }
     ]
   },
+=======
+>>>>>>> origin/optimizations
   "AnchorPrivateDataspace": {
     "Struct": [
       {
@@ -6539,6 +6542,7 @@
       }
     ]
   },
+  "FastpqCommitmentV1": "Array<u8, 32>",
   "FastpqCompactProfileIdV1": "Array<u8, 32>",
   "FastpqExecutionAssetV1": {
     "Struct": [
@@ -6775,7 +6779,7 @@
       },
       {
         "name": "segment_air_row_roots",
-        "type": "Vec<GoldilocksDigest384V1>"
+        "type": "Vec<FastpqCommitmentV1>"
       }
     ]
   },
@@ -20201,6 +20205,7 @@
       }
     ]
   },
+<<<<<<< HEAD
   "PrivateDataspaceRecordProof": {
     "Struct": [
       {
@@ -20225,6 +20230,8 @@
       }
     ]
   },
+=======
+>>>>>>> origin/optimizations
   "PrivateDataspaceRegistration": {
     "Struct": [
       {
@@ -20261,6 +20268,7 @@
       }
     ]
   },
+<<<<<<< HEAD
   "PrivateRootFeePolicy": {
     "Struct": [
       {
@@ -20285,6 +20293,8 @@
       }
     ]
   },
+=======
+>>>>>>> origin/optimizations
   "ProofAttachment": {
     "Struct": [
       {
@@ -21368,6 +21378,7 @@
       }
     ]
   },
+<<<<<<< HEAD
   "RegisteredAccountReadV1": {
     "Struct": [
       {
@@ -21396,6 +21407,8 @@
       }
     ]
   },
+=======
+>>>>>>> origin/optimizations
   "RemoteSpendIntent": {
     "Struct": [
       {
@@ -30730,6 +30743,9 @@
   "Vec<ExternalExecutionRouteLeg>": {
     "Vec": "ExternalExecutionRouteLeg"
   },
+  "Vec<FastpqCommitmentV1>": {
+    "Vec": "FastpqCommitmentV1"
+  },
   "Vec<FastpqExecutionEffectV1>": {
     "Vec": "FastpqExecutionEffectV1"
   },
@@ -30786,9 +30802,6 @@
   },
   "Vec<GameTranscriptAnchorV1>": {
     "Vec": "GameTranscriptAnchorV1"
-  },
-  "Vec<GoldilocksDigest384V1>": {
-    "Vec": "GoldilocksDigest384V1"
   },
   "Vec<GovernanceManifestActivation>": {
     "Vec": "GovernanceManifestActivation"

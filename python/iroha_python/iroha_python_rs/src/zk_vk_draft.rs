@@ -301,7 +301,7 @@ mod tests {
                 VerifyingKeyOperation::Register,
             )
             .unwrap_err()
-            .contains("exact canonical I105")
+            .contains("invalid requested authority")
         );
         assert!(
             decode_bound_verifying_key_instruction(

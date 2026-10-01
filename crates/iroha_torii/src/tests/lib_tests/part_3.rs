@@ -389,12 +389,9 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let account_id = authority.clone();
-    let account = Account::new(account_id.account().clone())
-        .with_label(Some(alias_label.clone()))
-        .build(&authority);
-    let world = World::with([domain], [authority_account, account], []);
-    let app = mk_app_state_for_tests_with_world(world);
+    let world = World::with([domain], [authority_account], []);
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(world);
+    bind_primary_account_alias_for_test(&app, &authority, &alias_label);
     {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = app.state.block(header);
@@ -459,7 +456,14 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [
+            Domain::new(DomainId::try_new("centralbank", "universal").expect("alias domain"))
+                .build(&authority),
+        ],
+        [authority_account],
+        [],
+    ));
     {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = app.state.block(header);
@@ -509,7 +513,11 @@ async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [],
+        [authority_account],
+        [],
+    ));
     let request = routing::ContractAliasResolveRequestDto {
         contract_alias: "router::universal".to_string(),
     };
@@ -518,7 +526,14 @@ async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
     let uri: axum::http::Uri = "/v1/contracts/aliases/resolve"
         .parse()
         .expect("contract alias resolve URI");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_contract_alias_resolve(
         State(app),
         method,
@@ -541,11 +556,16 @@ async fn contract_alias_resolve_returns_bound_contract() {
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [
+            Domain::new(DomainId::try_new("dex", "universal").expect("alias domain"))
+                .build(&authority),
+        ],
+        [authority_account],
+        [],
+    ));
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+        app.state.network_id_ref(),
         &authority,
         0,
         DataSpaceId::UNIVERSAL,
@@ -560,7 +580,14 @@ async fn contract_alias_resolve_returns_bound_contract() {
     let uri: axum::http::Uri = "/v1/contracts/aliases/resolve"
         .parse()
         .expect("contract alias resolve URI");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_contract_alias_resolve(
         State(app),
         method,
@@ -1252,7 +1279,7 @@ async fn asset_alias_resolve_returns_definition_fields() {
         domain_id.clone(),
         Name::from_str("usd").expect("asset name token"),
     );
-    let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
+    let alias: AssetDefinitionAlias = "usd#issuer.universal".parse().expect("asset alias");
     let definition = iroha_data_model::asset::AssetDefinition::numeric(
         definition_id.clone(),
         "usd".to_owned(),
@@ -1281,7 +1308,7 @@ async fn asset_alias_resolve_returns_definition_fields() {
         .to_bytes();
     let dto: routing::AssetAliasResolveResponseDto =
         norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.alias, "usd#issuer.main");
+    assert_eq!(dto.alias, "usd#issuer.universal");
     assert!(!dto.asset_definition_id.contains(':'));
     assert_eq!(
         dto.asset_definition_id
@@ -1291,7 +1318,7 @@ async fn asset_alias_resolve_returns_definition_fields() {
     );
     assert_eq!(dto.asset_name, "usd");
     let alias_binding = dto.alias_binding.expect("alias binding metadata");
-    assert_eq!(alias_binding.alias, "usd#issuer.main");
+    assert_eq!(alias_binding.alias, "usd#issuer.universal");
     assert_eq!(alias_binding.status, "permanent");
     assert_eq!(alias_binding.lease_expiry_ms, None);
     assert_eq!(alias_binding.grace_until_ms, None);
@@ -1305,7 +1332,7 @@ async fn asset_alias_resolve_accepts_short_form_alias() {
         domain_id.clone(),
         Name::from_str("usd").expect("asset name token"),
     );
-    let alias: AssetDefinitionAlias = "usd#main".parse().expect("asset alias");
+    let alias: AssetDefinitionAlias = "usd#universal".parse().expect("asset alias");
     let definition = iroha_data_model::asset::AssetDefinition::numeric(
         definition_id.clone(),
         "usd".to_owned(),
@@ -1334,7 +1361,7 @@ async fn asset_alias_resolve_accepts_short_form_alias() {
         .to_bytes();
     let dto: routing::AssetAliasResolveResponseDto =
         norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.alias, "usd#main");
+    assert_eq!(dto.alias, "usd#universal");
     assert!(!dto.asset_definition_id.contains(':'));
     assert_eq!(
         dto.asset_definition_id
@@ -1344,7 +1371,7 @@ async fn asset_alias_resolve_accepts_short_form_alias() {
     );
     assert_eq!(dto.asset_name, "usd");
     let alias_binding = dto.alias_binding.expect("alias binding metadata");
-    assert_eq!(alias_binding.alias, "usd#main");
+    assert_eq!(alias_binding.alias, "usd#universal");
     assert_eq!(alias_binding.status, "permanent");
     assert_eq!(dto.source.as_deref(), Some("world_state"));
 }
@@ -1356,19 +1383,19 @@ async fn asset_definition_get_returns_full_definition_by_base58_id() {
         domain_id.clone(),
         Name::from_str("usd").expect("asset name token"),
     );
-    let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
+    let alias: AssetDefinitionAlias = "usd#issuer.universal".parse().expect("asset alias");
     let definition = iroha_data_model::asset::AssetDefinition::numeric(
         definition_id.clone(),
         "usd".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(domain_id.clone()),
     )
     .with_description(Some("Treasury settlement token".to_owned()))
     .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition.clone()]);
-    let app = mk_app_state_for_tests_with_world(world);
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(world);
     bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
     let response = handler_asset_definition_get(
         State(app),
@@ -1417,7 +1444,7 @@ async fn asset_alias_resolve_returns_not_found_after_grace() {
         domain_id.clone(),
         Name::from_str("usd").expect("asset name token"),
     );
-    let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
+    let alias: AssetDefinitionAlias = "usd#issuer.universal".parse().expect("asset alias");
     let definition = iroha_data_model::asset::AssetDefinition::numeric(
         definition_id.clone(),
         "usd".to_owned(),
@@ -1428,7 +1455,11 @@ async fn asset_alias_resolve_returns_not_found_after_grace() {
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
-    let app = mk_app_state_for_tests_with_world(world);
+    let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_at_time_for_test(
+        world,
+        after_grace,
+    );
     bind_asset_alias_for_test(
         &app,
         &authority,
@@ -1438,8 +1469,6 @@ async fn asset_alias_resolve_returns_not_found_after_grace() {
         1,
         1_000,
     );
-    let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-    record_latest_committed_header_for_test(&app, 2, after_grace);
     let response = handler_asset_alias_resolve(
         State(app),
         NoritoJson(routing::AssetAliasResolveRequestDto {
@@ -1460,18 +1489,22 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
         domain_id.clone(),
         Name::from_str("usd").expect("asset name token"),
     );
-    let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
+    let alias: AssetDefinitionAlias = "usd#issuer.universal".parse().expect("asset alias");
     let definition = iroha_data_model::asset::AssetDefinition::numeric(
         definition_id.clone(),
         "usd".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(domain_id.clone()),
     )
     .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
-    let app = mk_app_state_for_tests_with_world(world);
+    let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_at_time_for_test(
+        world,
+        after_grace,
+    );
     bind_asset_alias_for_test(
         &app,
         &authority,
@@ -1481,8 +1514,6 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
         1,
         1_000,
     );
-    let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-    record_latest_committed_header_for_test(&app, 2, after_grace);
     let response = handler_asset_definition_get(
         State(app),
         axum::http::Method::GET,
@@ -1517,7 +1548,7 @@ async fn parse_asset_definition_id_rejects_alias_after_grace() {
         domain_id.clone(),
         Name::from_str("usd").expect("asset name token"),
     );
-    let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
+    let alias: AssetDefinitionAlias = "usd#issuer.universal".parse().expect("asset alias");
     let definition = iroha_data_model::asset::AssetDefinition::numeric(
         definition_id.clone(),
         "usd".to_owned(),
@@ -1528,7 +1559,11 @@ async fn parse_asset_definition_id_rejects_alias_after_grace() {
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
-    let app = mk_app_state_for_tests_with_world(world);
+    let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_at_time_for_test(
+        world,
+        after_grace,
+    );
     bind_asset_alias_for_test(
         &app,
         &authority,
@@ -1538,8 +1573,6 @@ async fn parse_asset_definition_id_rejects_alias_after_grace() {
         1,
         1_000,
     );
-    let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-    record_latest_committed_header_for_test(&app, 2, after_grace);
     let error = parse_asset_definition_id(app.as_ref(), alias.as_ref())
         .expect_err("expired alias must stop resolving");
     assert!(matches!(
@@ -1583,7 +1616,7 @@ async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
         &app,
         &authority,
         &long_id,
-        &"cbdc#bankb.dataspace".parse().expect("alias"),
+        &"cbdc#issuer.universal".parse().expect("alias"),
         None,
         1,
         0,
@@ -1592,18 +1625,18 @@ async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
         &app,
         &authority,
         &short_id,
-        &"usd#centralbank".parse().expect("alias"),
+        &"usd#universal".parse().expect("alias"),
         None,
         2,
         0,
     );
     assert_eq!(
-        parse_asset_definition_id(app.as_ref(), "cbdc#bankb.dataspace")
+        parse_asset_definition_id(app.as_ref(), "cbdc#issuer.universal")
             .expect("long alias should resolve"),
         long_id
     );
     assert_eq!(
-        parse_asset_definition_id(app.as_ref(), "usd#centralbank")
+        parse_asset_definition_id(app.as_ref(), "usd#universal")
             .expect("short alias should resolve"),
         short_id
     );
@@ -1683,7 +1716,7 @@ async fn asset_alias_resolve_returns_not_found_for_unknown_alias() {
     let response = handler_asset_alias_resolve(
         State(app),
         NoritoJson(routing::AssetAliasResolveRequestDto {
-            alias: "usd#issuer.main".to_owned(),
+            alias: "usd#issuer.universal".to_owned(),
         }),
     )
     .await

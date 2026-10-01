@@ -1,6 +1,9 @@
 //! Exact tenure retention across lane retirement and peer reuse.
 use super::*;
 use crate::state::{World, WorldBlock};
+fn custody_budget() -> AllocationBudget {
+    AllocationBudget::new(1024 * 1024)
+}
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -158,13 +161,13 @@ fn original_signer_binding_requires_positive_custody_and_survives_policy_member_
         });
     lane.committee.sort_by(|a, b| b.peer.cmp(&a.peer));
     assert!(
-        pin_signers(&world, &Nexus::default(), &lane, true)
+        pin_signers(&world, &Nexus::default(), &lane, true, &custody_budget())
             .unwrap()
             .as_slice()
             .is_empty()
     );
     fund(&mut world, &original);
-    let bindings = pin_signers(&world, &Nexus::default(), &lane, true).unwrap();
+    let bindings = pin_signers(&world, &Nexus::default(), &lane, true, &custody_budget()).unwrap();
     assert_eq!(bindings.as_slice().len(), 1);
     let expected = u32::from(
         lane.committee
@@ -175,7 +178,7 @@ fn original_signer_binding_requires_positive_custody_and_survives_policy_member_
     // The physical lane has no independently selected mutable staking owner: fixed
     // committee reuse of a global key alone must not manufacture financial authority.
     assert!(
-        pin_signers(&world, &Nexus::default(), &lane, false)
+        pin_signers(&world, &Nexus::default(), &lane, false, &custody_budget())
             .unwrap()
             .as_slice()
             .is_empty()
@@ -186,7 +189,7 @@ fn original_signer_binding_requires_positive_custody_and_survives_policy_member_
         .unwrap()
         .1 = 0_u32.into();
     assert!(
-        pin_signers(&world, &Nexus::default(), &lane, true)
+        pin_signers(&world, &Nexus::default(), &lane, true, &custody_budget())
             .unwrap()
             .as_slice()
             .is_empty()
@@ -251,6 +254,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
         "custody-test",
         None,
         10,
+        &custody_budget(),
     )
     .unwrap();
     assert_eq!(state.custody.len(), 1);
@@ -267,7 +271,8 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
             &network,
             "custody-test",
             None,
-            10
+            10,
+            &custody_budget(),
         )
         .is_err()
     );
@@ -280,6 +285,7 @@ fn creation_pins_once_and_capacity_is_reclaimed_only_after_retirement_delay() {
         "custody-test",
         None,
         11,
+        &custody_budget(),
     )
     .unwrap();
     assert!(
@@ -324,6 +330,7 @@ fn pending_original_evidence_delays_reclamation_without_native_height_arithmetic
         EvidenceRecord {
             evidence: Evidence { native: vec![] },
             attribution: EvidenceAttribution {
+                scope: iroha_data_model::block::consensus::EvidenceScope::Root,
                 instance: row.instance,
                 height: u64::MAX,
                 epoch: 0,
@@ -435,4 +442,359 @@ fn an_existing_frontier_cannot_regress_or_switch_hash_or_result_at_the_same_nati
         );
         assert_eq!(state.custody[0].merged, frontier);
     }
+}
+
+fn signer_demand(count: usize) -> usize {
+    std::alloc::Layout::array::<SumeragiLaneSignerCustody>(count)
+        .unwrap()
+        .size()
+        + SumeragiLaneCustodySigners::control_layout().size()
+}
+
+#[test]
+fn original_signer_pinning_refuses_then_retries_the_same_pool_and_stake_cut() {
+    let original_world = World::default();
+    let mut world = original_world.block();
+    let original = record();
+    let lane = lane(&original);
+    fund(&mut world, &original);
+    let demand = signer_demand(1);
+    let pool = AllocationBudget::new(demand - 1);
+    assert_eq!(
+        pin_signers(&world, &Nexus::default(), &lane, true, &pool).unwrap_err(),
+        CustodyError::Allocation
+    );
+    assert_eq!(pool.reserved_bytes(), 0, "partial backing refunds");
+    assert_eq!(world.public_lane_validators().len(), 1);
+    pool.set_limit_bytes(demand);
+    let owner = pin_signers(&world, &Nexus::default(), &lane, true, &pool).unwrap();
+    assert!(owner.admitted_to(&pool));
+    assert_eq!(
+        owner.as_slice(),
+        obligation(&original, 1).signers.as_slice()
+    );
+    let retained = owner.clone();
+    assert_eq!(retained.as_slice().as_ptr(), owner.as_slice().as_ptr());
+    drop(owner);
+    assert_eq!(pool.reserved_bytes(), demand);
+    drop(retained);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn original_signer_state_handoff_retains_backing_and_refuses_foreign_pool() {
+    let mut source = SumeragiLaneState::default();
+    source.custody.push(obligation(&record(), 1));
+    let original = source.custody[0].signers.as_slice().as_ptr();
+    let demand = signer_demand(1);
+    let pool = AllocationBudget::new(demand - 1);
+    assert!(admit_state(&source, &pool).is_err());
+    assert_eq!(source.custody[0].signers.as_slice().as_ptr(), original);
+    assert_eq!(pool.reserved_bytes(), 0);
+    pool.set_limit_bytes(demand);
+    let admitted = admit_state(&source, &pool).unwrap();
+    assert_eq!(admitted, source);
+    assert_eq!(pool.reserved_bytes(), demand);
+    let pointer = admitted.custody[0].signers.as_slice().as_ptr();
+    let retained = admit_state(&admitted, &pool).unwrap();
+    assert_eq!(retained.custody[0].signers.as_slice().as_ptr(), pointer);
+    assert_eq!(pool.reserved_bytes(), demand);
+    let foreign = AllocationBudget::new(demand);
+    assert!(matches!(
+        admit_state(&admitted, &foreign),
+        Err(LaneStateAdmissionError::Signers(
+            CustodySignersAdmissionError::ForeignBudget
+        ))
+    ));
+    assert_eq!(foreign.reserved_bytes(), 0);
+    drop(admitted);
+    assert_eq!(pool.reserved_bytes(), demand);
+    drop(retained);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn original_signer_world_handoff_admits_both_generations_before_replacing_either() {
+    let mut current = SumeragiLaneState::default();
+    current.custody.push(obligation(&record(), 1));
+    let mut previous = SumeragiLaneState::default();
+    previous.custody.push(obligation(&record(), 2));
+    let current_ptr = current.custody[0].signers.as_slice().as_ptr();
+    let previous_ptr = previous.custody[0].signers.as_slice().as_ptr();
+    let mut world = World::default();
+    world.sumeragi_lanes = mv::cell::Cell::from_values_charged(
+        current.clone(),
+        Some(previous.clone()),
+        mv::cell::CellAllocationCharges::new(
+            concread::ebrcell::Untracked,
+            concread::ebrcell::Untracked,
+        ),
+    );
+    let demand = signer_demand(1) * 2;
+    let pool = AllocationBudget::new(demand - 1);
+    assert!(admit_world_state(&mut world, &pool).is_err());
+    assert_eq!(pool.reserved_bytes(), 0);
+    assert_eq!(
+        world.sumeragi_lanes.view().custody[0]
+            .signers
+            .as_slice()
+            .as_ptr(),
+        current_ptr
+    );
+    assert_eq!(
+        world
+            .sumeragi_lanes
+            .predecessor_view()
+            .get()
+            .as_ref()
+            .unwrap()
+            .custody[0]
+            .signers
+            .as_slice()
+            .as_ptr(),
+        previous_ptr
+    );
+    pool.set_limit_bytes(demand);
+    admit_world_state(&mut world, &pool).unwrap();
+    assert_eq!(*world.sumeragi_lanes.view().get(), current);
+    assert_eq!(
+        *world.sumeragi_lanes.predecessor_view().get(),
+        Some(previous)
+    );
+    assert!(
+        world.sumeragi_lanes.view().custody[0]
+            .signers
+            .admitted_to(&pool)
+    );
+    assert!(
+        world
+            .sumeragi_lanes
+            .predecessor_view()
+            .get()
+            .as_ref()
+            .unwrap()
+            .custody[0]
+            .signers
+            .admitted_to(&pool)
+    );
+    assert_eq!(pool.reserved_bytes(), demand);
+    let pointer = world.sumeragi_lanes.view().custody[0]
+        .signers
+        .as_slice()
+        .as_ptr();
+    {
+        // The actual World overlay copies Cell values; World itself is move-only.
+        let block = world.block();
+        assert_eq!(
+            block.sumeragi_lanes.get().custody[0]
+                .signers
+                .as_slice()
+                .as_ptr(),
+            pointer,
+        );
+        assert_eq!(pool.reserved_bytes(), demand);
+    }
+    admit_world_state(&mut world, &pool).unwrap();
+    assert_eq!(pool.reserved_bytes(), demand);
+    let foreign = AllocationBudget::new(demand);
+    assert!(matches!(
+        admit_world_state(&mut world, &foreign),
+        Err(LaneStateAdmissionError::Signers(
+            CustodySignersAdmissionError::ForeignBudget
+        ))
+    ));
+    assert_eq!(
+        world.sumeragi_lanes.view().custody[0]
+            .signers
+            .as_slice()
+            .as_ptr(),
+        pointer
+    );
+    assert_eq!(foreign.reserved_bytes(), 0);
+    // World/Cell reclamation can be deferred by EBR; immediate last-owner refunds are
+    // asserted separately above on the immutable signer owner itself.
+}
+
+#[test]
+fn original_signer_state_constructor_refuses_before_cloning_unfunded_world() {
+    let mut world = World::default();
+    world.sumeragi_lanes = mv::cell::Cell::new({
+        let mut lanes = SumeragiLaneState::default();
+        lanes.custody.push(obligation(&record(), 1));
+        lanes
+    });
+    let source = world.sumeragi_lanes.view().custody[0].signers.clone();
+    let pointer = source.as_slice().as_ptr();
+    let pool = AllocationBudget::new(0);
+    let result = crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+        pool.clone(),
+        world,
+        crate::kura::Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+        "custody-test".parse().unwrap(),
+        iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([3; 32])),
+        ),
+    );
+    assert!(matches!(
+        result,
+        Err(crate::state::MergeLedgerCommitError::NativeLaneCustodyAdmission(_))
+    ));
+    assert_eq!(pool.reserved_bytes(), 0);
+    assert_eq!(source.as_slice().as_ptr(), pointer);
+}
+
+#[test]
+fn sample_state_admission_refuses_unfunded_source() {
+    let source = SumeragiLaneState {
+        samples: vec![iroha_data_model::sumeragi_lanes::SumeragiLaneSample {
+            height: 1,
+            time_ms: 10,
+            transactions: 3,
+            lanes: 1,
+        }]
+        .try_into()
+        .unwrap(),
+        ..SumeragiLaneState::default()
+    };
+    let original = iroha_allocation::AllocationBudget::new(0);
+    assert!(
+        admit_state(&source, &original).is_err(),
+        "sample backing and its retained control require original-pool admission"
+    );
+    assert_eq!(original.reserved_bytes(), 0);
+    assert_eq!(source.samples[0].transactions, 3);
+}
+
+#[test]
+fn original_sample_state_constructor_refuses_with_typed_sample_cause() {
+    use iroha_data_model::sumeragi_lanes::{LaneSamplesAdmissionError, SumeragiLaneSample};
+    let mut world = World::default();
+    world.sumeragi_lanes = mv::cell::Cell::new(SumeragiLaneState {
+        samples: vec![SumeragiLaneSample {
+            height: 1,
+            time_ms: 1,
+            transactions: 1,
+            lanes: 1,
+        }]
+        .try_into()
+        .unwrap(),
+        ..SumeragiLaneState::default()
+    });
+    let source = world.sumeragi_lanes.view().samples.clone();
+    let pointer = source.as_ptr();
+    let pool = AllocationBudget::new(0);
+    let result = crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+        pool.clone(),
+        world,
+        crate::kura::Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+        "sample-owner-test".parse().unwrap(),
+        iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([3; 32])),
+        ),
+    );
+    assert!(matches!(
+        result,
+        Err(
+            crate::state::MergeLedgerCommitError::NativeLaneCustodyAdmission(
+                LaneStateAdmissionError::Samples(LaneSamplesAdmissionError::Admission(_))
+            )
+        )
+    ));
+    assert_eq!(pool.reserved_bytes(), 0);
+    assert_eq!(
+        source.as_ptr(),
+        pointer,
+        "borrowed test owner outlives consuming constructor refusal"
+    );
+}
+
+#[test]
+fn original_sample_world_handoff_admits_both_generations_before_replacing_either() {
+    use iroha_data_model::sumeragi_lanes::{
+        LaneSamplesAdmissionError, SumeragiLaneSample, SumeragiLaneSamples,
+    };
+    let make = |height| SumeragiLaneState {
+        samples: vec![SumeragiLaneSample {
+            height,
+            time_ms: height,
+            transactions: 1,
+            lanes: 1,
+        }]
+        .try_into()
+        .unwrap(),
+        ..SumeragiLaneState::default()
+    };
+    let current = make(2);
+    let previous = make(1);
+    let current_pointer = current.samples.as_ptr();
+    let previous_pointer = previous.samples.as_ptr();
+    let mut world = World::default();
+    world.sumeragi_lanes = mv::cell::Cell::from_values_charged(
+        current.clone(),
+        Some(previous.clone()),
+        mv::cell::CellAllocationCharges::new(
+            concread::ebrcell::Untracked,
+            concread::ebrcell::Untracked,
+        ),
+    );
+    let demand = 2
+        * (std::mem::size_of::<SumeragiLaneSample>()
+            + SumeragiLaneSamples::control_layout().size());
+    let pool = AllocationBudget::new(demand - 1);
+    assert!(matches!(
+        admit_world_state(&mut world, &pool),
+        Err(LaneStateAdmissionError::Samples(
+            LaneSamplesAdmissionError::Admission(_)
+        ))
+    ));
+    assert_eq!(
+        pool.reserved_bytes(),
+        0,
+        "partial current owner refunds on predecessor refusal"
+    );
+    assert_eq!(
+        world.sumeragi_lanes.view().samples.as_ptr(),
+        current_pointer
+    );
+    assert_eq!(
+        world
+            .sumeragi_lanes
+            .predecessor_view()
+            .get()
+            .as_ref()
+            .unwrap()
+            .samples
+            .as_ptr(),
+        previous_pointer
+    );
+    pool.set_limit_bytes(demand);
+    admit_world_state(&mut world, &pool).unwrap();
+    assert_eq!(*world.sumeragi_lanes.view().get(), current);
+    assert_eq!(
+        *world.sumeragi_lanes.predecessor_view().get(),
+        Some(previous)
+    );
+    assert_eq!(pool.reserved_bytes(), demand);
+    let retained_pointer = world.sumeragi_lanes.view().samples.as_ptr();
+    pool.set_limit_bytes(0);
+    admit_world_state(&mut world, &pool).unwrap();
+    assert_eq!(
+        world.sumeragi_lanes.view().samples.as_ptr(),
+        retained_pointer
+    );
+    assert_eq!(pool.reserved_bytes(), demand);
+    let foreign = AllocationBudget::new(demand);
+    assert!(matches!(
+        admit_world_state(&mut world, &foreign),
+        Err(LaneStateAdmissionError::Samples(
+            LaneSamplesAdmissionError::ForeignBudget
+        ))
+    ));
+    assert_eq!(foreign.reserved_bytes(), 0);
+    assert_eq!(
+        world.sumeragi_lanes.view().samples.as_ptr(),
+        retained_pointer
+    );
 }

@@ -137,9 +137,6 @@ fn java_native_private_settlement_audit_approval_response_verify_v1(
     })
 }
 
-jni_sdk_android_pairs! {
-android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -147,8 +144,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1(
     mut env: jni::JNIEnv<'_>,
@@ -164,8 +159,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
         requested_payload_digest,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1();
-sdk:
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1(
@@ -186,8 +179,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
         auditor_public_key_utf8,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1();
-sdk:
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1(
@@ -207,5 +198,4 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
         requested_payload_digest,
         auditor_public_key_utf8,
     )
-}
 }

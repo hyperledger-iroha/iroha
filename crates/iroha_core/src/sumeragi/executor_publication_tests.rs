@@ -135,6 +135,114 @@ pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> Avail
     proposal_with_transaction(chain, worker, CertifiedTestChain::tick)
 }
 
+#[test]
+fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
+    with_worker(|chain, worker, _blocks, events| {
+        let block = proposal(chain, worker);
+        let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+        let source = std::ptr::from_ref(block.source());
+        let payload = block.payload().as_slice().as_ptr();
+        let budget = worker.state.ivm_execution_budget();
+        let state_height = worker.state.view().height();
+        assert!(block.admitted_to(&budget));
+        // Pin only the refusal observations: unrelated MV reclamation must not change the
+        // baseline while this test measures the request's immediately refunded owners.
+        let epoch = crossbeam_epoch::pin();
+        let retained = budget.reserved_bytes();
+        for limits in [
+            norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 64),
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, 64),
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+        ] {
+            let error = norito::with_decode_limits_scope(limits, || {
+                iroha_data_model::block::decode_versioned_signed_block(block.payload().as_slice())
+            })
+            .unwrap_err();
+            assert!(error.is_decode_resource_limit(), "{error:?}");
+            assert_eq!(
+                norito::with_decode_limits_scope(limits, || payload::decode(
+                    block.payload().as_slice()
+                ))
+                .unwrap_err(),
+                payload::PayloadError::DecodeResource
+            );
+            let outcome = norito::with_decode_limits_scope(limits, || worker.execute(&block, hash));
+            assert!(
+                matches!(outcome, Some(ExecOutcome::Failed(_))),
+                "local payload decode refusal must defer, got {outcome:?}; negatively cached: {}",
+                worker.results.contains_key(&hash)
+            );
+            assert!(!worker.results.contains_key(&hash));
+            assert!(worker.live.is_none());
+            assert!(worker.finishing.is_none());
+            assert!(worker.recovery.is_none());
+            assert!(worker.context.staging.get(&hash).is_none());
+            assert!(events.try_recv().is_err());
+            assert_eq!(worker.state.view().height(), state_height);
+            assert_eq!(std::ptr::from_ref(block.source()), source);
+            assert_eq!(block.payload().as_slice().as_ptr(), payload);
+            assert!(block.admitted_to(&budget));
+            assert_eq!(budget.reserved_bytes(), retained);
+        }
+        drop(epoch);
+        assert!(matches!(
+            worker.execute(&block, hash),
+            Some(ExecOutcome::Valid(_))
+        ));
+        assert!(!worker.results.contains_key(&hash));
+        assert_eq!(std::ptr::from_ref(block.source()), source);
+        assert_eq!(block.payload().as_slice().as_ptr(), payload);
+        assert!(block.admitted_to(&budget));
+        assert_eq!(
+            worker.state.view().height(),
+            state_height,
+            "execution has not published"
+        );
+    });
+}
+
+#[test]
+fn malformed_available_payload_remains_invalid_and_negatively_cached() {
+    with_worker(|chain, worker, _blocks, events| {
+        let original = proposal(chain, worker);
+        let mut malformed = original.payload().as_slice().to_vec();
+        malformed.pop().unwrap();
+        let mut header = original.header().clone();
+        header.payload_hash = payload_hash(&**worker.context.crypto.as_ref().unwrap(), &malformed);
+        header.payload_len = u32::try_from(malformed.len()).unwrap();
+        // Availability is genuine for these malformed application bytes. Its signatures
+        // authenticate custody, not the nested block's validity.
+        let block = chain.author_payload(header, malformed);
+        let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+        let state_height = worker.state.view().height();
+        assert!(matches!(
+            payload::decode(block.payload().as_slice()),
+            Err(payload::PayloadError::NotCanonical(_))
+        ));
+        assert!(matches!(
+            worker.execute(&block, hash),
+            Some(ExecOutcome::Invalid)
+        ));
+        let (source, outcome) = worker
+            .results
+            .get(&hash)
+            .expect("deterministic negative verdict");
+        assert_eq!(source, block.source());
+        assert!(matches!(outcome, ExecOutcome::Invalid));
+        let limits = norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 64);
+        assert!(matches!(
+            norito::with_decode_limits_scope(limits, || worker.execute(&block, hash)),
+            Some(ExecOutcome::Invalid)
+        ));
+        assert_eq!(worker.results.len(), 1);
+        assert!(worker.live.is_none());
+        assert!(worker.finishing.is_none());
+        assert!(worker.context.staging.get(&hash).is_none());
+        assert!(events.try_recv().is_err());
+        assert_eq!(worker.state.view().height(), state_height);
+    });
+}
+
 fn proposal_with_transaction(
     chain: &CertifiedTestChain,
     worker: &Worker<'_>,

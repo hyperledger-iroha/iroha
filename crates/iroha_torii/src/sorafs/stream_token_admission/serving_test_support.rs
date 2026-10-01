@@ -58,7 +58,7 @@ impl ServingAdmissionFixture {
         self.reputation
             .calls()
             .into_iter()
-            .map(|(_, outcome)| outcome)
+            .map(|(record, _)| record.outcome)
             .collect()
     }
     pub(crate) fn active_leases(&self) -> usize {

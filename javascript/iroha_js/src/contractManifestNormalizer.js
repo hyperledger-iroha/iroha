@@ -1,7 +1,8 @@
+import { validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1, validateManifestFieldsV1 } from "./contractManifestRules.js";
 import { normalizeContractErrorMessagesV1, normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { Buffer } from "buffer";
 import { analyzeEntrypointValueTypeV1, MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 } from "./entrypointSchema.js";
-import { assertString } from "./instructionBuilderPrimitives.js";
+import { assertString, parseHashLiteralToBuffer } from "./instructionBuilderPrimitives.js";
 import { canonicalizeMultihashHex } from "./normalizers.js";
 import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
 import { isCanonicalKotodamaIdentifier } from "./kotodamaIdentifiers.js";
@@ -74,8 +75,27 @@ export function createContractManifestNormalizer(
     return normalized;
   }
 
+  function normalizeManifestHash(value, name) {
+    if (value === undefined || value === null) return null;
+    // Snapshot binary caller storage once before either validation or encoding.
+    const input = typeof value === "string" ? value : normalizeByteArray(value, name);
+    const normalized = normalizeOptionalHash(input, name);
+    const bytes = typeof input === "string"
+      ? input.trim().startsWith("hash:")
+        ? parseHashLiteralToBuffer(input, name)
+        : Buffer.from(input.trim(), "hex")
+      : input;
+    if ((bytes[31] & 1) !== 1) {
+      fail(V_CODE_INVALID_HEX, `${name} must set the Iroha Hash marker bit`, name);
+    }
+    return normalized;
+  }
+
   function normalizeContractManifest(manifest) {
     const source = assertPlainObject(manifest, "manifest");
+    validateManifestFieldsV1(source, "manifest", (message) =>
+      fail(V_CODE_INVALID_OBJECT, message, "manifest"),
+    );
     const seiyakuName = source.seiyaku_name ?? source.seiyakuName;
     const compilerFingerprint = source.compiler_fingerprint ?? source.compilerFingerprint;
     const featuresBitmap = source.features_bitmap ?? source.featuresBitmap;
@@ -88,11 +108,11 @@ export function createContractManifestNormalizer(
               seiyakuName,
               "manifest.seiyakuName",
             ),
-      code_hash: normalizeOptionalHash(
+      code_hash: normalizeManifestHash(
         source.code_hash ?? source.codeHash,
         "manifest.codeHash",
       ),
-      abi_hash: normalizeOptionalHash(
+      abi_hash: normalizeManifestHash(
         source.abi_hash ?? source.abiHash,
         "manifest.abiHash",
       ),
@@ -127,6 +147,7 @@ export function createContractManifestNormalizer(
           ? null
           : normalizeManifestProvenance(source.provenance, "manifest.provenance"),
     };
+    validateManifestDeclarationsV1(normalized, "manifest");
     validateManifestErrorTypeBindingsV1(normalized);
     validateManifestDynamicAccessHintStateMaps(normalized);
     return normalized;
@@ -311,7 +332,7 @@ export function createContractManifestNormalizer(
 
   function normalizeEntrypoint(entry, name) {
     const source = assertPlainObject(entry, name);
-    const entrypointName = assertString(source.name, `${name}.name`).trim();
+    const entrypointName = assertString(source.name, `${name}.name`);
     if (!entrypointName) {
       fail(
         V_CODE_INVALID_STRING,
@@ -328,6 +349,7 @@ export function createContractManifestNormalizer(
       source.kind,
       `${name}.kind`,
     );
+    validateManifestEntrypointIdentityV1(entrypointName, kind.kind, permission, name);
     const params = normalizeEntrypointParams(source.params, `${name}.params`);
     const argumentSchema = normalizeEntrypointArgumentSchema(
       source.argument_schema ?? source.argumentSchema,

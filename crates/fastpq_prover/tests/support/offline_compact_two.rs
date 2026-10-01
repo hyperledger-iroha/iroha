@@ -134,7 +134,7 @@ fn verify_two(
     let maximum_child_bytes = original.segments.iter().map(Vec::len).max().unwrap();
     let limits = VerificationLimits::default();
     assert_eq!(limits.bundle.max_segments, CHILDREN);
-    assert_eq!(limits.bundle.max_total_queries, 64 * CHILDREN);
+    assert_eq!(limits.bundle.max_total_queries, 77 * CHILDREN);
     assert!(
         original
             .segments
@@ -359,7 +359,7 @@ pub(super) fn produce_fixture(
     assert!(limits.bundle.segment.max_proof_bytes <= 512 * 1024);
     assert!(bytes.len() <= limits.transport.max_wire_bytes);
     let started = std::time::Instant::now();
-    let verified = verify_two(&bytes, is_axt, fixture);
+    let verified = verify_two(&bytes, is_axt, &fixture);
     mark_controls_passed(&receipt, &format!("{:?}", verified.work())).unwrap();
     eprintln!(
         "two_public_verification={label}; controls={:?}; work={:?}",

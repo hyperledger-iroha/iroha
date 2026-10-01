@@ -12,7 +12,9 @@ fn decode_hex(source: &str) -> Vec<u8> {
 }
 
 fn input(length: usize) -> Vec<u8> {
-    (0..length).map(|i| ((i * 37 + 11) & 255) as u8).collect()
+    (0..length)
+        .map(|i| u8::try_from((i * 37 + 11) & 255).unwrap())
+        .collect()
 }
 
 #[test]
@@ -80,7 +82,7 @@ impl Observation {
         ERASURE.with(|counts| assert_eq!(counts.replace(Some((0, 0))), None));
         Self
     }
-    fn counts(&self) -> (usize, usize) {
+    fn counts() -> (usize, usize) {
         ERASURE.with(|counts| counts.get().unwrap())
     }
 }
@@ -96,19 +98,19 @@ fn actual_states_and_permutation_scratch_clear_on_success_error_and_unwind() {
     let mut hash = Sha3_256V1::new();
     hash.update(&[0xa5; 137]);
     let _public_digest = hash.finalize();
-    assert_eq!(observation.counts(), (2 * 35 + 25, 0));
-    let before = observation.counts().0;
-    let error = (|| {
+    assert_eq!(Observation::counts(), (2 * 35 + 25, 0));
+    let before = Observation::counts().0;
+    let error = {
         let mut xof = Shake256V1::new();
         xof.update(&[0x79; 31]);
         let mut reader = xof.finalize();
         let mut output = zeroize::Zeroizing::new([0; 288]);
         reader.read(&mut output[..]);
         Err::<(), ()>(())
-    })();
+    };
     assert!(error.is_err());
-    assert_eq!(observation.counts(), (before + 3 * 35 + 25, 0));
-    let before = observation.counts().0;
+    assert_eq!(Observation::counts(), (before + 3 * 35 + 25, 0));
+    let before = Observation::counts().0;
     assert!(
         std::panic::catch_unwind(|| {
             let mut hash = Sha3_256V1::new();
@@ -118,7 +120,8 @@ fn actual_states_and_permutation_scratch_clear_on_success_error_and_unwind() {
         })
         .is_err()
     );
-    assert_eq!(observation.counts(), (before + 50, 0));
+    assert_eq!(Observation::counts(), (before + 50, 0));
+    drop(observation);
 }
 
 #[test]
@@ -145,4 +148,12 @@ fn distinct_suffixes_opaque_bits_and_redacted_bounded_states() {
     );
     assert_eq!(Shake256V1::RETAINED_BYTES, Sha3_256V1::RETAINED_BYTES);
     assert_eq!(Shake256ReaderV1::RETAINED_BYTES, Sha3_256V1::RETAINED_BYTES);
+}
+
+#[test]
+fn opaque_digest_erases_all_bytes_for_private_merkle_owners() {
+    use zeroize::Zeroize as _;
+    let mut digest = super::Sha3Digest256V1::from_bytes([0xff; 32]);
+    digest.zeroize();
+    assert_eq!(digest.into_bytes(), [0; 32]);
 }

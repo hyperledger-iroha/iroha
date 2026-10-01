@@ -2909,6 +2909,29 @@ fn generated_projection_schema_bounds_selector_work() {
 mod registry_security;
 
 #[test]
+fn manual_descriptor_embedded_asset_preserves_all_fields_at_exact_byte_limit() {
+    assert!(MANUAL_STATIC_TOOL_ASSET.len() <= MANUAL_STATIC_TOOL_ASSET_MAX_BYTES);
+    let embedded = parse_manual_static_tool_descriptors(MANUAL_STATIC_TOOL_ASSET);
+    assert_eq!(embedded.len(), MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT);
+    let mut padded = MANUAL_STATIC_TOOL_ASSET.to_vec();
+    padded.resize(MANUAL_STATIC_TOOL_ASSET_MAX_BYTES, b' ');
+    assert_eq!(padded.len(), MANUAL_STATIC_TOOL_ASSET_MAX_BYTES);
+    let boundary = parse_manual_static_tool_descriptors(&padded);
+    assert_eq!(boundary.len(), embedded.len());
+    for (function, original) in &embedded {
+        assert!(!original.name.is_empty());
+        assert!(original.input_schema.is_object());
+        let actual = boundary.get(function).expect("same descriptor function");
+        assert_eq!(actual.name, original.name);
+        assert_eq!(actual.effect, original.effect);
+        assert_eq!(actual.description, original.description);
+        assert_eq!(actual.method, original.method);
+        assert_eq!(actual.path_template, original.path_template);
+        assert_eq!(actual.input_schema, original.input_schema);
+    }
+}
+
+#[test]
 fn manual_descriptor_loader_accepts_content_updates_and_preserves_policy() {
     let Value::Object(mut root) =
         json::from_slice::<Value>(MANUAL_STATIC_TOOL_ASSET).expect("embedded descriptor JSON")
@@ -2946,7 +2969,14 @@ fn manual_descriptor_loader_accepts_content_updates_and_preserves_policy() {
         std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&unsupported)).is_err()
     );
     let oversized = vec![b' '; MANUAL_STATIC_TOOL_ASSET_MAX_BYTES + 1];
-    assert!(std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&oversized)).is_err());
+    let mut valid_json_oversized = MANUAL_STATIC_TOOL_ASSET.to_vec();
+    valid_json_oversized.resize(MANUAL_STATIC_TOOL_ASSET_MAX_BYTES + 1, b' ');
+    assert!(json::from_slice::<Value>(&valid_json_oversized).is_ok());
+    for oversized in [oversized, valid_json_oversized] {
+        assert!(
+            std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&oversized)).is_err()
+        );
+    }
 }
 
 #[test]

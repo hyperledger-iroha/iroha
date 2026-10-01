@@ -51,7 +51,10 @@ fn scan_and_report_single_attachment() {
     assert!(rep.ok);
     assert_eq!(rep.content_type, "application/x-norito");
     assert_eq!(rep.size, body.len() as u64);
-    assert_eq!(rep.backend.as_deref(), Some("halo2/ipa"));
+    assert_eq!(
+        rep.backend.as_deref(),
+        Some(fixture_attachment().backend.as_str())
+    );
     assert!(rep.proof_hash.is_some());
     assert!(rep.proofs.is_empty());
     assert_eq!(
@@ -336,7 +339,7 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
     let tenant_key = anon_tenant_key();
     let successful = fixture_attachment();
     let mut retryable = successful.clone();
-    retryable.vk_ref = VerifyingKeyId::new("halo2/ipa", "temporarily-missing-vk");
+    retryable.vk_ref = VerifyingKeyId::new(retryable.backend.clone(), "temporarily-missing-vk");
     let list = ProofAttachmentList::try_from(vec![successful, retryable])
         .expect("two proofs fit the bounded attachment list");
     let body = norito::encode_canonical(&list).expect("canonical attachment list");
@@ -1625,7 +1628,8 @@ async fn background_worker_processes_pending_attachments() {
     let shutdown = ShutdownSignal::new();
     let worker = super::start_worker(shutdown.clone()).expect("start prover worker");
     use tokio::time::{Duration, Instant, sleep};
-    let deadline = Instant::now() + Duration::from_secs(6);
+    // The mandatory STARK fixture does real cryptographic work even in debug builds.
+    let deadline = Instant::now() + Duration::from_secs(60);
     let mut ok_report_ready = false;
     let mut err_ready = false;
     while Instant::now() < deadline {
@@ -1644,7 +1648,7 @@ async fn background_worker_processes_pending_attachments() {
     }
     shutdown.send();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), worker)
+        tokio::time::timeout(Duration::from_secs(60), worker)
             .await
             .expect("prover worker observes shutdown")
             .expect("prover worker joins"),

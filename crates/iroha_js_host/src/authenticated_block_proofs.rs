@@ -456,7 +456,7 @@ mod tests {
             builder.push_transaction(tx);
         }
         let mut block = builder.build(BTreeSet::new());
-        NativeFinalityFixture::install_network_results(&mut block, vec![Ok(Default::default()); 2]);
+        NativeFinalityFixture::install_network_results(&mut block, vec![Ok(Vec::new()); 2]);
         let entries: Vec<_> = block.network_input_hashes().collect();
         let block_proofs = block.network_execution_proof(&entries[0]).unwrap();
         let alternate_block_proofs = block.network_execution_proof(&entries[1]).unwrap();
@@ -545,12 +545,12 @@ mod tests {
         assert_eq!(checkpoint.height(), 2);
         assert_eq!(checkpoint.block_hash(), fixture.block.hash());
         let verifier = fixture.native.verifier();
-        let verified = verifier
+        let authenticated = verifier
             .verify_same_decision(&fixture.finality, &fixture.finality)
             .unwrap();
         assert_eq!(
             verdict.context_id_hex,
-            hex::encode(verified.context_id().as_ref())
+            hex::encode(authenticated.context_id().as_ref())
         );
     }
     #[test]

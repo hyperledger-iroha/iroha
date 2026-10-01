@@ -154,7 +154,7 @@ fn atomic_settlement_executes_three_and_255_exact_payments_once() {
     for count in [3, 255] {
         let (state, movements, definition) = atomic_state(count);
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
         let instruction = atomic_instruction(&stx, movements);
         install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
         let transcripts = stx.pending_transfer_transcript_count_for_testing();
@@ -296,7 +296,7 @@ fn atomic_settlement_wrong_network_or_expired_height_changes_nothing() {
 fn atomic_settlement_inclusive_expiry_height_is_accepted() {
     let (state, movements, _) = atomic_state(3);
     let mut block = state.block(BlockHeader::new(nonzero!(100_u64), None, None, 0, 0));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
     instruction
@@ -395,7 +395,7 @@ fn atomic_settlement_missing_carrier_identity_changes_nothing() {
 fn atomic_settlement_exact_signed_owner_needs_no_delegation_for_its_own_bucket() {
     let (state, movements, _) = atomic_state(3);
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
     let authority = movements[1].source.account().clone();
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &authority, &instruction, Some(1));
@@ -408,7 +408,8 @@ fn atomic_settlement_exact_signed_owner_needs_no_delegation_for_its_own_bucket()
 fn atomic_settlement_fresh_carrier_cannot_replay_the_business_identifier() {
     let (state, movements, _) = atomic_state(3);
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut stx = block.transaction();
+    block.admit_fastpq_source_for_testing(Hash::new(b"different-valid-carrier"));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
     instruction
@@ -431,7 +432,7 @@ fn atomic_settlement_fresh_carrier_cannot_replay_the_business_identifier() {
 fn atomic_settlement_reference_retention_includes_the_final_movement() {
     let (state, movements, _) = atomic_state(255);
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
     let instruction = atomic_instruction(&stx, movements);
     install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
     instruction
@@ -573,7 +574,7 @@ fn atomic_settlement_restricted_exact_bucket_survives_universal_coordinator_exec
     let (state, movements, definition) =
         atomic_state_in_scope(3, scope, AssetBalancePolicy::DataspaceRestricted);
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
     stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let instruction = atomic_instruction(&stx, movements);

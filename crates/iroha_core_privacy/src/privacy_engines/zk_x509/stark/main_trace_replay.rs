@@ -1,10 +1,18 @@
 //! Original-mask replay from closed immutable MAIN witness owners.
 
-use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1};
+use super::super::super::private_table::{
+    PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1,
+};
 #[cfg(test)]
 use super::super::super::prover_observation::{PhaseTimerV1, PhaseV1};
+use super::main_bounded_transform::{MainBoundedTransformPolicyV1, check_completion_v1};
 use super::*;
 use crate::privacy_engines::transparent_stark::{ReplayableTraceMaskV1, sample_trace_mask_v1};
+use fastpq_prover::goldilocks_transform::{
+    GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
+    GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
+    transform_goldilocks_columns_v1,
+};
 
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::masked_trace_coefficients_with_mask_v1;
@@ -17,13 +25,7 @@ pub(in super::super) struct MainTraceMaskGroupV1 {
 }
 
 impl MainTraceMaskGroupV1 {
-    pub(in super::super) fn sample_v1<R: TryRngCore>(
-        native_log: u8,
-        common_log: u8,
-        width: usize,
-        rng: &mut R,
-        mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
-    ) -> Result<Self, ZkX509StarkErrorV1> {
+    fn empty_v1(native_log: u8, common_log: u8, width: usize) -> Result<Self, ZkX509StarkErrorV1> {
         let native_rows = 1_usize
             .checked_shl(u32::from(native_log))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -43,6 +45,26 @@ impl MainTraceMaskGroupV1 {
         masks
             .try_reserve_exact(width)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if masks.capacity() != width {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(Self {
+            native_log,
+            common_log,
+            masks,
+        })
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn sample_v1<R: TryRngCore>(
+        native_log: u8,
+        common_log: u8,
+        width: usize,
+        rng: &mut R,
+        mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        let mut group = Self::empty_v1(native_log, common_log, width)?;
+        let native_rows = 1_usize << native_log;
         for column in 0..width {
             // Preserve the original source-before-entropy order and reject bad
             // native columns before sampling their masks. No native column survives.
@@ -58,15 +80,13 @@ impl MainTraceMaskGroupV1 {
             }
             #[cfg(test)]
             let mask_timer = PhaseTimerV1::start_v1(PhaseV1::SampleMaskDraws);
-            masks.push(sample_trace_mask_v1(MASK_DEGREE, rng).map_err(map_transparent_error_v1)?);
+            group
+                .masks
+                .push(sample_trace_mask_v1(MASK_DEGREE, rng).map_err(map_transparent_error_v1)?);
             #[cfg(test)]
             mask_timer.complete_v1();
         }
-        Ok(Self {
-            native_log,
-            common_log,
-            masks,
-        })
+        Ok(group)
     }
 
     /// Reuse bounded source batches while the original sampler preserves the
@@ -75,6 +95,7 @@ impl MainTraceMaskGroupV1 {
     /// the corresponding scalar source would have been reached; no proof is
     /// published in either case. The pending iterator owns at most eight
     /// clearing columns on error and unwind too.
+    #[cfg(test)]
     pub(in super::super) fn sample_batched_v1<R: TryRngCore>(
         native_log: u8,
         common_log: u8,
@@ -106,6 +127,75 @@ impl MainTraceMaskGroupV1 {
         })
     }
 
+    /// Retain only this batch through its original source-before-mask sequence.
+    /// A failed transform returns immediately, so later columns consume no entropy.
+    /// Successful calls preserve the sampler's exact RNG sequence. Failed calls
+    /// deliberately do not promise the old all-masks-before-commit RNG position.
+    #[allow(clippy::too_many_arguments)]
+    fn sample_and_replay_batch_with_v1<R: TryRngCore>(
+        &mut self,
+        columns: core::ops::Range<usize>,
+        policy: MainBoundedTransformPolicyV1,
+        rng: &mut R,
+        mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
+        transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        check_completion_v1(uncertain())?;
+        let width = columns
+            .end
+            .checked_sub(columns.start)
+            .filter(|&width| width != 0 && width <= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if columns.start != self.masks.len() || columns.end > self.masks.capacity() {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let native_rows = 1_usize << self.native_log;
+        let mut resident = Vec::new();
+        resident
+            .try_reserve_exact(width)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if resident.capacity() != width {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        for column in columns.clone() {
+            check_completion_v1(uncertain())?;
+            #[cfg(test)]
+            let source_timer = PhaseTimerV1::start_v1(PhaseV1::SampleSourceColumns);
+            let native = source(column)?;
+            #[cfg(test)]
+            source_timer.complete_v1();
+            if native.len() != native_rows
+                || native.iter().any(|value| F::canonical(value.0).is_none())
+            {
+                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+            }
+            if native.0.capacity() != native_rows {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
+            check_completion_v1(uncertain())?;
+            #[cfg(test)]
+            let mask_timer = PhaseTimerV1::start_v1(PhaseV1::SampleMaskDraws);
+            self.masks
+                .push(sample_trace_mask_v1(MASK_DEGREE, rng).map_err(map_transparent_error_v1)?);
+            #[cfg(test)]
+            mask_timer.complete_v1();
+            resident.push(native);
+        }
+        // In the batched source case this drops an exhausted source allocation.
+        // It must precede replay: only its replacement iterator header array is
+        // charged by for_native_replay_v1, never two simultaneous source arrays.
+        drop(source);
+        let mut resident = resident.into_iter();
+        self.replay_batch_with_v1(
+            columns,
+            policy,
+            |_| resident.next().ok_or(ZkX509StarkErrorV1::InternalInvariant),
+            transform,
+            uncertain,
+        )
+    }
+
     #[cfg(test)]
     fn replay_v1(
         &self,
@@ -121,14 +211,39 @@ impl MainTraceMaskGroupV1 {
             .map_err(map_transparent_error_v1)
     }
 
-    /// Construct sources serially, then interpolate only the bounded resident
-    /// batch in parallel. Mask application replaces one allocation at a time;
-    /// the original random coefficients and column order are unchanged.
+    /// Construct sources serially, interpolate only the bounded resident batch,
+    /// then replace each native allocation with its original masked polynomial.
     fn replay_batch_v1(
         &self,
         columns: core::ops::Range<usize>,
-        mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
+        policy: MainBoundedTransformPolicyV1,
+        source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
     ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        self.replay_batch_with_v1(
+            columns,
+            policy,
+            source,
+            |words, root, direction| {
+                transform_goldilocks_columns_v1(
+                    words,
+                    root,
+                    direction,
+                    fastpq_prover::ExecutionMode::Auto,
+                )
+            },
+            goldilocks_transform_completion_uncertain_v1,
+        )
+    }
+
+    fn replay_batch_with_v1(
+        &self,
+        columns: core::ops::Range<usize>,
+        policy: MainBoundedTransformPolicyV1,
+        mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
+        mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        check_completion_v1(uncertain())?;
         let width = columns
             .end
             .checked_sub(columns.start)
@@ -155,30 +270,39 @@ impl MainTraceMaskGroupV1 {
         let coefficient_count = native_rows
             .checked_add(MASK_DEGREE + 1)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        let mut batch = Vec::new();
+        // One matrix owner guards the original native allocations. This allows
+        // the exact same shared word staging as private quotient forward FFTs.
+        let mut batch = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1::<Vec<F>>);
         batch
             .try_reserve_exact(width)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if batch.capacity() != width {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
         for column in columns {
-            // Never overlap source construction scratch: only the completed
-            // native column transfers to this bounded batch.
+            check_completion_v1(uncertain())?;
             let native = PrivateTableV1::new(source(column)?.into_vec_v1(), zeroize_fields_v1);
             if native.len() != native_rows
                 || native.iter().any(|value| F::canonical(value.0).is_none())
             {
                 return Err(ZkX509StarkErrorV1::ProfileMismatch);
             }
-            batch.push(native);
+            if native.capacity() != native_rows {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
+            batch.push(native.into_vec());
         }
-        batch.par_iter_mut().try_for_each(|native| {
-            crate::privacy_engines::transparent_stark::goldilocks_ifft_v1(native, root)
-                .map_err(map_transparent_error_v1)
-        })?;
+        // The clearing word/device batch is gone before mask replacement starts.
+        policy.inverse_with_v1(&mut batch, root, &mut transform, &mut uncertain)?;
         for (native, mask) in batch.iter_mut().zip(masks) {
+            check_completion_v1(uncertain())?;
             let mut coefficients = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
             coefficients
                 .try_reserve_exact(coefficient_count)
                 .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+            if coefficients.capacity() != coefficient_count {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
             coefficients.extend_from_slice(native);
             coefficients.resize(coefficient_count, F::ZERO);
             // T(X) + r(X)(X^n - 1), including masks longer than native n.
@@ -186,15 +310,24 @@ impl MainTraceMaskGroupV1 {
                 coefficients[degree] = coefficients[degree].sub(random);
                 coefficients[native_rows + degree] = coefficients[native_rows + degree].add(random);
             }
-            *native = coefficients;
+            // Guard the outgoing allocation before the old native cells drop.
+            let previous = PrivateTableV1::new(
+                core::mem::replace(native, coefficients.into_vec()),
+                zeroize_fields_v1,
+            );
+            drop(previous);
         }
         let mut output = Vec::new();
         output
             .try_reserve_exact(width)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        for coefficients in batch {
-            output.push(ZeroizingMainTraceColumnV1(coefficients.into_vec()));
+        if output.capacity() != width {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
         }
+        for coefficients in batch.iter_mut() {
+            output.push(ZeroizingMainTraceColumnV1(core::mem::take(coefficients)));
+        }
+        check_completion_v1(uncertain())?;
         Ok(output)
     }
 }
@@ -207,6 +340,7 @@ pub(in super::super) struct MainTracePolynomialSetV1 {
 }
 
 impl MainTracePolynomialSetV1 {
+    #[cfg(test)]
     pub(in super::super) fn from_ordered_v1(
         layout: &AggregateProofLayoutV1,
         kind: MainTraceColumnKindV1,
@@ -266,6 +400,7 @@ impl MainTracePolynomialSetV1 {
         .map_err(map_aggregate_error_v1)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn replay_columns_coefficients_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -273,6 +408,7 @@ impl MainTracePolynomialSetV1 {
         group_index: usize,
         columns: core::ops::Range<usize>,
         sources: &MainTraceReplaySourcesV1<'_, '_>,
+        policy: MainBoundedTransformPolicyV1,
     ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
         let masks = self
             .groups
@@ -280,16 +416,18 @@ impl MainTracePolynomialSetV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         let mut next_column = columns.start;
         let mut native = None;
-        masks.replay_batch_v1(columns.clone(), |column| {
+        let policy = policy.for_native_replay_v1()?;
+        masks.replay_batch_v1(columns.clone(), policy, |column| {
             if column != next_column {
                 return Err(ZkX509StarkErrorV1::InternalInvariant);
             }
             if native.is_none() {
-                native = Some(
-                    sources
-                        .native_columns_v1(layout, kind, group_index, columns.clone())?
-                        .into_iter(),
-                );
+                let batch =
+                    sources.native_columns_v1(layout, kind, group_index, columns.clone())?;
+                if batch.len() != columns.len() || batch.capacity() != columns.len() {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                native = Some(batch.into_iter());
             }
             next_column += 1;
             native
@@ -308,6 +446,148 @@ impl MainTracePolynomialSetV1 {
         sources: &MainTraceReplaySourcesV1<'_, '_>,
     ) -> Result<aggregate::StreamingRowCommitmentResultV1, ZkX509StarkErrorV1> {
         let plan = self.joined_plan_v1(layout, kind)?;
+        let native_policy =
+            MainBoundedTransformPolicyV1::for_assembly_v1(layout, assembly_payload)?;
+        Self::commit_joined_batches_v1(
+            layout,
+            kind,
+            indices,
+            assembly_payload,
+            plan,
+            |group, columns| {
+                self.replay_columns_coefficients_v1(
+                    layout,
+                    kind,
+                    group,
+                    columns,
+                    sources,
+                    native_policy,
+                )
+            },
+        )
+    }
+
+    /// First commitment consumes each native source once and retains only masks.
+    /// All successful RNG draws, polynomials and commitment framing are unchanged.
+    /// Errors are fail-fast: no later source/RNG activity and no partial root escapes.
+    pub(super) fn sample_and_commit_joined_v1<R: TryRngCore>(
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        assembly_payload: usize,
+        sources: &MainTraceReplaySourcesV1<'_, '_>,
+        rng: &mut R,
+    ) -> Result<(Self, aggregate::StreamingRowCommitmentResultV1), ZkX509StarkErrorV1> {
+        layout.validate_exact_full_profile_registration_v1()?;
+        check_completion_v1(goldilocks_transform_completion_uncertain_v1())?;
+        let mut groups = Vec::new();
+        groups
+            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        for (index, group) in layout.trace_groups.iter().enumerate() {
+            if MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1.get(index).copied()
+                != Some(group.native_trace_log2)
+            {
+                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+            }
+            let width = match kind {
+                MainTraceColumnKindV1::Base => group.base_width,
+                MainTraceColumnKindV1::Aux => group.aux_width,
+            };
+            groups.push(MainTraceMaskGroupV1::empty_v1(
+                group.native_trace_log2,
+                layout.common_lde_log2,
+                width,
+            )?);
+        }
+        let mut set = Self {
+            groups: groups
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
+        };
+        let plan = aggregate::joined_trace::JoinedTraceCommitmentPlanV1::new_v1(
+            layout.parameters_v1(),
+            &layout.as_shared()?,
+            match kind {
+                MainTraceColumnKindV1::Base => {
+                    aggregate::joined_trace::JoinedTraceColumnKindV1::Base
+                }
+                MainTraceColumnKindV1::Aux => aggregate::joined_trace::JoinedTraceColumnKindV1::Aux,
+            },
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let policy = MainBoundedTransformPolicyV1::for_assembly_v1(layout, assembly_payload)?
+            .for_native_replay_v1()?;
+        let commitment = Self::commit_joined_batches_v1(
+            layout,
+            kind,
+            &[],
+            assembly_payload,
+            plan,
+            |group, columns| {
+                let mut pending = Vec::new().into_iter();
+                let mut next_column = columns.start;
+                let range = columns.clone();
+                set.groups
+                    .get_mut(group)
+                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+                    .sample_and_replay_batch_with_v1(
+                        columns,
+                        policy,
+                        rng,
+                        move |column| {
+                            if column != next_column {
+                                return Err(ZkX509StarkErrorV1::InternalInvariant);
+                            }
+                            next_column += 1;
+                            // Preserve the previous source/entropy interleaving: groups
+                            // 0..4 construct one source per draw; log19 constructs eight.
+                            if group != FULL_PROFILE_TRACE_GROUPS_V1 - 1 {
+                                let (registration, local) =
+                                    registered_main_group_column_v1(layout, group, kind, column)?;
+                                return sources.native_column_v1(layout, kind, registration, local);
+                            }
+                            if column == range.start {
+                                let batch = sources.native_columns_v1(
+                                    layout,
+                                    kind,
+                                    group,
+                                    range.clone(),
+                                )?;
+                                if batch.len() != range.len() || batch.capacity() != range.len() {
+                                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                                }
+                                pending = batch.into_iter();
+                            }
+                            pending.next().ok_or(ZkX509StarkErrorV1::InternalInvariant)
+                        },
+                        |words, root, direction| {
+                            transform_goldilocks_columns_v1(
+                                words,
+                                root,
+                                direction,
+                                fastpq_prover::ExecutionMode::Auto,
+                            )
+                        },
+                        goldilocks_transform_completion_uncertain_v1,
+                    )
+            },
+        )?;
+        set.validate_v1(layout, kind)?;
+        Ok((set, commitment))
+    }
+
+    /// One framing and evaluator path serves initial resident batches and replay.
+    fn commit_joined_batches_v1(
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        indices: &[usize],
+        assembly_payload: usize,
+        plan: aggregate::joined_trace::JoinedTraceCommitmentPlanV1,
+        mut batch: impl FnMut(
+            usize,
+            core::ops::Range<usize>,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+    ) -> Result<aggregate::StreamingRowCommitmentResultV1, ZkX509StarkErrorV1> {
         // The same joined plan creates the leaf framing for retained and replayed
         // columns. At most eight coefficient/evaluation columns coexist.
         let mut source_error = None;
@@ -324,22 +604,16 @@ impl MainTracePolynomialSetV1 {
                         if column % aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 != 0 {
                             return Err(ZkX509StarkErrorV1::InternalInvariant);
                         }
-                        let width = self
-                            .groups
+                        let descriptor = layout
+                            .trace_groups
                             .get(group)
-                            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
-                            .masks
-                            .len();
+                            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+                        let width = match kind {
+                            MainTraceColumnKindV1::Base => descriptor.base_width,
+                            MainTraceColumnKindV1::Aux => descriptor.aux_width,
+                        };
                         let end = width.min(column + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
-                        pending = self
-                            .replay_columns_coefficients_v1(
-                                layout,
-                                kind,
-                                group,
-                                column..end,
-                                sources,
-                            )?
-                            .into_iter();
+                        pending = batch(group, column..end)?.into_iter();
                         pending_next = Some((group, column));
                     }
                     if pending_next != Some((group, column)) {
@@ -370,6 +644,24 @@ impl MainTracePolynomialSetV1 {
         }
     }
 
+    /// Borrow only the original masks owned by this exact validated trace set.
+    pub(super) fn original_masks_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        group: usize,
+        columns: core::ops::Range<usize>,
+    ) -> Result<&[ReplayableTraceMaskV1], ZkX509StarkErrorV1> {
+        self.validate_v1(layout, kind)?;
+        if columns.is_empty() || columns.len() > aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        self.groups
+            .get(group)
+            .and_then(|group| group.masks.get(columns))
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
+    }
+
     pub(super) fn deep_group_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -383,9 +675,6 @@ impl MainTracePolynomialSetV1 {
             .groups
             .get(group)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        let next = point.mul_base(
-            goldilocks_primitive_root_v1(masks.native_log).map_err(map_transparent_error_v1)?,
-        );
         let mut current_values = ZeroizingExtensionColumnV1(Vec::new());
         let mut next_values = ZeroizingExtensionColumnV1(Vec::new());
         current_values
@@ -396,24 +685,32 @@ impl MainTracePolynomialSetV1 {
             .0
             .try_reserve_exact(masks.masks.len())
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        let powers = main_deep_replay::MainDeepPointPowersV1::new_v1(
-            [point, next],
-            (1_usize << masks.native_log) + MASK_DEGREE + 1,
-        )?;
+        let points = main_deep_replay::MainNativeDeepPointsV1::new_v1(masks.native_log, point)?;
         for first in (0..masks.masks.len()).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
             let end = masks
                 .masks
                 .len()
                 .min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
-            let coefficients =
-                self.replay_columns_coefficients_v1(layout, kind, group, first..end, sources)?;
-            let values = coefficients
-                .par_iter()
-                .map(|column| powers.evaluate_v1(column))
-                .collect::<Result<Vec<_>, _>>()?;
-            for [current, next] in values {
-                current_values.0.push(current);
-                next_values.0.push(next);
+            let native = sources.native_columns_v1(layout, kind, group, first..end)?;
+            points.check_workspace_v1(&[], 0, &native, native.capacity())?;
+            let original_masks = self.original_masks_v1(layout, kind, group, first..end)?;
+            if native.len() != original_masks.len() {
+                return Err(ZkX509StarkErrorV1::InternalInvariant);
+            }
+            let mut values = main_deep_replay::MainDeepStackValuesV1::<
+                { 2 * aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 },
+            >::zero_v1();
+            values.as_mut_slice_v1()[..2 * native.len()]
+                .par_chunks_mut(2)
+                .zip(native.par_iter())
+                .zip(original_masks.par_iter())
+                .try_for_each(|((values, native), mask)| {
+                    values.copy_from_slice(&points.evaluate_v1(native, mask.coefficients())?);
+                    Ok::<(), ZkX509StarkErrorV1>(())
+                })?;
+            for pair in values.as_slice_v1()[..2 * native.len()].chunks_exact(2) {
+                current_values.0.push(pair[0]);
+                next_values.0.push(pair[1]);
             }
         }
         Ok((
@@ -512,11 +809,15 @@ mod tests {
                         let caller = std::thread::current().id();
                         let mut order = Vec::new();
                         let result = group
-                            .replay_batch_v1(range.clone(), |column| {
-                                assert_eq!(std::thread::current().id(), caller);
-                                order.push(column);
-                                Ok(native(native_log, column))
-                            })
+                            .replay_batch_v1(
+                                range.clone(),
+                                MainBoundedTransformPolicyV1::cpu_v1(),
+                                |column| {
+                                    assert_eq!(std::thread::current().id(), caller);
+                                    order.push(column);
+                                    Ok(native(native_log, column))
+                                },
+                            )
                             .unwrap();
                         assert_eq!(order, range.clone().collect::<Vec<_>>());
                         result
@@ -574,7 +875,7 @@ mod tests {
             let mut calls = 0;
             assert!(
                 group
-                    .replay_batch_v1(range, |_| {
+                    .replay_batch_v1(range, MainBoundedTransformPolicyV1::cpu_v1(), |_| {
                         calls += 1;
                         Ok(native(3, 0))
                     })
@@ -599,7 +900,7 @@ mod tests {
         for unwind in [false, true] {
             let (result, observations) = inspection::observe_v1(|| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    group.replay_batch_v1(0..8, |column| {
+                    group.replay_batch_v1(0..8, MainBoundedTransformPolicyV1::cpu_v1(), |column| {
                         if column == 2 {
                             assert!(!unwind, "injected source unwind");
                             return Err(ZkX509StarkErrorV1::InternalInvariant);
@@ -616,13 +917,15 @@ mod tests {
         }
         let (result, observations) = inspection::observe_v1(|| {
             group
-                .replay_batch_v1(0..8, |column| Ok(native(3, column)))
+                .replay_batch_v1(0..8, MainBoundedTransformPolicyV1::cpu_v1(), |column| {
+                    Ok(native(3, column))
+                })
                 .unwrap()
         });
         assert_cleared(observations, 64);
         assert_eq!(result.len(), 8);
         let (result, observations) = inspection::observe_v1(|| {
-            group.replay_batch_v1(0..8, |column| {
+            group.replay_batch_v1(0..8, MainBoundedTransformPolicyV1::cpu_v1(), |column| {
                 if column == 7 {
                     Ok(ZeroizingMainTraceColumnV1(vec![F::ONE; 7]))
                 } else {
@@ -717,6 +1020,56 @@ impl MainTraceReplaySourcesV1<'_, '_> {
         while first < columns.end {
             let (registration, local) =
                 registered_main_group_column_v1(layout, group, kind, first)?;
+            if registration.segment.adapter == SegmentAdapterIdV1::Rfc5280
+                && matches!(kind, MainTraceColumnKindV1::Base)
+            {
+                let end = columns.end.min(registration.base_end()?);
+                if end <= first {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let mut batch = (first..end)
+                    .map(|_| zeroed_main_trace_column_v1(registration.segment.trace_size()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                {
+                    let count = batch.len();
+                    let mut targets: [&mut [F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                        core::array::from_fn(|_| -> &mut [F] { &mut [] });
+                    for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
+                        *target = &mut **column;
+                    }
+                    match self {
+                        Self::Base {
+                            assembly,
+                            sha,
+                            p256,
+                            ..
+                        } => {
+                            let source = MainLog19BaseTraceGroupSourceV1::for_main_v1(
+                                layout, assembly, sha, p256,
+                            )?;
+                            if source.registration_index_v1(registration)? != 1 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            source
+                                .rfc
+                                .fill_base_columns_v1(local, &mut targets[..count])
+                                .map_err(map_main_rfc_source_error_v1)?;
+                        }
+                        Self::Bound { log19, .. } => {
+                            if log19.registration_index_v1(registration)? != 1 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            log19
+                                .rfc
+                                .fill_base_columns_v1(local, &mut targets[..count])
+                                .map_err(map_main_rfc_source_error_v1)?;
+                        }
+                    }
+                }
+                output.extend(batch);
+                first = end;
+                continue;
+            }
             let grouped_p256_aux = registration.segment.adapter
                 == SegmentAdapterIdV1::P256Arithmetic
                 || (registration.segment.adapter == SegmentAdapterIdV1::P256ValueBus
@@ -923,3 +1276,86 @@ impl MainTraceReplaySourcesV1<'_, '_> {
 #[cfg(test)]
 #[path = "main_mask_sampling_tests.rs"]
 mod mask_sampling_tests;
+
+#[cfg(test)]
+mod native_mask_borrow_tests {
+    use super::*;
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
+
+    #[test]
+    #[ignore = "complete registered original-mask ownership and RNG control; run optimized"]
+    fn original_mask_borrows_bind_registered_kind_group_range_and_preserve_entropy() {
+        let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+        let mut rng = StdRng::from_seed([191; 32]);
+        let groups = layout
+            .trace_groups
+            .iter()
+            .map(|group| MainTraceMaskGroupV1 {
+                native_log: group.native_trace_log2,
+                common_log: layout.common_lde_log2,
+                masks: (0..group.base_width)
+                    .map(|_| sample_trace_mask_v1(MASK_DEGREE, &mut rng).unwrap())
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let set =
+            MainTracePolynomialSetV1::from_ordered_v1(&layout, MainTraceColumnKindV1::Base, groups)
+                .unwrap();
+        let mut unchanged_rng = rng.clone();
+        for (index, group) in layout.trace_groups.iter().enumerate() {
+            let end = group
+                .base_width
+                .min(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
+            let borrowed = set
+                .original_masks_v1(&layout, MainTraceColumnKindV1::Base, index, 0..end)
+                .unwrap();
+            assert_eq!(borrowed.len(), end);
+            for (column, mask) in borrowed.iter().enumerate() {
+                assert!(core::ptr::eq(mask, &set.groups[index].masks[column]));
+                assert_eq!(
+                    mask.coefficients(),
+                    set.groups[index].masks[column].coefficients()
+                );
+                assert_eq!(mask.coefficients().len(), MASK_DEGREE + 1);
+            }
+            for invalid in [
+                0..0,
+                0..aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 + 1,
+                group.base_width..group.base_width + 1,
+            ] {
+                assert!(
+                    set.original_masks_v1(&layout, MainTraceColumnKindV1::Base, index, invalid)
+                        .is_err()
+                );
+            }
+        }
+        assert!(
+            set.original_masks_v1(
+                &layout,
+                MainTraceColumnKindV1::Base,
+                FULL_PROFILE_TRACE_GROUPS_V1,
+                0..1
+            )
+            .is_err()
+        );
+        assert!(
+            set.original_masks_v1(&layout, MainTraceColumnKindV1::Aux, 0, 0..1)
+                .is_err()
+        );
+        let mut malformed_layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+        malformed_layout.trace_groups[0].native_trace_log2 += 1;
+        assert!(
+            set.original_masks_v1(&malformed_layout, MainTraceColumnKindV1::Base, 0, 0..1)
+                .is_err()
+        );
+        assert_eq!(rng.next_u64(), unchanged_rng.next_u64());
+    }
+}
+
+#[cfg(test)]
+#[path = "main_trace_replay_inverse_tests.rs"]
+mod inverse_tests;
+
+#[cfg(test)]
+#[path = "main_sample_commit_tests.rs"]
+mod sample_commit_tests;

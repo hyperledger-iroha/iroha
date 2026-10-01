@@ -90,6 +90,7 @@ impl KagamiTaira {
         let dir = crate::localnet::localnet_test_helpers::private_tempdir()
             .expect("temporary Taira directory");
         let opts = LocalnetOptions {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(TAIRA_TESTNET_PEERS).expect("four peers"),

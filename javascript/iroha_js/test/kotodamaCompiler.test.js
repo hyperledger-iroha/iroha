@@ -2772,3 +2772,50 @@ test("compiler output authenticates static error messages against embedded bytes
   response.output.manifestJson = JSON.stringify(forged);
   await assert.rejects(compileKotodamaWithNativeBinding(native, "seiyaku Demo {}"), /error_messages do not match/u);
 });
+
+test("shared compiler sidecar geometry preserves exact diagnostics and validation order", () => {
+  const cases = [
+    ["sourceMapJson", { pc_start: 5, source_id: -1 }, "source-map sidecar entry 0 must use a forward PC range"],
+    ["sourceMapJson", { source_id: -1, byte_start: -1 }, "source-map sidecar entry 0.source_id must be an unsigned safe integer in 0..4294967295"],
+    ["budgetReportJson", { pc_start: 5, bytecode_bytes: -1 }, "budget sidecar entry 0.bytecode_bytes must be an unsigned safe integer in 0..4294967295"],
+    ["budgetReportJson", { pc_start: 5, jump_range_risk: 0 }, "budget sidecar entry 0.jump_range_risk must be a boolean"],
+    ["budgetReportJson", { source_id: null, byte_start: 0 }, "budget sidecar entry 0 must use one consistent nullable source location"],
+  ];
+  for (const [field, changed, message] of cases) {
+    const result = structuredClone(SERVICE_SUCCESS);
+    const sidecar = JSON.parse(result.output[field]);
+    Object.assign(sidecar.entries[0], changed);
+    result.output[field] = JSON.stringify(sidecar);
+    assert.throws(() => normalizeCompilerResult(result), { name: "TypeError", message });
+  }
+  const nullable = structuredClone(SERVICE_SUCCESS);
+  const budget = JSON.parse(nullable.output.budgetReportJson);
+  for (const key of ["source_path", "source_id", "byte_start", "byte_end", "line", "column"]) {
+    budget.entries[0][key] = null;
+  }
+  nullable.output.budgetReportJson = JSON.stringify(budget);
+  assert.equal(normalizeCompilerResult(nullable).output.budgetReport[0].source_id, null);
+});
+
+test("shared compiler native invocation preserves the exact metadata failure cause", async () => {
+  const client = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () => ({}),
+  });
+  await assert.rejects(client.compile("seiyaku Demo {}"), (error) => {
+    assert.equal(error.name, "TypeError");
+    assert.equal(error.message, "Kotodama compiler fetch returned an invalid Response");
+    assert.ok(error.cause instanceof TypeError);
+    return true;
+  });
+});
+
+test("shared compiler Unicode validation accepts scalar pairs and rejects lone surrogates", async () => {
+  const calls = [];
+  const client = new KotodamaCompilerClient("https://compiler.example", { fetchImpl: successfulFetch(calls) });
+  await client.compile("seiyaku Demo {} // \u{1F30F}");
+  assert.equal(calls.length, 1);
+  for (const source of ["\uD800", "\uDFFF", "\uD800x"]) {
+    await assert.rejects(client.compile(source), { name: "TypeError", message: "Kotodama source must contain valid Unicode scalar values" });
+  }
+  assert.equal(calls.length, 1);
+});

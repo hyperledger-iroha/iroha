@@ -7,7 +7,6 @@ use iroha_data_model::governance::types::{
 use iroha_data_model::parliament_casting::{
     PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1, ParliamentTimedOvnCastingContextBindingV1,
     ParliamentTimedOvnCastingSnapshotCommitmentV1,
-    ParliamentTimedOvnRegistrationCorpusCommitmentV1,
 };
 use mv::storage::StorageReadOnly;
 

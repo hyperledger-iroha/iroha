@@ -620,7 +620,7 @@ fn abort_constant_rate_task(task: Option<JoinHandle<()>>) {
 
 const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x53_4e_01;
 const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
-const QUIC_DEPENDENCY_BLOCK_REASON: &str = "SoraNet relay QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "SoraNet relay QUIC is unavailable pending transport requalification of locked quinn-proto 0.11.18; dependency memory and panic fixes alone do not establish authenticated transport, resource, or interoperability qualification";
 
 fn validate_shipping_quinn_dependency() -> Result<(), RelayError> {
     Err(RelayError::Quic(QUIC_DEPENDENCY_BLOCK_REASON.to_owned()))
@@ -3800,7 +3800,7 @@ impl RelayRuntime {
     }
     /// Start the relay control/data planes until shutdown is requested.
     pub async fn run(self) -> Result<(), RelayError> {
-        // Reject before constructing the endpoint so vulnerable Quinn cannot
+        // Reject before constructing the endpoint so unqualified Quinn cannot
         // bind a socket or receive unauthenticated traffic.
         validate_shipping_quinn_dependency()?;
         let listen_addr = self.config.listen_addr()?;
@@ -7510,9 +7510,9 @@ impl RelayRuntime {
             .send_window(QUIC_SEND_WINDOW_BYTES_V1)
             .crypto_buffer_size(QUIC_CRYPTO_BUFFER_BYTES_V1)
             // The reachable best-effort path only sends cover DATAGRAMs. Do
-            // not advertise receive support: Quinn 0.11.9 / quinn-proto 0.11.15 charges
-            // payload bytes but no fixed amount per queued entry, so a peer
-            // could otherwise enqueue unbounded zero-length DATAGRAMs.
+            // not advertise unused receive support. Locked Quinn 0.11.12 /
+            // quinn-proto 0.11.18 fixes entry accounting, but shipping QUIC
+            // remains unavailable pending complete transport qualification.
             .datagram_receive_buffer_size(None)
             .datagram_send_buffer_size(QUIC_DATAGRAM_BUFFER_BYTES_V1)
             // The spin bit leaks an otherwise unnecessary RTT signal.
@@ -7627,11 +7627,9 @@ fn ensure_constant_rate_runtime_available(
         .constant_rate
         .is_some_and(|capability| capability.mode == ConstantRateMode::Strict)
     {
-        // Quinn 0.11.9 / quinn-proto 0.11.15 charges only payload bytes against its
-        // DATAGRAM receive buffer. Zero-length entries can therefore grow the
-        // queue without consuming the configured byte budget. The strict mux
-        // must remain unreachable until the locked transport has per-entry
-        // accounting and the end-to-end path is requalified.
+        // Locked Quinn 0.11.12 / quinn-proto 0.11.18 fixes per-entry accounting.
+        // The strict mux must remain unreachable until its scheduling,
+        // resource bounds and every payload consumer are qualified end to end.
         return Err(HandshakeError::StrictConstantRateUnavailable);
     }
     Ok(())

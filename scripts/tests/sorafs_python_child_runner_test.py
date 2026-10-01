@@ -13,12 +13,14 @@ import copy
 from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+import unittest
 
 import pytest
 
@@ -310,7 +312,7 @@ def run_original_harness(root: Path):
     module = sys.modules["iroha_python"]
     saved = list(module.__path__); module.__path__.append(str(root))
     try:
-        with pytest.raises(runner.QualificationError, match="search path"):
+        with unittest.TestCase().assertRaisesRegex(runner.QualificationError, "search path"):
             runner.loaded_members(verifier, owners)
     finally:
         module.__path__[:] = saved
@@ -319,18 +321,30 @@ def run_original_harness(root: Path):
     native_owners = [(native_wheel.owner.package, native_layout.site_root,
                       {member.name: (member.sha256, member.size) for member in native_wheel.package_members},
                       "iroha_native._crypto")]
-    with pytest.raises(runner.QualificationError, match="unexpected loader"):
+    with unittest.TestCase().assertRaisesRegex(runner.QualificationError, "unexpected loader"):
         runner.loaded_members(verifier, native_owners)  # inert subclass is never a production native loader
     return {"scope": "original inert wheel harness and source-owner controls only",
-            "harness_sha256": hashlib.sha256(body.encode()).hexdigest()}
+            "harness_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "python_flags": {"isolated": sys.flags.isolated, "no_site": sys.flags.no_site}}
 
 
 @pytest.mark.parametrize("mode", ["synthetic", "harness"])
 def test_isolated_actual_pytest_and_original_archive_owners(tmp_path: Path, mode: str) -> None:
     environment = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONDONTWRITEBYTECODE": "1"}
     environment.pop("PYTEST_CURRENT_TEST", None)
-    result = subprocess.run([sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--run", mode, str(tmp_path / mode)],
-                            env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    if mode == "harness":
+        # Only this inert import-control mode needs the synthetic wheel site.
+        # Its exact function body runs without ambient installed distributions.
+        source = "import hashlib, importlib.util, json, sys, unittest\nfrom pathlib import Path\n"
+        source += "ROOT = Path(sys.argv[1])\n" + inspect.getsource(load)
+        source += "runner = load('python_child_runner_controls', ROOT / 'scripts/fixtures/SorafsPythonConsumerQualificationRunner.py')\n"
+        source += inspect.getsource(run_original_harness)
+        source += "print('SYNTHETIC_CHILD_CONTROL=' + json.dumps(run_original_harness(Path(sys.argv[2])), sort_keys=True))\n"
+        command = [sys.executable, "-I", "-S", "-B", "-c", source, str(ROOT), str(tmp_path / mode)]
+    else:
+        command = [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--run", mode, str(tmp_path / mode)]
+    result = subprocess.run(command, env=environment, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=120)
     (tmp_path / "stdout.log").write_bytes(result.stdout)
     (tmp_path / "stderr.log").write_bytes(result.stderr)
     assert result.returncode == 0, result.stdout.decode() + result.stderr.decode()
@@ -340,6 +354,7 @@ def test_isolated_actual_pytest_and_original_archive_owners(tmp_path: Path, mode
         assert report["cases"] == 77 and report["phases"] == 231 and report["max_node_bytes"] > 10_000
     else:
         assert "inert" in report["scope"]
+        assert report["python_flags"] == {"isolated": 1, "no_site": 1}
 
 
 if __name__ == "__main__":

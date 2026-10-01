@@ -228,8 +228,8 @@ fn four_keys_reach_the_exact_maximum_touched_tree_under_default_updates() {
         resources.total_queries,
         VerificationLimits::default().bundle.max_total_queries
     );
-    assert_eq!(resources.maximum_segment_frame_bytes, 502_895);
-    assert_eq!(resources.maximum_bundle_frame_bytes, 1_006_942);
+    assert_eq!(resources.maximum_segment_frame_bytes, 500_084);
+    assert_eq!(resources.maximum_bundle_frame_bytes, 1_001_320);
 }
 
 fn three_delta_statement() -> FastpqPublicTransferStatementV1 {

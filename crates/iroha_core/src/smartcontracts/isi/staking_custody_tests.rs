@@ -237,6 +237,14 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
         (validator, asset, before, share_before, nexus)
     };
     state_block.drain_transfer_transcripts();
+    // This first phase is the original direct genesis-height custody component.
+    // Retain its exact pending record/reserves before creating the signed root;
+    // ordinary Initial execution below must not reuse a header-shaped genesis.
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("retain the exact component custody setup");
+    let state = original_staking_state(state, nexus.clone());
+    let mut state_block = state.block(original_staking_header(&state));
     let key = (lane, validator.clone());
     let share_key = stake_key(lane, &validator, &validator);
     let instruction = {

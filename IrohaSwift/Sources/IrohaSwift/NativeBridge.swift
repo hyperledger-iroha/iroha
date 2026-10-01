@@ -104,6 +104,13 @@ enum NoritoBridgeLoader {
         "connect_norito_acceleration_config_get_v1",
         "connect_norito_acceleration_state_get_v1"
     ]
+    // ML-DSA is owned by the mandatory soranet_pq/pqc native dependency.
+    static let mldsaRequiredSymbols = [
+        "soranet_mldsa_parameters",
+        "soranet_mldsa_generate_keypair",
+        "soranet_mldsa_sign",
+        "soranet_mldsa_verify"
+    ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
@@ -164,7 +171,7 @@ enum NoritoBridgeLoader {
         "connect_norito_kagemusha_device_command_response_v1_verify",
         "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
         "connect_norito_kagemusha_device_mint_stage_result_v1_validate"
-    ] + parliamentTimedOvnWalletRequiredSymbols + accelerationRequiredSymbols
+    ] + parliamentTimedOvnWalletRequiredSymbols + accelerationRequiredSymbols + mldsaRequiredSymbols
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
 
@@ -2157,6 +2164,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.loadedBridgeAbiVersion = abiVersion
 
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        guard let mldsaParameters = staticHandle.flatMap({ dlsym($0, "soranet_mldsa_parameters") }),
+              let mldsaGenerateKeypair = staticHandle.flatMap({ dlsym($0, "soranet_mldsa_generate_keypair") }),
+              let mldsaSign = staticHandle.flatMap({ dlsym($0, "soranet_mldsa_sign") }),
+              let mldsaVerify = staticHandle.flatMap({ dlsym($0, "soranet_mldsa_verify") }) else {
+            self.loadedBridgeAbiVersion = nil
+            NSLog("[NoritoNativeBridge] missing canonical ML-DSA exports")
+            return
+        }
         guard let accelerationSet = staticHandle.flatMap({ dlsym($0, "connect_norito_acceleration_config_set_v1") }),
               let accelerationGet = staticHandle.flatMap({ dlsym($0, "connect_norito_acceleration_config_get_v1") }),
               let accelerationState = staticHandle.flatMap({ dlsym($0, "connect_norito_acceleration_state_get_v1") }) else {
@@ -2278,6 +2293,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.verifyDetachedFn = staticHandle
             .flatMap { dlsym($0, "connect_norito_verify_detached") }
             .map { unsafeBitCast($0, to: VerifyDetachedFn.self) }
+        self.mldsaParametersFn = unsafeBitCast(mldsaParameters, to: MldsaParametersFn.self)
+        self.mldsaGenerateKeypairFn = unsafeBitCast(mldsaGenerateKeypair, to: MldsaGenerateKeypairFn.self)
+        self.mldsaSignFn = unsafeBitCast(mldsaSign, to: MldsaSignFn.self)
+        self.mldsaVerifyFn = unsafeBitCast(mldsaVerify, to: MldsaVerifyFn.self)
         self.freeFn = connect_norito_free
         if let enterSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_chain_discriminant_scope_enter")
@@ -3039,22 +3058,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.secp256k1VerifyFn = nil
             }
-            if let mldsaParamsSymbol = dlsym(handle, "connect_norito_mldsa_parameters") ?? dlsym(handle, "soranet_mldsa_parameters") {
+            if let mldsaParamsSymbol = dlsym(handle, "soranet_mldsa_parameters") {
                 self.mldsaParametersFn = unsafeBitCast(mldsaParamsSymbol, to: MldsaParametersFn.self)
             } else {
                 self.mldsaParametersFn = nil
             }
-            if let mldsaGenerateSymbol = dlsym(handle, "connect_norito_mldsa_generate_keypair") ?? dlsym(handle, "soranet_mldsa_generate_keypair") {
+            if let mldsaGenerateSymbol = dlsym(handle, "soranet_mldsa_generate_keypair") {
                 self.mldsaGenerateKeypairFn = unsafeBitCast(mldsaGenerateSymbol, to: MldsaGenerateKeypairFn.self)
             } else {
                 self.mldsaGenerateKeypairFn = nil
             }
-            if let mldsaSignSymbol = dlsym(handle, "connect_norito_mldsa_sign") ?? dlsym(handle, "soranet_mldsa_sign") {
+            if let mldsaSignSymbol = dlsym(handle, "soranet_mldsa_sign") {
                 self.mldsaSignFn = unsafeBitCast(mldsaSignSymbol, to: MldsaSignFn.self)
             } else {
                 self.mldsaSignFn = nil
             }
-            if let mldsaVerifySymbol = dlsym(handle, "connect_norito_mldsa_verify") ?? dlsym(handle, "soranet_mldsa_verify") {
+            if let mldsaVerifySymbol = dlsym(handle, "soranet_mldsa_verify") {
                 self.mldsaVerifyFn = unsafeBitCast(mldsaVerifySymbol, to: MldsaVerifyFn.self)
             } else {
                 self.mldsaVerifyFn = nil

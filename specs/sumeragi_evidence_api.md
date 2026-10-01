@@ -35,14 +35,20 @@ error. Every negotiated response declares `Vary: Accept`.
     measures first and allocates only an accepted exact-size body.
   - Every JSON audit item includes the non-null `consensus_admitted_height` and one closed `penalty_status` object. Its exact shape is `{ "status": "pending", "details": null }`, `{ "status": "applied", "details": { "height": <u64> } }`, or `{ "status": "cancelled", "details": { "height": <u64> } }`; the terminal height is the canonical block that applied or cancelled the penalty.
   - The persisted first-release Norito `EvidenceRecord` stores `recorded_at_height`, `recorded_at_view`, `recorded_at_ms`, and the same closed `EvidencePenaltyStatus` sum type. Shortened pre-release records and retired boolean/nullable penalty layouts are rejected rather than default-filled.
+  - `offenders` may be empty only for a `conflicting_certificates` item with
+    `safety_violation: true`: CommitQCs from different views establish a safety
+    violation without attributing individual signers. SDKs preserve that report
+    and its exact proof hash; they never invent an offender to make it parse.
   - `EvidenceRecord` is not itself the JSON response DTO. Torii exposes a fixed, closed audit projection; the embedded `Evidence` holds one canonical native Sumeragi evidence frame (`iroha_sumeragi::message::Evidence`).
   - Node-local pending observations have no data-model record and never appear in either endpoint. No instruction cancels a penalty; the `cancelled` status is never written.
-- Evidence with a subject height older than governed
-  `SumeragiNposParameters.reconfig.evidence_horizon_blocks` is dropped on
-  ingress; the actor logs the rejection to help operators investigate stale
-  submissions. This signed value and `slashing_delay_blocks` are immutable
-  after initial installation; their sum cannot exceed three epochs. They are
-  on-chain state, not local `[sumeragi]` config or executor-owned defaults.
+- Root evidence uses its authenticated global subject height for the governed
+  `SumeragiNposParameters.reconfig.evidence_horizon_blocks` check. Lane evidence
+  uses its authenticated incarnation's lifetime: live custody remains liable,
+  and retirement admits through `retired_at + evidence_horizon_blocks`, inclusive.
+  A native lane subject height is never interpreted as a global horizon or tenure
+  clock. This signed horizon and `slashing_delay_blocks` are immutable after
+  initial installation; their sum cannot exceed three epochs. They are on-chain
+  state, not local `[sumeragi]` config or executor-owned defaults.
 
 Evidence mutation is not an HTTP or CLI operation. Evidence enters through the
 authenticated consensus peer path and, for exact native equivocation proofs,
@@ -50,9 +56,13 @@ through canonically ordered proof batches bound to signed blocks. Validators
 anchor the frozen height context only to cryptographically verified committed
 finality history (never the structural recovery context store), then reverify
 roster-ordered proofs of possession, both artifact signatures, referenced
-current-context certificates, the evidence horizon, canonical ordering, batch
-bounds, and the durable deduplication key before admission. Torii and the SDKs
-  expose only the two read-only audit endpoints above.
+current-context certificates, the evidence lifetime, canonical ordering, batch
+bounds, and the durable deduplication key before admission. Lane proofs additionally
+verify the original creation and admission-parent carriers, pinned committee and
+proofs of possession, every required native ancestry/demotion header, and the exact
+globally merged branch frontier. Their persisted attribution carries an explicit
+lane scope and original signer custody; missing positive creation-time custody is
+forensic-only. Torii and the SDKs expose only the two read-only audit endpoints above.
 
 Committed evidence is part of canonical WSV snapshot state. An at-tip restart
 must restore each pending or terminal record exactly; peer-local gossip is not
@@ -60,7 +70,21 @@ a reconstruction authority for penalty liens or replay fences. The table holds
 at most four complete validator rosters (124 records) and at most 16 MiB of
 canonical proof payloads after stale terminal records are reclaimed. Candidate
 validation, post-execution insertion, snapshot recovery, and proposer selection
-all enforce the same checked byte accounting.
+all enforce the same checked byte accounting. Saturation defers additional admissions
+without evicting retained proofs. The immutable penalty delay starts at the global
+admission carrier. A live lane's terminal record remains a replay fence; a retired
+lane's terminal record is prunable only strictly after its admission deadline and
+only with its authenticated original custody row and immutable policy. Unknown,
+reclaimed or substituted incarnations cannot authorize admission or reopen replay.
+
+Existing-State record restoration authenticates original carrier inclusion, attribution,
+clock and terminal effects while retaining the original native reader on local refusal.
+Typed original-history and custody decoder budget refusals defer under the same owner,
+including consuming handoffs. Missing or corrupt lane sources fail that acquisition and
+release its pending admission slot; local proposer selection can continue to another proof
+without deleting the failed observation or treating a storage failure as signer guilt.
+This does not qualify accelerated whole-State startup: nonempty snapshot caches remain
+rejected until complete State and certified-history restoration is authenticated.
 
 The binary `Evidence` shape carries only the canonical native frame. Retired kind/payload
 records fail decode and are never reconstructed from mutable topology state.

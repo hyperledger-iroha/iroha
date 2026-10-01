@@ -2,17 +2,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_config::parameters::actual::ParliamentTimedOvn;
 use iroha_core::{
-    governance::{
-        manifest::LaneManifestRegistry,
-        parliament::{
-            ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
-        },
+    governance::parliament::{
+        ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
     },
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
     smartcontracts::ivm::cache::IvmCache,
-    state::{State, StateTransaction, World, WorldReadOnly},
+    state::{State, StateReadOnly, StateTransaction, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -77,10 +72,10 @@ fn quantity(value: &str) -> Quantity {
         .parse()
         .expect("canonical validation-fee fixture quantity")
 }
-fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
+fn block_header(state: &State, height: u64, timestamp_ms: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("height"),
-        None,
+        state.view().latest_block_hash(),
         None,
         timestamp_ms,
         0,
@@ -105,27 +100,13 @@ fn xor_asset_definition_id() -> AssetDefinitionId {
         "xor".parse().expect("asset name"),
     )
 }
-fn payout_contract_address() -> ContractAddress {
-    ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
-        &account(1).0,
-        42,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("payout contract address")
+fn payout_contract_address(network: &iroha_data_model::NetworkId) -> ContractAddress {
+    ContractAddress::derive(network, &account(1).0, 42, DataSpaceId::UNIVERSAL)
+        .expect("payout contract address")
 }
-fn pool_contract_address() -> ContractAddress {
-    ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
-        &account(2).0,
-        43,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("pool contract address")
+fn pool_contract_address(network: &iroha_data_model::NetworkId) -> ContractAddress {
+    ContractAddress::derive(network, &account(2).0, 43, DataSpaceId::UNIVERSAL)
+        .expect("pool contract address")
 }
 fn payout_contract_artifact() -> (
     Vec<u8>,
@@ -294,8 +275,11 @@ fn pool_contract_artifact() -> (
     let verified = ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
     (artifact, verified.manifest)
 }
-fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutBindingV1 {
-    let contract_address = payout_contract_address();
+fn payout_binding(
+    network: &iroha_data_model::NetworkId,
+    fee_asset: &AssetDefinitionId,
+) -> ValidationFeeTreasuryPayoutBindingV1 {
+    let contract_address = payout_contract_address(network);
     let (contract_artifact, _) = payout_contract_artifact();
     ValidationFeeTreasuryPayoutBindingV1 {
         treasury_account_id: contract_address.subject_id(),
@@ -306,7 +290,7 @@ fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutB
             .expect("payout entrypoint"),
         ds_asset_id: fee_asset.clone(),
         xor_asset_id: xor_asset_definition_id(),
-        pool_vault_account_id: pool_contract_address().subject_id(),
+        pool_vault_account_id: pool_contract_address(network).subject_id(),
         batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
         min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
         max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
@@ -331,7 +315,6 @@ fn test_state() -> (
     let domain_id = DomainId::try_new("fees", "paynet").expect("domain id");
     let domain = Domain::new(domain_id).build(&user);
     let fee_asset = fee_asset_definition_id();
-    let treasury = payout_contract_address().subject_id();
     let asset_definition = AssetDefinition::new(
         fee_asset.clone(),
         "fee_token".to_owned(),
@@ -355,11 +338,13 @@ fn test_state() -> (
     let mut accounts = vec![
         Account::new(user.clone()).build(&user),
         Account::new(recipient.clone()).build(&user),
-        Account::new(treasury.clone()).build(&user),
-        Account::new(pool_contract_address().subject_id()).build(&user),
     ];
     accounts.extend((2..=6).map(|seed| Account::new(account(seed).0).build(&user)));
-    let state = State::new_for_testing(
+    use iroha_core::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let config = TestChainConfig::new(
         World::with_assets(
             [domain],
             accounts,
@@ -367,17 +352,27 @@ fn test_state() -> (
             [user_asset],
             [],
         ),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
+        1_700_000_000_000,
     );
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    state
-        .block(block_header(1, 1_700_000_000_000))
-        .commit_empty_block_for_testing()
-        .expect("commit canonical genesis asset-incarnation state");
+    let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared =
+        CertifiedTestChain::prepare(config).expect("original signed fee admission genesis");
+    let state = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished fee admission State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_authority,
+        mode.into(),
+        None,
+    )
+    .expect("apply actual signed fee admission genesis");
+    let treasury = payout_contract_address(state.network_id_ref()).subject_id();
+    assert_eq!(
+        state.network_id_ref().into_genesis_hash(),
+        state.view().latest_block_hash().unwrap()
+    );
     (state, user, user_key_pair, recipient, treasury, fee_asset)
 }
 fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {
@@ -406,7 +401,7 @@ fn validation_fee_policy(
     fee_asset: AssetDefinitionId,
     treasury: AccountId,
 ) -> ValidationFeePolicyV1 {
-    let payout_binding = payout_binding(&fee_asset);
+    let payout_binding = payout_binding(state.network_id_ref(), &fee_asset);
     assert_eq!(treasury, payout_binding.treasury_account_id);
     ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
@@ -890,32 +885,45 @@ fn install_canonical_post_enactment_validation_fee_state(
         TEST_POLICY_ENACTMENT_HEIGHT
     );
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_ENACTMENT_HEIGHT,
         1_700_000_006_000,
     ));
-    let mut state_transaction = block.transaction();
+    let mut state_transaction = block
+        .transaction_for_fastpq_testing(Hash::new(b"validation_fee_admission_original_callback"));
 
     let register_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_permission, authority.clone())
         .execute(authority, &mut state_transaction)
         .expect("grant payout-contract registration authority");
+    let payout_dataspace = payout_contract_address(state.network_id_ref())
+        .dataspace_id()
+        .expect("payout contract has an exact native dataspace");
     let (contract_artifact, contract_manifest) = payout_contract_artifact();
     let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
         authority,
+<<<<<<< HEAD
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+=======
+        payout_dataspace,
+>>>>>>> origin/optimizations
         contract_artifact,
         &mut state_transaction,
     )
     .expect("register payout-contract bytes");
     iroha_core::smartcontracts::code::register_manifest(
         authority,
+<<<<<<< HEAD
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+=======
+        payout_dataspace,
+>>>>>>> origin/optimizations
         contract_manifest.signed(authority_key_pair),
         &mut state_transaction,
     )
     .expect("register signed payout-contract manifest");
-    let payout_contract_address_for_activation = payout_contract_address();
+    let payout_contract_address_for_activation = payout_contract_address(state.network_id_ref());
     state_transaction
         .world
         .bind_inactive_contract_subject_for_testing(
@@ -931,22 +939,33 @@ fn install_canonical_post_enactment_validation_fee_state(
     )
     .expect("activate immutable payout-contract subject");
 
+    let pool_dataspace = pool_contract_address(state.network_id_ref())
+        .dataspace_id()
+        .expect("pool contract has an exact native dataspace");
     let (pool_artifact, pool_manifest) = pool_contract_artifact();
     let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
         authority,
+<<<<<<< HEAD
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+=======
+        pool_dataspace,
+>>>>>>> origin/optimizations
         pool_artifact,
         &mut state_transaction,
     )
     .expect("register pool-contract bytes");
     iroha_core::smartcontracts::code::register_manifest(
         authority,
+<<<<<<< HEAD
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+=======
+        pool_dataspace,
+>>>>>>> origin/optimizations
         pool_manifest.signed(authority_key_pair),
         &mut state_transaction,
     )
     .expect("register signed pool-contract manifest");
-    let pool_contract_address_for_activation = pool_contract_address();
+    let pool_contract_address_for_activation = pool_contract_address(state.network_id_ref());
     state_transaction
         .world
         .bind_inactive_contract_subject_for_testing(
@@ -968,13 +987,13 @@ fn install_canonical_post_enactment_validation_fee_state(
         .expect("enabled policy carries its payout binding");
     let wrapper_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-            contract: payout_contract_address(),
+            contract: payout_contract_address(state.network_id_ref()),
             entrypoint: "autonomous_validation_fee_tick".to_owned(),
         }
         .into();
     let pool_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-            contract: pool_contract_address(),
+            contract: pool_contract_address(state.network_id_ref()),
             entrypoint: "swap_exact_in_quote_public".to_owned(),
         }
         .into();
@@ -1070,8 +1089,9 @@ fn install_hijiri_state(
     parameters: Option<&HijiriParametersV1>,
     account_risk: Option<&HijiriAccountRiskV1>,
 ) {
-    let mut block = state.block(block_header(height, 1_700_000_007_000 + height));
-    let mut state_transaction = block.transaction();
+    let mut block = state.block(block_header(&state, height, 1_700_000_007_000 + height));
+    let mut state_transaction = block
+        .transaction_for_fastpq_testing(Hash::new(b"validation_fee_admission_original_callback"));
     if let Some(parameters) = parameters {
         state_transaction
             .world
@@ -1359,7 +1379,7 @@ fn signed_batch_transfer_with_entries(
 }
 fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> String {
     let accepted = accept_transaction(state, tx);
-    let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
+    let mut block = state.block(block_header(&state, height, 1_700_000_002_000 + height));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut block,
@@ -1776,10 +1796,12 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
     let policy = validation_fee_policy(&state, fee_asset, treasury);
     let custom = policy_registry(&state, &policy).into_custom_parameter();
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_ENACTMENT_HEIGHT,
         1_700_000_001_000,
     ));
-    let mut state_transaction = block.transaction();
+    let mut state_transaction = block
+        .transaction_for_fastpq_testing(Hash::new(b"validation_fee_admission_original_callback"));
     let error = SetParameter::new(Parameter::Custom(custom))
         .execute(&user, &mut state_transaction)
         .expect_err("generic parameter writes must not bypass Parliament");
@@ -1802,6 +1824,7 @@ fn active_registry_rejects_missing_enacted_parliament_attempt() {
     let proposal_id = policy_proposal(&policy).fingerprint();
     {
         let mut block = state.block(block_header(
+            &state,
             TEST_POLICY_ENACTMENT_HEIGHT + 1,
             1_700_000_007_000,
         ));
@@ -1843,13 +1866,13 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
     install_canonical_post_enactment_validation_fee_state(&state, &user, &user_key_pair, policy);
     let wrapper_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-            contract: payout_contract_address(),
+            contract: payout_contract_address(state.network_id_ref()),
             entrypoint: "autonomous_validation_fee_tick".to_owned(),
         }
         .into();
     let pool_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-            contract: pool_contract_address(),
+            contract: pool_contract_address(state.network_id_ref()),
             entrypoint: "swap_exact_in_quote_public".to_owned(),
         }
         .into();
@@ -1859,6 +1882,7 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
         }
         .into();
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_ENACTMENT_HEIGHT + 1,
         1_700_000_007_000,
     ));
@@ -1868,7 +1892,7 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
         (pool_permission, treasury.clone()),
         (
             wrapper_ds_transfer_permission,
-            pool_contract_address().subject_id(),
+            pool_contract_address(state.network_id_ref()).subject_id(),
         ),
     ] {
         let grant_error = Grant::account_permission(permission.clone(), recipient.clone())
@@ -1972,6 +1996,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     );
     let accepted = accept_transaction(&state, missing_fee_tx);
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_EFFECTIVE_HEIGHT,
         1_700_000_003_000,
     ));
@@ -2008,6 +2033,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     );
     let accepted = accept_transaction(&state, underpaid_fee_tx);
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_EFFECTIVE_HEIGHT + 1,
         1_700_000_004_000,
     ));
@@ -2053,6 +2079,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     .sign(user_key_pair.private_key());
     let accepted = accept_transaction(&state, fee_then_overdrawn_principal_tx);
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_EFFECTIVE_HEIGHT + 2,
         1_700_000_005_000,
     ));
@@ -2092,6 +2119,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     );
     let accepted = accept_transaction(&state, principal_then_overdrawn_fee_tx);
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_EFFECTIVE_HEIGHT + 3,
         1_700_000_006_000,
     ));
@@ -2130,6 +2158,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     );
     let accepted = accept_transaction(&state, exact_fee_tx);
     let mut block = state.block(block_header(
+        &state,
         TEST_POLICY_EFFECTIVE_HEIGHT + 4,
         1_700_000_007_000,
     ));

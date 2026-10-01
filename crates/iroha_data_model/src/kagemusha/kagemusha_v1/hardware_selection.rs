@@ -1,8 +1,9 @@
 //! Signed selection of one exact KAGEMUSHA monetary transition.
 //!
 //! Signature verification is necessary but cannot authorize money alone. A platform verifier
-//! must prove that a qualified non-forking device generated the secure index, and the paired
-//! recursive proof must fold that verification for every ancestor.
+//! must bind the original app approval to the actual native monetary owner and the paired
+//! recursive proof must fold that verification for every ancestor. Financial logical indexes
+//! are native protocol metadata; ordinary attested keys do not assert hardware non-forking.
 
 use super::app_attest_extensions::{
     parse_app_attest_assertion, parse_app_attest_assertion_extensions,
@@ -170,10 +171,10 @@ pub struct KagemushaHardwareTransitionSelectionV1 {
     /// Self-free terminal body committed by the device for an outgoing transition.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub terminal_body_commitment: [u8; 32],
-    /// Irreversible index consumed before this transition.
+    /// Native financial logical index consumed before this transition.
     pub secure_index_before: u128,
-    /// Exact successor index authenticated by the platform signature or assertion.
-    /// The profile's counter or one-use-key guarantee must independently prevent forks.
+    /// Exact successor financial logical index bound by app approval and native replay state.
+    /// This field is independent of the platform assertion counter and makes no hardware claim.
     pub secure_index_after: u128,
 }
 
@@ -184,18 +185,39 @@ impl KagemushaHardwareTransitionSelectionV1 {
     ///
     /// Returns an error for any missing identity or index other than exact-next.
     pub fn validate_shape(&self) -> Result<(), KagemushaValidationErrorV1> {
+        self.validate_phase_shape(false)
+    }
+    /// Validate the exact prepared transition before an outgoing candidate exists.
+    /// All identity, epoch and logical-index checks remain mandatory; candidate and terminal
+    /// commitments must both be zero. This is not terminal monetary approval.
+    /// # Errors
+    /// Rejects incomplete scope, skipped logical indexes or any candidate/terminal commitment.
+    pub fn validate_prepare_shape(&self) -> Result<(), KagemushaValidationErrorV1> {
+        self.validate_phase_shape(true)
+    }
+    fn validate_phase_shape(&self, prepare: bool) -> Result<(), KagemushaValidationErrorV1> {
         let outgoing = matches!(
             self.operation_kind,
             KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
         );
+        let bootstrap = self.operation_kind == KagemushaOperationKindV1::Bootstrap;
+        let valid_indexes = if bootstrap {
+            self.secure_index_before == 0 && self.secure_index_after == 0
+        } else {
+            self.secure_index_before.checked_add(1) == Some(self.secure_index_after)
+        };
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
-            || self.operation_kind == KagemushaOperationKindV1::Bootstrap
+            || !valid_indexes
             || self.network_id.as_bytes() == &[0; 32]
             || self.policy_epoch == 0
             || self.hardware_epoch_generation == 0
-            || self.secure_index_before.checked_add(1) != Some(self.secure_index_after)
-            || outgoing != (self.candidate_envelope_digest != [0; 32])
-            || outgoing != (self.terminal_body_commitment != [0; 32])
+            || if prepare {
+                self.candidate_envelope_digest != [0; 32]
+                    || self.terminal_body_commitment != [0; 32]
+            } else {
+                outgoing != (self.candidate_envelope_digest != [0; 32])
+                    || outgoing != (self.terminal_body_commitment != [0; 32])
+            }
             || [
                 self.release_id,
                 self.provider_policy_root,
@@ -224,6 +246,17 @@ impl KagemushaHardwareTransitionSelectionV1 {
     /// Returns an error for an invalid subject or unexpected fixed-field length.
     pub fn canonical_signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
         self.validate_shape()?;
+        self.encode_signing_bytes()
+    }
+    /// Encode the same fixed 403-byte subject and domain for a preparation approval.
+    /// The enclosing purpose-specific wrapper separates this from terminal approval.
+    /// # Errors
+    /// Rejects invalid preparation scope or nonzero candidate/terminal commitments.
+    pub fn canonical_prepare_signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
+        self.validate_prepare_shape()?;
+        self.encode_signing_bytes()
+    }
+    fn encode_signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
         let mut message =
             Vec::with_capacity(KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES);
         message.extend_from_slice(SIGNING_DOMAIN_V1);
@@ -325,6 +358,8 @@ pub enum KagemushaAppAttestReleaseMeasurementV1 {
 pub struct KagemushaVerifiedAppAttestSelectionV1 {
     /// Digest of the exact Norito selection carrying the original assertion bytes.
     pub evidence_digest: [u8; 32],
+    /// Original signed Apple counter; separate from the monetary logical indexes.
+    pub app_attest_counter: u32,
     /// Whether this particular assertion carried signed release measurements.
     pub release_measurement: KagemushaAppAttestReleaseMeasurementV1,
 }
@@ -407,7 +442,7 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
             .map_err(|_| invalid("kagemusha.app_attest.assertion"))
     }
 
-    /// Check App Attest's P-256 assertion equation and an exact-next authenticated counter.
+    /// Check App Attest's original P-256 equation and advance over an independently retained floor.
     ///
     /// The signed ECDSA-SHA256 input is Apple's nonce
     /// `SHA256(authenticatorData || SHA256(canonical_signing_bytes))`. ECDSA-SHA256 hashes
@@ -424,13 +459,14 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
     /// semantics before using this evidence in any monetary proof.
     ///
     /// # Errors
-    /// Rejects a malformed assertion, wrong app/key/subject, invalid signature or skipped count.
+    /// Rejects a malformed assertion, wrong app/key/subject, invalid signature or replayed count.
     pub fn verify_signature_and_counter_against(
         &self,
         credential: &KagemushaHardwareCredentialV1,
         profile: &KagemushaHardwareProfileV1,
         expected: KagemushaHardwareTransitionSelectionExpectedV1,
         policy: &KagemushaAppAttestationAuthorityPolicyV1,
+        original_app_attest_counter_floor: u32,
     ) -> Result<KagemushaVerifiedAppAttestSelectionV1, KagemushaValidationErrorV1> {
         validate_subject_against(&self.subject, credential, profile, expected)?;
         if profile.platform_class != KagemushaHardwarePlatformClassV1::AppleAppAttest {
@@ -441,13 +477,16 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
             .map_err(|_| invalid("kagemusha.app_attest.app_policy"))?;
         let (authenticator_data, signature_der) = self.original_assertion_components()?;
         let expected_rp_id = policy.app_signing_identity_digest;
-        let counter = u32::try_from(self.subject.secure_index_after)
-            .map_err(|_| invalid("kagemusha.app_attest.counter"))?;
+        let counter = u32::from_be_bytes(
+            authenticator_data[33..37]
+                .try_into()
+                .map_err(|_| invalid("kagemusha.app_attest.counter"))?,
+        );
         if expected_rp_id == [0; 32]
             || authenticator_data[..32] != expected_rp_id[..]
             || !matches!(authenticator_data[32], 0x40 | 0xc0)
             || (authenticator_data.len() == 37 && authenticator_data[32] != 0x40)
-            || authenticator_data[33..37] != counter.to_be_bytes()[..]
+            || counter <= original_app_attest_counter_floor
         {
             return Err(invalid("kagemusha.app_attest.assertion"));
         }
@@ -477,6 +516,7 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
             .map_err(|_| invalid("kagemusha.app_attest.signature"))?;
         require_encoded_size(self, KAGEMUSHA_APP_ATTEST_SELECTION_MAX_BYTES_V1)?;
         Ok(KagemushaVerifiedAppAttestSelectionV1 {
+            app_attest_counter: counter,
             evidence_digest: digest_bytes(
                 APP_ATTEST_DIGEST_DOMAIN_V1,
                 &norito::encode_canonical(self)?,
@@ -676,16 +716,91 @@ mod tests {
         assert_eq!(operation_tag_v1(KagemushaOperationKindV1::RedeemSplit), 4);
         assert_eq!(operation_tag_v1(KagemushaOperationKindV1::Rotate), 5);
     }
+    #[test]
+    fn prepared_subject_and_wrapper_keep_terminal_approval_separate() {
+        use crate::kagemusha::{
+            KagemushaAppOperationApprovalChallengeV1, KagemushaAppOperationApprovalPurposeV1,
+            KagemushaAppOperationApprovalSigningLayoutV1,
+        };
+        let (_, _, _, _, signed) = fixture();
+        let mut subject = signed.subject;
+        assert!(subject.canonical_prepare_signing_bytes().is_err());
+        subject.candidate_envelope_digest = [0; 32];
+        subject.terminal_body_commitment = [0; 32];
+        assert!(subject.canonical_signing_bytes().is_err());
+        let prepared = subject.canonical_prepare_signing_bytes().unwrap();
+        assert_eq!(
+            prepared.len(),
+            KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES
+        );
+        let mut wrapper = KagemushaAppOperationApprovalChallengeV1 {
+            version: 1,
+            purpose: KagemushaAppOperationApprovalPurposeV1::PrepareTransition,
+            operation_id: [1; 32],
+            nonce: [2; 32],
+            account_binding: [3; 32],
+            authority_policy_digest: [4; 32],
+            attested_key_id: [5; 32],
+            enrollment_digest: [6; 32],
+            subject_signing_digest: Sha256::digest(&prepared).into(),
+            normalized_guard_digest: [7; 32],
+            issued_at_ms: 100,
+            expires_at_ms: 200,
+            subject,
+        };
+        let bytes = wrapper.canonical_signing_bytes().unwrap();
+        assert_eq!(
+            bytes[KagemushaAppOperationApprovalSigningLayoutV1::PURPOSE],
+            [2]
+        );
+        wrapper.purpose = KagemushaAppOperationApprovalPurposeV1::MonetaryTransition;
+        assert!(wrapper.canonical_signing_bytes().is_err());
+        wrapper.purpose = KagemushaAppOperationApprovalPurposeV1::PrepareTransition;
+        wrapper.subject.candidate_envelope_digest = [8; 32];
+        assert!(wrapper.canonical_signing_bytes().is_err());
+        wrapper.subject = subject;
+        wrapper.subject.secure_index_after += 1;
+        assert!(wrapper.canonical_signing_bytes().is_err());
+    }
 
     #[test]
-    fn bootstrap_has_no_signed_hardware_selection() {
+    fn bootstrap_selection_has_zero_logical_indexes_and_no_outgoing_commitments() {
         let (_, _, _, _, signed) = fixture();
         let mut subject = signed.subject;
         subject.operation_kind = KagemushaOperationKindV1::Bootstrap;
         subject.candidate_envelope_digest = [0; 32];
         subject.terminal_body_commitment = [0; 32];
-        assert!(subject.validate_shape().is_err());
-        assert!(subject.canonical_signing_bytes().is_err());
+        subject.secure_index_before = 0;
+        subject.secure_index_after = 0;
+        assert!(subject.validate_shape().is_ok());
+        assert_eq!(
+            subject.canonical_signing_bytes().unwrap().len(),
+            KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES
+        );
+        for index in 0..4 {
+            let mut changed = subject;
+            match index {
+                0 => changed.secure_index_before = 1,
+                1 => changed.secure_index_after = 1,
+                2 => changed.candidate_envelope_digest = [1; 32],
+                _ => changed.terminal_body_commitment = [1; 32],
+            }
+            assert!(changed.validate_shape().is_err());
+        }
+    }
+
+    #[test]
+    fn ordinary_android_key_policy_does_not_claim_hardware_one_use() {
+        let (_, mut profile, _, _, _) = fixture();
+        profile.platform_class = KagemushaHardwarePlatformClassV1::AndroidKeyMint;
+        profile.capability_mask = super::super::KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1;
+        profile.app_attestation_authority_policy_digest = [1; 32];
+        profile = profile.seal_hardware_profile_id().unwrap();
+        assert_eq!(profile.capability_mask, 0x0003_0000);
+        assert!(profile.validate().is_ok());
+        profile.capability_mask |= super::super::KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1;
+        profile = profile.seal_hardware_profile_id().unwrap();
+        assert!(profile.validate().is_err());
     }
 
     #[test]
@@ -1047,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn app_attest_assertion_binds_original_cbor_core_selection_and_strict_next_counter() {
+    fn app_attest_assertion_binds_original_cbor_and_independent_counter_floor() {
         let (profile, credential, expected, policy, evidence) = app_attest_fixture();
         let (original_authenticator, original_signature) =
             evidence.original_assertion_components().unwrap();
@@ -1059,7 +1174,13 @@ mod tests {
         trailing.raw_assertion.push(0);
         assert!(trailing.original_assertion_components().is_err());
         let verify = |selection: &KagemushaAppAttestHardwareTransitionSelectionV1| {
-            selection.verify_signature_and_counter_against(&credential, &profile, expected, &policy)
+            selection.verify_signature_and_counter_against(
+                &credential,
+                &profile,
+                expected,
+                &policy,
+                9,
+            )
         };
         let verified = verify(&evidence).unwrap();
         assert_ne!(verified.evidence_digest, [0; 32]);
@@ -1118,7 +1239,12 @@ mod tests {
         auth = original_auth.to_vec();
         auth[36] = 11;
         skipped.raw_assertion = signed_assertion(&skipped.subject, &auth, &signer);
-        assert!(verify(&skipped).is_err());
+        assert_eq!(verify(&skipped).unwrap().app_attest_counter, 11);
+        assert!(
+            skipped
+                .verify_signature_and_counter_against(&credential, &profile, expected, &policy, 11,)
+                .is_err()
+        );
 
         let mut wrong_key = evidence.clone();
         let other_signer = KagemushaFixtureSignerV1::from_repeated_byte(19);
@@ -1144,7 +1270,8 @@ mod tests {
                     &credential,
                     &profile,
                     expected,
-                    &wrong_policy
+                    &wrong_policy,
+                    9,
                 )
                 .is_err()
         );
@@ -1161,6 +1288,31 @@ mod tests {
         let mut duplicate_selection = evidence.clone();
         duplicate_selection.raw_assertion = duplicate;
         assert!(verify(&duplicate_selection).is_err());
+    }
+
+    #[test]
+    fn app_attest_counter_gap_is_independent_from_large_financial_index() {
+        let (profile, credential, mut expected, policy, mut evidence) = app_attest_fixture();
+        let financial_index = u128::from(u32::MAX) + 50;
+        evidence.subject.secure_index_before = financial_index;
+        evidence.subject.secure_index_after = financial_index + 1;
+        expected.secure_index_before = financial_index;
+        let (auth, _) = evidence.original_assertion_components().unwrap();
+        let original_auth = auth.to_vec();
+        evidence.raw_assertion = signed_assertion(
+            &evidence.subject,
+            &original_auth,
+            &KagemushaFixtureSignerV1::from_repeated_byte(18),
+        );
+        let verified = evidence
+            .verify_signature_and_counter_against(&credential, &profile, expected, &policy, 4)
+            .unwrap();
+        assert_eq!(verified.app_attest_counter, 10);
+        assert!(
+            evidence
+                .verify_signature_and_counter_against(&credential, &profile, expected, &policy, 10,)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1181,7 +1333,7 @@ mod tests {
         };
         assert!(
             evidence
-                .verify_signature_and_counter_against(&credential, &profile, expected, &policy)
+                .verify_signature_and_counter_against(&credential, &profile, expected, &policy, 9)
                 .is_err()
         );
 

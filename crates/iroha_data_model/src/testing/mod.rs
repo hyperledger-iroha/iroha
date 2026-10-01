@@ -17,3 +17,6 @@ pub mod kagemusha_release {
 /// Genuine native certificate/checkpoint fixtures; execution outputs remain synthetic test inputs.
 #[cfg(feature = "transparent_api")]
 pub mod native_finality;
+
+/// Genuine model crypto admission over explicit synthetic ordinary platform evidence.
+pub mod ordinary_app_enrollment;

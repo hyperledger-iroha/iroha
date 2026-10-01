@@ -211,6 +211,7 @@ connect.session.status	GET	/v1/connect/status	protocol	protocol_handshake	authen
 connect.status	GET	/v1/connect/status/aggregate	operator	operator_signature	operator	read	http	feature(connect)	true	true	false	true
 connect.websocket	GET	/v1/connect/ws	protocol	protocol_handshake	authenticated_protocol_principal	stream	websocket	feature(connect)	true	true	false	false
 contracts.account_recovery_approve_post	POST	/v1/accounts/recovery/approve	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
+contracts.account_recovery_cancel_post	POST	/v1/accounts/recovery/cancel	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 contracts.account_recovery_finalize_post	POST	/v1/accounts/recovery/finalize	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 contracts.account_recovery_policy_set_post	POST	/v1/accounts/recovery/policy/set	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
 contracts.account_recovery_propose_post	POST	/v1/accounts/recovery/propose	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	true	false	true
@@ -219,7 +220,11 @@ contracts.contracts_aliases_post	POST	/v1/contracts/aliases	public	canonical_acc
 contracts.contracts_aliases_resolve_post	POST	/v1/contracts/aliases/resolve	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 contracts.contracts_artifacts_by_dataspace_id_by_code_hash_bytes_get	GET	/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 contracts.contracts_artifacts_by_dataspace_id_by_code_hash_contract_view_get	GET	/v1/contracts/artifacts/{dataspace_id}/{code_hash}/contract-view	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
+<<<<<<< HEAD
 contracts.contracts_artifacts_by_dataspace_id_by_code_hash_get	GET	/v1/contracts/artifacts/{dataspace_id}/{code_hash}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+=======
+contracts.contracts_artifacts_by_dataspace_id_by_code_hash_get	GET	/v1/contracts/artifacts/{dataspace_id}/{code_hash}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
+>>>>>>> origin/optimizations
 contracts.contracts_artifacts_by_dataspace_id_by_code_hash_verified_source_jobs_by_job_id_get	GET	/v1/contracts/artifacts/{dataspace_id}/{code_hash}/verified-source-jobs/{job_id}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.contracts_artifacts_by_dataspace_id_by_code_hash_verified_source_jobs_post	POST	/v1/contracts/artifacts/{dataspace_id}/{code_hash}/verified-source/jobs	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	false	false	true
 contracts.contracts_call_batch_prepare_post	POST	/v1/contracts/call/batch/prepare	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
@@ -428,6 +433,7 @@ kagemusha.top_up	POST	/v1/kagemusha/top-up	public	canonical_signed_body	authenti
 ledger.block_proof	GET	/v1/ledger/block/{height}/proof/{entry_hash}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 ledger.executed_block_wire	GET	/v1/ledger/block/{height}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 ledger.headers	GET	/v1/ledger/headers	public	torii_default	public	read	http	always	true	true	false	false
+ledger.resource_names_state	GET	/v1/ledger/resource-names/{challenge}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	false	true	false	true
 ledger.state_proof	GET	/v1/ledger/state-proof/{height}	public	torii_default	public	read	http	always	true	true	false	false
 ledger.state_root	GET	/v1/ledger/state/{height}	public	torii_default	public	read	http	always	true	true	false	false
 ministry.agenda_proposal.draft	POST	/v1/ministry/agenda/proposals/draft	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true

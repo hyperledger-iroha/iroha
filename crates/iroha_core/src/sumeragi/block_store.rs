@@ -26,11 +26,13 @@ use std::{io, num::NonZeroUsize, sync::Arc};
 #[path = "block_store/body_read.rs"]
 mod body_read;
 #[path = "block_store/certificate_read.rs"]
-mod certificate_read;
+pub(super) mod certificate_read;
 #[path = "block_store/committed_read.rs"]
 mod committed_read;
 #[path = "block_store/execution.rs"]
 mod execution;
+#[path = "block_store/keyed_read.rs"]
+mod keyed_read;
 #[path = "block_store/publication.rs"]
 mod publication;
 use committed_read::CommittedRead;
@@ -307,11 +309,13 @@ impl BodyReader for KuraBlockStore {
             )));
         }
         let block = self.stored(source.height()).map_err(BodyReadError::Io)?;
-        Ok(Box::new(body_read::StoredBodyRead::new(
+        Ok(Box::new(keyed_read::KeyedRead::new(
             source,
             block,
             self.execution_budget.clone(),
             self.hasher.clone(),
+            self.schedule.clone(),
+            self.verifier.clone(),
         )))
     }
 }

@@ -474,7 +474,8 @@ impl Inner {
             .map_err(|error| error.to_string())?,
         );
         let signer = KeyPairSigner::new(&inputs.key_pair).map_err(|error| error.to_string())?;
-        let observer: Arc<dyn Observer> = Arc::new(LogObserver);
+        let observer =
+            evidence_observer(Arc::clone(&inputs.state), record.lane, record.incarnation);
         #[cfg(feature = "telemetry")]
         let metrics = MetricsInstance::Lane(record.lane);
         let driver = Driver::new(
@@ -513,5 +514,51 @@ impl Inner {
             ingress.register(instance, Arc::new(driver.handle()));
         }
         Ok(RunningLane { instance, driver })
+    }
+}
+
+/// Observe this exact lane incarnation without granting raw reports monetary authority.
+pub(in crate::sumeragi) fn evidence_observer(
+    state: Arc<State>,
+    lane: LaneId,
+    incarnation: [u8; 32],
+) -> Arc<dyn Observer> {
+    Arc::new(LaneEvidenceObserver {
+        state,
+        lane,
+        incarnation,
+    })
+}
+struct LaneEvidenceObserver {
+    state: Arc<State>,
+    lane: LaneId,
+    incarnation: [u8; 32],
+}
+impl Observer for LaneEvidenceObserver {
+    fn evidence(&self, evidence: &iroha_sumeragi::message::Evidence) {
+        if let Err(error) = crate::sumeragi::evidence::observe_lane(
+            &self.state,
+            self.lane,
+            self.incarnation,
+            evidence,
+        ) {
+            iroha_logger::warn!(%error, "sumeragi: lane evidence observation was not retained");
+        }
+        LogObserver.evidence(evidence);
+    }
+    fn fault(&self, fault: &iroha_sumeragi::api::LocalFault) {
+        LogObserver.fault(fault);
+    }
+    fn halt(&self, reason: &iroha_sumeragi::api::HaltReason) {
+        LogObserver.halt(reason);
+    }
+    fn stopped(&self, worker: crate::sumeragi::driver::Worker) {
+        LogObserver.stopped(worker);
+    }
+    fn finished(&self) {
+        LogObserver.finished();
+    }
+    fn frame_limit(&self, exceeded: &crate::sumeragi::driver::FrameLimitExceeded) {
+        LogObserver.frame_limit(exceeded);
     }
 }

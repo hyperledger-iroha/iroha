@@ -44,21 +44,26 @@ fn pipeline_fixture(bytes: u64, triggers: Vec<Trigger>) -> (Box<State>, SignedBl
             .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
         parameters.commit();
     }
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut tx = setup.transaction();
-    for trigger in triggers {
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut tx)
-            .unwrap();
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut tx = setup.transaction_for_callback_testing();
+        for trigger in triggers {
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut tx)
+                .unwrap();
+        }
+        tx.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    tx.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![Log::new(Level::DEBUG, "Network event".to_owned()).into()],
-        FeePaymentIntent::authority(vec![], None),
-        false,
-    )]);
+        vec![input(
+            &state,
+            vec![Log::new(Level::DEBUG, "Network event".to_owned()).into()],
+            FeePaymentIntent::authority(vec![], None),
+            false,
+        )],
+    );
     (state, source)
 }
 

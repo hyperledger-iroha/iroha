@@ -347,6 +347,7 @@ class CanonicalSourceLockAssertionTests(unittest.TestCase):
         # Only Git's three read results are fixtures. The real footer reads the
         # actual lock bytes, pin and tracking policy; no candidate is fabricated.
         command = '''set -euo pipefail
+CANONICAL_SOURCE_LOCK_EXPECTED_SHA256="$PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256"
 git() {
   if [[ "$3" == "$FIXTURE_GIT_FAIL" ]]; then return 91; fi
   case "$3" in
@@ -416,6 +417,91 @@ git() {
                 result = self.invoke(FIXTURE_GIT_FAIL=operation)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("fixture success", result.stdout)
+
+    def test_real_git_fixture_preserves_objects_and_rejects_dirty_states(self):
+        script = (ROOT / "ci/privacy_sdk_cargo_lockfile_test.sh").read_text()
+        begin = "# BEGIN canonical source lock Git fixtures."
+        end = "# END canonical source lock Git fixtures."
+        self.assertEqual(script.count(begin), 1)
+        self.assertEqual(script.count(end), 1)
+        fixture_body = script.split(begin, 1)[1].split(end, 1)[0]
+        # Reuse the real shell fixture owner. Every production conjunction and
+        # dirty-state control executes under Bash 3.2 with genuine Git objects.
+        command = '''set -euo pipefail
+readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256="$4"
+expect_failure() {
+  local expected="$1" output
+  shift
+  if output="$("$@" 2>&1)"; then
+    echo "expected command to fail: $*" >&2
+    exit 1
+  fi
+  case "$output" in
+    *"$expected"*) ;;
+    *) echo "missing rejection: $expected: $output" >&2; exit 1 ;;
+  esac
+}
+assert_canonical_source_lock() (
+  local SOURCE_ROOT="$1" WORKFLOW_PATH="$2"
+  local CANONICAL_SOURCE_LOCK_EXPECTED_SHA256="$3"
+''' + self.assertion + "\n)\n" + fixture_body + '''
+exercise_canonical_source_lock_git_fixture "$1" "$2" "$3"
+printf '%s\\n' 'fixture success'
+'''
+        fixture = self.source / "real-git-fixture"
+        # Poisoned routing must not select or modify an inherited repository.
+        poison = self.source / "inherited-git-context"
+        environment = dict(os.environ, GIT_DIR=str(poison / "git"),
+                           GIT_WORK_TREE=str(poison / "tree"),
+                           GIT_INDEX_FILE=str(poison / "index"))
+        result = subprocess.run(
+            ["/bin/bash", "-c", command, "source-lock-fixture", str(ROOT),
+             str(self.workflow), str(fixture), OWNER[0]], env=environment,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "fixture success\n")
+        self.assertEqual(result.stderr, "")
+        self.assertFalse(poison.exists())
+        # The copied signed commit is byte-identical; no fixture commit is made.
+        git_environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith("GIT_")}
+        git_environment.update(GIT_CONFIG_GLOBAL=os.devnull,
+                               GIT_CONFIG_NOSYSTEM="1")
+
+        def git(root, *arguments):
+            return subprocess.check_output(
+                ["/usr/bin/git", "--no-replace-objects", "-C", str(root), *arguments],
+                env=git_environment,
+            )
+
+        head = git(fixture, "rev-parse", "HEAD").decode().strip()
+        self.assertEqual(git(fixture, "cat-file", "commit", head),
+                         git(ROOT, "cat-file", "commit", head))
+        self.assertEqual(git(fixture, "ls-files", "--stage", "--", "Cargo.lock"),
+                         b"100644 " + git(fixture, "rev-parse", "HEAD:Cargo.lock").strip()
+                         + b" 0\tCargo.lock\n")
+        self.assertEqual((fixture / "Cargo.lock").read_bytes(),
+                         git(fixture, "show", "HEAD:Cargo.lock"))
+        # An uncommitted candidate in the source fixture must not prevent unit
+        # execution or be staged/committed by it. Its committed graph remains
+        # the immutable positive owner for the independent child fixture.
+        (fixture / "Cargo.lock").write_bytes(b"uncommitted candidate\n")
+        lock_oid = git(fixture, "rev-parse", "HEAD:Cargo.lock").decode().strip()
+        git(fixture, "update-index", "--cacheinfo", f"100755,{lock_oid},Cargo.lock")
+        source_index = (fixture / ".git/index").read_bytes()
+        source_lock = (fixture / "Cargo.lock").read_bytes()
+        result = subprocess.run(
+            ["/bin/bash", "-c", command, "dirty-source-lock-fixture", str(fixture),
+             str(self.workflow), str(self.source / "dirty-source-child"), OWNER[0]],
+            env=environment, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "fixture success\n")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual((fixture / ".git/index").read_bytes(), source_index)
+        self.assertEqual((fixture / "Cargo.lock").read_bytes(), source_lock)
+        self.assertEqual(git(fixture, "rev-parse", "HEAD").decode().strip(), head)
 
     def test_absence_assertion_distinguishes_match_absence_and_read_failure(self):
         script = (ROOT / "ci/privacy_sdk_cargo_lockfile_test.sh").read_text()

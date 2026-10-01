@@ -1,7 +1,7 @@
 //! Bounded complete World-element snapshots authenticated against certified execution.
 //!
 //! Every element includes its field/key/value hash preimage. An opaque remainder of
-//! LtHash lanes is never a membership proof: it can be algebraically manufactured.
+//! `LtHash` lanes is never a membership proof: it can be algebraically manufactured.
 //! Native publication must capture all canonical elements at the same applied cut.
 //! Target values additionally require their real canonical typed preimages.
 
@@ -166,7 +166,7 @@ pub fn world_state_path_hash_v1(
     ]))
 }
 
-/// Expand a complete canonical element preimage using the existing LtHash context.
+/// Expand a complete canonical element preimage using the existing `LtHash` context.
 /// This arithmetic helper supplies no membership or finality authority.
 #[must_use]
 pub fn world_state_element_v1(
@@ -499,6 +499,18 @@ impl VerifiedWorldStateSnapshotV1 {
         keys: &[crate::asset::AssetDefinitionId],
     ) -> Result<(), FinalityError> {
         self.verify_native_table_keys_complete("world.asset_definition_alias_bindings", keys)
+    }
+
+    /// Prove one exact native asset-definition alias binding is absent at this complete certified cut.
+    /// A query-materialized `alias=None` and a failed query cannot establish this fact.
+    /// Callers must independently enforce the selected native registry schema before interpreting it.
+    /// # Errors
+    /// The exact definition key is present, has invalid encoding, or the fixed native field is not a table.
+    pub fn verify_asset_definition_alias_binding_absent(
+        &self,
+        definition: &crate::asset::AssetDefinitionId,
+    ) -> Result<(), FinalityError> {
+        self.verify_native_table_key_absent("world.asset_definition_alias_bindings", definition)
     }
 
     /// Authenticate every canonical key original of `world.account_aliases`.

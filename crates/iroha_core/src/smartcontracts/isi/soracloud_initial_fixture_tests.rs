@@ -193,6 +193,77 @@ fn state_with_soracloud_permission_on_chain(
     state_block.commit_world_overlay_for_testing()?;
     Ok(state)
 }
+// Ordinary Initial-executor scenarios require an original authenticated genesis root.
+// The component fixture still owns the same seeded permissions and validator rows; its World
+// enters the canonical chain constructor before any ordinary execution or proof admission.
+fn state_with_initial_soracloud_permission(kura: &Arc<Kura>) -> Result<State, eyre::Report> {
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let component = state_with_soracloud_permission(kura)?;
+    let mut config = TestChainConfig::new(component.world, 0);
+    config.chain_id = component.chain_id;
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).map_err(|failure| failure.error)?;
+    let state = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished SoraCloud State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        mode.into(),
+        None,
+    )?;
+    Ok(state)
+}
+
+fn initial_soracloud_header(state: &State, height: u64) -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(height).expect("ordinary SoraCloud execution height"),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    )
+}
+
+#[test]
+fn initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission()
+-> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_initial_soracloud_permission(&kura)?;
+    let parent = state
+        .view()
+        .latest_block_hash()
+        .expect("committed original genesis");
+    assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+    let header = initial_soracloud_header(&state, 2);
+    assert_eq!(header.prev_block_hash(), Some(parent));
+    let mut block = state.block(header);
+    let transaction = block.transaction();
+    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_ok());
+    require_soracloud_permission(&ALICE_ID, &transaction)?;
+    assert_eq!(
+        transaction
+            .world
+            .public_lane_validators
+            .get(&(LaneId::SINGLE, ALICE_ID.clone()))
+            .expect("original seeded validator")
+            .status,
+        PublicLaneValidatorStatus::Active,
+    );
+    drop(transaction);
+    drop(block);
+    let component = state_with_soracloud_permission(&kura)?;
+    let mut block = component.block(initial_soracloud_header(&component, 2));
+    let transaction = block.transaction();
+    require_soracloud_permission(&ALICE_ID, &transaction)?;
+    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_err());
+    Ok(())
+}
+
 #[test]
 fn soracloud_permission_allows_granted_authority() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
@@ -695,10 +766,8 @@ fn sample_inrou_service_placement_record_for(
 #[test]
 fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let state = state_with_initial_soracloud_permission(&kura)?;
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     Register::account(Account::new(BOB_ID.clone()))

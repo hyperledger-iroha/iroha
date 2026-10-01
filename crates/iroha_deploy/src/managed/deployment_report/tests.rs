@@ -9,23 +9,12 @@ use iroha_data_model::{
 };
 use iroha_fs::PublishMode;
 use iroha_model_base::topology::DataSpaceId;
-use iroha_test_samples::ALICE_ID;
 
 fn global_fixture() -> (tempfile::TempDir, ManagedStore, ManagedDeploymentTarget) {
     let temporary = tempfile::tempdir().unwrap();
     let (store, directory, _) =
         super::super::tests::fixture(&temporary.path().join("state"), "local");
-    let mut retained = generation::read(&directory).unwrap();
-    let _profile = ChainDiscriminantGuard::enter(753);
-    retained.prepared.context.network_id =
-        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"report-global")))
-            .to_string();
-    retained.prepared.context.account_id = ALICE_ID.to_string();
-    directory
-        .open_child(generation::DIRECTORY)
-        .unwrap()
-        .write_atomic(MANIFEST, &encode(&retained).unwrap(), PublishMode::Replace)
-        .unwrap();
+    let retained = generation::read(&directory).unwrap();
     let target = store
         .capture_deployment(&retained.prepared.context)
         .unwrap();

@@ -1,4 +1,4 @@
-//! Bounded model artifact adapters for the fixed masked six-lane DEEP profile.
+//! Bounded model artifact adapters for the fixed masked SHA3/SHAKE DEEP profile.
 //!
 //! Public expectations and all AXT context come from the caller. Transport facts
 //! are exact-compared before any child proof is decoded. One enclosing Norito
@@ -37,8 +37,13 @@ use crate::{
     proof::PublicIO,
 };
 
+// Exact prior u64 diagnostic identity: immutable negative-fixture data only.
+// It selects no retired implementation, layout, decoder, or production profile.
 #[cfg(test)]
-use crate::backend::compact_v1;
+const PREDECESSOR_U64_PROFILE: [u8; 32] = [
+    0x0f, 0x1f, 0xcc, 0x22, 0x66, 0x30, 0xbb, 0xf6, 0xf8, 0x9e, 0x84, 0xdc, 0x6a, 0x48, 0x41, 0x86,
+    0x8e, 0x48, 0x35, 0xb8, 0xd4, 0xa5, 0xd6, 0xa9, 0x26, 0x1f, 0x05, 0x71, 0x94, 0xa7, 0x06, 0x76,
+];
 
 /// Explicit caller ceilings at every decoded layer and across the whole request.
 #[derive(Clone, Copy, Debug)]
@@ -174,8 +179,12 @@ struct DeepQuantityArtifactProfile {
     extension_nonresidue: u64,
     extension_schema: String,
     extension_bytes: u32,
-    hash_digest_lanes: u8,
-    lane_parameter_sha3_256: [u8; 32],
+    commitment_algorithm: &'static str,
+    commitment_bytes: u32,
+    transcript_algorithm: &'static str,
+    trace_mask_coefficients: u32,
+    quotient_mask_coefficients: u32,
+    fiber_encoding: &'static str,
     fri_arities: [u32; 5],
     fri_lengths: [u32; 6],
     fri_degrees: [u32; 6],
@@ -211,8 +220,16 @@ impl DeepQuantityArtifactProfile {
             extension_nonresidue: 7,
             extension_schema: crate::GoldilocksFp4V1::frame_name(),
             extension_bytes: fixed_u32(crate::GoldilocksFp4V1::BYTES),
-            hash_digest_lanes: 6,
-            lane_parameter_sha3_256: fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1,
+            commitment_algorithm: "FIPS202:SHA3-256:suffix06",
+            commitment_bytes: 32,
+            transcript_algorithm: "FIPS202:SHAKE256:suffix1f:atomic-raw-tapes",
+            trace_mask_coefficients: fixed_u32(
+                fastpq_isi::compact_challenge::TRACE_MASK_COEFFICIENTS,
+            ),
+            quotient_mask_coefficients: fixed_u32(
+                fastpq_isi::compact_challenge::QUOTIENT_MASK_COEFFICIENTS,
+            ),
+            fiber_encoding: "arity-tag:omit-smallest-known-incoming-coordinate",
             fri_arities: FRI_ARITIES.map(fixed_u32),
             fri_lengths: FRI_LENGTHS.map(fixed_u32),
             fri_degrees: FRI_DEGREES.map(fixed_u32),
@@ -258,7 +275,7 @@ fn profile_id_for<V: CompactTransferValue>() -> FastpqCompactProfileIdV1 {
     // Normal artifact construction and decoding share exactly one fixed profile.
     #[cfg(test)]
     if !V::QUANTITY_CONTEXT {
-        return FastpqCompactProfileIdV1(Sha256::digest(compact_v1::IDENTITY).into());
+        return FastpqCompactProfileIdV1(PREDECESSOR_U64_PROFILE);
     }
     quantity_diagnostic_profile_id()
 }

@@ -1,6 +1,4 @@
-// Canonical fanout admission tests live here to keep the snapshot module's
-// production implementation within its source-size ratchet.
-#[cfg(not(feature = "fast_dsl"))]
+// Canonical fanout admission tests exercise the snapshot-owned query guards.
 use iroha_data_model::query::dsl::CompoundPredicate;
 fn canonical_reader_world(mut world: World) -> World {
     let permission: iroha_data_model::permission::Permission =
@@ -27,7 +25,6 @@ fn canonical_test_limits(max_items: u64) -> QueryLimits {
         8 * 1024 * 1024,
     ))
 }
-#[cfg(not(feature = "fast_dsl"))]
 fn find_role_ids_start(
     params: QueryParams,
     selector: iroha_data_model::query::dsl::SelectorTuple<RoleId>,
@@ -38,7 +35,6 @@ fn find_role_ids_start(
         selector,
     )
 }
-#[cfg(not(feature = "fast_dsl"))]
 fn find_role_ids_start_with_predicate(
     params: QueryParams,
     predicate: iroha_data_model::query::dsl::CompoundPredicate<RoleId>,
@@ -54,7 +50,6 @@ fn find_role_ids_start_with_predicate(
             .expect("role-id query type has a canonical mapping"),
     )
 }
-#[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn canonical_role_ids_rejects_large_filter_before_source_execution() {
     let predicate = CompoundPredicate::<RoleId>::build(|prototype| {
@@ -93,7 +88,6 @@ fn canonical_role_ids_rejects_large_filter_before_source_execution() {
     .expect_err("filtered role IDs must reject before source execution");
     assert_opaque_canonical_start_rejected(error);
 }
-#[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn budgeted_arc_snapshot_canonical_mode_rejects_an_opaque_start_with_bounded_pagination() {
     let domain = Domain::new(DomainId::try_new("canonical", "universal").expect("domain id"))
@@ -123,7 +117,6 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_an_opaque_start_with_bounded_pag
     .expect_err("bounded pagination cannot authorize opaque canonical source decoding");
     assert_opaque_canonical_start_rejected(error);
 }
-#[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn budgeted_arc_snapshot_canonical_mode_rejects_unbounded_domain_source() {
     let domain =
@@ -148,7 +141,7 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_unbounded_domain_source() {
     .expect_err("unbounded domain rows must be rejected before query execution");
     assert_opaque_canonical_start_rejected(error);
 }
-#[cfg(all(not(feature = "fast_dsl"), feature = "ids_projection"))]
+#[cfg(feature = "ids_projection")]
 #[test]
 fn budgeted_arc_snapshot_canonical_mode_rejects_selector_before_source_execution() {
     let world = World::with_assets_and_roles(
@@ -180,7 +173,6 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_selector_before_source_execution
     .expect_err("selector must be rejected before source execution");
     assert_opaque_canonical_start_rejected(error);
 }
-#[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};
@@ -229,16 +221,15 @@ fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
     .expect_err("parameterized multisig query must reject before payload decode");
     assert_opaque_canonical_start_rejected(error);
 }
-#[cfg(feature = "fast_dsl")]
 #[test]
-fn canonical_fast_dsl_start_rejects_before_nested_component_decode() {
+fn canonical_opaque_start_rejects_before_nested_component_decode() {
     let world = World::with([], [alice_account()], []);
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(
         canonical_reader_world(world),
         Kura::blank_kura_for_testing(),
         store.clone(),
-        ChainId::from("canonical-fast-dsl-rejection"),
+        ChainId::from("canonical-opaque-rejection"),
     ));
     let error = run_on_snapshot_ephemeral_with_budget_arc(
         &state,
@@ -248,6 +239,6 @@ fn canonical_fast_dsl_start_rejects_before_nested_component_decode() {
         canonical_test_limits(1),
         QueryExecutionBudget::from_weighted_limit(1024 * 1024, 1, 1),
     )
-    .expect_err("opaque fast-DSL canonical start must fail closed");
+    .expect_err("opaque canonical start must fail closed");
     assert_opaque_canonical_start_rejected(error);
 }

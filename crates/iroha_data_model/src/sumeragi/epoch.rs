@@ -266,11 +266,11 @@ pub fn validate_committee(members: &[ValidatorCommitteeMemberV1]) -> Result<(), 
         {
             return Err("native committee key order or proof shape is invalid".into());
         }
-        iroha_crypto::bls_normal_pop_verify(
+        iroha_crypto::verify_bls_normal_pop_borrowed(
             member.validator.public_key(),
             &member.proof_of_possession,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.into_error().to_string())?;
         previous = Some(key);
     }
     Ok(())

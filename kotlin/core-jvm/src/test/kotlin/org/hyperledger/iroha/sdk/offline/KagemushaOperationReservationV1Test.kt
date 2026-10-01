@@ -130,11 +130,15 @@ class KagemushaOperationReservationV1Test {
         override fun qualificationReportDigest() = ByteArray(32) { 3 }
         override fun executeAndVerify(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray, acceptedDevicePublicKey: ByteArray?): KagemushaAuthenticatedDeviceResponseV1 {
             calls++
-            return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.UNAVAILABLE, ByteArray(0), ByteArray(0))
+            return KagemushaAuthenticatedDeviceResponseV1(operation, KagemushaAuthenticatedDeviceStatusV1.UNAVAILABLE, ByteArray(0), ByteArray(0), ByteArray(0))
         }
     }
 
     private class RecordingCore : KagemushaNativeCoreCoordinatorV1 {
+        override fun authenticatedHardwarePolicy(): KagemushaAuthenticatedHardwarePolicyV1 = error("unused")
+        override fun stageIncomingOriginal(kind: KagemushaIncomingStageKindV1, creditId: ByteArray): ByteArray = error("unused")
+        override fun prepareIncomingFold(selector: KagemushaPendingCreditSelectorV1): KagemushaNativeIncomingFoldPreparationV1 = error("unused")
+        override fun completeIncomingFold(preparation: KagemushaNativeIncomingFoldPreparationV1, evidence: KagemushaIncomingFoldEvidenceV1): ByteArray = error("unused")
         override fun beginObservation(operation: Int, canonicalCommand: ByteArray): ByteArray =
             if (substituteId) ByteArray(32) else error("unused")
         var substituteId = false
@@ -148,10 +152,10 @@ class KagemushaOperationReservationV1Test {
             return if (substituteId) ByteArray(32) { -1 } else operationId.copyOf()
         }
         override fun acceptQualification(qualification: KagemushaHardwareQualificationV1, hardwarePolicyDigest: ByteArray): Unit = error("unused")
-        override fun acceptAuthenticatedDeviceReply(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray, canonicalReply: ByteArray, responseAuthenticator: ByteArray, qualification: KagemushaHardwareQualificationV1): Unit = error("unused")
+        override fun acceptAuthenticatedDeviceReply(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray, canonicalReply: ByteArray, responseAuthenticator: ByteArray, qualification: KagemushaHardwareQualificationV1, originalResponse: ByteArray?): Unit = error("unused")
         override fun beginSenderTransition(operationId: ByteArray, inputs: KagemushaDeviceSenderPublicInputsV1, qualification: KagemushaHardwareQualificationV1): KagemushaNativeSenderPreparationV1 = error("unused")
         override fun provePreparedSenderTransition(preparation: KagemushaNativeSenderPreparationV1, authenticatedPreparationReply: ByteArray): KagemushaNativeSenderCandidateV1 = error("unused")
-        override fun terminalEnvelope(candidate: KagemushaNativeSenderCandidateV1, authenticatedCommitReply: ByteArray): ByteArray = error("unused")
+        override fun terminalEnvelope(candidate: KagemushaNativeSenderCandidateV1, originalCommitResponseFrame: ByteArray): ByteArray = error("unused")
         override fun acceptInstalledTerminal(candidate: KagemushaNativeSenderCandidateV1, canonicalEnvelope: ByteArray, authenticatedInstallReply: ByteArray, authenticatedInstalledReply: ByteArray, authenticatedWalletSnapshotReply: ByteArray): KagemushaHardwareTerminalResultV1 = error("unused")
         override fun senderRecovery(kind: KagemushaNativeSenderKindV1, terminalId: ByteArray, qualification: KagemushaHardwareQualificationV1): KagemushaNativeSenderRecoveryV1? = error("unused")
         override fun senderRecoveryByOperationId(kind: KagemushaNativeSenderKindV1, operationId: ByteArray, qualification: KagemushaHardwareQualificationV1): KagemushaNativeSenderRecoveryV1? = error("unused")

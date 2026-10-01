@@ -190,9 +190,14 @@ fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.world
-        .increase_asset_total_amount(&definition_id, &Quantity::from(10_u32))
-        .expect("seed aggregate supply");
+    assert_eq!(
+        stx.world
+            .asset_definition(&definition_id)
+            .expect("seeded asset definition")
+            .total_quantity(),
+        &Quantity::from(10_u32),
+        "the constructor already accounts for the exact initial custody balance"
+    );
     stx.world.internal_event_buf.clear();
     let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
         ALICE_ID.clone(),
@@ -2488,7 +2493,7 @@ fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
     assert!(stx.world.assets.get(&destination_asset_id).is_none());
     let err = stx
         .world
-        .decrease_asset_total_amount(&asset_definition_id, &Quantity::one())
+        .decrease_asset_total_amount(&asset_definition_id, &Quantity::from(11_u32))
         .expect_err("quantity subtraction must not create a negative total");
     assert!(matches!(
         err,
@@ -2507,7 +2512,7 @@ fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
             .asset_definition(&asset_definition_id)
             .expect("asset definition")
             .total_quantity(),
-        &Quantity::zero()
+        &Quantity::from(10_u32)
     );
 }
 #[test]

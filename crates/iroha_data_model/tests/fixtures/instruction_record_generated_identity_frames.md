@@ -6,7 +6,11 @@ type rows preserve 367 populated values and 1,468 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
+<<<<<<< HEAD
 `ee93acbddab4069f2b38e0c9687af9bf99c5a0e140f3425f7fa06216e50961dd`.
+=======
+`c7a0e0f06c43820de8941a363fb420e694cb00dbfaa1b5bf203b303d2f4b2d91`.
+>>>>>>> origin/optimizations
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -123,6 +127,7 @@ on-chain penalty exists to cancel. The merged first-release inventory retains 33
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
 
+<<<<<<< HEAD
 The current capture contains 331 rows, 367 populated cases and 1,468 frame forms.
 Earlier dated counts and checksums above describe only their original candidates.
 
@@ -132,3 +137,27 @@ and anchor records. `print_scoped_artifact_instruction_identity_frames` produces
 all eight typed rows and verifies their root, vector, option and map roundtrips.
 Private-root payloads in this structural codec fixture are opaque sample bytes;
 authentication is covered by the separate native registration and anchor tests.
+=======
+On 2026-09-30, the checksum assertion was reconciled with the checked-in current
+329-row capture. The collection retains 365 populated cases and 1,460 frame
+forms. The current typed registry contains 390 instructions: 21 governance
+entries and 369 non-governance entries. Earlier dated counts and checksums above
+remain evidence for their original candidates.
+
+On 2026-10-01, the four native account-recovery operation rows were recaptured
+with the required positive request generation. The current typed maintenance
+printer decoded and re-encoded all root and container frames, retaining both
+populated Propose cases and all other 325 rows byte for byte. Missing or zero
+generations remain rejected; no historical decoder or default was introduced.
+The collection remains 329 records, 365 cases and 1,460 complete frame forms.
+
+A subsequent 2026-10-01 current-native capture updates only the six contract
+artifact registration, byte storage and chunk-upload operation rows. Each now
+binds `ContractArtifactId` to the explicitly universal dataspace. The original
+code and ABI hashes, populated manifest values, bytes, chunk parameters and
+removal reason remain unchanged. The current manifest emits its empty optional
+error-type schema field; all other 323 current rows remain byte for byte.
+The typed maintenance printer decoded and exactly re-encoded all four frame
+forms before publication. No retired bare-hash instruction decoder or implicit
+dataspace fallback was added, and the 329-record/365-case inventory is retained.
+>>>>>>> origin/optimizations

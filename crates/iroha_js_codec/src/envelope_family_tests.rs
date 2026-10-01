@@ -8,9 +8,11 @@
 
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::smart_contract::ContractArtifactId;
 use iroha_data_model::{
     asset::definition::ConfidentialPolicyMode, isi::TransferAssetBatchEntry, proof::VerifyingKeyId,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::NumericSpec;
 use norito::json::Value;
 
@@ -195,11 +197,19 @@ const ROUTING_CASES: [(&str, &str); 52] = [
     ),
     (
         r#"{"RegisterSmartContractBytes":{}}"#,
+<<<<<<< HEAD
         "RegisterSmartContractBytes must contain exactly [artifact_id, code]; missing [artifact_id, code], unexpected []",
     ),
     (
         r#"{"RemoveSmartContractBytes":{}}"#,
         "RemoveSmartContractBytes must contain exactly [artifact_id]; missing [artifact_id], unexpected []",
+=======
+        "RegisterSmartContractBytes.artifact_id field missing",
+    ),
+    (
+        r#"{"RemoveSmartContractBytes":{}}"#,
+        "RemoveSmartContractBytes.artifact_id field missing",
+>>>>>>> origin/optimizations
     ),
     (r#"{"zk":{}}"#, "unsupported zk instruction variant"),
     (
@@ -621,7 +631,10 @@ fn kaigi_participant_and_relay_envelopes_roundtrip_native_frames() {
 #[test]
 fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
     let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
-    let code_hash = Hash::new(b"envelope-family-code");
+    let artifact_id = ContractArtifactId::new(
+        DataSpaceId::new(u64::MAX),
+        Hash::new(b"envelope-family-code"),
+    );
     let cases: [(&str, InstructionBox); 5] = [
         (
             "ProposeDeployContract",
@@ -645,10 +658,14 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RegisterSmartContractBytes",
             Box::new(RegisterSmartContractBytes {
+<<<<<<< HEAD
                 artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                     iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     code_hash,
                 ),
+=======
+                artifact_id,
+>>>>>>> origin/optimizations
                 code: vec![0x49, 0x56, 0x4d, 0x00],
             })
             .into_instruction_box(),
@@ -656,10 +673,14 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RemoveSmartContractBytes",
             Box::new(RemoveSmartContractBytes {
+<<<<<<< HEAD
                 artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                     iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     code_hash,
                 ),
+=======
+                artifact_id,
+>>>>>>> origin/optimizations
                 reason: Some("superseded".to_owned()),
             })
             .into_instruction_box(),
@@ -667,10 +688,14 @@ fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
         (
             "RemoveSmartContractBytes",
             Box::new(RemoveSmartContractBytes {
+<<<<<<< HEAD
                 artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                     iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     code_hash,
                 ),
+=======
+                artifact_id,
+>>>>>>> origin/optimizations
                 reason: None,
             })
             .into_instruction_box(),

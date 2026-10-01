@@ -5,29 +5,64 @@ fn owner_entrypoint_permission(address: &ContractAddress, selector: &str) -> Per
     }
     .into()
 }
-fn owner_permission_world(owner: &AccountId, recipient: &AccountId) -> (World, ContractAddress) {
-    let address = ContractAddress::derive(
-        &executor_test_network_id(b"owner delegation"),
-        owner,
-        41,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("contract address");
-    let mut world = World::with(
+fn seed_owner_permission_contract(
+    transaction: &mut crate::state::StateTransaction<'_, '_>,
+    address: &ContractAddress,
+    owner: &AccountId,
+    code_hash: Hash,
+) {
+    transaction.world.accounts.insert(
+        address.subject_id(),
+        iroha_data_model::account::AccountValue::new(
+            iroha_data_model::account::AccountDetails::default(),
+        ),
+    );
+    transaction
+        .world
+        .contract_instances
+        .insert(address.clone(), code_hash);
+    transaction
+        .world
+        .contract_subject_addresses
+        .insert(address.subject_id(), address.clone());
+    transaction.world.contract_subject_bindings.insert(
+        address.clone(),
+        crate::smartcontracts::code::ContractSubjectBinding::new_direct(address, owner.clone())
+            .with_active_code_hash(code_hash),
+    );
+}
+fn owner_permission_state(owner: &AccountId, recipient: &AccountId) -> (State, ContractAddress) {
+    let state = state_after_genesis(World::with(
         [],
         [
             Account::new(owner.clone()).build(owner),
             Account::new(recipient.clone()).build(recipient),
         ],
         [],
-    );
-    bind_executor_test_contract(
-        &mut world,
-        &address,
-        owner,
-        Hash::new(b"owner delegation code"),
-    );
-    (world, address)
+    ));
+    let address = ContractAddress::derive(&state.network_id, owner, 41, DataSpaceId::UNIVERSAL)
+        .expect("contract address from original genesis network");
+    {
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
+        let mut setup = block.transaction();
+        seed_owner_permission_contract(
+            &mut setup,
+            &address,
+            owner,
+            Hash::new(b"owner delegation code"),
+        );
+        setup.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("contract owner fixture World setup");
+    }
+    (state, address)
 }
 
 #[test]
@@ -38,9 +73,14 @@ fn current_contract_owner_originates_and_revokes_exact_tokens_without_code_manag
     ] {
         let owner = checked_account_id();
         let recipient = checked_account_id();
-        let (world, address) = owner_permission_world(&owner, &recipient);
-        let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let (state, address) = owner_permission_state(&owner, &recipient);
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
         let mut tx = block.transaction();
         let permission = owner_entrypoint_permission(&address, "write");
         assert!(
@@ -77,14 +117,26 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
     for scenario in 0..7 {
         let owner = checked_account_id();
         let foreign = checked_account_id();
-        let (mut world, address) = owner_permission_world(&owner, &foreign);
+        let (state, address) = owner_permission_state(&owner, &foreign);
         let authority = match scenario {
             0 | 2 | 6 => foreign.clone(),
             _ => owner.clone(),
         };
-        let mut binding = world
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
+        let mut tx = block.transaction();
+        assert!(
+            super::root_scope::execution_root_scope(&tx).is_ok(),
+            "owner refusal scenarios must reach the authenticated permission boundary"
+        );
+        let mut binding = tx
+            .world
             .contract_subject_bindings
-            .view()
             .get(&address)
             .cloned()
             .unwrap();
@@ -97,27 +149,24 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
             3 => binding.lifecycle.owner = ContractLifecycleOwnerV1::Parliament,
             _ => {}
         }
-        world
+        tx.world
             .contract_subject_bindings
             .insert(address.clone(), binding);
         let selector = if scenario == 5 { " write" } else { "write" };
         let permission = owner_entrypoint_permission(&address, selector);
         if scenario == 6 {
-            world.account_permissions.insert(
+            tx.world.account_permissions.insert(
                 foreign.clone(),
                 BTreeSet::from([owner_entrypoint_permission(&address, "read")]),
             );
         }
         let role_id: RoleId = "owner_scope_test".parse().unwrap();
-        world.roles.insert(
+        tx.world.roles.insert(
             role_id.clone(),
             Role::new(role_id.clone(), owner.clone())
                 .add_permission(permission.clone())
                 .build(&owner),
         );
-        let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-        let mut tx = block.transaction();
         if scenario == 4 {
             // Construct a valid State, then exercise the delegation boundary against a
             // corrupted transactional view. State startup correctly rejects this binding.
@@ -198,30 +247,37 @@ seiyaku OwnerPermission {
         )
         .expect("compile guarded mutable entrypoint");
     let code_hash = ivm::contract_code_hash(&program);
-    let address = ContractAddress::derive(
-        &executor_test_network_id(b"ordinary owner invocation"),
-        &authority,
-        73,
-        DataSpaceId::UNIVERSAL,
-    )
-    .unwrap();
-    let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-    world.contract_code.insert(
+    let state = state_after_genesis(World::with(
+        [],
+        [Account::new(authority.clone()).build(&authority)],
+        [],
+    ));
+    let address =
+        ContractAddress::derive(&state.network_id, &authority, 73, DataSpaceId::UNIVERSAL).unwrap();
+    let mut block = state.block(BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ));
+    let mut setup = block.transaction();
+    setup.world.contract_code.insert(
         iroha_data_model::smart_contract::ContractArtifactId::new(
             address.dataspace_id().unwrap(),
             code_hash,
         ),
         program,
     );
-    world.contract_manifests.insert(
+    setup.world.contract_manifests.insert(
         iroha_data_model::smart_contract::ContractArtifactId::new(
             address.dataspace_id().unwrap(),
             code_hash,
         ),
         manifest.signed(&ALICE_KEYPAIR),
     );
-    bind_executor_test_contract(&mut world, &address, &authority, code_hash);
-    let state = state_for_testing(world);
+    seed_owner_permission_contract(&mut setup, &address, &authority, code_hash);
+    setup.apply();
     let permission = owner_entrypoint_permission(&address, "write");
     let call = TransactionBuilder::new(
         state.network_id,
@@ -235,9 +291,10 @@ seiyaku OwnerPermission {
         arguments: None,
     }))
     .sign(ALICE_KEYPAIR.private_key());
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut cache = IvmCache::new();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     assert!(
         !authority_has_permission(&tx.world, &authority, &contract_deployment_permission())
             .unwrap()
@@ -258,11 +315,15 @@ seiyaku OwnerPermission {
     )])
     .sign(ALICE_KEYPAIR.private_key());
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(grant.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     super::Executor::Initial
         .execute_transaction(&mut tx, &authority, grant, &mut cache)
         .expect("ordinary owner self-grant executes without global permission");
     tx.apply();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     super::Executor::Initial
         .execute_transaction(&mut tx, &authority, call.clone(), &mut cache)
         .expect("exact self-grant authorizes guarded mutable call");
@@ -311,6 +372,8 @@ seiyaku OwnerPermission {
         .sign(ALICE_KEYPAIR.private_key());
     let mut tx =
         block.transaction_for_fastpq_testing(Hash::from(forbidden_body.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     let denied = super::Executor::Initial
         .execute_transaction(&mut tx, &authority, forbidden_body, &mut cache)
         .expect_err("scoped invocation does not grant caller metadata authority");
@@ -330,6 +393,8 @@ seiyaku OwnerPermission {
         .expect("owner revokes exact invocation grant");
     tx.apply();
     let mut tx = block.transaction_for_fastpq_testing(Hash::from(call.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     assert!(
         super::Executor::Initial
             .execute_transaction(&mut tx, &authority, call, &mut cache)

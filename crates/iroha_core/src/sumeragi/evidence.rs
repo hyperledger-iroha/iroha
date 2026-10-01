@@ -43,6 +43,9 @@ pub(crate) enum EvidenceAdmissionError {
     /// A source was missing, corrupt or locally refused before authenticated observation.
     #[error("native evidence source: {0}")]
     History(iroha_data_model::query::error::QueryExecutionFail),
+    /// An original retained lane read is pending, missing or invalid locally.
+    #[error("native lane evidence source: {0}")]
+    Source(std::io::Error),
     /// Original process capacity refused preparation.
     #[error(transparent)]
     Preparation(#[from] EvidencePreparationError),
@@ -52,6 +55,20 @@ impl From<super::evidence_history::NativeEvidenceError> for EvidenceAdmissionErr
         use super::evidence_history::NativeEvidenceError;
         match error {
             NativeEvidenceError::History(error) => Self::History(error),
+            NativeEvidenceError::Source(error) => Self::Source(error),
+            other => Self::Invalid(other.to_string()),
+        }
+    }
+}
+impl From<iroha_sumeragi::message::CodecError> for EvidenceAdmissionError {
+    fn from(error: iroha_sumeragi::message::CodecError) -> Self {
+        if cfg!(all(test, sumeragi_core_mutation = "HC7")) {
+            return Self::Invalid(error.to_string());
+        }
+        match error {
+            iroha_sumeragi::message::CodecError::Resource(refusal) => {
+                Self::Preparation(EvidencePreparationError::DecodeResource(refusal))
+            }
             other => Self::Invalid(other.to_string()),
         }
     }
@@ -86,42 +103,56 @@ pub(crate) fn evidence_key(evidence: &Evidence) -> Hash {
     .expect("incremental evidence hashing is infallible")
 }
 
-fn attribution_of(
-    verified: &super::evidence_history::VerifiedNativeEvidence,
-) -> EvidenceAttribution {
-    EvidenceAttribution {
-        instance: verified.instance().0,
-        height: verified.height(),
-        epoch: verified.epoch().epoch,
-        context_id: verified.epoch().context.0,
-        authority_generation: verified.authority_generation().0,
-        offenders: verified
-            .offenders()
-            .iter()
-            .map(|(signer, peer_id)| EvidenceOffender {
-                signer: *signer,
-                peer_id: peer_id.clone(),
-            })
-            .collect(),
-        safety_violation: verified.safety_violation(),
-    }
-}
-
 fn horizon(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64> {
     world
         .sumeragi_npos_parameters()
         .map(|parameters| parameters.evidence_horizon_blocks())
         .filter(|value| *value > 0)
 }
-/// Terminal records remain replay fences until their signed offence horizon expires.
+/// Terminal root reports remain replay fences through their signed offence horizon. Lane
+/// reports retain their exact original incarnation until strictly after retirement admission
+/// closes; a native subject height never supplies this root-clock pruning boundary.
 pub(crate) fn committed_evidence_record_is_prunable(
     world: &(impl WorldReadOnly + ?Sized),
     record: &EvidenceRecord,
     height: u64,
 ) -> bool {
-    record.penalty_status.is_terminal()
-        && horizon(world)
-            .is_some_and(|horizon| height.saturating_sub(record.attribution.height) > horizon)
+    use iroha_data_model::block::consensus::EvidenceScope;
+    if !record.penalty_status.is_terminal() {
+        return false;
+    }
+    let Some(parameters) = world.sumeragi_npos_parameters() else {
+        return false;
+    };
+    if parameters.evidence_horizon_blocks() == 0 {
+        return false;
+    }
+    match record.attribution.scope {
+        EvidenceScope::Root => {
+            height.saturating_sub(record.attribution.height) > parameters.evidence_horizon_blocks()
+        }
+        EvidenceScope::Lane(_) if cfg!(all(test, sumeragi_core_mutation = "HC1")) => {
+            height.saturating_sub(record.attribution.height) > parameters.evidence_horizon_blocks()
+        }
+        EvidenceScope::Lane(scope) => world.sumeragi_lanes().custody.iter().any(|row| {
+            row.validate().is_ok()
+                && row.lane == scope.lane
+                && row.incarnation == scope.incarnation
+                && row.instance == record.attribution.instance
+                && row.created_at == scope.created_at
+                && scope.admission_parent_height.checked_add(1) == Some(record.recorded_at_height)
+                && row
+                    .created_at
+                    .checked_add(2)
+                    .is_some_and(|active| active <= scope.admission_parent_height)
+                && row.evidence_horizon == parameters.evidence_horizon_blocks()
+                && row.slashing_delay == parameters.slashing_delay_blocks()
+                && row.admits_at(record.recorded_at_height) == Ok(true)
+                && row
+                    .admission_deadline()
+                    .is_ok_and(|deadline| deadline.is_some_and(|deadline| height > deadline))
+        }),
+    }
 }
 /// Borrowed count and byte-capacity observation, without copying nested proofs.
 pub(crate) struct CommittedEvidenceCapacity {
@@ -205,85 +236,6 @@ impl AdmittedEvidence {
     }
 }
 
-/// Authenticate every incoming proof against the same immutable parent before any State writer.
-/// Ordering, aggregate limits, prior-height/horizon, repeated proofs and signer replay are exact.
-pub(crate) fn validate_admissions(
-    view: &StateView<'_>,
-    carrier_height: u64,
-    admissions: &[Evidence],
-) -> Result<Vec<AdmittedEvidence>, EvidenceAdmissionError> {
-    if admissions.len() > MAX_EVIDENCE_ADMISSIONS_PER_BLOCK {
-        return Err(invalid("too many evidence admissions"));
-    }
-    let incoming = checked_evidence_byte_sum(
-        0,
-        admissions.iter().map(evidence_encoded_len),
-        MAX_EVIDENCE_ADMISSION_BYTES,
-    )
-    .ok_or_else(|| invalid("evidence admission bytes exceed the block limit"))?;
-    let capacity = committed_evidence_capacity(view.world());
-    if capacity.record_capacity_exceeded || capacity.byte_capacity_exceeded {
-        return Err(invalid("retained evidence exceeds its canonical capacity"));
-    }
-    let mut retained_count = 0usize;
-    let mut retained_bytes = 0usize;
-    for (_, record) in view.world().consensus_evidence().iter() {
-        if !committed_evidence_record_is_prunable(view.world(), record, carrier_height) {
-            retained_count += 1;
-            retained_bytes += evidence_encoded_len(&record.evidence);
-        }
-    }
-    if retained_count + admissions.len() > MAX_COMMITTED_EVIDENCE_RECORDS
-        || checked_evidence_byte_sum(retained_bytes, [incoming], MAX_COMMITTED_EVIDENCE_BYTES)
-            .is_none()
-    {
-        return Err(invalid("retained evidence has no reclaimable capacity"));
-    }
-    if admissions.is_empty() {
-        return Ok(Vec::new());
-    }
-    let horizon = horizon(view.world())
-        .ok_or_else(|| invalid("evidence requires a signed positive NPoS horizon"))?;
-    let mut admitted: Vec<AdmittedEvidence> = Vec::with_capacity(admissions.len());
-    let mut previous = None;
-    for evidence in admissions {
-        let native = evidence
-            .decode_native()
-            .map_err(|error| EvidenceAdmissionError::Invalid(error.to_string()))?;
-        let (_, subject_height, _) = super::evidence_history::subject(&native);
-        if subject_height >= carrier_height || carrier_height - subject_height > horizon {
-            return Err(invalid(
-                "offence is not prior to its carrier within the signed horizon",
-            ));
-        }
-        let key = evidence_key(evidence);
-        if previous.is_some_and(|previous| previous >= key) {
-            return Err(invalid("evidence keys must be strictly increasing"));
-        }
-        if view.world().consensus_evidence().get(&key).is_some() {
-            return Err(invalid("evidence is already committed"));
-        }
-        // TODO(S8 release blocker): retain the complete history/decoded-proof working graph
-        // in the original preparation pool. This functional admission is not resource qualified.
-        let verified = super::evidence_history::verify_from_state(view, &native, |_, _| Ok(()))?;
-        let attribution = attribution_of(&verified);
-        if view.world().consensus_evidence().iter().any(|(_, record)| {
-            !committed_evidence_record_is_prunable(view.world(), record, carrier_height)
-                && shares_offender(&record.attribution, &attribution)
-        }) || admitted
-            .iter()
-            .any(|record| shares_offender(&record.attribution, &attribution))
-        {
-            return Err(invalid(
-                "a retained report already accounts for an original signer in this epoch",
-            ));
-        }
-        admitted.push(AdmittedEvidence { key, attribution });
-        previous = Some(key);
-    }
-    Ok(admitted)
-}
-
 /// Same-block admission can never authorize mandatory slashing.
 pub(crate) fn validate_admission_penalty_separation(
     admissions: &[AdmittedEvidence],
@@ -303,8 +255,14 @@ pub(crate) fn validate_admission_penalty_separation(
 
 /// Reauthenticate restored records against actual native execution, including their attribution.
 /// A snapshot's key, claimed signer list or decoded context is never authority.
-pub(crate) fn validate_persisted_records(
+pub(crate) fn validate_persisted_records(state: &State) -> Result<(), EvidenceAdmissionError> {
+    restoration::validate(state)
+}
+
+fn validate_persisted_records_inner(
     view: &StateView<'_>,
+    budget: &AllocationBudget,
+    restored: &restoration::RestorationRead,
 ) -> Result<(), EvidenceAdmissionError> {
     let capacity = committed_evidence_capacity(view.world());
     if capacity.record_capacity_exceeded || capacity.byte_capacity_exceeded {
@@ -323,21 +281,49 @@ pub(crate) fn validate_persisted_records(
         if *key != evidence_key(&record.evidence) {
             return Err(invalid("restored proof key differs"));
         }
-        let native = record
-            .evidence
-            .decode_native()
-            .map_err(|error| EvidenceAdmissionError::Invalid(error.to_string()))?;
-        let verified = super::evidence_history::verify_from_state(view, &native, |_, _| Ok(()))?;
-        if attribution_of(&verified) != record.attribution {
+        let root;
+        let verified = match record.attribution.scope {
+            iroha_data_model::block::consensus::EvidenceScope::Root => {
+                let native = witness_custody::decode(&record.evidence, budget)?;
+                root = super::evidence_history::verify_from_state(view, &native, |_, _| Ok(()))?;
+                &root
+            }
+            iroha_data_model::block::consensus::EvidenceScope::Lane(_) => restored
+                .verified(key)
+                .ok_or_else(|| invalid("restored lane proof lacks its retained original reader"))?,
+        };
+        if !verified.matches_attribution(&record.attribution) {
             return Err(invalid(
                 "restored attribution differs from original native history",
             ));
         }
-        if record.attribution.height >= record.recorded_at_height
-            || record.recorded_at_height > committed_height
-            || record.recorded_at_height - record.attribution.height
-                > parameters.evidence_horizon_blocks()
-        {
+        let within_original_lifetime = match record.attribution.scope {
+            iroha_data_model::block::consensus::EvidenceScope::Root => {
+                record.attribution.height < record.recorded_at_height
+                    && record.recorded_at_height - record.attribution.height
+                        <= parameters.evidence_horizon_blocks()
+            }
+            iroha_data_model::block::consensus::EvidenceScope::Lane(scope) => {
+                let mut rows = view
+                    .world()
+                    .sumeragi_lanes()
+                    .custody
+                    .iter()
+                    .filter(|row| row.incarnation == scope.incarnation);
+                rows.next().is_some_and(|row| {
+                    row.validate().is_ok()
+                        && row.lane == scope.lane
+                        && row.instance == record.attribution.instance
+                        && row.created_at == scope.created_at
+                        && scope.admission_parent_height.checked_add(1)
+                            == Some(record.recorded_at_height)
+                        && row.evidence_horizon == parameters.evidence_horizon_blocks()
+                        && row.slashing_delay == parameters.slashing_delay_blocks()
+                        && row.admits_at(record.recorded_at_height) == Ok(true)
+                }) && rows.next().is_none()
+            }
+        };
+        if !within_original_lifetime || record.recorded_at_height > committed_height {
             return Err(invalid(
                 "restored evidence was not admitted within its original horizon",
             ));
@@ -412,10 +398,36 @@ pub(crate) fn validate_persisted_records(
     Ok(())
 }
 
-/// One original charged canonical observation, without decoded signer authority.
+/// A local lane observation names an original incarnation, never a global offence height.
+#[derive(Clone, Copy)]
+struct LocalLane {
+    lane: iroha_model_base::topology::LaneId,
+    incarnation: [u8; 32],
+    instance: [u8; 32],
+    created_at: u64,
+}
+impl LocalLane {
+    fn admits_at(&self, world: &impl WorldReadOnly, carrier: u64) -> bool {
+        let Some(policy) = world.sumeragi_npos_parameters() else {
+            return false;
+        };
+        world.sumeragi_lanes().custody.iter().any(|row| {
+            row.validate().is_ok()
+                && row.lane == self.lane
+                && row.incarnation == self.incarnation
+                && row.instance == self.instance
+                && row.created_at == self.created_at
+                && row.evidence_horizon == policy.evidence_horizon_blocks()
+                && row.slashing_delay == policy.slashing_delay_blocks()
+                && row.admits_at(carrier) == Ok(true)
+        })
+    }
+}
+/// One original charged canonical observation. Lane reports remain untrusted until selection.
 struct LocalEvidence {
     key: Hash,
     subject_height: u64,
+    lane: Option<LocalLane>,
     frame: ChargedBuffer<u8>,
 }
 /// Finite flat local pool. Both descriptor backing and canonical frames retain original charges.
@@ -429,6 +441,7 @@ impl NativeEvidencePool {
         &mut self,
         evidence: &Evidence,
         subject_height: u64,
+        lane: Option<LocalLane>,
         budget: &AllocationBudget,
     ) -> Result<bool, EvidenceAdmissionError> {
         let key = evidence_key(evidence);
@@ -470,6 +483,7 @@ impl NativeEvidencePool {
             .try_push(LocalEvidence {
                 key,
                 subject_height,
+                lane,
                 frame,
             })
             .map_err(|_| EvidencePreparationError::Invariant)?;
@@ -490,8 +504,14 @@ impl NativeEvidencePool {
         while index < entries.as_slice().len() {
             let entry = &entries.as_slice()[index];
             if committed.consensus_evidence().get(&entry.key).is_some()
-                || horizon
-                    .is_some_and(|horizon| height.saturating_sub(entry.subject_height) > horizon)
+                || entry.lane.map_or_else(
+                    || {
+                        horizon.is_some_and(|horizon| {
+                            height.saturating_sub(entry.subject_height) > horizon
+                        })
+                    },
+                    |lane| !lane.admits_at(committed, height),
+                )
             {
                 let last = entries.as_slice().len() - 1;
                 entries.as_mut_slice().swap(index, last);
@@ -514,8 +534,7 @@ pub(crate) fn observe(
     state: &State,
     native: &NativeEvidence,
 ) -> Result<bool, EvidenceAdmissionError> {
-    let evidence = Evidence::from_native(native)
-        .map_err(|error| EvidenceAdmissionError::Invalid(error.to_string()))?;
+    let evidence = Evidence::from_native(native).map_err(EvidenceAdmissionError::from)?;
     let generation = state.state_view_generation();
     let view = state.view();
     let Some(horizon) = horizon(view.world()) else {
@@ -536,33 +555,131 @@ pub(crate) fn observe(
     pending.retain(
         &evidence,
         subject_height,
+        None,
         state.evidence_preparation_budget(),
     )
 }
 
-/// Proposer-only bounded selection. Follower verification never consults this private pool.
-pub(crate) fn pending_evidence_admissions_from_world(
+/// Keep only bounded canonical bytes from this lane reducer. This is deliberately not
+/// authentication or monetary admission: the proposer and every follower independently read
+/// original global custody and complete native ancestry before publishing any attribution.
+pub(crate) fn observe_lane(
+    state: &State,
+    lane: iroha_model_base::topology::LaneId,
+    incarnation: [u8; 32],
+    native: &NativeEvidence,
+) -> Result<bool, EvidenceAdmissionError> {
+    let (instance, subject_height, _) = super::evidence_history::subject(native);
+    let generation = state.state_view_generation();
+    let view = state.view();
+    let Some(carrier) = (view.height() as u64).checked_add(1) else {
+        return Ok(false);
+    };
+    let mut matching = view
+        .world()
+        .sumeragi_lanes()
+        .custody
+        .iter()
+        .filter(|row| row.lane == lane && row.incarnation == incarnation);
+    let Some(row) = matching.next() else {
+        return Ok(false);
+    };
+    if matching.next().is_some() || row.instance != instance.0 || subject_height == 0 {
+        return Ok(false);
+    }
+    let scope = LocalLane {
+        lane,
+        incarnation,
+        instance: instance.0,
+        created_at: row.created_at,
+    };
+    if !scope.admits_at(view.world(), carrier) {
+        return Ok(false);
+    }
+    let evidence = Evidence::from_native(native).map_err(EvidenceAdmissionError::from)?;
+    if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(false);
+    }
+    let mut pending = state.native_pending_evidence.lock();
+    pending.prune(view.world(), carrier);
+    pending.retain(
+        &evidence,
+        subject_height,
+        Some(scope),
+        state.evidence_preparation_budget(),
+    )
+}
+
+/// Capture bounded original frames under one immutable parent, then release all World/pool
+/// guards before the shared retained admission reader performs native disk I/O. The final
+/// caller rechecks the same generation before publishing any proposal.
+pub(crate) fn pending_evidence_admissions(
     state: &State,
     height: u64,
-    _: &impl WorldReadOnly,
+    generation: u64,
 ) -> Vec<Evidence> {
-    let view = state.view();
-    let mut pending = state.native_pending_evidence.lock();
-    pending.prune(view.world(), height);
+    let captured = (|| -> Result<ChargedBuffer<ChargedBuffer<u8>>, EvidencePreparationError> {
+        let view = state.view();
+        if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
+        {
+            return Err(EvidencePreparationError::OriginalHistoryPending);
+        }
+        let mut pending = state.native_pending_evidence.lock();
+        pending.prune(view.world(), height);
+        let entries = pending
+            .entries
+            .as_ref()
+            .map_or(&[][..], ChargedBuffer::as_slice);
+        let budget = state.evidence_preparation_budget();
+        let mut frames = ChargedBuffer::new(entries.len(), budget)?;
+        for entry in entries {
+            let mut frame = ChargedBuffer::new(entry.frame.as_slice().len(), budget)?;
+            frame
+                .append(entry.frame.as_slice())
+                .map_err(|_| EvidencePreparationError::Invariant)?;
+            frames
+                .try_push(frame)
+                .map_err(|_| EvidencePreparationError::Invariant)?;
+        }
+        Ok(frames)
+    })();
+    let Ok(frames) = captured else {
+        return Vec::new();
+    };
     let mut selected = Vec::new();
-    if let Some(entries) = &pending.entries {
-        for entry in entries.as_slice() {
-            if selected.len() == MAX_EVIDENCE_ADMISSIONS_PER_BLOCK {
-                break;
-            }
-            if entry.subject_height >= height {
-                continue;
-            }
-            selected.push(Evidence {
-                native: entry.frame.as_slice().to_vec(),
-            });
-            if validate_admissions(&view, height, &selected).is_err() {
+    if frames.as_slice().is_empty() {
+        return selected;
+    }
+    if selected
+        .try_reserve_exact(MAX_EVIDENCE_ADMISSIONS_PER_BLOCK)
+        .is_err()
+    {
+        return selected;
+    }
+    for frame in frames.as_slice() {
+        if selected.len() == MAX_EVIDENCE_ADMISSIONS_PER_BLOCK {
+            break;
+        }
+        // TODO(S8): the outgoing proposal model and decoded proof graph still require their
+        // complete funded owner. Temporary original source snapshots above are fully charged.
+        let mut native = Vec::new();
+        if native.try_reserve_exact(frame.as_slice().len()).is_err() {
+            break;
+        }
+        native.extend_from_slice(frame.as_slice());
+        selected.push(Evidence { native });
+        match admission::prepare_admissions(state, generation, height, &selected) {
+            Ok(_) => {}
+            Err(error) => {
                 selected.pop();
+                if admission::retryable(&error) {
+                    // Temporary refusal retains the exact original read. Ordinary work may
+                    // continue; publication explicitly cancels an obsolete acquisition.
+                    break;
+                }
+                // A terminally failed local source grants no proof authority, but cannot
+                // pin unrelated reports behind it. Keep the local observation for repair;
+                // never delete or blame its signed input merely because storage failed.
             }
         }
     }
@@ -577,7 +694,7 @@ pub(crate) struct PreparedStakingEffects<'state> {
     header: BlockHeader,
     tip: Option<NativeExecutionTip>,
     effects_hash: Option<HashOf<iroha_data_model::consensus::NposConsensusEffects>>,
-    admissions: Vec<AdmittedEvidence>,
+    admissions: ChargedBuffer<AdmittedEvidence>,
     prune: ChargedBuffer<Hash>,
     stake_index: Option<crate::smartcontracts::isi::staking::PublicLaneStakeIndex>,
 }
@@ -607,12 +724,12 @@ impl PreparedStakingEffects<'_> {
                 effects,
                 self.stake_index.as_ref(),
                 self.prune.as_slice(),
-                &self.admissions,
+                self.admissions.as_slice(),
                 block.header().height().get(),
                 block.header().view_change_index(),
                 block.header().creation_time_ms,
             )?;
-        } else if !self.admissions.is_empty() || !self.prune.as_slice().is_empty() {
+        } else if !self.admissions.as_slice().is_empty() || !self.prune.as_slice().is_empty() {
             return Err(eyre::eyre!(
                 "absent staking effects cannot consume prepared records"
             ));
@@ -632,14 +749,18 @@ pub(crate) fn prepare<'state>(
     let view = state.view();
     let no_effects = iroha_data_model::consensus::NposConsensusEffects::default();
     let effects = block.npos_consensus_effects().unwrap_or(&no_effects);
-    let admissions =
-        validate_admissions(&view, header.height().get(), &effects.evidence_admissions)
-            .map_err(classify)?;
-    validate_admission_penalty_separation(&admissions, &effects.penalty_actions)
-        .map_err(classify)?;
     let npos = view.world().sumeragi_npos_parameters().is_some();
     let tip = view.native_execution_tip();
     drop(view);
+    let admissions = admission::prepare_admissions(
+        state,
+        generation,
+        header.height().get(),
+        &effects.evidence_admissions,
+    )
+    .map_err(classify)?;
+    validate_admission_penalty_separation(admissions.as_slice(), &effects.penalty_actions)
+        .map_err(classify)?;
     let (actions, index) = if npos {
         let (actions, index) = super::penalties::PenaltyApplier::new(state, None)
             .derive_npos_penalty_actions(&header)
@@ -687,9 +808,23 @@ pub(crate) fn prepare<'state>(
 }
 fn classify(error: EvidenceAdmissionError) -> crate::block::BlockValidationError {
     use crate::block::BlockValidationError;
+    if matches!(
+        &error,
+        EvidenceAdmissionError::Source(_) | EvidenceAdmissionError::History(_)
+    ) && admission::retryable(&error)
+    {
+        return BlockValidationError::EvidencePreparation(
+            EvidencePreparationError::OriginalHistoryPending,
+        );
+    }
     match error {
         EvidenceAdmissionError::Preparation(error) => {
             BlockValidationError::EvidencePreparation(error)
+        }
+        EvidenceAdmissionError::Source(error) => {
+            BlockValidationError::LocalStorageRecoveryRequired {
+                reason: error.to_string(),
+            }
         }
         EvidenceAdmissionError::History(error) => {
             BlockValidationError::LocalStorageRecoveryRequired {
@@ -700,5 +835,14 @@ fn classify(error: EvidenceAdmissionError) -> crate::block::BlockValidationError
     }
 }
 
+pub(crate) mod admission;
+
 #[cfg(test)]
 mod tests;
+
+mod restoration;
+
+#[cfg(test)]
+mod codec_tests;
+
+mod witness_custody;

@@ -22,7 +22,11 @@ use ff::PrimeField as _;
 use halo2_base::gates::circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder};
 #[cfg(test)]
 use halo2_base::utils::fe_to_biguint;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use halo2_base::{
     AssignedValue,
     gates::RangeInstructions as _,
@@ -33,12 +37,20 @@ use halo2_proofs::{
     halo2curves::pasta::{Fp, Fq},
     plonk::{Circuit, ConstraintSystem, Error as PlonkError},
 };
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use halo2_proofs::{
     halo2curves::pasta::{EpAffine, EqAffine},
     poly::ipa::commitment::ParamsIPA,
 };
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use snark_verifier::{
     loader::native::NativeLoader,
     pcs::ipa::{IpaAccumulator, IpaSuccinctVerifyingKey},
@@ -48,7 +60,11 @@ use snark_verifier::{
 use super::state_relation::{
     PUBLIC_INSTANCE_COUNT, RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, public_instance,
 };
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use super::{
     KAGEMUSHA_RECURSION_IPA_K_V1,
     composite::{assigned_digest_bytes, ep_succinct_vk, eq_succinct_vk},
@@ -61,7 +77,11 @@ use super::{
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 const TRANSPORT_DECIDER_EQUATION_TAG_V1: u32 = 6;
 
 /// Public instance count of one compact outer parity.
@@ -89,7 +109,11 @@ const INNER_BINDING_INDICES_V1: [usize; 8] = [
     public_instance::EP_DEFERRED_AUDIT_HI,
 ];
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// One parity's private wide carrier and public compact statement.
 #[derive(Clone, Copy)]
 pub(super) struct KagemushaTransportDeciderParityWitnessV1<'a, C>
@@ -112,7 +136,11 @@ where
     pub(super) outer_instances: &'a [C::ScalarExt],
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Complete mutually audited outer-decider witness.
 #[derive(Clone, Copy)]
 pub(super) struct KagemushaTransportDeciderWitnessV1<'a> {
@@ -140,7 +168,11 @@ pub(super) struct KagemushaTransportDeciderEpCircuitV1 {
     pub(super) builder: BaseCircuitBuilder<Fq>,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Measured row/cell inventory for one compact transport-decider parity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct KagemushaTransportDeciderCapacityProfileV1 {
@@ -160,7 +192,11 @@ pub(super) struct KagemushaTransportDeciderCapacityProfileV1 {
 }
 
 impl KagemushaTransportDeciderEqCircuitV1 {
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     pub(super) fn capacity_profile(
         &self,
     ) -> Result<KagemushaTransportDeciderCapacityProfileV1, String> {
@@ -169,7 +205,11 @@ impl KagemushaTransportDeciderEqCircuitV1 {
 }
 
 impl KagemushaTransportDeciderEpCircuitV1 {
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     pub(super) fn capacity_profile(
         &self,
     ) -> Result<KagemushaTransportDeciderCapacityProfileV1, String> {
@@ -177,7 +217,11 @@ impl KagemushaTransportDeciderEpCircuitV1 {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn transport_capacity_profile_v1<F>(
     builder: &BaseCircuitBuilder<F>,
 ) -> Result<KagemushaTransportDeciderCapacityProfileV1, String>
@@ -228,7 +272,11 @@ where
     })
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn packed_rows_v1(cells: &[usize], columns: &[usize], label: &str) -> Result<usize, String> {
     if cells.len() != columns.len() {
         return Err(format!("transport {label} phase inventory mismatch"));
@@ -318,7 +366,11 @@ impl_transport_decider_circuit!(
     "Kagemusha Ep transport decider"
 );
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 struct TransportScalarHalfV1<C>
 where
     C: CurveAffineExt,
@@ -330,7 +382,11 @@ where
     inner_binding_cells: Vec<AssignedValue<C::ScalarExt>>,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Build both compact parities and return the exact circuit-derived outer
 /// deferred-audit digests.
 pub(super) fn build_kagemusha_transport_decider_pair_v1(
@@ -410,7 +466,11 @@ pub(super) fn build_kagemusha_transport_decider_pair_v1(
     ))
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn build_transport_scalar_half_v1<C>(
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
     witness: KagemushaTransportDeciderParityWitnessV1<'_, C>,
@@ -531,7 +591,11 @@ where
     })
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn bind_own_audit_v1<C>(
     builder: &mut BaseCircuitBuilder<C::ScalarExt>,
     offset: usize,
@@ -549,7 +613,11 @@ where
     Ok(())
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn public_digest_cells_v1<F: halo2_base::utils::ScalarField>(
     builder: &BaseCircuitBuilder<F>,
     offset: usize,

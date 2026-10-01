@@ -159,15 +159,31 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         (plan.maximum_live_buffers + plan.remaining_source_and_runtime_envelope) as u64,
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
     );
-    assert_eq!(plan.quotient_stage, 3_158_310_912);
-    assert_eq!(plan.maximum_live_buffers, 3_697_993_152);
-    assert_eq!(plan.remaining_source_and_runtime_envelope, 9_186_908_736);
+    // The maximum RFC registration also charges 102 Vec headers (2,448),
+    // eight borrowed column targets (128), fixed replay scratch (2,272),
+    // and the one-entry public denominator owner (48): 4,896 additional bytes.
+    // The larger FRI stage still dominates. Adjacent-chunk blinding retains
+    // one additional Fp4 mask scratch element; all caps/reserves stay fixed.
+    assert_eq!(core::mem::size_of::<E>(), 32);
+    assert_eq!(
+        super::super::super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
+        core::mem::size_of::<E>()
+    );
+    assert_eq!(plan.quotient_stage, 3_158_315_808);
+    assert_eq!(
+        plan.maximum_live_buffers,
+        3_697_993_152 + core::mem::size_of::<E>()
+    );
+    assert_eq!(
+        plan.remaining_source_and_runtime_envelope,
+        9_186_908_736 - core::mem::size_of::<E>()
+    );
     assert_eq!(
         plan.remaining_source_and_runtime_envelope
             - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
-        596_974_144,
+        596_974_144 - core::mem::size_of::<E>(),
     );
     // This remainder must also cover borrowed sources and process overhead;
     // passing this buffer check is not whole-prover or RSS qualification.
@@ -253,7 +269,7 @@ fn maximum_profile_assembly_payload_fits_source_admission_before_masks() {
     eprintln!(
         "maximum complete MAIN assembly payload={payload}, allowance={allowance}; capacity accounting only, no RSS or full-proof qualification"
     );
-    assert_eq!(allowance, 596_974_144);
+    assert_eq!(allowance, 596_974_144 - core::mem::size_of::<E>());
     assert!(payload <= allowance);
     plan.check_source_shapes_v1(&layout, &assembly)
         .expect("all native source forecasts admitted before masking");
@@ -581,10 +597,20 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     assert_eq!(native_cells, 2_116_723_200);
     assert_eq!(masked_cells, 2_127_275_976);
     assert_eq!(quotient_rows, 53_215_232);
-    assert_eq!(residues, 28_990_742_528);
+    // Exact local registration census after private endpoint equations
+    // replaced public claims and six metadata plus23 key-source RFC equations
+    // were added: 23 *2^21 =48,234,496 extra local residue evaluations.
+    // Joined-link replay work has its separate source-bound owner census.
+    assert_eq!(residues, 28_748_521_472);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
-    assert_eq!(buffers.maximum_live_buffers, 3_697_993_152);
-    assert_eq!(buffers.remaining_source_and_runtime_envelope, 9_186_908_736);
+    assert_eq!(
+        buffers.maximum_live_buffers,
+        3_697_993_152 + core::mem::size_of::<E>()
+    );
+    assert_eq!(
+        buffers.remaining_source_and_runtime_envelope,
+        9_186_908_736 - core::mem::size_of::<E>()
+    );
     assert_eq!(cached_columns, 3_436);
     assert_eq!(quotient_native_iffts, 7_404);
     assert_eq!(quotient_native_butterflies, 27_951_608_320);

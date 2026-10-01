@@ -36,8 +36,8 @@ use super::{
         P256WindowBatchStarkTraceV1, P256WindowTraceV1, build_p256_window_batch_stark_trace_v1,
     },
     rfc5280_stark::{
-        ZkX509P256CertificateTerminalClaimsV1, ZkX509P256TerminalClaimsV1,
-        ZkX509P256WalletTerminalClaimsV1,
+        ZkX509P256CertificatePrivateProductsV1, ZkX509P256PrivateProductsV1,
+        ZkX509P256WalletPrivateProductsV1,
     },
 };
 use super::{
@@ -65,8 +65,9 @@ use super::{
     },
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_external_binding_air::{
-        P256_EXTERNAL_BINDINGS_PER_ROW_V1, ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_DIGEST_V1,
-        ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1,
+        P256_EXTERNAL_BINDINGS_PER_ROW_V1, P256_INPUT_SELECTION_ROW_START_V1,
+        P256_INPUT_SELECTION_SELECTOR_ROW_V1, ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_DIGEST_V1,
+        ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1, p256_input_selection_byte_v1,
     },
     p256_reduction_air::{
         P256_LOW_S_BASE_WIDTH_V1, P256_LOW_S_STARK_AUX_WIDTH_V1,
@@ -290,6 +291,7 @@ map_adapter_error!(P256ReductionAirErrorV1);
 map_adapter_error!(P256ScalarBitBusErrorV1);
 map_adapter_error!(P256ValueBusErrorV1);
 map_adapter_error!(P256CrossTraceBusErrorV1);
+map_adapter_error!(super::p256_external_binding_air::P256ExternalBindingErrorV1);
 fn f_usize_v1(value: usize) -> Result<F, P256AggregateAdapterErrorV1> {
     Ok(F(
         u64::try_from(value).map_err(|_| P256AggregateAdapterErrorV1::Resource)?
@@ -483,6 +485,13 @@ fn p256_arithmetic_aux_replay_scratch_v1() -> usize {
         + core::mem::size_of::<P256AggregateColumnsDestinationGuardV1<'static, 'static>>()
         + crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
             * core::mem::size_of::<&mut [F]>()
+        + core::mem::size_of::<P256ArithmeticAuxSelectionV1>()
+        + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>>(
+        )
+        + core::mem::size_of::<P256AggregateAuxRowScratchV1<8>>()
+        + core::mem::size_of::<[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1]>()
+        + core::mem::size_of::<[P256ScalarSourceEventFixedV1; 8]>()
+        + core::mem::size_of::<[P256ArithmeticCopyEventFixedV1; 3]>()
 }
 /// Peak stack payload for a serial value-bus batch, beyond existing stream heap scratch.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -584,13 +593,12 @@ fn build_compact_cross_aux_row_v1(
     }
     Ok(after)
 }
-fn evaluate_compact_cross_residues_v1<A: PolynomialAirFieldV1>(
+fn evaluate_compact_cross_local_residues_v1<A: PolynomialAirFieldV1>(
     events: &[P256CrossTraceEventFixedV1<A>],
     sources: &[A],
     boundary: P256CrossTraceBoundaryFixedV1<A>,
     current: &[A],
     next: &[A],
-    start_values: [F; P256_CROSS_TRACE_LANES_V1],
     challenges: P256CrossTraceChallengesV1,
 ) -> Result<Vec<A>, P256AggregateAdapterErrorV1> {
     challenges
@@ -613,22 +621,16 @@ fn evaluate_compact_cross_residues_v1<A: PolynomialAirFieldV1>(
         || [boundary.first, boundary.last, boundary.continuation]
             .into_iter()
             .any(|value| !value.is_canonical())
-        || start_values.iter().any(|value| !value.is_canonical())
     {
         return Err(P256AggregateAdapterErrorV1::Constraint);
     }
     let mut residues =
-        Vec::with_capacity(events.len() + P256_CROSS_TRACE_LANES_V1 * (events.len() + 4));
+        Vec::with_capacity(events.len() + P256_CROSS_TRACE_LANES_V1 * (events.len() + 3));
     for slot in 0..events.len() {
         residues.push(current[slot].sub(events[slot].active.mul(sources[slot])));
     }
-    for (lane, start_value) in start_values.into_iter().enumerate() {
+    for lane in 0..P256_CROSS_TRACE_LANES_V1 {
         let product = compact_products_start_v1(events.len(), lane);
-        residues.push(
-            boundary
-                .first
-                .mul(current[product].sub(A::from_base(start_value))),
-        );
         for slot in 0..events.len() {
             let factor = cross_factor_v1(events[slot], current[slot], challenges.lanes[lane].terms);
             residues.push(current[product + slot + 1].sub(current[product + slot].mul(factor)));
@@ -638,6 +640,30 @@ fn evaluate_compact_cross_residues_v1<A: PolynomialAirFieldV1>(
         let terminal = compact_terminal_start_v1(events.len()) + lane;
         residues.push(boundary.last.mul(current[terminal].sub(after)));
         residues.push(next[terminal].sub(current[terminal]));
+    }
+    Ok(residues)
+}
+fn evaluate_compact_cross_residues_v1<A: PolynomialAirFieldV1>(
+    events: &[P256CrossTraceEventFixedV1<A>],
+    sources: &[A],
+    boundary: P256CrossTraceBoundaryFixedV1<A>,
+    current: &[A],
+    next: &[A],
+    start_values: [F; P256_CROSS_TRACE_LANES_V1],
+    challenges: P256CrossTraceChallengesV1,
+) -> Result<Vec<A>, P256AggregateAdapterErrorV1> {
+    if start_values.iter().any(|value| !value.is_canonical()) {
+        return Err(P256AggregateAdapterErrorV1::Constraint);
+    }
+    let mut residues = evaluate_compact_cross_local_residues_v1(
+        events, sources, boundary, current, next, challenges,
+    )?;
+    for (lane, start) in start_values.into_iter().enumerate() {
+        residues.push(
+            boundary.first.mul(
+                current[compact_products_start_v1(events.len(), lane)].sub(A::from_base(start)),
+            ),
+        );
     }
     Ok(residues)
 }
@@ -1179,7 +1205,7 @@ fn encode_writer_fixed_v1(
             &mut flat[event..event + CROSS_EVENT_FIXED_WIDTH],
         );
         let multiplicity = VALUE_WRITER_MULTIPLICITIES + slot * 4;
-        flat[multiplicity] = row.multiplicity_one[slot];
+        flat[multiplicity] = row.multiplicity_small[slot];
         flat[multiplicity + 1] = row.multiplicity_64[slot];
         flat[multiplicity + 2] = row.multiplicity_65[slot];
         flat[multiplicity + 3] = row.multiplicity_129[slot];
@@ -1205,7 +1231,7 @@ fn decode_writer_fixed_v1<A: PolynomialAirFieldV1>(
                 let event = VALUE_WRITER_EVENT + slot * CROSS_EVENT_FIXED_WIDTH;
                 decode_cross_event_v1(&flat[event..event + CROSS_EVENT_FIXED_WIDTH])
             }),
-            multiplicity_one: core::array::from_fn(|slot| {
+            multiplicity_small: core::array::from_fn(|slot| {
                 flat[VALUE_WRITER_MULTIPLICITIES + slot * 4]
             }),
             multiplicity_64: core::array::from_fn(|slot| {
@@ -1897,6 +1923,52 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
         )
     }
 }
+/// A bounded column selection derived only from the public registration range.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct P256ArithmeticAuxSelectionV1 {
+    scalar: bool,
+    value_copy: bool,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256ArithmeticAuxSelectionV1 {
+    fn new_v1(first: usize, width: usize) -> Result<Self, P256AggregateAdapterErrorV1> {
+        let end = first
+            .checked_add(width)
+            .filter(|&end| end <= P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1)
+            .filter(|_| {
+                width > 0
+                    && width
+                        <= crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            })
+            .ok_or(P256AggregateAdapterErrorV1::Topology)?;
+        Ok(Self {
+            scalar: first < ARITHMETIC_VALUE_COPY_AUX && end > ARITHMETIC_SCALAR_AUX,
+            value_copy: end > ARITHMETIC_VALUE_COPY_AUX,
+        })
+    }
+}
+/// Exact compact row when its verifier-fixed events are all inactive: every
+/// source is zero, every prefix is the unchanged running product, and terminal
+/// copies remain those of the same bound source. No private value is inspected.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn fill_compact_identity_aux_row_v1(
+    events: usize,
+    running: &[F; P256_PERMUTATION_CHALLENGE_LANES_V1],
+    terminal: &[F; P256_PERMUTATION_CHALLENGE_LANES_V1],
+    target: &mut [F],
+) -> Result<(), P256AggregateAdapterErrorV1> {
+    if !matches!(events, 3 | 8) || target.len() != compact_aux_width_v1(events) {
+        return Err(P256AggregateAdapterErrorV1::Topology);
+    }
+    target[..events].fill(F::ZERO);
+    for lane in 0..P256_PERMUTATION_CHALLENGE_LANES_V1 {
+        let start = compact_products_start_v1(events, lane);
+        target[start..start + events + 1].fill(running[lane]);
+        target[compact_terminal_start_v1(events) + lane] = terminal[lane];
+    }
+    Ok(())
+}
 /// Constant-memory arithmetic auxiliary stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ArithmeticAggregateAuxStreamV1<'a> {
@@ -2034,6 +2106,92 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         )?;
         self.next_row += 1;
         Ok(Some(aux))
+    }
+    /// Project only requested public column families while preserving the
+    /// native row order. Activity is the verifier-owned operation/coefficient
+    /// schedule, never a witness selector. The dense stream above remains the
+    /// independent native oracle and the terminal-derivation path.
+    fn next_selected_aux_row_v1(
+        &mut self,
+        selection: P256ArithmeticAuxSelectionV1,
+    ) -> Result<Option<[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1]>, P256AggregateAdapterErrorV1>
+    {
+        if self.next_row == P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
+            return Ok(None);
+        }
+        if self.next_row > P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        #[cfg(test)]
+        auxiliary_replay_tests::record_arithmetic_row_v1();
+        let row = self.next_row;
+        let mut aux =
+            P256AggregateAuxRowScratchV1([F::ZERO; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1]);
+        if selection.scalar {
+            let target = &mut aux.0[ARITHMETIC_SCALAR_AUX..ARITHMETIC_VALUE_COPY_AUX];
+            if matches!(row / P256_ARITHMETIC_ROWS_PER_OPERATION_V1, 13 | 14) {
+                let base = self
+                    .rows
+                    .trace
+                    .base
+                    .get(row)
+                    .ok_or(P256AggregateAdapterErrorV1::Source)?;
+                let events = arithmetic_scalar_events_v1(row)?;
+                let sources = P256AggregateAuxRowScratchV1(arithmetic_scalar_sources_v1(row, base));
+                self.scalar_running = build_compact_scalar_aux_row_v1(
+                    &events,
+                    &sources.0,
+                    self.scalar_running,
+                    self.scalar_terminal,
+                    self.scalar_challenges,
+                    target,
+                )?;
+            } else {
+                fill_compact_identity_aux_row_v1(
+                    8,
+                    &self.scalar_running,
+                    &self.scalar_terminal,
+                    target,
+                )?;
+            }
+        }
+        if selection.value_copy {
+            let target = &mut aux.0[ARITHMETIC_VALUE_COPY_AUX..];
+            let logical_rows =
+                P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
+            if row < logical_rows && row % P256_ARITHMETIC_ROWS_PER_OPERATION_V1 < 16 {
+                let base = self
+                    .rows
+                    .trace
+                    .base
+                    .get(row)
+                    .ok_or(P256AggregateAdapterErrorV1::Source)?;
+                let fixed = self.rows.fixed.row_v1(row)?;
+                let events = arithmetic_value_copy_events_v1(row, logical_rows)?;
+                let sources = P256AggregateAuxRowScratchV1(
+                    p256_arithmetic_opened_operand_limbs_v1(base, &fixed),
+                );
+                self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
+                    &events,
+                    &sources.0,
+                    self.arithmetic_copy_running,
+                    self.arithmetic_copy_terminal,
+                    self.arithmetic_copy_challenges,
+                    target,
+                )?;
+            } else {
+                fill_compact_identity_aux_row_v1(
+                    3,
+                    &self.arithmetic_copy_running,
+                    &self.arithmetic_copy_terminal,
+                    target,
+                )?;
+            }
+        }
+        // Column zero and every unselected family remain zero. Only selected
+        // columns are copied by the existing transactional destination guard.
+        self.next_row += 1;
+        Ok(Some(aux.0))
     }
     /// Replay this deterministic stream into one challenge-dependent arithmetic auxiliary column.
     pub(crate) fn fill_aux_column_v1(
@@ -2517,24 +2675,17 @@ impl Drop for P256WindowAggregateAuxStreamV1<'_> {
         self.zeroize_private_v1();
     }
 }
-/// Integrated numeric residues for the vertical window adapter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct P256WindowAggregateChallengesV1 {
-    /// External chain value entering the vertical window segment.
-    pub(crate) cross_start: [F; P256_CROSS_TRACE_LANES_V1],
-    /// Writer/external tagged-product challenges.
-    pub(crate) cross: P256CrossTraceChallengesV1,
-    /// Scalar/window-bit tuple challenges.
-    pub(crate) scalar: P256ScalarBitBusChallengesV1,
-}
 /// Complete vertical window AIR and attached cross/scalar products over one field.
-pub(crate) fn evaluate_p256_window_aggregate_residues_over_field_v1<A: PolynomialAirFieldV1>(
+pub(crate) fn evaluate_p256_window_aggregate_local_residues_over_field_v1<
+    A: PolynomialAirFieldV1,
+>(
     current: &[A; P256_WINDOW_BASE_WIDTH_V1],
     next: &[A; P256_WINDOW_BASE_WIDTH_V1],
     current_aux: &[A; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
     next_aux: &[A; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
     fixed: &[A; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1],
-    challenges: P256WindowAggregateChallengesV1,
+    cross: P256CrossTraceChallengesV1,
+    scalar: P256ScalarBitBusChallengesV1,
 ) -> Result<Vec<A>, P256AggregateAdapterErrorV1> {
     let current_native: &[A; P256_WINDOW_STARK_AUX_WIDTH_V1] = current_aux
         [..P256_WINDOW_STARK_AUX_WIDTH_V1]
@@ -2562,14 +2713,13 @@ pub(crate) fn evaluate_p256_window_aggregate_residues_over_field_v1<A: Polynomia
     let boundary = decode_boundary_v1(
         &fixed[WINDOW_BOUNDARY_FIXED..WINDOW_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
     );
-    residues.extend(evaluate_compact_cross_residues_v1(
+    residues.extend(evaluate_compact_cross_local_residues_v1(
         &cross_events,
         &p256_window_opened_external_cells_v1(current),
         boundary,
         &current_aux[WINDOW_CROSS_AUX..WINDOW_SCALAR_AUX],
         &next_aux[WINDOW_CROSS_AUX..WINDOW_SCALAR_AUX],
-        challenges.cross_start,
-        challenges.cross,
+        cross,
     )?);
     let scalar_event =
         decode_scalar_event_v1(&fixed[WINDOW_SCALAR_FIXED..WINDOW_SCALAR_BIT_SELECTORS_FIXED]);
@@ -2586,9 +2736,9 @@ pub(crate) fn evaluate_p256_window_aggregate_residues_over_field_v1<A: Polynomia
         boundary,
         &current_aux[WINDOW_SCALAR_AUX..],
         &next_aux[WINDOW_SCALAR_AUX..],
-        challenges.scalar,
+        scalar,
     )?);
-    if residues.len() != P256_WINDOW_AGGREGATE_CONSTRAINT_COUNT_V1 {
+    if residues.len() != P256_WINDOW_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1 {
         return Err(P256AggregateAdapterErrorV1::Topology);
     }
     Ok(residues)
@@ -2649,7 +2799,7 @@ fn reduction_cross_events_v1(
     }
     match role {
         P256ReductionAggregateRoleV1::Digest => Ok([
-            P256CrossTraceEventFixedV1::inactive(),
+            active_cross_event_v1(P256CrossTraceEndpointV1::DigestInput, row)?,
             active_cross_event_v1(
                 P256CrossTraceEndpointV1::External,
                 DIGEST_REDUCTION_OUTPUT_ADDRESS + row,
@@ -2895,35 +3045,15 @@ impl Drop for P256ReductionAggregateAuxStreamV1<'_> {
         self.zeroize_private_v1();
     }
 }
-#[cfg(test)]
-/// Integrated numeric reduction residues.
-pub(crate) fn evaluate_p256_reduction_aggregate_residues_v1(
-    current: &[F; P256_REDUCTION_BASE_WIDTH_V1],
-    next: &[F; P256_REDUCTION_BASE_WIDTH_V1],
-    current_aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1],
-    next_aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1],
-    fixed: &[F; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1],
-    start: [F; P256_CROSS_TRACE_LANES_V1],
-    challenges: P256CrossTraceChallengesV1,
-) -> Result<Vec<F>, P256AggregateAdapterErrorV1> {
-    evaluate_p256_reduction_aggregate_residues_over_field_v1(
-        current,
-        next,
-        current_aux,
-        next_aux,
-        fixed,
-        start,
-        challenges,
-    )
-}
 /// The same integrated comparison and cross-trace polynomials over either field.
-pub(crate) fn evaluate_p256_reduction_aggregate_residues_over_field_v1<A: PolynomialAirFieldV1>(
+pub(crate) fn evaluate_p256_reduction_aggregate_local_residues_over_field_v1<
+    A: PolynomialAirFieldV1,
+>(
     current: &[A; P256_REDUCTION_BASE_WIDTH_V1],
     next: &[A; P256_REDUCTION_BASE_WIDTH_V1],
     current_aux: &[A; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1],
     next_aux: &[A; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1],
     fixed: &[A; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1],
-    start: [F; P256_CROSS_TRACE_LANES_V1],
     challenges: P256CrossTraceChallengesV1,
 ) -> Result<Vec<A>, P256AggregateAdapterErrorV1> {
     let current_native: &[A; P256_REDUCTION_STARK_AUX_WIDTH_V1] = current_aux
@@ -2952,16 +3082,15 @@ pub(crate) fn evaluate_p256_reduction_aggregate_residues_over_field_v1<A: Polyno
     let boundary = decode_boundary_v1(
         &fixed[REDUCTION_BOUNDARY_FIXED..REDUCTION_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
     );
-    residues.extend(evaluate_compact_cross_residues_v1(
+    residues.extend(evaluate_compact_cross_local_residues_v1(
         &events,
         &p256_reduction_opened_binding_cells_v1(current),
         boundary,
         &current_aux[REDUCTION_CROSS_AUX..],
         &next_aux[REDUCTION_CROSS_AUX..],
-        start,
         challenges,
     )?);
-    if residues.len() != P256_REDUCTION_AGGREGATE_CONSTRAINT_COUNT_V1 {
+    if residues.len() != P256_REDUCTION_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1 {
         return Err(P256AggregateAdapterErrorV1::Topology);
     }
     Ok(residues)
@@ -3231,35 +3360,15 @@ impl Drop for P256LowSAggregateAuxStreamV1<'_> {
         self.zeroize_private_v1();
     }
 }
-#[cfg(test)]
-/// Integrated wallet low-S residues.
-pub(crate) fn evaluate_p256_low_s_aggregate_residues_v1(
-    current: &[F; P256_LOW_S_BASE_WIDTH_V1],
-    next: &[F; P256_LOW_S_BASE_WIDTH_V1],
-    current_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
-    next_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
-    fixed: &[F; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1],
-    start: [F; P256_CROSS_TRACE_LANES_V1],
-    challenges: P256CrossTraceChallengesV1,
-) -> Result<Vec<F>, P256AggregateAdapterErrorV1> {
-    evaluate_p256_low_s_aggregate_residues_over_field_v1(
-        current,
-        next,
-        current_aux,
-        next_aux,
-        fixed,
-        start,
-        challenges,
-    )
-}
 /// The same integrated comparison and cross-trace polynomials over either field.
-pub(crate) fn evaluate_p256_low_s_aggregate_residues_over_field_v1<A: PolynomialAirFieldV1>(
+pub(crate) fn evaluate_p256_low_s_aggregate_local_residues_over_field_v1<
+    A: PolynomialAirFieldV1,
+>(
     current: &[A; P256_LOW_S_BASE_WIDTH_V1],
     next: &[A; P256_LOW_S_BASE_WIDTH_V1],
     current_aux: &[A; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
     next_aux: &[A; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
     fixed: &[A; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1],
-    start: [F; P256_CROSS_TRACE_LANES_V1],
     challenges: P256CrossTraceChallengesV1,
 ) -> Result<Vec<A>, P256AggregateAdapterErrorV1> {
     let current_native: &[A; P256_LOW_S_STARK_AUX_WIDTH_V1] = current_aux
@@ -3285,16 +3394,15 @@ pub(crate) fn evaluate_p256_low_s_aggregate_residues_over_field_v1<A: Polynomial
     let boundary = decode_boundary_v1(
         &fixed[LOW_S_BOUNDARY_FIXED..LOW_S_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
     );
-    residues.extend(evaluate_compact_cross_residues_v1(
+    residues.extend(evaluate_compact_cross_local_residues_v1(
         &[event],
         &[p256_low_s_opened_binding_cell_v1(current)],
         boundary,
         &current_aux[LOW_S_CROSS_AUX..],
         &next_aux[LOW_S_CROSS_AUX..],
-        start,
         challenges,
     )?);
-    if residues.len() != P256_LOW_S_AGGREGATE_CONSTRAINT_COUNT_V1 {
+    if residues.len() != P256_LOW_S_AGGREGATE_LOCAL_CONSTRAINT_COUNT_V1 {
         return Err(P256AggregateAdapterErrorV1::Topology);
     }
     Ok(residues)
@@ -3346,21 +3454,6 @@ const SINK_SELECTION_REAL_BITS_BASE: usize = SINK_SELECTION_ACTIVE_BASE + 1;
 const SINK_SELECTION_SELECTED_BITS_BASE: usize = SINK_SELECTION_REAL_BITS_BASE + 8;
 const _: () = assert!(SINK_SELECTION_SELECTED_BITS_BASE + 8 == P256_BINDING_SINK_BASE_WIDTH_V1);
 const _: () = assert!(SINK_SELECTION_CONTINUE_FIXED + 1 == P256_BINDING_SINK_FIXED_WIDTH_V1);
-fn p256_input_selection_byte_v1(
-    witness: super::p256_ecdsa_air::P256EcdsaWitnessV1,
-    byte: usize,
-) -> Result<u8, P256AggregateAdapterErrorV1> {
-    let word = byte / 32;
-    let offset = byte % 32;
-    match word {
-        0 => Ok(witness.public_key_x_be[offset]),
-        1 => Ok(witness.public_key_y_be[offset]),
-        2 => Ok(witness.r_be[offset]),
-        3 => Ok(witness.s_be[offset]),
-        4 => Ok(witness.digest_be[offset]),
-        _ => Err(P256AggregateAdapterErrorV1::Topology),
-    }
-}
 fn p256_inactive_real_byte_v1(byte: usize) -> Result<u8, P256AggregateAdapterErrorV1> {
     if byte < 4 * 32 {
         Ok(0)
@@ -3436,15 +3529,17 @@ impl P256BindingSinkFixedProviderV1 {
             source.product.boundary,
             &mut fixed[SINK_BOUNDARY_FIXED..SINK_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
         );
-        if row < P256_INPUT_SELECTION_BYTES_V1 {
+        if (P256_INPUT_SELECTION_ROW_START_V1..P256_INPUT_SELECTION_SELECTOR_ROW_V1).contains(&row)
+        {
+            let byte = row - P256_INPUT_SELECTION_ROW_START_V1;
             fixed[SINK_SELECTION_BYTE_FIXED] = F::ONE;
             fixed[SINK_SELECTION_DUMMY_FIXED] = F(u64::from(p256_input_selection_byte_v1(
-                ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1,
-                row,
+                &ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1,
+                byte,
             )?));
             fixed[SINK_SELECTION_INACTIVE_REAL_FIXED] =
-                F(u64::from(p256_inactive_real_byte_v1(row)?));
-        } else if row == P256_INPUT_SELECTION_BYTES_V1 {
+                F(u64::from(p256_inactive_real_byte_v1(byte)?));
+        } else if row == P256_INPUT_SELECTION_SELECTOR_ROW_V1 {
             fixed[SINK_SELECTION_SELECTOR_FIXED] = F::ONE;
             fixed[SINK_SELECTION_REQUIRE_ACTIVE_FIXED] = F(u64::from(!self.optional_certificate));
         }
@@ -3502,9 +3597,12 @@ impl<'a> P256BindingSinkRowsV1<'a> {
                 .copy_from_slice(&source.external_cells);
         }
         base[SINK_SELECTION_ACTIVE_BASE] = self.trace.input_selection.active;
-        if row < P256_INPUT_SELECTION_BYTES_V1 {
-            let real = p256_input_selection_byte_v1(self.trace.input_selection.real, row)?;
-            let selected = p256_input_selection_byte_v1(self.trace.input_selection.selected, row)?;
+        if (P256_INPUT_SELECTION_ROW_START_V1..P256_INPUT_SELECTION_SELECTOR_ROW_V1).contains(&row)
+        {
+            let byte = row - P256_INPUT_SELECTION_ROW_START_V1;
+            let real = p256_input_selection_byte_v1(&self.trace.input_selection.real, byte)?;
+            let selected =
+                p256_input_selection_byte_v1(&self.trace.input_selection.selected, byte)?;
             base[SINK_SELECTION_REAL_BASE] = F(u64::from(real));
             base[SINK_SELECTION_SELECTED_BASE] = F(u64::from(selected));
             write_byte_bits_v1(
@@ -3624,15 +3722,23 @@ impl Drop for P256BindingSinkAggregateStreamV1<'_> {
 }
 fn sink_sources_from_opened_base_v1<A: PolynomialAirFieldV1>(
     base: &[A; P256_BINDING_SINK_BASE_WIDTH_V1],
+    next: &[A; P256_BINDING_SINK_BASE_WIDTH_V1],
 ) -> [A; 6] {
-    core::array::from_fn(|event| {
+    let mut sources = core::array::from_fn(|event| {
         let slot = event / 2;
         if event.is_multiple_of(2) {
             base[slot]
         } else {
             base[P256_EXTERNAL_BINDINGS_PER_ROW_V1 + slot]
         }
-    })
+    });
+    // At legacy event rows both selected bytes are zero. At the disjoint
+    // selected-input rows writer0 is zero. Keep the expression affine at OOD
+    // points; the existing event selector gates the committed event value.
+    sources[0] = sources[0]
+        .add(base[SINK_SELECTION_SELECTED_BASE].mul_base(F(256)))
+        .add(next[SINK_SELECTION_SELECTED_BASE]);
+    sources
 }
 /// Pure numeric sink residues over directly opened writer/external cells.
 #[cfg(test)]
@@ -3681,7 +3787,7 @@ pub(crate) fn evaluate_p256_binding_sink_aggregate_residues_over_field_v1<
     let boundary = decode_boundary_v1(
         &fixed[SINK_BOUNDARY_FIXED..SINK_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
     );
-    let sources = sink_sources_from_opened_base_v1(current);
+    let sources = sink_sources_from_opened_base_v1(current, next);
     let mut residues = evaluate_compact_cross_residues_v1(
         &events,
         &sources,
@@ -3839,6 +3945,92 @@ pub(crate) enum P256MainAdapterV1 {
     BindingSink,
     /// Packed arithmetic/window scalar-bit copy bus.
     ScalarBitBus,
+}
+/// Closed auxiliary column families used by private MAIN endpoint equations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum P256PrivateLinkFamilyV1 {
+    /// Value memory endpoint.
+    Value,
+    /// Value/arithmetic copy endpoint.
+    Copy,
+    /// Arithmetic scalar-bit endpoint.
+    ArithmeticScalar,
+    /// Window scalar-bit endpoint.
+    WindowScalar,
+    /// Product entering the external-cell chain segment.
+    ChainStart,
+    /// Constant-on-native-domain external-cell terminal.
+    ChainTerminal,
+}
+/// Resolve column indices from the same layout constants used to encode the trace.
+/// No witness, terminal value, native row or column index is accepted from a proof.
+pub(crate) fn p256_private_link_columns_v1(
+    registration: P256MainRegistrationV1,
+    family: P256PrivateLinkFamilyV1,
+) -> Result<[usize; 4], P256AggregateAdapterErrorV1> {
+    use P256MainAdapterV1 as Adapter;
+    use P256PrivateLinkFamilyV1 as Family;
+    let offset = match (
+        registration.adapter_v1(),
+        registration.local_instance_v1(),
+        family,
+    ) {
+        (Adapter::ValueBus, 0 | 1, Family::Value) => {
+            return Ok(super::p256_value_bus::p256_value_bus_terminal_columns_v1());
+        }
+        (Adapter::ValueBus, 0, Family::Copy) => {
+            VALUE_ARITHMETIC_COPY_AUX
+                + compact_terminal_start_v1(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1)
+        }
+        (Adapter::Arithmetic, 0, Family::Copy) => {
+            ARITHMETIC_VALUE_COPY_AUX + compact_terminal_start_v1(3)
+        }
+        (Adapter::Arithmetic, 0, Family::ArithmeticScalar) => {
+            ARITHMETIC_SCALAR_AUX + compact_terminal_start_v1(8)
+        }
+        (Adapter::WindowBatch, 0, Family::WindowScalar) => {
+            WINDOW_SCALAR_AUX + compact_terminal_start_v1(1)
+        }
+        (Adapter::ScalarBitBus, 0, Family::ArithmeticScalar) => {
+            return Ok(super::p256_scalar_bit_bus::p256_scalar_bit_bus_terminal_columns_v1()[0]);
+        }
+        (Adapter::ScalarBitBus, 0, Family::WindowScalar) => {
+            return Ok(super::p256_scalar_bit_bus::p256_scalar_bit_bus_terminal_columns_v1()[1]);
+        }
+        (Adapter::ValueBus, 0, Family::ChainStart) => {
+            return Ok(core::array::from_fn(|lane| {
+                VALUE_ARITHMETIC_COPY_AUX - 4 - P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 * 4 + lane
+            }));
+        }
+        (Adapter::ValueBus, 0, Family::ChainTerminal) => VALUE_ARITHMETIC_COPY_AUX - 4,
+        (Adapter::WindowBatch, 0, Family::ChainStart) => {
+            return Ok(core::array::from_fn(|lane| {
+                WINDOW_CROSS_AUX + compact_products_start_v1(3, lane)
+            }));
+        }
+        (Adapter::WindowBatch, 0, Family::ChainTerminal) => {
+            WINDOW_CROSS_AUX + compact_terminal_start_v1(3)
+        }
+        (Adapter::Reduction, 0 | 1, Family::ChainStart) => {
+            return Ok(core::array::from_fn(|lane| {
+                REDUCTION_CROSS_AUX + compact_products_start_v1(2, lane)
+            }));
+        }
+        (Adapter::Reduction, 0 | 1, Family::ChainTerminal) => {
+            REDUCTION_CROSS_AUX + compact_terminal_start_v1(2)
+        }
+        (Adapter::WalletLowS, 0, Family::ChainStart) => {
+            return Ok(core::array::from_fn(|lane| {
+                LOW_S_CROSS_AUX + compact_products_start_v1(1, lane)
+            }));
+        }
+        (Adapter::WalletLowS, 0, Family::ChainTerminal) => {
+            LOW_S_CROSS_AUX + compact_terminal_start_v1(1)
+        }
+        (Adapter::BindingSink, 0, Family::ChainTerminal) => compact_terminal_start_v1(6),
+        _ => return Err(P256AggregateAdapterErrorV1::Topology),
+    };
+    Ok(core::array::from_fn(|lane| offset + lane))
 }
 /// Exact verifier-owned identity of one P-256 MAIN registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5322,8 +5514,8 @@ impl Drop for P256MainCrossClaimsGuardV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainTerminalAssemblyGuardV1 {
     certificate_or_crl:
-        [ZkX509P256CertificateTerminalClaimsV1; P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1],
-    wallet: ZkX509P256WalletTerminalClaimsV1,
+        [ZkX509P256CertificatePrivateProductsV1; P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1],
+    wallet: ZkX509P256WalletPrivateProductsV1,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainTerminalAssemblyGuardV1 {
@@ -5503,7 +5695,7 @@ fn p256_main_signature_terminal_claims_v1(
 fn p256_main_terminal_claims_v1(
     signatures: &[P256MainSignatureBoundV1; P256_X5S1_SIGNATURES_V1],
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
-) -> Result<ZkX509P256TerminalClaimsV1, P256AggregateAdapterErrorV1> {
+) -> Result<ZkX509P256PrivateProductsV1, P256AggregateAdapterErrorV1> {
     let mut computed = Vec::new();
     computed
         .try_reserve_exact(P256_X5S1_SIGNATURES_V1)
@@ -5538,7 +5730,7 @@ fn p256_main_terminal_claims_v1(
         let signature = &computed[signature_index];
         let mut cross_sources = [signature.cross_sources[0]; 4];
         cross_sources.copy_from_slice(&signature.cross_sources);
-        ZkX509P256CertificateTerminalClaimsV1 {
+        ZkX509P256CertificatePrivateProductsV1 {
             buses: signature.buses,
             cross_sources,
             sink: signature.sink,
@@ -5554,13 +5746,13 @@ fn p256_main_terminal_claims_v1(
     wallet_cross_sources.copy_from_slice(&wallet.cross_sources);
     let assembled = P256MainTerminalAssemblyGuardV1 {
         certificate_or_crl,
-        wallet: ZkX509P256WalletTerminalClaimsV1 {
+        wallet: ZkX509P256WalletPrivateProductsV1 {
             buses: wallet.buses,
             cross_sources: wallet_cross_sources,
             sink: wallet.sink,
         },
     };
-    ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(
+    ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
         assembled.certificate_or_crl,
         assembled.wallet,
     )
@@ -5578,7 +5770,7 @@ fn zeroize_p256_main_bus_claims_v1(claims: &mut P256BusTerminalClaimsV1) {
     super::private_table::zeroize_fields_v1(&mut claims.scalar_bus_window[..]);
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256TerminalClaimsV1) {
+fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256PrivateProductsV1) {
     for signature in &mut claims.certificate_or_crl {
         zeroize_p256_main_bus_claims_v1(&mut signature.buses);
         for source in &mut signature.cross_sources {
@@ -5737,7 +5929,7 @@ pub(crate) struct P256MainBoundSourceV1 {
     signatures: Option<ClearingVecV1<P256MainSignatureBoundV1>>,
     fixed: Option<P256MainVerifierFixedSourceV1>,
     post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
-    terminal_claims: Option<ZkX509P256TerminalClaimsV1>,
+    terminal_claims: Option<ZkX509P256PrivateProductsV1>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainBoundSourceV1 {
@@ -5796,7 +5988,7 @@ impl P256MainBoundSourceV1 {
         if self.fixed.is_none() {
             return Err(P256AggregateAdapterErrorV1::Phase);
         }
-        if ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(
+        if ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
             claims.certificate_or_crl,
             claims.wallet,
         )
@@ -6215,12 +6407,13 @@ impl P256MainBoundSourceV1 {
         {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
+        let selection = P256ArithmeticAuxSelectionV1::new_v1(first, outputs.len())?;
         let mut stream = self.arithmetic_aux_stream_v1(registration)?;
         fill_aggregate_aux_columns_v1::<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>(
             shape.trace_size,
             first,
             outputs,
-            || stream.next_aux_row_v1(),
+            || stream.next_selected_aux_row_v1(selection),
         )
     }
     /// Replay at most eight adjacent value auxiliary columns from one exact
@@ -6404,10 +6597,10 @@ impl P256MainBoundSourceV1 {
             _ => Err(P256AggregateAdapterErrorV1::Topology),
         }
     }
-    /// Exact X5V1 terminal material for all five role-positioned signatures.
+    /// Private product owner for all five role-positioned signatures; no public scalar codec.
     pub(crate) fn terminal_claims_v1(
         &self,
-    ) -> Result<ZkX509P256TerminalClaimsV1, P256AggregateAdapterErrorV1> {
+    ) -> Result<ZkX509P256PrivateProductsV1, P256AggregateAdapterErrorV1> {
         self.ensure_bound_v1()?;
         self.terminal_claims
             .ok_or(P256AggregateAdapterErrorV1::Phase)
@@ -6778,16 +6971,16 @@ mod tests {
         let buses = canonical_bus_terminal_claims();
         let certificate_or_crl = core::array::from_fn(|_| {
             let (cross_sources, sink) = canonical_terminal_chain(P256EcdsaRoleV1::CertificateOrCrl);
-            ZkX509P256CertificateTerminalClaimsV1 {
+            ZkX509P256CertificatePrivateProductsV1 {
                 buses,
                 cross_sources: cross_sources.try_into().unwrap(),
                 sink,
             }
         });
         let (cross_sources, sink) = canonical_terminal_chain(P256EcdsaRoleV1::WalletOwnership);
-        let claims = ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(
+        let claims = ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
             certificate_or_crl,
-            ZkX509P256WalletTerminalClaimsV1 {
+            ZkX509P256WalletPrivateProductsV1 {
                 buses,
                 cross_sources: cross_sources.try_into().unwrap(),
                 sink,
@@ -7189,7 +7382,7 @@ mod tests {
         for byte in 0..P256_INPUT_SELECTION_BYTES_V1 {
             let real = u8::try_from((byte * 73 + 19) % 251).expect("fixture byte");
             let dummy =
-                p256_input_selection_byte_v1(ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1, byte)
+                p256_input_selection_byte_v1(&ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1, byte)
                     .expect("dummy byte");
             // All 160 selected-byte relations reject even a coordinated
             // selected-byte/range-bit substitution.
@@ -7246,7 +7439,7 @@ mod tests {
     #[test]
     fn binding_sink_selector_rejects_range_padding_transition_and_fixed_schedule_attacks() {
         let byte = 137;
-        let dummy = p256_input_selection_byte_v1(ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1, byte)
+        let dummy = p256_input_selection_byte_v1(&ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1, byte)
             .expect("dummy byte");
         let inactive_real = p256_inactive_real_byte_v1(byte).expect("inactive byte");
         let (base, fixed) =
@@ -7927,7 +8120,10 @@ mod tests {
         for row in 0..P256_REDUCTION_ROWS_V1 {
             let digest = reduction_cross_events_v1(P256ReductionAggregateRoleV1::Digest, row)
                 .expect("digest reduction schedule");
-            assert_eq!(digest[0], P256CrossTraceEventFixedV1::inactive());
+            assert_eq!(
+                digest[0],
+                active_cross_event_v1(P256CrossTraceEndpointV1::DigestInput, row).unwrap()
+            );
             assert_eq!(
                 digest[1].address,
                 F(u64::try_from(DIGEST_REDUCTION_OUTPUT_ADDRESS + row).expect("digest address"))
@@ -8427,6 +8623,178 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn private_link_columns_match_independent_typed_terminal_projections() {
+        use P256MainAdapterV1 as Adapter;
+        use P256PrivateLinkFamilyV1 as Family;
+        let check = |adapter, local, family, row: &[F], expected: [F; 4]| {
+            let registration = P256MainRegistrationV1::new_v1(4, adapter, local).unwrap();
+            let columns = p256_private_link_columns_v1(registration, family).unwrap();
+            assert_eq!(columns.map(|column| row[column]), expected);
+        };
+        let value: [F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        let arithmetic: [F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        let window: [F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        let reduction: [F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        let low_s: [F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        let sink: [F; P256_CROSS_TRACE_SINK_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        let scalar: [F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        let native_value: [F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] =
+            core::array::from_fn(|i| F(i as u64 + 1));
+        for local in [0, 1] {
+            check(
+                Adapter::ValueBus,
+                local,
+                Family::Value,
+                &native_value,
+                super::super::p256_value_bus::p256_value_bus_stark_opened_terminal_v1(
+                    &native_value,
+                ),
+            );
+        }
+        check(
+            Adapter::ValueBus,
+            0,
+            Family::Copy,
+            &value,
+            p256_value_execution_arithmetic_copy_terminal_v1(&value).unwrap(),
+        );
+        check(
+            Adapter::ValueBus,
+            0,
+            Family::ChainStart,
+            &value,
+            p256_value_execution_cross_terminal_claim_v1(&value, &value)
+                .unwrap()
+                .start,
+        );
+        check(
+            Adapter::ValueBus,
+            0,
+            Family::ChainTerminal,
+            &value,
+            p256_value_execution_cross_terminal_v1(&value).unwrap(),
+        );
+        check(
+            Adapter::Arithmetic,
+            0,
+            Family::Copy,
+            &arithmetic,
+            p256_arithmetic_value_copy_terminal_v1(&arithmetic).unwrap(),
+        );
+        check(
+            Adapter::Arithmetic,
+            0,
+            Family::ArithmeticScalar,
+            &arithmetic,
+            p256_arithmetic_scalar_terminal_v1(&arithmetic).unwrap(),
+        );
+        check(
+            Adapter::WindowBatch,
+            0,
+            Family::WindowScalar,
+            &window,
+            p256_window_scalar_terminal_v1(&window).unwrap(),
+        );
+        check(
+            Adapter::WindowBatch,
+            0,
+            Family::ChainStart,
+            &window,
+            p256_window_cross_terminal_claim_v1(&window, &window)
+                .unwrap()
+                .start,
+        );
+        check(
+            Adapter::WindowBatch,
+            0,
+            Family::ChainTerminal,
+            &window,
+            p256_window_cross_terminal_v1(&window).unwrap(),
+        );
+        for (local, role) in [
+            (0, P256ReductionAggregateRoleV1::Digest),
+            (1, P256ReductionAggregateRoleV1::ResultX),
+        ] {
+            check(
+                Adapter::Reduction,
+                local,
+                Family::ChainStart,
+                &reduction,
+                p256_reduction_cross_terminal_claim_v1(role, &reduction, &reduction)
+                    .unwrap()
+                    .start,
+            );
+            check(
+                Adapter::Reduction,
+                local,
+                Family::ChainTerminal,
+                &reduction,
+                p256_reduction_cross_terminal_v1(&reduction).unwrap(),
+            );
+        }
+        check(
+            Adapter::WalletLowS,
+            0,
+            Family::ChainStart,
+            &low_s,
+            p256_low_s_cross_terminal_claim_v1(&low_s, &low_s)
+                .unwrap()
+                .start,
+        );
+        check(
+            Adapter::WalletLowS,
+            0,
+            Family::ChainTerminal,
+            &low_s,
+            p256_low_s_cross_terminal_v1(&low_s).unwrap(),
+        );
+        check(
+            Adapter::BindingSink,
+            0,
+            Family::ChainTerminal,
+            &sink,
+            p256_binding_sink_terminal_v1(&sink).unwrap(),
+        );
+        let terminal =
+            super::super::p256_scalar_bit_bus::p256_scalar_bit_bus_opened_terminals_v1(&scalar);
+        check(
+            Adapter::ScalarBitBus,
+            0,
+            Family::ArithmeticScalar,
+            &scalar,
+            terminal[0],
+        );
+        check(
+            Adapter::ScalarBitBus,
+            0,
+            Family::WindowScalar,
+            &scalar,
+            terminal[1],
+        );
+        for (adapter, local, family) in [
+            (Adapter::ValueBus, 1, Family::ChainStart),
+            (Adapter::Arithmetic, 0, Family::ChainStart),
+            (Adapter::ScalarBitBus, 0, Family::Copy),
+            (Adapter::BindingSink, 0, Family::ChainStart),
+        ] {
+            assert!(
+                p256_private_link_columns_v1(
+                    P256MainRegistrationV1::new_v1(4, adapter, local).unwrap(),
+                    family
+                )
+                .is_err()
+            );
+        }
+    }
+
     fn small_be(value: u64) -> [u8; 32] {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
@@ -9117,7 +9485,7 @@ mod tests {
             P256MainRegistrationV1::new_v1(2, P256MainAdapterV1::BindingSink, 0).expect("sink two");
         let sink_three = P256MainRegistrationV1::new_v1(3, P256MainAdapterV1::BindingSink, 0)
             .expect("sink three");
-        let selector_row = P256_INPUT_SELECTION_BYTES_V1;
+        let selector_row = P256_INPUT_SELECTION_SELECTOR_ROW_V1;
         assert_eq!(
             fixed
                 .fixed_cell_v1(sink_one, selector_row, SINK_SELECTION_REQUIRE_ACTIVE_FIXED,)
@@ -9255,7 +9623,7 @@ mod tests {
             .expect("bound scalar fixed replay");
         assert_eq!(scalar_base_after, scalar_base_before);
         assert_eq!(scalar_fixed_after, scalar_fixed_before);
-        let claims = bound.terminal_claims_v1().expect("exact X5V1 terminals");
+        let claims = bound.terminal_claims_v1().expect("exact private products");
         for certificate in claims.certificate_or_crl {
             assert!(
                 evaluate_p256_bus_terminal_claim_equalities_v1(certificate.buses)
@@ -9376,7 +9744,7 @@ mod tests {
             signatures: None,
             fixed: Some(P256MainVerifierFixedSourceV1::new_v1().expect("closed fixed source")),
             post_base: Some(post_base),
-            terminal_claims: Some(ZkX509P256TerminalClaimsV1::canonical_zero_for_test_v1()),
+            terminal_claims: Some(ZkX509P256PrivateProductsV1::canonical_zero_for_test_v1()),
         };
         bound.zeroize_private_v1();
         assert!(bound.private_is_zeroized_v1());
@@ -9396,7 +9764,7 @@ mod tests {
         let buses = canonical_bus_terminal_claims();
         let certificate_or_crl = core::array::from_fn(|_| {
             let (cross_sources, sink) = canonical_terminal_chain(P256EcdsaRoleV1::CertificateOrCrl);
-            ZkX509P256CertificateTerminalClaimsV1 {
+            ZkX509P256CertificatePrivateProductsV1 {
                 buses,
                 cross_sources: cross_sources.try_into().expect("four certificate sources"),
                 sink,
@@ -9404,27 +9772,27 @@ mod tests {
         });
         let (wallet_sources, wallet_sink) =
             canonical_terminal_chain(P256EcdsaRoleV1::WalletOwnership);
-        let wallet = ZkX509P256WalletTerminalClaimsV1 {
+        let wallet = ZkX509P256WalletPrivateProductsV1 {
             buses,
             cross_sources: wallet_sources.try_into().expect("five wallet sources"),
             sink: wallet_sink,
         };
-        ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(certificate_or_crl, wallet)
-            .expect("canonical X5V1 claims");
+        ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(certificate_or_crl, wallet)
+            .expect("canonical private products");
         let mut changed = certificate_or_crl;
         changed[0].cross_sources[1].start[0] = changed[0].cross_sources[1].start[0].add(F::ONE);
-        assert!(ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
+        assert!(ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
         let mut changed = certificate_or_crl;
         changed[1].sink[1] = changed[1].sink[1].add(F::ONE);
-        assert!(ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
+        assert!(ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
         let mut changed = certificate_or_crl;
         changed[2].buses.value_sorted[2] = changed[2].buses.value_sorted[2].add(F::ONE);
-        assert!(ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
+        assert!(ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(changed, wallet).is_err());
         let mut changed_wallet = wallet;
         changed_wallet.cross_sources[4].start[3] =
             changed_wallet.cross_sources[4].start[3].add(F::ONE);
         assert!(
-            ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(
+            ZkX509P256PrivateProductsV1::from_p256_air_terminals_v1(
                 certificate_or_crl,
                 changed_wallet,
             )
@@ -9440,3 +9808,7 @@ mod value_aux_batch_tests;
 #[cfg(test)]
 #[path = "p256_base_replay_batch_tests.rs"]
 mod base_replay_batch_tests;
+
+#[cfg(test)]
+#[path = "p256_selected_input_binding_tests.rs"]
+mod selected_input_binding_tests;

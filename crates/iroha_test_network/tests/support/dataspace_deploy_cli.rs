@@ -138,7 +138,7 @@ fn fixture_trust(
             .map_err(|error| eyre!("validate native fixture configuration: {error:?}"))?;
         let catalog = config.nexus.configured_lane_catalog.clone();
         ensure!(
-            catalog.lanes().iter().all(|lane| lane.id != LaneId::new(6)),
+            catalog.lanes().iter().all(|lane| lane.alias != "dpn"),
             "fixture DPN lane must be absent before deployment"
         );
         if let Some(expected) = &baseline {
@@ -269,12 +269,13 @@ fn assert_generated_lane_manifest(
     intent: &Value,
     trust: &Trust,
     authorities: &BTreeMap<PeerId, AccountId>,
+    expected_lane: LaneId,
 ) -> Result<RuntimeLaneManifestV1> {
     let runtime: RuntimeLaneManifestV1 = json::from_value(field(intent, "lane_manifest")?.clone())?;
     runtime.validate_structure()?;
     let descriptor: NativeLaneManifestV1 = json::from_str(runtime.manifest.get())?;
     ensure!(
-        runtime.lane_id == LaneId::new(6)
+        runtime.lane_id == expected_lane
             && descriptor.lane.as_deref() == Some("dpn")
             && descriptor.version == Some(NativeLaneManifestV1::VERSION)
             && descriptor.quorum == Some(3)
@@ -680,6 +681,10 @@ where
         .map_err(|error| eyre!("fresh owner configuration is invalid: {error:?}"))?;
     let (trust, expected_catalog, authorities) =
         fixture_trust(&fixture, &owner, fixture.build_identity)?;
+    // Extend the authenticated exclusive lane bound instead of filling a sparse
+    // hole in the canonical Taira catalog, whose existing lanes end at lane 7.
+    let expected_lane = LaneId::new(expected_catalog.lane_count().get());
+    let requested_lane = expected_lane.as_u32().to_string();
     let root = fixture.root;
     fs::create_dir(root)?;
     fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
@@ -705,7 +710,7 @@ where
                 "--dataspace",
                 "dpn",
                 "--lane-id",
-                "6",
+                &requested_lane,
                 "--lane-profile",
                 "restricted-full-replica",
                 "--account-alias",
@@ -730,7 +735,8 @@ where
             deadline,
         )
         .await?;
-    let generated_manifest = assert_generated_lane_manifest(&intent, &trust, &authorities)?;
+    let generated_manifest =
+        assert_generated_lane_manifest(&intent, &trust, &authorities, expected_lane)?;
     let deployment = bundle.join("deployment.json");
     ensure!(
         json::from_slice::<Value>(&fs::read(&deployment)?)? == intent,
@@ -1078,15 +1084,31 @@ fn assert_generated_binding_controls(authorities: &BTreeMap<PeerId, AccountId>) 
         ),
         ..NativeLaneManifestV1::default()
     };
-    let intent = |descriptor: &NativeLaneManifestV1| {
+    let expected_lane = LaneId::new(8);
+    let intent = |descriptor: &NativeLaneManifestV1, lane_id: LaneId| {
         let manifest = RuntimeLaneManifestV1 {
-            lane_id: LaneId::new(6),
+            lane_id,
             manifest: iroha_primitives::json::Json::try_new(descriptor).unwrap(),
         };
         let value = json::to_value(&manifest).unwrap();
         norito::json!({"lane_manifest": value})
     };
-    assert_generated_lane_manifest(&intent(&descriptor), &trust, authorities).unwrap();
+    assert_generated_lane_manifest(
+        &intent(&descriptor, expected_lane),
+        &trust,
+        authorities,
+        expected_lane,
+    )
+    .unwrap();
+    assert!(
+        assert_generated_lane_manifest(
+            &intent(&descriptor, LaneId::new(6)),
+            &trust,
+            authorities,
+            expected_lane,
+        )
+        .is_err()
+    );
     for mutation in 0..5 {
         let mut changed = descriptor.clone();
         let bindings = changed.validators.as_mut().unwrap();
@@ -1100,7 +1122,15 @@ fn assert_generated_binding_controls(authorities: &BTreeMap<PeerId, AccountId>) 
             4 => changed.quorum = Some(2),
             _ => unreachable!(),
         }
-        assert!(assert_generated_lane_manifest(&intent(&changed), &trust, authorities).is_err());
+        assert!(
+            assert_generated_lane_manifest(
+                &intent(&changed, expected_lane),
+                &trust,
+                authorities,
+                expected_lane,
+            )
+            .is_err()
+        );
     }
 }
 

@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::exec_witness;
-use crate::{governance::manifest::LaneManifestRegistry, state::WorldReadOnly};
+use crate::state::WorldReadOnly;
 use iroha_data_model::{
     account::Account,
     events::{EventBox, execute_trigger::ExecuteTriggerEventFilter},
@@ -15,17 +15,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::domain::DomainId;
-use std::{sync::Arc, time::Duration};
-
-fn install_routes(state: &State) {
-    let nexus = state.nexus_snapshot();
-    let registry =
-        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
-    registry
-        .validate_materialized_authority_for_catalog(&nexus.lane_catalog, &nexus.governance)
-        .expect("real physical policy manifest fixture");
-    state.install_lane_manifests_for_testing(&Arc::new(registry));
-}
+use std::time::Duration;
 
 fn fixture(row_bytes: u64, callback_bytes: Option<usize>) -> State {
     fixture_with_fee_asset(row_bytes, callback_bytes, None)
@@ -37,7 +27,6 @@ fn fixture_with_fee_asset(
     fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
 ) -> State {
     let mut state = state(row_bytes);
-    install_routes(&state);
     if let Some(asset) = &fee_asset {
         use iroha_primitives::numeric::Quantity;
         let fees = &mut state.nexus.get_mut().fees;
@@ -48,62 +37,65 @@ fn fixture_with_fee_asset(
         fees.fee_asset_id = asset.to_string();
         fees.fee_sink_account_id = iroha_test_samples::BOB_ID.to_string();
     }
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut transaction = setup.transaction();
-    Register::account(Account::new(ALICE_ID.clone()))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-    if let Some(asset) = fee_asset {
-        use iroha_data_model::{
-            asset::{AssetBalancePolicy, AssetDefinition, AssetId},
-            domain::Domain,
-            isi::Mint,
-        };
-        use iroha_primitives::numeric::Quantity;
-        Register::account(Account::new(iroha_test_samples::BOB_ID.clone()))
+    let state = authenticate_output_state(state);
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut transaction = setup.transaction_for_callback_testing();
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
-        Register::domain(Domain::new(
-            DomainId::try_new("network-fee", "universal").unwrap(),
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-        Register::asset_definition(AssetDefinition::numeric(
-            asset.clone(),
-            "Network fee".to_owned(),
-            AssetBalancePolicy::Global,
-            None,
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-        Mint::asset_quantity(Quantity::from(10_u32), AssetId::of(asset, ALICE_ID.clone()))
+        if let Some(asset) = fee_asset {
+            use iroha_data_model::{
+                asset::{AssetBalancePolicy, AssetDefinition, AssetId},
+                domain::Domain,
+                isi::Mint,
+            };
+            use iroha_primitives::numeric::Quantity;
+            Register::account(Account::new(iroha_test_samples::BOB_ID.clone()))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("network-fee", "universal").unwrap(),
+            ))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
+            Register::asset_definition(AssetDefinition::numeric(
+                asset.clone(),
+                "Network fee".to_owned(),
+                AssetBalancePolicy::Global,
+                None,
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .unwrap();
+            Mint::asset_quantity(Quantity::from(10_u32), AssetId::of(asset, ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+        }
+        if let Some(bytes) = callback_bytes {
+            let id: TriggerId = "network_callback".parse().unwrap();
+            let action = Action::new(
+                vec![
+                    InstructionBox::from(SetKeyValue::account(
+                        ALICE_ID.clone(),
+                        "callback_write".parse().unwrap(),
+                        Json::new(7),
+                    )),
+                    Log::new(Level::DEBUG, "x".repeat(bytes)).into(),
+                ],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .unwrap();
+            Register::trigger(Trigger::new(id, action))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+        }
+        transaction.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    if let Some(bytes) = callback_bytes {
-        let id: TriggerId = "network_callback".parse().unwrap();
-        let action = Action::new(
-            vec![
-                InstructionBox::from(SetKeyValue::account(
-                    ALICE_ID.clone(),
-                    "callback_write".parse().unwrap(),
-                    Json::new(7),
-                )),
-                Log::new(Level::DEBUG, "x".repeat(bytes)).into(),
-            ],
-            Repeats::Exactly(1),
-            ALICE_ID.clone(),
-            ExecuteTriggerEventFilter::new()
-                .for_trigger(id.clone())
-                .under_authority(ALICE_ID.clone()),
-        )
-        .unwrap();
-        Register::trigger(Trigger::new(id, action))
-            .execute(&ALICE_ID, &mut transaction)
-            .unwrap();
-    }
-    transaction.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
     state
 }
 
@@ -114,7 +106,7 @@ fn input(
     batch: bool,
 ) -> TransactionEntrypoint {
     let mut tx = TransactionBuilder::new(state.network_id, ALICE_ID.clone(), fee);
-    tx.set_creation_time(Duration::from_millis(1));
+    tx.set_creation_time(output_fixture_input_time(state));
     let executable = if batch {
         Executable::Batch(
             instructions
@@ -132,7 +124,7 @@ fn input(
     )
 }
 
-fn carrier(inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
+fn carrier(state: &State, inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
     // These component fixtures use the singleton route. Bind every original input before
     // signing so the producer validates the same source identity as native execution.
     let context = iroha_data_model::block::BlockExecutionContextBundle::new(
@@ -147,13 +139,7 @@ fn carrier(inputs: Vec<TransactionEntrypoint>) -> SignedBlock {
             })
             .collect(),
     );
-    let mut builder = BlockBuilder::new(BlockHeader::new(
-        NonZeroU64::new(2).unwrap(),
-        None,
-        None,
-        2,
-        0,
-    ));
+    let mut builder = BlockBuilder::new(output_fixture_header(state));
     for input in inputs {
         match input {
             TransactionEntrypoint::External(tx) => {
@@ -222,9 +208,55 @@ fn network_row<'a>(block: &'a StateBlock<'_>, index: usize) -> &'a NetworkExecut
 }
 
 #[test]
+fn output_fixture_retains_original_genesis_and_successor_source() {
+    let unprepared = State::new_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut unprepared_block = unprepared.block(BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        None,
+        None,
+        2,
+        0,
+    ));
+    assert!(
+        crate::executor::root_scope::execution_root_scope(&unprepared_block.transaction()).is_err()
+    );
+    drop(unprepared_block);
+    let state = fixture(65_536, Some(1024));
+    let parent = state.view().latest_block_hash().expect("original genesis");
+    assert_eq!(state.view().height(), 1);
+    assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+    let parameters = state.view().world.parameters.get().block();
+    assert_eq!(parameters.execution_output().max_output_bytes, 65_536);
+    assert_eq!(parameters.execution_output().max_pipeline_triggers, 0);
+    assert_eq!(parameters.execution_output().max_time_invocations, 1);
+    assert_eq!(parameters.max_time_trigger_invocations(), NonZeroU32::MIN);
+    let source = carrier(
+        &state,
+        vec![input(
+            &state,
+            vec![Log::new(Level::INFO, "original output source".into()).into()],
+            FeePaymentIntent::authority(vec![], None),
+            false,
+        )],
+    );
+    assert_eq!(source.header().prev_block_hash(), Some(parent));
+    assert!(source.header().creation_time() > output_fixture_input_time(&state));
+    let (mut block, _recording) = recorded_network_block(&state, &source);
+    assert!(crate::executor::root_scope::execution_root_scope(&block.transaction()).is_ok());
+    drop(block);
+    drop(_recording);
+    assert_eq!(state.view().latest_block_hash(), Some(parent));
+}
+
+#[test]
 fn actual_signed_sources_apply_once_in_original_output_positions() {
     let state = fixture(65_536, None);
     let source = carrier(
+        &state,
         (0..2)
             .map(|index| {
                 input(
@@ -292,12 +324,15 @@ fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
             _ => exact.unwrap() - 1,
         };
         let state = fixture(bytes, Some(32_768));
-        let source = carrier(vec![input(
+        let source = carrier(
             &state,
-            vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
-            FeePaymentIntent::authority(vec![], None),
-            false,
-        )]);
+            vec![input(
+                &state,
+                vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
+                FeePaymentIntent::authority(vec![], None),
+                false,
+            )],
+        );
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -358,15 +393,18 @@ fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() 
     let missing = DomainId::try_new("missing-network-domain", "universal").unwrap();
     for bytes in [16_384, 65_536] {
         let state = fixture(bytes, Some(32_768));
-        let source = carrier(vec![input(
+        let source = carrier(
             &state,
-            vec![
-                ExecuteTrigger::new("network_callback".parse().unwrap()).into(),
-                Unregister::domain(missing.clone()).into(),
-            ],
-            FeePaymentIntent::authority(vec![], None),
-            false,
-        )]);
+            vec![input(
+                &state,
+                vec![
+                    ExecuteTrigger::new("network_callback".parse().unwrap()).into(),
+                    Unregister::domain(missing.clone()).into(),
+                ],
+                FeePaymentIntent::authority(vec![], None),
+                false,
+            )],
+        );
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -417,12 +455,15 @@ fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() 
 #[test]
 fn block_gas_admission_rejects_before_business_or_transaction_gas() {
     let state = fixture(65_536, Some(1024));
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
-        FeePaymentIntent::authority(vec![], None),
-        false,
-    )]);
+        vec![input(
+            &state,
+            vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
+            FeePaymentIntent::authority(vec![], None),
+            false,
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     // ExecuteTrigger is rejected by the real pre-body gas admission guard.
     // This does not exercise the owner's final post-success gas fallback.
@@ -457,20 +498,23 @@ fn stateless_rejection_does_not_execute_its_business_instructions() {
         FeePaymentIntent::authority(vec![], None),
     );
     tx.set_creation_time(Duration::from_secs(1_000_000));
-    let source = carrier(vec![TransactionEntrypoint::External(
-        tx.with_instructions([SetKeyValue::account(
-            ALICE_ID.clone(),
-            "future_write".parse().unwrap(),
-            Json::new(1),
-        )])
-        .sign(ALICE_KEYPAIR.private_key()),
-    )]);
+    let source = carrier(
+        &state,
+        vec![TransactionEntrypoint::External(
+            tx.with_instructions([SetKeyValue::account(
+                ALICE_ID.clone(),
+                "future_write".parse().unwrap(),
+                Json::new(1),
+            )])
+            .sign(ALICE_KEYPAIR.private_key()),
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
     assert!(
         matches!(network_row(&block, 0).result.as_ref(), Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-        iroha_data_model::ValidationFail::NotPermitted(reason))) if reason == "transaction creation time 1000000000 is not earlier than block creation time 2")
+        iroha_data_model::ValidationFail::NotPermitted(reason))) if reason == &format!("transaction creation time 1000000000 is not earlier than block creation time {}", source.header().creation_time().as_millis()))
     );
     let key: Name = "future_write".parse().unwrap();
     assert!(
@@ -516,20 +560,23 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         )],
         None,
     );
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![
-            SetKeyValue::account(
-                ALICE_ID.clone(),
-                "fee_business_write".parse().unwrap(),
-                Json::new(1),
-            )
-            .into(),
-            Unregister::domain(missing.clone()).into(),
-        ],
-        fee,
-        true,
-    )]);
+        vec![input(
+            &state,
+            vec![
+                SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    "fee_business_write".parse().unwrap(),
+                    Json::new(1),
+                )
+                .into(),
+                Unregister::domain(missing.clone()).into(),
+            ],
+            fee,
+            true,
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -604,19 +651,22 @@ fn frozen_fraud_admission_refuses_before_business_work_and_grace_preserves_execu
         state.fraud_monitoring.required_minimum_band =
             Some(iroha_config::parameters::actual::FraudRiskBand::Low);
         state.fraud_monitoring.missing_assessment_grace = grace;
-        let source = carrier(vec![input(
+        let source = carrier(
             &state,
-            vec![
-                SetKeyValue::account(
-                    ALICE_ID.clone(),
-                    "fraud_effect".parse().unwrap(),
-                    Json::new(1_u32),
-                )
-                .into(),
-            ],
-            FeePaymentIntent::authority(vec![], None),
-            false,
-        )]);
+            vec![input(
+                &state,
+                vec![
+                    SetKeyValue::account(
+                        ALICE_ID.clone(),
+                        "fraud_effect".parse().unwrap(),
+                        Json::new(1_u32),
+                    )
+                    .into(),
+                ],
+                FeePaymentIntent::authority(vec![], None),
+                false,
+            )],
+        );
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let before = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -662,16 +712,20 @@ fn ordinary_signed_creation_time_must_precede_its_actual_carrier() {
             ALICE_ID.clone(),
             FeePaymentIntent::authority(vec![], None),
         );
-        builder.set_creation_time(Duration::from_millis(created_at));
-        let source = carrier(vec![TransactionEntrypoint::External(
-            builder
-                .with_instructions([SetKeyValue::account(
-                    ALICE_ID.clone(),
-                    "source_time_effect".parse().unwrap(),
-                    Json::new(1_u32),
-                )])
-                .sign(ALICE_KEYPAIR.private_key()),
-        )]);
+        let actual_created_at = output_fixture_parent_time(&state) + created_at;
+        builder.set_creation_time(Duration::from_millis(actual_created_at));
+        let source = carrier(
+            &state,
+            vec![TransactionEntrypoint::External(
+                builder
+                    .with_instructions([SetKeyValue::account(
+                        ALICE_ID.clone(),
+                        "source_time_effect".parse().unwrap(),
+                        Json::new(1_u32),
+                    )])
+                    .sign(ALICE_KEYPAIR.private_key()),
+            )],
+        );
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -695,7 +749,7 @@ fn ordinary_signed_creation_time_must_precede_its_actual_carrier() {
             assert!(matches!(row.result.as_ref(),
                 Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::NotPermitted(reason)))
-                if reason == &format!("transaction creation time {created_at} is not earlier than block creation time 2")));
+                if reason == &format!("transaction creation time {actual_created_at} is not earlier than block creation time {}", source.header().creation_time().as_millis())));
             assert_eq!(block.committed_fragment_count(), fragments);
             assert_eq!(block.gas_used_in_block, 0);
             assert!(
@@ -745,24 +799,27 @@ fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_f
     parameters.commit();
     let alice = AssetId::of(asset.clone(), ALICE_ID.clone());
     let bob = AssetId::of(asset.clone(), iroha_test_samples::BOB_ID.clone());
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![
-            Transfer::asset_quantity(alice.clone(), 1_u32, iroha_test_samples::BOB_ID.clone())
-                .into(),
-            Transfer::asset_quantity(alice.clone(), 1_u32, iroha_test_samples::BOB_ID.clone())
-                .into(),
-        ],
-        FeePaymentIntent::authority(
-            vec![FeeChargeLimit::new(
-                FeeChargeKind::Nexus,
-                asset,
-                Quantity::from(1_u32),
-            )],
-            None,
-        ),
-        true,
-    )]);
+        vec![input(
+            &state,
+            vec![
+                Transfer::asset_quantity(alice.clone(), 1_u32, iroha_test_samples::BOB_ID.clone())
+                    .into(),
+                Transfer::asset_quantity(alice.clone(), 1_u32, iroha_test_samples::BOB_ID.clone())
+                    .into(),
+            ],
+            FeePaymentIntent::authority(
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    asset,
+                    Quantity::from(1_u32),
+                )],
+                None,
+            ),
+            true,
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let before_fragments = block.committed_fragment_count();
     let receiver_before = block.world.assets().get(&bob).cloned();
@@ -817,8 +874,8 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
     .encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     {
-        let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-        let mut tx = setup.transaction();
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut tx = setup.transaction_for_callback_testing();
         Grant::account_permission(
             iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
                 authority: ALICE_ID.clone(),
@@ -853,7 +910,7 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
         FeePaymentIntent::authority(vec![], None),
         false,
     );
-    let source = carrier(vec![entry.clone()]);
+    let source = carrier(&state, vec![entry.clone()]);
     let cache_owner = state.trigger_ivm_cache.lock().prepared_contract_cache();
     let reason = ExecutionDeferral::AllocationUnavailable;
     cache_owner.set_checkout_refusal_for_test(Some(reason));
@@ -915,3 +972,6 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
         Repeats::Exactly(1)
     );
 }
+
+#[path = "output_network_nexus_receipt_tests.rs"]
+mod nexus_receipts;

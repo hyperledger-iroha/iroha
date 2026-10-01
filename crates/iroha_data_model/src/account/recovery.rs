@@ -199,12 +199,16 @@ pub enum AccountRecoveryStatus {
 pub struct AccountRecoveryRequest {
     /// Stable alias targeted by the recovery request.
     pub alias: AccountAlias,
+    /// Monotonic alias-local request identity, retained after terminal outcomes.
+    pub request_generation: NonZeroU64,
     /// Account active behind the alias when the request was proposed.
     pub active_account_id_at_proposal: AccountId,
     /// Controller that should replace the active controller once finalized.
     pub proposed_controller: AccountController,
     /// Guardian approvals collected so far.
     pub approvals: BTreeSet<AccountId>,
+    /// Independent guardian cancellation votes, exclusive with replacement approvals.
+    pub cancellation_approvals: BTreeSet<AccountId>,
     /// Native multisig proposals invalidated atomically by finalization.
     ///
     /// The hashes are retained on the terminal request so clients can resolve corresponding
@@ -222,6 +226,7 @@ impl AccountRecoveryRequest {
     #[must_use]
     pub fn new(
         alias: AccountAlias,
+        request_generation: NonZeroU64,
         active_account_id_at_proposal: AccountId,
         proposed_controller: AccountController,
         proposed_by: AccountId,
@@ -229,9 +234,11 @@ impl AccountRecoveryRequest {
     ) -> Self {
         Self {
             alias,
+            request_generation,
             active_account_id_at_proposal,
             proposed_controller,
             approvals: BTreeSet::new(),
+            cancellation_approvals: BTreeSet::new(),
             invalidated_multisig_proposal_hashes: Vec::new(),
             proposed_by,
             execute_after_ms,
@@ -246,6 +253,12 @@ impl AccountRecoveryRequest {
     /// Add an approval keyed by guardian subject id.
     pub fn approve(&mut self, account: &AccountId) {
         self.approvals.insert(account.subject_id());
+    }
+    /// Record an irreversible cancellation vote and withdraw this guardian's replacement vote.
+    pub fn approve_cancellation(&mut self, account: &AccountId) {
+        let subject = account.subject_id();
+        self.approvals.remove(&subject);
+        self.cancellation_approvals.insert(subject);
     }
     /// Mark the request as cancelled.
     pub fn cancel(&mut self) {
@@ -364,6 +377,7 @@ mod tests {
         let active = account(1);
         let mut request = AccountRecoveryRequest::new(
             alias,
+            NonZeroU64::new(7).expect("positive request generation"),
             active,
             AccountController::single(
                 account(2)
@@ -380,6 +394,15 @@ mod tests {
             "invalidated by account recovery".to_owned(),
         ))];
         request.invalidated_multisig_proposal_hashes = vec![HashOf::new(&invalidated_instructions)];
+        let cancellation_guardian = account(4);
+        request.approve(&cancellation_guardian);
+        request.approve_cancellation(&cancellation_guardian);
+        assert!(request.approvals.is_empty());
+        assert!(
+            request
+                .cancellation_approvals
+                .contains(&cancellation_guardian.subject_id())
+        );
         request.finalize();
         let encoded = norito::to_bytes(&request).expect("encode recovery request");
         let decoded = norito::decode_from_bytes::<AccountRecoveryRequest>(&encoded)
@@ -391,6 +414,17 @@ mod tests {
             let decoded = norito::json::from_str::<AccountRecoveryRequest>(&json)
                 .expect("decode recovery request JSON");
             assert_eq!(decoded, request);
+            let mut missing_generation = norito::json::to_value(&request).unwrap();
+            missing_generation
+                .as_object_mut()
+                .unwrap()
+                .remove("request_generation");
+            assert!(
+                norito::json::from_str::<AccountRecoveryRequest>(
+                    &norito::json::to_json(&missing_generation).unwrap(),
+                )
+                .is_err()
+            );
         }
     }
 }

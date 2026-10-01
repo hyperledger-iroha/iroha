@@ -8,6 +8,23 @@ with other SDKs changes only through coordinated cross-SDK updates.
 For operator and protocol documentation, see [docs.iroha.tech](https://docs.iroha.tech/).
 This file focuses on getting a .NET application connected safely.
 
+Contract-artifact reads and verified-source jobs use `ContractArtifactId(dataspaceId,
+codeHash)` and canonical request credentials. The dataspace is an explicit `ulong`;
+the hash is the lowercase marked hash of the complete `.to` artifact. Responses bind
+both the configured network and requested artifact identity, and bytecode reads verify
+the domain-separated complete-artifact hash. Singular manifest queries use
+`FindContractManifestByArtifactId` with the same identity.
+Singular queries use the current native query discriminants and Norito newtype
+framing. Domain endorsement queries and domain transfer/metadata instructions require the fully qualified `domain.dataspace`
+identity, for example `banka.universal`.
+These operations require the ABI-25 Rust domain validator and exact canonical ASCII
+labels, including admitted IDNA A-labels; raw Unicode and alternate spellings are
+rejected. The native pinned UTS-46 owner also decides underscore and hyphen admission.
+NFT instructions use the same fully qualified domain inside `name$domain.dataspace`.
+Typed transfer, metadata and trigger instructions preserve the native enum struct
+field and the `TriggerId`/`Json` newtype fields; transaction metadata uses that same
+`Json` encoder.
+
 ## Requirements
 
 - .NET SDK 8.0.419, as pinned by `global.json`

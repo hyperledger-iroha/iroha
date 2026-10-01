@@ -120,14 +120,35 @@ fn proposal_wire(block: &SignedBlock) -> Result<Vec<u8>, FinalityError> {
     Ok(bytes)
 }
 
-/// Verify the signed availability table and every original RS16 row against the exact
-/// canonical proposal, under independently authenticated height authority.
+/// A signed availability failure or a local scratch-allocation refusal.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PayloadAvailabilityError {
+    /// The signed source, payload or portable shape bound is invalid for this reader.
+    #[error(transparent)]
+    Invalid(#[from] FinalityError),
+    /// The caller's original allocation scope or physical allocator refused scratch.
+    /// This is not an invalidity verdict about the signed source.
+    #[error("availability scratch resource: {0}")]
+    Resource(norito::core::DecodeResourceError),
+}
+
+impl From<PayloadAvailabilityError> for FinalityError {
+    fn from(error: PayloadAvailabilityError) -> Self {
+        match error {
+            PayloadAvailabilityError::Invalid(error) => error,
+            PayloadAvailabilityError::Resource(error) => Self(error.to_string()),
+        }
+    }
+}
+
+/// Verify signed availability under the portable scratch bound.
 ///
-/// Scratch is bounded by the portable reader limit. This read-only verification cannot
-/// manufacture native body custody or allocation authority.
+/// This wrapper grants no request-pool allocation authority. Callers with a scoped
+/// owner must use [`verify_payload_availability_with_admission`] and preserve its
+/// typed local refusal; existing portable callers receive diagnostic errors only.
 ///
 /// # Errors
-/// Invalid signatures, layout, proposal bytes, row commitments, or reader resource limits.
+/// Rejects invalid signatures, layout, payload, rows and physical allocation failures.
 pub fn verify_payload_availability(
     instance: Hash32,
     config: &iroha_sumeragi::types::HeightConfig,
@@ -136,6 +157,36 @@ pub fn verify_payload_availability(
     payload: &[u8],
     crypto: &dyn Crypto,
 ) -> Result<(), FinalityError> {
+    verify_payload_availability_with_admission(
+        instance,
+        config,
+        header,
+        availability,
+        payload,
+        crypto,
+        |_| Ok(()),
+    )
+    .map_err(Into::into)
+}
+
+/// Verify signed availability after the caller admits exact scratch bytes.
+///
+/// The shared verifier derives the codeword and field-workspace sizes from the
+/// authenticated row table and calls admission before either allocation. A local
+/// refusal cannot turn the original signed source into invalid evidence. This
+/// callback does not grant native body custody or a different allocation pool.
+///
+/// # Errors
+/// Rejects invalid signed sources separately from local admission/allocation refusal.
+pub fn verify_payload_availability_with_admission(
+    instance: Hash32,
+    config: &iroha_sumeragi::types::HeightConfig,
+    header: &CoreHeader,
+    availability: &AvailabilityFrame,
+    payload: &[u8],
+    crypto: &dyn Crypto,
+    mut admit: impl FnMut(usize) -> Result<(), norito::core::DecodeResourceError>,
+) -> Result<(), PayloadAvailabilityError> {
     let verified = iroha_sumeragi::availability::verify_availability(
         instance,
         config,
@@ -150,23 +201,33 @@ pub fn verify_payload_availability(
         .checked_mul(std::mem::size_of::<u16>())
         .and_then(|bytes| bytes.checked_add(shape.encoded_bytes()))
         .ok_or_else(|| FinalityError("availability scratch length overflow".into()))?;
-    need(
-        scratch <= MAX_FINALITY_AVAILABILITY_SCRATCH_BYTES,
-        "availability exceeds portable reader scratch bound",
-    )?;
+    if scratch > MAX_FINALITY_AVAILABILITY_SCRATCH_BYTES {
+        return Err(PayloadAvailabilityError::Resource(
+            norito::core::DecodeResourceError::TotalAllocationExceeded {
+                attempted: scratch as u64,
+                limit: MAX_FINALITY_AVAILABILITY_SCRATCH_BYTES as u64,
+            },
+        ));
+    }
+    admit(scratch).map_err(PayloadAvailabilityError::Resource)?;
+    let allocation_failed = |bytes| {
+        PayloadAvailabilityError::Resource(norito::core::DecodeResourceError::AllocationFailed {
+            bytes: bytes as u64,
+        })
+    };
     let mut codeword = Vec::new();
     codeword
         .try_reserve_exact(shape.encoded_bytes())
-        .map_err(malformed)?;
+        .map_err(|_| allocation_failed(shape.encoded_bytes()))?;
     codeword.resize(shape.encoded_bytes(), 0);
     let mut workspace = Vec::new();
     workspace
         .try_reserve_exact(shape.workspace_words())
-        .map_err(malformed)?;
+        .map_err(|_| allocation_failed(shape.workspace_words() * size_of::<u16>()))?;
     workspace.resize(shape.workspace_words(), 0);
     verified
         .verify_payload(payload, &mut codeword, &mut workspace, crypto)
-        .map_err(|error| FinalityError(format!("availability payload: {error:?}")))
+        .map_err(|error| FinalityError(format!("availability payload: {error:?}")).into())
 }
 
 /// A consensus key and its proof of possession; its authority comes from the trusted schedule.

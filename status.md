@@ -26,15 +26,18 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 ## Immediate blockers
 
 Exact finalized-carrier retries now authenticate the original execution and
-acknowledge admission without requeueing or charging again. The rebuilt local
-Nexus happy-day and smoke workloads complete financial, signed RS16 finality and
-exact-retry checks across all 16 peers; smoke also preserves the funded settlement
-through all 16 validator restarts. The measured smoke settlement takes 45.17 seconds.
-Repeated accepted settlements remain unqualified on one fixed source candidate.
-A fresh disjoint-committee run exposed an applied-body pruning race that stops
-the availability worker during an in-flight file read; its correction awaits
-rebuilt node qualification. Restricted native-lane gossip also needs fresh
-daemon/harness qualification with disjoint global and participant committees.
+acknowledge admission without requeueing or charging again. The embedded MCP
+descriptor size drift that prevented daemon startup is corrected with a bounded
+loader and compile-time guard. A fixed local daemon/harness candidate completes
+the Nexus smoke workload's financial, signed RS16 finality and exact-retry checks
+across all 16 peers and preserves the settlement through all 16 restarts. Its
+settlement takes 59.17 seconds. The campaign validator now recognizes the exact
+retry observer's canonical phase label and verifies the retained evidence.
+The rebuilt disjoint-committee workload also preserves progress while one lane
+stops and after every peer restarts, covering the applied-body pruning repair.
+Ten fresh paid-settlement runs also pass on that fixed candidate, each with 16
+signed RS16 observations, exact-retry checks and finality at height 9. Qualification
+of the combined source and the settlement latency target remain open.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding
@@ -66,25 +69,23 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-The latest pinned Taira observation on September 30 found four d431 validators
-at height 10 with matching CommitQCs and empty queues. Health, liveness, faucet
-policy and MCP responded, but every validator returned readiness HTTP 503. The
-beacon install resolved to Applied; its proof and signer-provider activation
-remained unfinished. The deployed recovery CLI loses the Canary operator key,
-and its source-bound forward lease has expired. See the
-[readiness incident](docs/incidents/2026-09-30-taira-readiness.md).
+Taira runs the signed e35c10ba release with fresh validator keys and signed genesis.
+All four validators return readiness HTTP 200, have three peers, and converged
+at height 3 after an ordinary signed transaction resolved to StateApplied.
+The public endpoint at `https://taira.sora.org` has verified TLS, and the
+same-revision basic doctor reports healthy public routes and curated MCP tools.
+The previous live ledger and twenty obsolete validator releases were deleted.
 
-Current source fixes recovery arguments, checks readiness and initializes fresh
-safety records. Authenticated Linux qualification and the authorized fresh
-current-protocol cutover remain pending. Current codecs cannot authenticate the
-retired runtime. The [reset runbook](specs/runbooks/sumeragi_taira_reset.md) requires
-fresh four-validator readiness, write and restart evidence. On-chain governance
-owns deployment policy; a fixed-duration fault soak is not a cutover prerequisite.
+Current source fixes deployment recovery and initializes fresh safety records
+before first startup. Deployment preparation, transfer and the routine updater
+accept an authenticated build-only candidate without a full regression gate.
+On-chain governance owns deployment policy; no fixed 24-hour fault test is a
+deployment prerequisite for testnet or production.
 
-The retained height-3598 ledger remains a separate recovery obligation. Physical
-DPN, paid `dpn`/`admin@dpn`, clean-client completion and production beacon custody
-are not qualified by fresh bootstrap. Validators run in a Linux guest on
-MacStadium in Dublin; use the approved deployment tooling.
+Beacon custody activation, physical DPN, paid `dpn`/`admin@dpn` and clean-client
+completion remain open. Validators run in a Linux guest on MacStadium in Dublin;
+use the approved deployment tooling. Retained incident records describe the
+[previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
 
 BPNG retained-history qualification, validator catch-up, additive catalog
 activation and API22/FE17 application commissioning remain open. Basic acceptance
@@ -93,11 +94,16 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-Default daemon/CLI binaries have scoped compilation coverage after compiler and
-runtime-owner extraction. Merged Core/test qualification, executable freshness,
-timing and full workspace execution remain incomplete. Dependency ownership and
-measured compiler memory are the active gates; code line-count gates are retired.
-See the [architecture plan](specs/first_release_architecture_redesign.md) and
+Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
+Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
+checks cover normal native/JS/Python frontends and dependency/codec guards.
+These results qualify their recorded source. The combined candidate still needs
+fresh compiler and focused-test validation, a merge-free workspace check, genuine
+private-terminal/quotient-mask profile regeneration, current native/SDK consumers
+and executable-metadata freshness. Full workspace tests, physical-device
+qualification and same-candidate release validation remain incomplete.
+Dependency ownership and pinned compiler-memory measurements remain gates; see
+the [architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
 Memory qualification retains a 25% model-baseline reduction, measured limits for
@@ -119,19 +125,35 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** complete FASTPQ/X509 relations and bounded work, ZK-ACE/qROM
-  and terminal-degree qualification, BFV/MKHE/Figure 9 design, independent review
-  and actual CPU/Metal/CUDA conformance. Unsupported paths stay fail closed under
-  the [ZK goals](specs/zk_first_release_goals.md).
+- **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
+  pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
+  300 seconds. Verifier byte-source joins remain incomplete: host copies do not
+  bind P256/projection byte declarations to the shared trace. The selected-input
+  repair binds bytes to actual P256 values, but native comparison exposed a
+  missing selected-input multiplicity in the closed fixed-schedule compiler.
+  The post-pin privacy selection completes with 942 passes and 14 failures;
+  all 26 repaired IVM memory controls pass. Schedule, fixture and resource
+  corrections require a new native run. The partial private-terminal repair
+  leaves 492 public intermediate scalars requiring a zero-knowledge repair.
+  A new complete proof still needs to meet all limits. The current q77 maximum ordinary
+  and maximum AXT proofs pass byte/RSS limits with unchanged source; both exact
+  retained artifacts also pass fresh-process verification. RAM-LFE secure
+  encryption/full execution, IVM execution/finalized-State binding, protocol and
+  side-channel review, hardware/network evidence and final signing remain open
+  under the [ZK goals](specs/zk_first_release_goals.md).
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.
-- **Offline money/devices:** recursive proofs, durable non-forking hardware,
-  mint/redemption, adversarial recovery and signed physical profiles remain open.
-  Secure-key signing and host JNI do not establish offline money.
+- **Offline money/devices:** the ordinary app profile uses an attested persistent
+  hardware key, genuine platform admission and independent Native financial
+  custody. Recursive proofs, current-owner integration, mint/redemption,
+  adversarial recovery and signed physical qualification remain open. Ordinary
+  key signatures do not establish a non-forking journal or hardware clock.
 
 First-release contracts remain canonical APIs, domainless `AccountId`, Norito
 wire formats and deterministic ABI V1. Sumeragi uses exact `3f + 1` global
 committees, exactly `n - f` votes, signed RS16 availability and work-driven blocks.
-Ordinary signing supports authenticated software custody; KAGEMUSHA monetary
-authority separately requires governed non-forking hardware.
+Ordinary signing supports authenticated software custody. The first production
+KAGEMUSHA app profile requires governed app-key admission, genuine monetary
+proofs and exact current-owner/replay authority; it has no custom applet or
+one-use-key prerequisite.

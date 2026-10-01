@@ -517,9 +517,19 @@ impl<T: Write> RunArgs<T> for ContractCommand {
 
 fn up(store: &ManagedStore, name: &str, timeout: u64) -> Result<ManagedStatus> {
     let runtime = InstalledRuntime::discover()?;
-    store
-        .up(&runtime.localnet_request(name, Duration::from_secs(timeout)))
-        .map_err(Into::into)
+    let mut request = runtime.localnet_request(name, Duration::from_secs(timeout));
+    match store.prepared(name) {
+        Ok(prepared) => {
+            request.service_profile = prepared.service_profile;
+            store.up_retained(&request).map_err(Into::into)
+        }
+        Err(iroha_deploy::managed::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            store.up(&request).map_err(Into::into)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn check_fee_budget<'a>(

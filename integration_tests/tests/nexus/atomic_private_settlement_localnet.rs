@@ -3825,44 +3825,17 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
     // Replay the original signed carrier while it is live. The acknowledgment must
     // retain its finalized identity without creating another financial effect.
-    let replay_height = sponsor
-        .client()
-        .get_privacy_capabilities()?
-        .committed_height;
-    ensure!(
-        replay_height >= receipt.finalized_height
-            && replay_height >= final_manifest.authority_context_height
-            && replay_height
-                .checked_add(1)
-                .is_some_and(|candidate| candidate <= final_manifest.expiry_height),
-        "exact finalized replay is outside the original carrier's live height window"
-    );
-    let replay_acknowledgment = sponsor
-        .client()
-        .submit_private_settlement_bundle_v1(&request)
-        .wrap_err("live exact finalized replay must acknowledge its immutable admission owner")?;
-    ensure!(
-        replay_acknowledgment.bundle_id == final_manifest.bundle_id
-            && replay_acknowledgment.carrier_id == Hash::from(request.transaction.hash()),
-        "exact finalized replay acknowledgment changed the bundle or signed carrier identity"
-    );
-    ensure!(
-        replay_acknowledgment.accepted_at_height >= replay_height
-            && replay_acknowledgment
-                .accepted_at_height
-                .checked_add(1)
-                .is_some_and(|candidate| candidate <= final_manifest.expiry_height),
-        "exact finalized replay acknowledgment is outside the original carrier's live height window"
-    );
+    let replayed = observe_idempotent_finalized_retry(
+        &sponsor,
+        &network,
+        &final_manifest,
+        &request,
+        &receipt,
+    )?;
     ensure!(
         sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
-        "acknowledged finalization replay charged a third carrier fee"
+        "acknowledged finalization retry charged a third carrier fee"
     );
-    ensure!(
-        wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
-        "replay changed the terminal receipt"
-    );
-    let replayed = wait_for_converged_fault_state_snapshot(&network, "smoke-replay")?;
     ensure_fault_state_reverted(&after, &replayed)?;
     evidence_files.push(write_smoke_evidence(
         &evidence_root,

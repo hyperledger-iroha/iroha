@@ -1,4 +1,5 @@
 //! End-point querying logic, including custom public and authenticated routes.
+mod authority_originals;
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
 mod capability_test_support;
@@ -25,6 +26,8 @@ mod private_settlement;
 mod repair;
 mod reputation_journal;
 mod reserve;
+mod resource_names_state;
+pub use authority_originals::NativeAuthorityOriginalsReadV1;
 mod runtime_governance_client_auth;
 /// Public SCCP v1 read API.
 pub mod sccp;
@@ -12170,12 +12173,14 @@ mod evidence_http_tests {
             ))
             .expect("native signed pair"),
             attribution: EvidenceAttribution {
+                scope: iroha_data_model::block::consensus::EvidenceScope::Root,
                 instance: [0x53; 32],
                 height: 10,
                 epoch: 0,
                 context_id: [0x54; 32],
                 authority_generation: [0x58; 32],
                 offenders: vec![EvidenceOffender {
+                    lane_stake: None,
                     signer: 0,
                     peer_id: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
                 }],

@@ -1243,6 +1243,7 @@ check_apple_consumer_link() {
   mkdir -p "$consumer_dir"
   cat > "$consumer_dir/main.c" <<'CONSUMER_EOF'
 #include "connect_norito_bridge.h"
+#include "soranet_pq.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -1261,6 +1262,31 @@ extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *, uint8_t *);
 extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *, uint8_t *, const uint8_t *);
 extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *, const uint8_t *, const uint8_t *);
 
+/* Exercise the public ABI consumed by Swift, in addition to the retained
+ * PQClean backend checks below. Suite 1 is ML-DSA-65 on the native owner. */
+static int check_mldsa_ffi(void) {
+    static const uint8_t message[] = {'a', 'b', 'c'};
+    static const uint8_t changed[] = {'a', 'b', 'd'};
+    uint8_t public_key[1952], secret_key[4032] = {0}, signature[3309];
+    uint32_t public_len = 0, secret_len = 0, signature_len = 0;
+    int result = 14;
+    if (soranet_mldsa_parameters(1, &public_len, &secret_len, &signature_len)) goto done;
+    if (public_len != sizeof(public_key) || secret_len != sizeof(secret_key)
+        || signature_len != sizeof(signature)) goto done;
+    if (soranet_mldsa_generate_keypair(1, public_key, sizeof(public_key),
+            secret_key, sizeof(secret_key))) goto done;
+    if (soranet_mldsa_sign(1, secret_key, sizeof(secret_key), message, sizeof(message),
+            signature, sizeof(signature))) goto done;
+    if (soranet_mldsa_verify(1, public_key, sizeof(public_key), message, sizeof(message),
+            signature, sizeof(signature))) goto done;
+    if (soranet_mldsa_verify(1, public_key, sizeof(public_key), changed, sizeof(changed),
+            signature, sizeof(signature)) != SORANET_PQ_ERR_VERIFICATION_FAILED) goto done;
+    result = 0;
+done:
+    for (size_t i = 0; i < sizeof(secret_key); ++i) ((volatile uint8_t *)secret_key)[i] = 0;
+    return result;
+}
+
 int main(void) {
     static const uint8_t message[] = {'a', 'b', 'c'};
     static const uint8_t changed[] = {'a', 'b', 'd'};
@@ -1275,6 +1301,10 @@ int main(void) {
     uint8_t kem_public[800], kem_secret[1632], ciphertext[768], sent[32], received[32];
     size_t signature_len = 0;
     if (connect_norito_bridge_abi_version() != CONNECT_NORITO_BRIDGE_ABI_VERSION) return 1;
+    static const char domain[] = "xn--bcher-kva.universal";
+    static const char invalid_domain[] = "BANKA.universal";
+    if (connect_norito_domain_id_validate_v1(domain, sizeof(domain) - 1) != 0) return 12;
+    if (connect_norito_domain_id_validate_v1(invalid_domain, sizeof(invalid_domain) - 1) != 1) return 13;
     sha3_256(sha3, message, sizeof(message));
     shake256(shake, sizeof(shake), message, sizeof(message));
     if (memcmp(sha3, sha3_expected, sizeof(sha3)) || memcmp(shake, shake_expected, sizeof(shake))) return 2;
@@ -1290,7 +1320,7 @@ int main(void) {
     if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(ciphertext, sent, kem_public)) return 9;
     if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(received, ciphertext, kem_secret)) return 10;
     if (memcmp(sent, received, sizeof(sent))) return 11;
-    return 0;
+    return check_mldsa_ffi();
 }
 CONSUMER_EOF
   echo "[+] Linking complete native archive into a C consumer: $target_triple" >&2
@@ -1302,7 +1332,8 @@ CONSUMER_EOF
     LC_ALL=C.UTF-8 \
     DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
     "$CLANG_BINARY" -target "$clang_target" -isysroot "$sdkroot" \
-    -I "$ROOT_DIR/crates/connect_norito_bridge/include" "$consumer_dir/main.c" \
+    -I "$ROOT_DIR/crates/connect_norito_bridge/include" \
+    -I "$ROOT_DIR/crates/soranet_pq/include" "$consumer_dir/main.c" \
     -Wl,-all_load "$library" \
     -framework Foundation -framework Security -framework Metal -framework CoreGraphics \
     -framework Accelerate \
@@ -1852,6 +1883,11 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "bridge_header_sha256": "$HEADER_HASH",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
+    "connect_norito_domain_id_validate_v1",
+    "soranet_mldsa_parameters",
+    "soranet_mldsa_generate_keypair",
+    "soranet_mldsa_sign",
+    "soranet_mldsa_verify",
     "connect_norito_free",
     "connect_norito_chain_discriminant_scope_enter",
     "connect_norito_chain_discriminant_scope_exit",
@@ -1905,6 +1941,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
     "connect_norito_kagemusha_contract_vector_v1",
     "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_install_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",

@@ -4,6 +4,22 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
+    func testEveryCurrentMlDsaExportIsRequiredForAdmission() {
+        XCTAssertEqual(NoritoBridgeLoader.mldsaRequiredSymbols, [
+            "soranet_mldsa_parameters",
+            "soranet_mldsa_generate_keypair",
+            "soranet_mldsa_sign",
+            "soranet_mldsa_verify"
+        ])
+        XCTAssertTrue(NoritoBridgeLoader.hasRequiredExports(resolving: { _ in true }))
+        for missing in NoritoBridgeLoader.mldsaRequiredSymbols {
+            XCTAssertFalse(NoritoBridgeLoader.hasRequiredExports(resolving: { $0 != missing }))
+        }
+        let current = Set(NoritoBridgeLoader.mldsaRequiredSymbols)
+        // Every other export, including an obsolete prefixed alias, is present.
+        XCTAssertFalse(NoritoBridgeLoader.hasRequiredExports(resolving: { !current.contains($0) }))
+    }
+
     func testEveryCurrentAccelerationExportIsRequiredForAdmission() {
         XCTAssertEqual(NoritoBridgeLoader.accelerationRequiredSymbols, [
             "connect_norito_acceleration_config_set_v1",

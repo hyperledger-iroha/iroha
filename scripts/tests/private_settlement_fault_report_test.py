@@ -106,7 +106,7 @@ def run_record(participants: int, seed: int, run: int) -> dict[str, object]:
             "successful_leg_applications": participants,
             "each_leg_applied_exactly_once": True,
             "invalid_leg_state_byte_identical": True,
-            "replay_rejected": True,
+            "exact_retry_idempotent": True,
         },
         "all_nodes_converged": True,
     }
@@ -219,9 +219,17 @@ class PrivateSettlementFaultReportTests(unittest.TestCase):
         with self.assertRaises(MODULE.FaultEvidenceError):
             MODULE.parse_run(partial, "fixture")
         replay = run_record(3, 0, 0)
-        replay["atomicity"]["replay_rejected"] = False  # type: ignore[index]
+        replay["atomicity"]["exact_retry_idempotent"] = False  # type: ignore[index]
         with self.assertRaises(MODULE.FaultEvidenceError):
             MODULE.parse_run(replay, "fixture")
+
+    def test_retry_requires_idempotence_evidence_without_retired_rejection_claim(self) -> None:
+        record = run_record(3, 0, 0)
+        self.assertEqual(MODULE.parse_run(record, "fixture")[:3], (3, 0, 0))
+        atomicity = record["atomicity"]
+        atomicity["replay_rejected"] = atomicity.pop("exact_retry_idempotent")  # type: ignore[union-attr,index]
+        with self.assertRaises(MODULE.FaultEvidenceError):
+            MODULE.parse_run(record, "fixture")
 
     def test_runs_from_different_source_commits_are_rejected(self) -> None:
         runs = complete_matrix()

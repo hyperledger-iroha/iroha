@@ -887,6 +887,16 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world(
     let mut app = mk_app_state_for_tests();
     {
         let inner = Arc::get_mut(&mut app).unwrap();
+        inner.chain_id = Arc::new(chain.state().view().chain_id().clone());
+        inner.signed_query_admission = Arc::new(
+            crate::routing::SignedQueryAdmission::new(
+                chain.network_id(),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(120),
+                std::num::NonZeroUsize::new(1_024).unwrap(),
+            )
+            .expect("native appeal-finance query admission"),
+        );
         inner.state = chain.state().clone();
         inner.kura = chain.kura().clone();
         inner.local_peer_id = Some(iroha_model_base::peer::PeerId::new(
@@ -923,6 +933,16 @@ fn sorafs_app_state_with_appeal_finance_asset_lock_world_and_governance(
     let mut app = mk_app_state_for_tests();
     {
         let inner = Arc::get_mut(&mut app).unwrap();
+        inner.chain_id = Arc::new(chain.state().view().chain_id().clone());
+        inner.signed_query_admission = Arc::new(
+            crate::routing::SignedQueryAdmission::new(
+                chain.network_id(),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(120),
+                std::num::NonZeroUsize::new(1_024).unwrap(),
+            )
+            .expect("native appeal-finance query admission"),
+        );
         inner.state = chain.state().clone();
         inner.kura = chain.kura().clone();
         inner.local_peer_id = Some(iroha_model_base::peer::PeerId::new(
@@ -971,10 +991,16 @@ fn commit_appeal_finance_instruction(
     )
     .with_instructions([instruction])
     .sign(signer.private_key());
+    let applied = chain.commit(vec![transaction]);
+    let committed = chain.committed(chain.height());
     assert_eq!(
-        chain.commit(vec![transaction]),
+        applied,
         vec![true],
-        "actual asset-lock instruction must execute"
+        "actual asset-lock instruction must execute: {:?}",
+        committed
+            .block()
+            .network_output_at(0)
+            .map(|(_, output)| &output.result),
     );
 }
 fn seed_appeal_finance_asset_lock(

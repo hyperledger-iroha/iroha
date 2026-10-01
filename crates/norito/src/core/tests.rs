@@ -6,6 +6,56 @@ use crate::{
 };
 use crc64fast::Digest;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[test]
+fn decode_resource_error_preserves_every_variant_and_field() {
+    let errors = [
+        Error::ArchiveLengthExceeded {
+            length: 101,
+            limit: 100,
+        },
+        Error::SequenceLengthExceeded {
+            length: 51,
+            limit: 50,
+        },
+        Error::FieldLengthExceeded {
+            length: 31,
+            limit: 30,
+        },
+        Error::TotalElementsExceeded {
+            attempted: 21,
+            limit: 20,
+        },
+        Error::TotalAllocationExceeded {
+            attempted: 11,
+            limit: 10,
+        },
+        Error::AllocationFailed { bytes: 2048 },
+        Error::NestingDepthExceeded {
+            depth: 5,
+            limit: 4,
+            context: "resource fixture",
+        },
+    ];
+    for error in errors {
+        let resource = error.decode_resource_error().expect("typed refusal");
+        let recovered = Error::from(resource);
+        assert!(error.is_decode_resource_limit());
+        assert_eq!(format!("{recovered:?}"), format!("{error:?}"));
+        assert_eq!(resource.to_string(), error.to_string());
+        assert_eq!(recovered.decode_resource_error(), Some(resource));
+    }
+    for error in [
+        Error::NonCanonicalEncoding,
+        Error::ChecksumMismatch,
+        Error::Message("failed to allocate 2048 bytes while decoding".into()),
+        Error::Io(std::io::ErrorKind::OutOfMemory.into()),
+    ] {
+        assert_eq!(error.decode_resource_error(), None);
+        assert!(!error.is_decode_resource_limit());
+    }
+}
+
 #[test]
 fn encoder_sink_paths_produce_identical_bytes() {
     let value = 0xA1B2_C3D4_E5F6_0718_u64;

@@ -40,6 +40,13 @@ pub(super) fn prepare(
     daemon: BinaryPin,
     ports: &LocalnetPorts,
 ) -> Result<RetainedLocalnet> {
+    if matches!(root_kind, RootKind::Private { .. })
+        && request.service_profile != crate::localnet::LocalnetServiceProfile::Standard
+    {
+        return Err(Error::Invalid(
+            "service-authority profiles require a global managed root".into(),
+        ));
+    }
     let published_path = directory.path().join(DIRECTORY);
     let stage = fresh_stage(directory)?;
     let prepared = match &root_kind {
@@ -47,6 +54,7 @@ pub(super) fn prepare(
             &request.name,
             stage.path(),
             ports,
+            request.service_profile,
             Some(&published_path),
         )?,
         RootKind::Private { spec } => crate::localnet::prepare_private_root_at(

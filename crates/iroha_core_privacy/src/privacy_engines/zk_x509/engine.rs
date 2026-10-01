@@ -88,9 +88,13 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // schedule digests in their opaque byte order. The manifest itself uses SHA-256.
 // This identifies the sole compiled AIR and geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
+// Native derivation and independent framing bind the private-terminal links,
+// quotient blinding, selected P256 inputs and RFC output metadata in this candidate.
+// TODO: complete credential binding, hiding review and resource qualification
+// before activating this profile.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x19, 0xaa, 0x35, 0x92, 0x7e, 0xbc, 0x6e, 0x0f, 0xf8, 0x00, 0xa0, 0xc8, 0x0b, 0x6b, 0x31, 0x5c,
-    0x26, 0x15, 0x35, 0x0f, 0x35, 0xc8, 0x2a, 0xfd, 0xb9, 0xea, 0xe6, 0x09, 0xd4, 0xc9, 0xca, 0x9c,
+    0xc8, 0x13, 0x7b, 0x55, 0x17, 0x2d, 0x79, 0xe9, 0x5d, 0x69, 0x82, 0x1d, 0x4c, 0xc0, 0x86, 0x5d,
+    0x58, 0xc3, 0x38, 0xe2, 0x33, 0xe0, 0x8b, 0x02, 0x2a, 0x6c, 0xd5, 0xec, 0x92, 0x9f, 0x54, 0xbc,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -383,6 +387,13 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
 ///
 /// There is no independently accepted subproof path and no host-side
 /// reference-relation substitute for the final self-check.
+///
+/// Successful construction consumes the canonical entropy sequence. Construction
+/// is fail-fast after preflight: an error may consume only a prefix of that
+/// sequence, and the injected RNG is neither rolled back nor advanced to a fixed
+/// failure position. An uncertain accelerator completion returns no proof and
+/// stops further source construction and entropy use under the existing process
+/// quarantine. Callers must not depend on identical RNG state across failures.
 #[allow(clippy::too_many_arguments)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[doc(hidden)]
@@ -395,6 +406,9 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     encoded_witness: &[u8],
     rng: &mut R,
 ) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
+    if fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1() {
+        return Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain.into());
+    }
     // Every witness-dependent preflight deliberately precedes the first
     // entropy read.
     #[cfg(test)]
@@ -739,6 +753,68 @@ mod tests {
             independent
         );
     }
+    // Historical profile tests must use the exact old public descriptors,
+    // rather than accidentally mixing a new closure with an old SHA-padding pin.
+    fn restore_retired_public_terminal_profile_descriptors_v1(fields: &mut [Vec<u8>]) {
+        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        fields[9] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log13-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=696|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=1-per-subproof-current+next-openings|ca-deep-constraints=all1379-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed102-constraints1681-degree4-authenticated72-times-73-relations-38bit-slack-affine-loglookup-30-relations|rbr-budget-bits=157|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9420938|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
+        fields[10] = b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay=complete:activation=governance-gated".to_vec();
+        fields[13] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification".to_vec();
+        fields[14] =
+            hex::decode("307915059aa0f173351facf134c2c08df720e365cfdb96c239eca44c07b654bb")
+                .unwrap();
+    }
+    #[test]
+    fn compiled_profile_binds_private_terminal_closure() {
+        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let profile = core::str::from_utf8(fields[9]).unwrap();
+        assert!(profile.contains("main-public-terminal-records=384-rfc80+sha304"));
+        assert!(profile.contains("main-claim-envelope-bytes=6180"));
+        assert!(profile.contains("quotient-chunk-stride=fri-degree-cap-minus137"));
+        assert!(profile.contains(
+            "quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation"
+        ));
+        assert!(profile.contains("main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root"));
+        assert!(
+            profile.contains(
+                "private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only"
+            )
+        );
+        assert!(
+            core::str::from_utf8(fields[10])
+                .unwrap()
+                .contains("no-unmasked-der-rfc-source-or-p256-terminal-scalars")
+        );
+        let components = core::str::from_utf8(fields[13]).unwrap();
+        assert!(components.contains("private-der-source-terminal-air-links=complete"));
+        assert!(components.contains("private-committed-terminal-air-links=complete"));
+    }
+    #[test]
+    fn compiled_profile_rejects_retired_public_terminal_exposure() {
+        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let mut retired = fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        restore_retired_public_terminal_profile_descriptors_v1(&mut retired);
+        let retired_fields = retired.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let old_digest = independent_compiled_profile_digest_v1(&retired_fields);
+        assert_eq!(
+            hex::encode(old_digest),
+            "0312a22aad46561f42f28831baff280a072f34899284e354938c09a82e7adcdf"
+        );
+        assert_ne!(
+            old_digest,
+            recompute_zk_x509_compiled_profile_digest_v1().unwrap()
+        );
+        assert_ne!(Some(old_digest), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
+        let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
+            .expect("current verifier profile");
+        supplied.compiled_profile_digest = old_digest;
+        assert!(super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err());
+    }
     #[test]
     fn compiled_profile_rejects_the_superseded_sha_padding_descriptor() {
         let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
@@ -747,13 +823,23 @@ mod tests {
             .iter()
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
+        restore_retired_public_terminal_profile_descriptors_v1(&mut superseded);
         let current = core::str::from_utf8(&superseded[17]).unwrap().to_owned();
         let word_boundary = "word-capacity-recurrence=local-compute+digest+memory-call-last:";
         let bus_boundary =
             "cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:";
         assert_eq!(current.matches(word_boundary).count(), 1);
         assert_eq!(current.matches(bus_boundary).count(), 1);
+        // Historical SHA-padding profiles also used the retired compact-CA
+        // descriptor. Preserve their exact original digests and rejection tests.
+        superseded[14] =
+            hex::decode("9a34a72f020551e65442c24b58ee075f6c485e36e0df7c579b246b19d0195b9a")
+                .unwrap();
         for (descriptor, expected_digest) in [
+            (
+                current.clone(),
+                "19aa35927ebc6e0ff800a0c80b6b315c2615350f35c82afdb9eae609d4c9ca9c",
+            ),
             (
                 current.replace(word_boundary, ""),
                 "9d2d34512de90d13a0f68d352bbcc887ba9ac2f2a89e5deb845ff5c4c64d45ff",
@@ -872,15 +958,22 @@ mod tests {
     #[test]
     fn credential_prover_has_one_preflighted_joint_root_path_and_no_subproof_escape() {
         let source = include_str!("engine.rs");
-        let prover_start = source
-            .find("pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng")
+        // Search only production text: an obsolete signature must not match
+        // this test's own search literal and inspect the assertions themselves.
+        let production_source = &source[..source
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("test module")];
+        let prover_start = production_source
+            .find("pub fn prove_zk_x509_credential_proof_v1_with_rng")
             .expect("sole credential prover");
-        let prover_end = source[prover_start..]
+        let prover_end = production_source[prover_start..]
             .find("fn compiled_profile_fields_v1")
             .map(|offset| prover_start + offset)
             .expect("sole credential prover end");
-        let prover = &source[prover_start..prover_end];
-        let production_source = &source[..source.find("#[cfg(test)]").expect("test module")];
+        let prover = &production_source[prover_start..prover_end];
+        let quarantine = prover
+            .find("goldilocks_transform_completion_uncertain_v1()")
+            .expect("quarantine before construction or entropy");
         let profile_gate = prover
             .find("construct_zk_x509_compiled_profile_v1()")
             .expect("pinned profile validation");
@@ -911,6 +1004,7 @@ mod tests {
         let self_check = prover
             .find("verify_zk_x509_credential_subproofs_v1(")
             .expect("independent final self-check");
+        assert!(quarantine < profile_gate);
         assert!(
             profile_gate < preparation
                 && preparation < assembly

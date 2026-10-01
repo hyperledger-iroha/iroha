@@ -1548,7 +1548,10 @@ fn load_selected_workspace(
 }
 
 /// Build a package using only the caller's retained runtime identity and optional storage policy.
-pub(crate) fn build_runtime_package(
+///
+/// # Errors
+/// Returns the complete build diagnostic if package resolution, custody or compilation fails.
+pub fn build_runtime_package(
     config: &iroha::config::Config,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
@@ -1560,8 +1563,11 @@ pub(crate) fn build_runtime_package(
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
     build::build_runtime_package(
         config,
+<<<<<<< HEAD
         registry_config,
         registry_resolver,
+=======
+>>>>>>> origin/optimizations
         manifest,
         package,
         contract,

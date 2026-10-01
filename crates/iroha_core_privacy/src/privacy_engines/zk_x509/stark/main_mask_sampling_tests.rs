@@ -577,3 +577,142 @@ fn canonical_p256_base_runs_preserve_registration_boundaries_and_batch_allowance
             < plan.replay_batch
     );
 }
+
+#[test]
+#[ignore = "actual maximum RFC base source parity at both registration seams and transcript phases"]
+fn maximum_rfc_base_batches_preserve_both_phases_and_registration_seams() {
+    use crate::privacy_engines::zk_x509::{
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true).unwrap();
+    let trust_anchor = fixture.authoritative_state.trust_anchor();
+    let crl = fixture.authoritative_state.crl_record();
+    let assembly = build_zk_x509_main_trace_assembly_v1(
+        &fixture.statement,
+        ZkX509GovernanceV1 {
+            trust_anchor: &trust_anchor,
+            certificate_policy: fixture.authoritative_state.certificate_policy(),
+            crl: &crl,
+        },
+        &fixture.witness,
+    )
+    .unwrap();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let registration = layout
+        .registered_segments
+        .iter()
+        .copied()
+        .find(|registration| registration.segment.adapter == SegmentAdapterIdV1::Rfc5280)
+        .unwrap();
+    assert_eq!(registration.trace_group, 5);
+    let end = registration.base_end().unwrap();
+    let ranges = [
+        registration.base_start - 3..registration.base_start + 5,
+        end - 3..end + 5,
+    ];
+    let sha =
+        main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses).unwrap();
+    let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
+    let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
+        &layout,
+        &fixture.statement,
+        &assembly.projection_trace,
+    )
+    .unwrap();
+    let mut io =
+        MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
+    let mut expected = Vec::new();
+    {
+        let scalar =
+            MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, &assembly, &sha, &p256).unwrap();
+        let sources = MainTraceReplaySourcesV1::Base {
+            assembly: &assembly,
+            sha: &sha,
+            p256: &p256,
+            projection: &projection,
+            io: &io,
+        };
+        for range in &ranges {
+            let batch = sources
+                .native_columns_v1(&layout, MainTraceColumnKindV1::Base, 5, range.clone())
+                .unwrap();
+            assert_eq!(batch.len(), 8);
+            for (column, actual) in range.clone().zip(batch.iter()) {
+                let (owner, local) = registered_main_group_column_v1(
+                    &layout,
+                    5,
+                    MainTraceColumnKindV1::Base,
+                    column,
+                )
+                .unwrap();
+                assert_eq!(
+                    **actual,
+                    *scalar.native_base_column_v1(owner, local).unwrap()
+                );
+            }
+            expected.push(batch);
+        }
+        assert!(
+            sources
+                .native_columns_v1(
+                    &layout,
+                    MainTraceColumnKindV1::Aux,
+                    5,
+                    registration.aux_start..registration.aux_start + 1
+                )
+                .is_err()
+        );
+    }
+    let digest = |seed| PrivacyOuterDigestV1::from_bytes([seed; 48]);
+    let binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+            [0x81; 32],
+            assembly.verifier_profile.compiled_profile_digest,
+            core::array::from_fn(|index| digest(index as u8 + 1)),
+        ),
+        digest(0x91),
+        digest(0xa1),
+        digest(0xb1),
+    )
+    .unwrap();
+    let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+        &layout, &assembly, sha, p256, binding,
+    )
+    .unwrap();
+    projection
+        .bind_challenges_v1(binding.main_post_base())
+        .unwrap();
+    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    let sources = MainTraceReplaySourcesV1::Bound {
+        log19: &bound,
+        projection: &projection,
+        io: &io,
+    };
+    for (range, before) in ranges.iter().zip(expected.iter()) {
+        let after = sources
+            .native_columns_v1(&layout, MainTraceColumnKindV1::Base, 5, range.clone())
+            .unwrap();
+        for (actual, expected) in after.iter().zip(before.iter()) {
+            assert_eq!(**actual, **expected);
+        }
+        for (column, actual) in range.clone().zip(after.iter()) {
+            let (owner, local) =
+                registered_main_group_column_v1(&layout, 5, MainTraceColumnKindV1::Base, column)
+                    .unwrap();
+            assert_eq!(
+                **actual,
+                *bound.native_base_column_v1(owner, local).unwrap()
+            );
+        }
+    }
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    assert!(
+        8 * ((1 << 19) * core::mem::size_of::<F>()
+            + core::mem::size_of::<ZeroizingMainTraceColumnV1>())
+            < plan.replay_batch
+    );
+}

@@ -195,7 +195,9 @@ impl RawTapeV1 {
                 if candidate >= limit {
                     continue;
                 }
-                let position = (candidate % LDE_ROWS as u64) as u32;
+                // The fixed 2^23 domain bounds every remainder to a u32.
+                let position = u32::try_from(candidate % LDE_ROWS as u64)
+                    .map_err(|_| RawTapeErrorV1::Exhausted)?;
                 if let Err(at) = queries.binary_search(&position) {
                     queries.insert(at, position);
                 }
@@ -237,8 +239,17 @@ impl Drop for RawTapeV1 {
         #[cfg(test)]
         ERASURE.with(|count| {
             if let Some((clean, dirty)) = count.get() {
-                let zero = self.bytes.iter().filter(|&&byte| byte == 0).count();
-                count.set(Some((clean + zero, dirty + self.bytes.len() - zero)));
+                let observed = self
+                    .bytes
+                    .iter()
+                    .fold((clean, dirty), |(clean, dirty), &byte| {
+                        if byte == 0 {
+                            (clean + 1, dirty)
+                        } else {
+                            (clean, dirty + 1)
+                        }
+                    });
+                count.set(Some(observed));
             }
         });
     }

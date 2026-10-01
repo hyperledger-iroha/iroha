@@ -2810,15 +2810,158 @@ fn quantity_sub(lhs: Quantity, rhs: Quantity) -> Result<Quantity, Error> {
     lhs.checked_sub(&rhs)
         .map_err(|_| Error::Math(MathError::Overflow))
 }
+/// Distinct native evidence clocks. A lane proof names its creation-time registration;
+/// its native subject height can never become a global tenure or withdrawal boundary.
+#[derive(Clone, Copy, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "original cut and tenure are fixed scalar custody; boxing creates an uncharged monetary authority owner"
+)]
+pub(crate) enum ConsensusSlashLiability {
+    /// Root consensus subjects use the authenticated global offence height.
+    Root(u64),
+    /// Lane liability is limited to the exact original signer and retained escrow tenure.
+    Lane {
+        scope: iroha_data_model::block::consensus::LaneEvidenceScope,
+        instance: [u8; 32],
+        recorded_at: u64,
+        signer: u32,
+        binding: iroha_data_model::sumeragi_lanes::SumeragiLaneStakeBinding,
+    },
+}
+impl ConsensusSlashLiability {
+    /// Build the typed clock from an already authenticated committed attribution.
+    /// An originally unbound lane member is forensic only, even if it later registers stake.
+    pub(crate) fn from_attribution(
+        attribution: &iroha_data_model::block::consensus::EvidenceAttribution,
+        recorded_at: u64,
+        signer: u32,
+    ) -> Option<Self> {
+        use iroha_data_model::block::consensus::EvidenceScope;
+        let offender = attribution
+            .offenders
+            .iter()
+            .find(|offender| offender.signer == signer)?;
+        match attribution.scope {
+            EvidenceScope::Root if offender.lane_stake.is_none() => {
+                Some(Self::Root(attribution.height))
+            }
+            EvidenceScope::Root => None,
+            EvidenceScope::Lane(scope) => Some(Self::Lane {
+                scope,
+                instance: attribution.instance,
+                recorded_at,
+                signer,
+                binding: offender.lane_stake?,
+            }),
+        }
+    }
+    fn offence_height(self) -> Option<u64> {
+        match self {
+            Self::Root(height) => Some(height),
+            Self::Lane { .. } => None,
+        }
+    }
+    /// Revalidate the original World row, immutable policy, registration and actual escrow.
+    /// No current route, later registration or native height supplies monetary authority.
+    pub(crate) fn names_registration(
+        self,
+        world: &impl WorldReadOnly,
+        record: &PublicLaneValidatorRecord,
+    ) -> Result<bool, Error> {
+        let Self::Lane {
+            scope,
+            instance,
+            recorded_at,
+            signer,
+            binding,
+        } = self
+        else {
+            return validator_tenure_contains_height(
+                record,
+                self.offence_height().expect("root clock"),
+            );
+        };
+        if cfg!(all(test, sumeragi_core_mutation = "HC2")) {
+            return Ok(true);
+        }
+        let invalid = |reason: &str| Error::InvariantViolation(reason.into());
+        let parameters = world
+            .sumeragi_npos_parameters()
+            .ok_or_else(|| invalid("lane slash lost immutable evidence policy"))?;
+        let mut rows = world
+            .sumeragi_lanes()
+            .custody
+            .iter()
+            .filter(|row| row.incarnation == scope.incarnation);
+        let row = rows
+            .next()
+            .ok_or_else(|| invalid("lane slash lost original custody obligation"))?;
+        if rows.next().is_some()
+            || row.validate().is_err()
+            || row.lane != scope.lane
+            || row.instance != instance
+            || row.created_at != scope.created_at
+            || scope.admission_parent_height.checked_add(1) != Some(recorded_at)
+            || row
+                .created_at
+                .checked_add(2)
+                .is_none_or(|active| active > scope.admission_parent_height)
+            || row.evidence_horizon != parameters.evidence_horizon_blocks()
+            || row.slashing_delay != parameters.slashing_delay_blocks()
+            || row.admits_at(recorded_at) != Ok(true)
+            || row
+                .signers
+                .as_slice()
+                .iter()
+                .find(|entry| entry.signer == signer)
+                .map(|entry| entry.binding)
+                != Some(binding)
+        {
+            return Err(invalid(
+                "lane slash differs from its original admission and signer custody",
+            ));
+        }
+        if record.activation_height != binding.activation_height
+            || !binding
+                .names_account(record.lane_id, &record.validator)
+                .map_err(|reason| Error::InvariantViolation(reason.into()))?
+        {
+            return Ok(false);
+        }
+        // Borrow the canonical composite key and actual escrow without constructing an
+        // unfunded account clone solely for lookup. A fully consumed escrow has no exposure.
+        let Some((_, (escrow, _))) = world
+            .public_lane_stake_custody()
+            .iter()
+            .find(|((lane, account), _)| *lane == record.lane_id && account == &record.validator)
+        else {
+            return Ok(false);
+        };
+        let actual =
+            iroha_data_model::sumeragi_lanes::SumeragiLaneStakeBinding::from_record(record, escrow)
+                .map_err(|reason| Error::InvariantViolation(reason.into()))?;
+        if actual != binding {
+            return Err(invalid(
+                "original lane registration or escrow was substituted",
+            ));
+        }
+        Ok(true)
+    }
+}
+
 /// Return offence-height-eligible custody using a complete indexed key slice.
 pub(crate) fn indexed_slashable_validator_exposure(
     world: &impl WorldReadOnly,
     lane_id: LaneId,
     validator: &AccountId,
     record: &PublicLaneValidatorRecord,
-    offence_height: u64,
+    liability: ConsensusSlashLiability,
     share_keys: &[PublicLaneStakeShareKey],
 ) -> Result<Quantity, Error> {
+    if !liability.names_registration(world, record)? {
+        return Ok(Quantity::zero());
+    }
     if !share_keys.windows(2).all(|pair| pair[0] < pair[1]) {
         return Err(Error::InvariantViolation(
             "indexed public-lane stake-share keys are not canonical".into(),
@@ -2844,7 +2987,7 @@ pub(crate) fn indexed_slashable_validator_exposure(
         }
         Some(Ok((key, share)))
     });
-    slashable_exposure_from_shares(record, shares, Some(offence_height))
+    slashable_exposure_from_shares(record, shares, liability.offence_height())
 }
 
 fn validator_share_updates(
@@ -3287,7 +3430,7 @@ pub(crate) fn apply_slash_to_validator(
         slash_id,
         amount,
         now_ms,
-        Some(offence_height),
+        Some(ConsensusSlashLiability::Root(offence_height)),
         None,
         true,
         true,
@@ -3326,7 +3469,7 @@ pub(crate) fn apply_indexed_consensus_slash_to_validator(
     slash_id: Hash,
     amount: &Quantity,
     now_ms: u64,
-    offence_height: u64,
+    liability: ConsensusSlashLiability,
     share_keys: &[PublicLaneStakeShareKey],
 ) -> Result<(), Error> {
     apply_slash_to_validator_inner(
@@ -3336,7 +3479,7 @@ pub(crate) fn apply_indexed_consensus_slash_to_validator(
         slash_id,
         amount,
         now_ms,
-        Some(offence_height),
+        Some(liability),
         Some(share_keys),
         false,
         true,
@@ -3351,7 +3494,7 @@ pub(crate) fn apply_indexed_slash_to_validator_without_observability(
     slash_id: Hash,
     amount: &Quantity,
     now_ms: u64,
-    offence_height: u64,
+    liability: ConsensusSlashLiability,
     share_keys: &[PublicLaneStakeShareKey],
 ) -> Result<(), Error> {
     apply_slash_to_validator_inner(
@@ -3361,7 +3504,7 @@ pub(crate) fn apply_indexed_slash_to_validator_without_observability(
         slash_id,
         amount,
         now_ms,
-        Some(offence_height),
+        Some(liability),
         Some(share_keys),
         false,
         false,
@@ -3376,13 +3519,16 @@ fn apply_slash_to_validator_inner(
     slash_id: Hash,
     amount: &Quantity,
     now_ms: u64,
-    offence_height: Option<u64>,
+    liability: Option<ConsensusSlashLiability>,
     indexed_share_keys: Option<&[PublicLaneStakeShareKey]>,
     record_execution_evidence: bool,
     record_operational_observability: bool,
     monetary_plan: Option<&PublicLaneMonetaryPlanV1>,
 ) -> Result<(), Error> {
-    ensure_canonical_staking_owner(state_transaction, lane_id, "apply_slash_to_validator")?;
+    if !matches!(liability, Some(ConsensusSlashLiability::Lane { .. })) {
+        ensure_canonical_staking_owner(state_transaction, lane_id, "apply_slash_to_validator")?;
+    }
+    let offence_height = liability.and_then(ConsensusSlashLiability::offence_height);
     let deactivation_height = scheduled_validator_deactivation_height(state_transaction, lane_id)?;
     let dataspace_catalog = state_transaction.nexus.dataspace_catalog.clone();
     let staking_cfg = state_transaction.nexus.staking.clone();
@@ -3397,11 +3543,17 @@ fn apply_slash_to_validator_inner(
         })
         .transpose()?
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
-    if let Some(offence_height) = offence_height
-        && !validator_tenure_contains_height(&validator_snapshot, offence_height)?
+    if let Some(liability) = liability
+        && !liability.names_registration(world, &validator_snapshot)?
     {
         return Err(Error::InvariantViolation(
-            "consensus slash offence falls outside the validator tenure".into(),
+            match liability {
+                ConsensusSlashLiability::Root(_) => {
+                    "consensus slash offence falls outside the validator tenure"
+                }
+                _ => "consensus slash differs from the original validator liability",
+            }
+            .into(),
         ));
     }
     let stake_account = validator_snapshot.stake_account.clone();
@@ -8883,7 +9035,7 @@ mod tests {
             Hash::new("self-pending-priority"),
             &Quantity::from(400_u64),
             0,
-            2,
+            ConsensusSlashLiability::Root(2),
             &share_keys,
         )
         .expect("an H+1 offence remains slashable from frozen pending custody");

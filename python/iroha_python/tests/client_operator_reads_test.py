@@ -462,3 +462,30 @@ def test_native_evidence_accepts_each_native_class(native_class: str) -> None:
     payload = evidence_record_payload()
     payload["class"] = native_class
     assert SumeragiEvidenceRecord.from_payload(payload).class_ == native_class
+
+
+def test_evidence_preserves_unattributed_certificate_safety_violation() -> None:
+    payload = evidence_record_payload()
+    payload.update({
+        "class": "conflicting_certificates", "safety_violation": True, "offenders": [],
+    })
+    parsed = SumeragiEvidenceRecord.from_payload(payload)
+    assert parsed.class_ == "conflicting_certificates"
+    assert parsed.safety_violation is True
+    assert parsed.offenders == ()
+    assert parsed.native_frame_hash == payload["native_frame_hash"]
+
+
+@pytest.mark.parametrize("evidence_class,safety_violation", [
+    ("conflicting_certificates", False), ("conflicting_certificates", 1),
+    ("phase_vote", True),
+])
+def test_empty_offenders_require_exact_certificate_safety_violation(
+    evidence_class: str, safety_violation: Any,
+) -> None:
+    payload = evidence_record_payload()
+    payload.update({
+        "class": evidence_class, "safety_violation": safety_violation, "offenders": [],
+    })
+    with pytest.raises(ValueError, match="offenders must contain"):
+        SumeragiEvidenceRecord.from_payload(payload)

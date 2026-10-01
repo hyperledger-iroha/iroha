@@ -121,7 +121,11 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
+<<<<<<< HEAD
                 "ee93acbddab4069f2b38e0c9687af9bf99c5a0e140f3425f7fa06216e50961dd",
+=======
+                "c7a0e0f06c43820de8941a363fb420e694cb00dbfaa1b5bf203b303d2f4b2d91",
+>>>>>>> origin/optimizations
                 "instruction record capture digest drift"
             );
             let capture: Value =
@@ -249,6 +253,171 @@ fn print_privacy_qualification_record_fixture_row() {
     println!(
         "PRIVACY_QUALIFICATION_FIXTURE_ROW={}",
         json::to_json(&row).expect("privacy qualification record")
+    );
+}
+
+#[test]
+#[ignore = "explicit maintenance command captures recovery instructions with required generations"]
+fn print_recovery_generation_record_fixture_rows() {
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::topology::DataSpaceId;
+
+    use crate::{
+        account::{AccountAlias, AccountAliasDomain, AccountController},
+        isi::account_recovery::{
+            ApproveAccountRecovery, CancelAccountRecovery, FinalizeAccountRecovery,
+            ProposeAccountRecovery,
+        },
+    };
+
+    fn row<T>(values: Vec<T>) -> Value
+    where
+        T: NoritoSchema
+            + NoritoSerialize
+            + for<'de> NoritoDeserialize<'de>
+            + Clone
+            + Debug
+            + PartialEq,
+    {
+        let hash = hex(&norito::schema::identity::frame_hash::<T>());
+        json::object([
+            ("nominal", Value::String(T::nominal_name())),
+            ("serialize_hash", Value::String(hash.clone())),
+            ("deserialize_hash", Value::String(hash)),
+            (
+                "cases",
+                Value::Array(
+                    values
+                        .into_iter()
+                        .map(|value| frame_fields(&capture(value)))
+                        .collect(),
+                ),
+            ),
+        ])
+        .expect("current recovery instruction row")
+    }
+
+    let alias = AccountAlias::new(
+        "recoverable".parse().unwrap(),
+        Some(AccountAliasDomain::new("banka".parse().unwrap())),
+        DataSpaceId::UNIVERSAL,
+    );
+    let generation = NonZeroU64::new(17).unwrap();
+    let proposals = [0xD6, 0xDB]
+        .into_iter()
+        .map(|seed| {
+            let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("deterministic recovery fixture key");
+            ProposeAccountRecovery::new(
+                alias.clone(),
+                AccountController::single(key.public_key().clone()),
+                generation,
+            )
+        })
+        .collect();
+    let rows = vec![
+        row(vec![ApproveAccountRecovery::new(alias.clone(), generation)]),
+        row(vec![CancelAccountRecovery::new(alias.clone(), generation)]),
+        row(vec![FinalizeAccountRecovery::new(alias, generation)]),
+        row(proposals),
+    ];
+    println!(
+        "RECOVERY_GENERATION_FIXTURE_ROWS={}",
+        json::to_json(&rows).expect("canonical recovery instruction rows")
+    );
+}
+
+#[test]
+#[ignore = "explicit maintenance command captures deployment instructions with explicit artifact dataspaces"]
+fn print_contract_artifact_record_fixture_rows() {
+    use iroha_crypto::Hash;
+    use iroha_model_base::topology::DataSpaceId;
+
+    use crate::{
+        isi::smart_contract_code::{
+            CancelSmartContractCodeUpload, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            UploadSmartContractCodeChunk,
+        },
+        smart_contract::{ContractArtifactId, manifest::ContractManifest},
+    };
+
+    let code_hash = Hash::new(b"contract-code");
+    let abi_hash = Hash::new(b"abi-policy");
+    assert_eq!(
+        hex(code_hash.as_ref()),
+        "5b3985441f11d36cc02dd108562faf5d4b8d5f3b13fb79b6d0f094ab648755f1"
+    );
+    assert_eq!(
+        hex(abi_hash.as_ref()),
+        "18b2577f70fcf90193eff287aacd10b76dd36b99c0f5935fdcc67443f8bc148d"
+    );
+    // These populated codec fixtures previously implied the universal dataspace.
+    // Preserve the original hash and data while supplying that exact current field.
+    let artifact_id = ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+    let values = vec![
+        capture(CancelSmartContractCodeUpload { artifact_id }),
+        capture(FinalizeSmartContractCodeUpload {
+            artifact_id,
+            total_size: 3,
+            chunk_count: 1,
+        }),
+        capture(RegisterSmartContractBytes {
+            artifact_id,
+            code: vec![1, 2, 3],
+        }),
+        capture(RegisterSmartContractCode {
+            artifact_id,
+            manifest: ContractManifest {
+                seiyaku_name: None,
+                code_hash: Some(code_hash),
+                abi_hash: Some(abi_hash),
+                compiler_fingerprint: Some("kotodama-1.2.3".to_owned()),
+                features_bitmap: Some(0),
+                access_set_hints: None,
+                entrypoints: None,
+                states: None,
+                error_types: None,
+                error_messages: None,
+                kotoba: None,
+                provenance: None,
+            },
+        }),
+        capture(RemoveSmartContractBytes {
+            artifact_id,
+            reason: Some("superseded".to_owned()),
+        }),
+        capture(UploadSmartContractCodeChunk {
+            artifact_id,
+            total_size: 3,
+            chunk_index: 0,
+            chunk_count: 1,
+            chunk: vec![1, 2, 3],
+        }),
+    ];
+    let rows: Vec<_> = values
+        .into_iter()
+        .map(|value| {
+            json::object([
+                ("nominal", value.get("nominal").unwrap().clone()),
+                (
+                    "serialize_hash",
+                    value.get("serialize_hash").unwrap().clone(),
+                ),
+                (
+                    "deserialize_hash",
+                    value.get("deserialize_hash").unwrap().clone(),
+                ),
+                ("cases", Value::Array(vec![frame_fields(&value)])),
+            ])
+            .expect("current contract artifact instruction row")
+        })
+        .collect();
+    println!(
+        "CONTRACT_ARTIFACT_FIXTURE_ROWS={}",
+        json::to_json(&rows).expect("canonical contract artifact instruction rows")
     );
 }
 

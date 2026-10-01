@@ -680,18 +680,18 @@ suite-list first-byte MSB uses its separate required-bit encoding described
 above.
 
 The shipping relay currently rejects QUIC endpoint creation before binding
-because the lockfile resolves vulnerable quinn-proto 0.11.15; released 0.11.17
-fixes three unauthenticated remote-memory exhaustion paths. The protocol and
-tests below remain dormant requalification material until that upgrade.
+pending complete transport qualification with locked quinn-proto 0.11.18.
+The patched dependency fixes known memory and panic paths; the protocol and
+component tests below do not establish end-to-end shipping qualification.
 
 The relay parses the strict constant-rate flag for wire compatibility but does not accept
 strict circuits. Configuration with `constant_rate_capability.enabled=true` and `strict=true`
 fails validation, and live handshake preflight independently rejects any negotiated strict result
 before sending the relay response or registering a circuit. Dormant best-effort code schedules
 dummy QUIC DATAGRAM cover only; application payload remains on QUIC streams. This fail-closed rule
-is required because locked Quinn 0.11.9 / quinn-proto 0.11.15 charges payload bytes, but no fixed amount per
-queued DATAGRAM entry, against the receive budget. Strict activation remains gated on per-entry
-accounting plus final end-to-end qualification; the dormant authenticated mux and its direct tests
+remains required pending scheduling, resource and payload-consumer qualification. Locked Quinn
+0.11.12 / quinn-proto 0.11.18 now charges fixed overhead per DATAGRAM entry. Strict activation
+remains gated on final end-to-end qualification; the dormant authenticated mux and its direct tests
 do not weaken or bypass that gate.
 
 #### Handshake suites (SNNet-16)

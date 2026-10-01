@@ -291,7 +291,9 @@ impl Committee {
         if !keys.iter().all(PublicKey::is_well_formed) {
             return Err(CommitteeError::MalformedKey);
         }
-        keys.sort();
+        // Canonical keys have a total order and duplicates are rejected below. In-place
+        // sorting preserves that order without allocating unowned stable-sort scratch.
+        keys.sort_unstable();
         if keys.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(CommitteeError::Duplicate);
         }
@@ -754,6 +756,30 @@ mod tests {
             .collect();
         assert_eq!(Committee::new(many), Err(CommitteeError::TooLarge));
         assert_eq!(CommitteeError::Empty.to_string(), "Empty");
+    }
+
+    #[test]
+    fn committee_sort_preserves_original_member_and_key_allocations() {
+        let keys: Vec<_> = (1..=MAX_COMMITTEE_SIZE)
+            .rev()
+            .map(|value| key(&u32::try_from(value).unwrap().to_be_bytes()))
+            .collect();
+        let backing = keys.as_ptr();
+        let capacity = keys.capacity();
+        let key_backings: Vec<_> = keys.iter().map(|key| key.as_bytes().as_ptr()).collect();
+        let committee = Committee::new(keys).unwrap();
+        assert_eq!(committee.members.as_ptr(), backing);
+        assert_eq!(committee.members.capacity(), capacity);
+        for (index, member) in committee.members().iter().enumerate() {
+            assert_eq!(
+                member.as_bytes(),
+                u32::try_from(index + 1).unwrap().to_be_bytes()
+            );
+            assert_eq!(
+                member.as_bytes().as_ptr(),
+                key_backings[MAX_COMMITTEE_SIZE - index - 1]
+            );
+        }
     }
 
     #[test]

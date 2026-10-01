@@ -5,6 +5,7 @@
 //! consumer claiming a valid lane execution must reproduce admission and its certified result.
 
 mod ancestry;
+pub(in crate::sumeragi) mod frame;
 pub use ancestry::{LaneAncestry, LaneAncestryError};
 
 use iroha_data_model::{

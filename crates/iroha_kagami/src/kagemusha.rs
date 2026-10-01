@@ -70,7 +70,7 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 98] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 95] = [
     "connect_norito_confidential_prover_revision_v1",
     "connect_norito_confidential_prover_create_v1",
     "connect_norito_confidential_prover_close_v1",
@@ -92,6 +92,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 98] = [
     "Java_org_hyperledger_iroha_sdk_privacy_ConfidentialProverNative_jobProve",
     "Java_org_hyperledger_iroha_sdk_privacy_ConfidentialProverNative_jobClose",
     "connect_norito_bridge_abi_version",
+    "connect_norito_domain_id_validate_v1",
     "connect_norito_free",
     "connect_norito_kagemusha_v1_payment_request_validate",
     "connect_norito_kagemusha_v1_payment_validate",
@@ -138,10 +139,6 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 98] = [
     "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
     "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
     "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
-    "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion",
-    "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
-    "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
-    "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",

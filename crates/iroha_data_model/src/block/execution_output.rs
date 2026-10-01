@@ -482,6 +482,7 @@ impl ExecutionOutputV1 {
             Err(TransactionRejectionReason::LimitCheck(error))
                 if error.reason == EXECUTION_OUTPUT_LIMIT_REASON
         ) || !self.result().batch_transfer_outcomes().is_empty()
+            || self.result().nexus_fee_receipt().is_some()
         {
             return false;
         }
@@ -530,6 +531,7 @@ impl ExecutionOutputV1 {
             Err(TransactionRejectionReason::LimitCheck(error))
                 if error.reason == INTERNAL_REJECTION_DIAGNOSTIC_OMITTED)
             && self.result().batch_transfer_outcomes().is_empty()
+            && self.result().nexus_fee_receipt().is_none()
             && matches!(
                 diagnostic,
                 Some(TriggerFailureRootV1::OmittedAfterRejection)
@@ -606,7 +608,10 @@ impl ExecutionOutputV1 {
                 result,
                 completions,
             }) => {
-                network_input(network_inputs, *input_index)?;
+                let input = network_input(network_inputs, *input_index)?;
+                if let Some(receipt) = result.nexus_fee_receipt() {
+                    receipt.validate_for_network_input(input, proposal_height)?;
+                }
                 if result.is_err() && !completions.is_empty() {
                     return Err("rolled-back Network output retains callback completions".into());
                 }
@@ -646,6 +651,9 @@ impl ExecutionOutputV1 {
             return Err("rolled-back output retains batch-transfer receipts".into());
         }
         if let Some((trigger, failure_root)) = internal {
+            if result.nexus_fee_receipt().is_some() {
+                return Err("internal output cannot publish a Network Nexus receipt".into());
+            }
             validate_action(trigger)?;
             if trigger.registered_at_height >= proposal_height {
                 return Err("internal action was not registered before applying height".into());

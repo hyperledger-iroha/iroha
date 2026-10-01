@@ -256,7 +256,7 @@ def _parse_atomicity(value: Any, participants: int, label: str) -> None:
             "successful_leg_applications",
             "each_leg_applied_exactly_once",
             "invalid_leg_state_byte_identical",
-            "replay_rejected",
+            "exact_retry_idempotent",
         },
         label,
     )
@@ -279,7 +279,7 @@ def _parse_atomicity(value: Any, participants: int, label: str) -> None:
     for field in (
         "each_leg_applied_exactly_once",
         "invalid_leg_state_byte_identical",
-        "replay_rejected",
+        "exact_retry_idempotent",
     ):
         _require_true(atomicity[field], f"{label}.{field}")
 

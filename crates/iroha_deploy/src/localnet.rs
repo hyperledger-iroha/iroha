@@ -1,6 +1,7 @@
 //! Canonical native localnet generation shared by desktop and CLI frontends.
 
 mod custody;
+pub mod service_authorities;
 use crate::genesis::{
     ConsensusPolicy, generate_default,
     profile::{
@@ -96,6 +97,7 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 #[cfg(test)]
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use rand::{TryRngCore as _, rngs::OsRng};
+pub use service_authorities::LocalnetServiceProfile;
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -113,6 +115,8 @@ pub(crate) use private_root::{prepare_private_root_at, verify_retained as verify
 
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
+    /// Closed service-authority preparation; token services remain disabled.
+    pub service_profile: LocalnetServiceProfile,
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
     pub sora_profile: Option<SoraProfile>,
     /// Optional localnet performance profile (throughput presets).
@@ -1159,6 +1163,7 @@ fn generate_localnet_runtime<T: Write>(
     let chain_discriminant =
         resolve_localnet_chain_discriminant(&chain_id, configured_discriminant)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
+    service_authorities::validate_selection(opts, managed, taira)?;
     let hosts = validate_localnet_options(opts, taira)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     if taira
@@ -1208,6 +1213,14 @@ fn generate_localnet_runtime<T: Write>(
     let onboarding_identity = localnet_ephemeral_identity(seed_bytes, b"onboarding-root")?;
     let runtime_bundle = write_localnet_runtime_bundle(
         &out_dir,
+        &client_identity,
+        &http_operator_identity,
+        &onboarding_identity,
+    )?;
+    let service_authorities = service_authorities::generate(
+        opts.service_profile,
+        &out_dir,
+        seed_bytes,
         &client_identity,
         &http_operator_identity,
         &onboarding_identity,
@@ -1263,13 +1276,24 @@ fn generate_localnet_runtime<T: Write>(
     }
     genesis = append_localnet_service_accounts(
         genesis,
-        &[&client_identity.account_id, &onboarding_identity.account_id],
+        &[
+            Account::new(client_identity.account_id.clone()),
+            Account::new(onboarding_identity.account_id.clone()),
+        ],
     )?;
     genesis = append_localnet_service_fee_bootstrap(
         genesis,
         &genesis_account_id,
         &client_identity.account_id,
         &onboarding_identity.account_id,
+    )?;
+    if let Some(authorities) = service_authorities.as_ref() {
+        genesis = authorities.append_genesis(genesis, &client_identity.account_id)?;
+    }
+    genesis = service_authorities::append_profile(
+        genesis,
+        opts.service_profile,
+        &client_identity.account_id,
     )?;
     genesis = apply_parameter_overrides(
         genesis,
@@ -1388,6 +1412,12 @@ fn generate_localnet_runtime<T: Write>(
         signature_batch_max_ed25519,
         queue_capacity,
     );
+    let bootstrap_config = match service_authorities.as_ref() {
+        Some(authorities) => {
+            authorities.seed_provider_owner(&bootstrap_config, chain_discriminant)?
+        }
+        None => bootstrap_config,
+    };
     let config = parse_localnet_peer_config(&bootstrap_config, None)?;
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
     let confidential_policy_hash =
@@ -1421,6 +1451,9 @@ fn generate_localnet_runtime<T: Write>(
         &genesis_signed_path,
         genesis_expected_hash,
     )?;
+    if let Some(authorities) = service_authorities.as_ref() {
+        authorities.publish(&out_dir, genesis_expected_hash, &client_identity.account_id)?;
+    }
     for (idx, peer) in peers.iter().enumerate() {
         let paths = LocalnetPeerStoragePaths::new(&out_dir, idx);
         custody::ensure_directory(&paths.kura)
@@ -1482,6 +1515,12 @@ fn generate_localnet_runtime<T: Write>(
                 signature_batch_max_ed25519,
                 queue_capacity,
             );
+            let rendered = match service_authorities.as_ref() {
+                Some(authorities) => {
+                    authorities.seed_provider_owner(&rendered, chain_discriminant)?
+                }
+                None => rendered,
+            };
             if managed {
                 managed_peer_config(&rendered, &managed_node_dir(render_root, idx))
             } else {
@@ -3636,7 +3675,7 @@ fn append_localnet_contract_permissions(
 }
 fn append_localnet_service_accounts(
     genesis: RawGenesisTransaction,
-    service_accounts: &[&AccountId],
+    service_accounts: &[iroha_data_model::account::NewAccount],
 ) -> Result<RawGenesisTransaction> {
     let mut registered = genesis
         .instructions()
@@ -3651,10 +3690,9 @@ fn append_localnet_service_accounts(
     // Generated account/asset custody leaves its global phase open. Service
     // registration and its following fee/contract grants share that authority.
     let mut builder = genesis.into_builder();
-    for account_id in service_accounts {
-        if registered.insert((*account_id).clone()) {
-            builder =
-                builder.append_instruction(Register::account(Account::new((*account_id).clone())));
+    for account in service_accounts {
+        if registered.insert(account.id.clone()) {
+            builder = builder.append_instruction(Register::account(account.clone()));
         }
     }
     builder.build_raw()
@@ -6617,18 +6655,26 @@ pub fn prepare_localnet(
     directory: &Path,
     ports: &crate::managed::LocalnetPorts,
 ) -> crate::managed::Result<crate::managed::PreparedLocalnet> {
-    prepare_localnet_at(name, directory, ports, None)
+    prepare_localnet_at(
+        name,
+        directory,
+        ports,
+        LocalnetServiceProfile::Standard,
+        None,
+    )
 }
 
 pub(crate) fn prepare_localnet_at(
     name: &str,
     directory: &Path,
     ports: &crate::managed::LocalnetPorts,
+    service_profile: LocalnetServiceProfile,
     publication_root: Option<&Path>,
 ) -> crate::managed::Result<crate::managed::PreparedLocalnet> {
     use crate::managed::{Error, ManagedContext, ManagedPeer, PreparedLocalnet};
     generate_managed_localnet_at(
         &LocalnetOptions {
+            service_profile,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("four is nonzero"),
@@ -6671,7 +6717,11 @@ pub(crate) fn prepare_localnet_at(
             log_name: format!("peer{index}.log"),
         })
         .collect();
-    Ok(PreparedLocalnet { context, peers })
+    Ok(PreparedLocalnet {
+        context,
+        peers,
+        service_profile,
+    })
 }
 
 impl crate::managed::PreparedLocalnet {

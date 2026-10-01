@@ -50,7 +50,9 @@ fn exact_canonical_projection_owns_original_pool_until_last_drop() {
             time_ms: 2_000,
             transactions: 7,
             lanes: 1,
-        }],
+        }]
+        .try_into()
+        .unwrap(),
         last_transition: 1,
         incarnations: 3,
         ..SumeragiLaneState::default()

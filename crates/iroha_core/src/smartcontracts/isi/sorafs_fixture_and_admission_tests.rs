@@ -404,9 +404,6 @@ fn revoke_repair_operator(state: &mut State, account: &AccountId, provider_id: P
         .account_permissions
         .insert(account.clone(), permissions);
 }
-fn seed_test_call_hash(stx: &mut crate::state::StateTransaction<'_, '_>) {
-    stx.tx_call_hash = Some(Hash::prehashed([0x51; Hash::LENGTH]));
-}
 pub(super) fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let handle = LiveQueryStore::start_test();
@@ -417,6 +414,53 @@ pub(super) fn make_state() -> State {
     state.gov.sorafs_telemetry.submitters = vec![alice()];
     state
 }
+#[test]
+fn sorafs_component_fee_source_requires_a_retained_finite_producer() {
+    let state = make_state();
+    let mut block = state.block(block_header());
+    let mut stx = block.transaction();
+    stx.tx_call_hash = Some(Hash::prehashed([0x51; Hash::LENGTH]));
+    seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
+    let alice_balance_before = pin_fee_balance(&stx, &alice());
+    let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+    let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+    let instruction = RegisterPinManifest {
+        manifest_payload: default_manifest_payload(),
+        alias: None,
+        successor_of: None,
+    };
+    let error = instruction
+        .clone()
+        .execute(&alice(), &mut stx)
+        .expect_err("a copied hash must not substitute for a retained producer invocation");
+    assert!(
+        matches!(error, InstructionExecutionError::InvariantViolation(message)
+        if message.contains("FASTPQ source has no retained producer invocation"))
+    );
+    assert!(stx.world.pin_manifests.get(&default_digest()).is_none());
+    assert_pin_fee_balances_unchanged(
+        &stx,
+        &alice(),
+        alice_balance_before,
+        &treasury_account,
+        treasury_balance_before,
+    );
+    drop(stx);
+    drop(block);
+    let state = make_state();
+    let mut block = state.block(block_header());
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
+    seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
+    instruction
+        .execute(&alice(), &mut stx)
+        .expect("the same exact hash is admitted only with its finite retained producer");
+    assert!(stx.world.pin_manifests.get(&default_digest()).is_some());
+    assert!(
+        crate::executor::root_scope::execution_root_scope(&stx).is_err(),
+        "component E custody must not create immutable ordinary execution authority"
+    );
+}
+
 #[test]
 fn provider_reverse_index_iteration_is_exact_and_ordered() {
     let state = make_state();
@@ -941,11 +985,10 @@ fn sample_alias_binding() -> ManifestAliasBinding {
 }
 #[test]
 fn register_pin_manifest_allows_public_submission() {
-    let mut state = make_state();
+    let mut state = make_initial_sorafs_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(initial_sorafs_block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut block = state.block(initial_sorafs_block_header(&state));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
     if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
         perms.clear();
@@ -1053,8 +1096,7 @@ fn register_pin_manifest_allows_public_submission() {
 fn public_pin_resource_ceilings_reject_before_fee_or_state_mutation() {
     let state = make_state();
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
     stx.gov.sorafs_pin_policy.max_global_manifests = 1;
     RegisterPinManifest {
@@ -1097,8 +1139,7 @@ fn retired_pin_history_cannot_recycle_count_ceilings() {
     for authority_scoped in [false, true] {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         if authority_scoped {
             stx.gov.sorafs_pin_policy.max_manifests_per_authority = 1;
@@ -1167,8 +1208,7 @@ fn public_pin_global_and_authority_byte_ceilings_reject_before_fee_or_state() {
     for authority_scoped in [false, true] {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         if authority_scoped {
             stx.gov.sorafs_pin_policy.max_bytes_per_authority = default_content_length();
@@ -1213,8 +1253,7 @@ fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
     let state = make_state();
     {
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -1305,8 +1344,7 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
     let state = make_state();
     {
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -1376,11 +1414,10 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
 }
 #[test]
 fn public_pin_cannot_reserve_alias_without_alias_permission() {
-    let mut state = make_state();
+    let mut state = make_initial_sorafs_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(initial_sorafs_block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut block = state.block(initial_sorafs_block_header(&state));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     remove_permission(&mut stx, "CanBindSorafsAlias");
     let alice_balance_before = pin_fee_balance(&stx, &alice());
     let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
@@ -1416,11 +1453,10 @@ fn public_pin_cannot_reserve_alias_without_alias_permission() {
 }
 #[test]
 fn register_pin_manifest_rejects_unfunded_public_submission_without_side_effects() {
-    let mut state = make_state();
+    let mut state = make_initial_sorafs_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(initial_sorafs_block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut block = state.block(initial_sorafs_block_header(&state));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
         perms.clear();
     }
@@ -1452,8 +1488,7 @@ fn register_pin_manifest_rejects_insufficient_public_fee_without_side_effects() 
     let mut state = make_state();
     seed_sorafs_permissions(&mut state, &bob());
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
         perms.clear();
     }
@@ -1485,11 +1520,10 @@ fn register_pin_manifest_rejects_insufficient_public_fee_without_side_effects() 
 }
 #[test]
 fn threshold_approval_may_be_relayed_without_broad_permission() {
-    let mut state = make_state();
+    let mut state = make_initial_sorafs_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(initial_sorafs_block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut block = state.block(initial_sorafs_block_header(&state));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
     insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
     let record = stx
@@ -1519,11 +1553,10 @@ fn threshold_approval_may_be_relayed_without_broad_permission() {
 }
 #[test]
 fn retire_pin_manifest_requires_exact_authenticated_submitter() {
-    let mut state = make_state();
+    let mut state = make_initial_sorafs_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(initial_sorafs_block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut block = state.block(initial_sorafs_block_header(&state));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
     RegisterPinManifest {
         manifest_payload: default_manifest_payload(),
@@ -1547,11 +1580,10 @@ fn retire_pin_manifest_requires_exact_authenticated_submitter() {
 }
 #[test]
 fn bind_manifest_alias_requires_permission() {
-    let mut state = make_state();
+    let mut state = make_initial_sorafs_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(initial_sorafs_block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut block = state.block(initial_sorafs_block_header(&state));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     remove_permission(&mut stx, "CanBindSorafsAlias");
     let bind = BindManifestAlias {
         digest: default_digest(),

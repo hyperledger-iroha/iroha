@@ -20,13 +20,16 @@ use super::{
     certified_chain::{CertifiedChain, committed_block},
     crypto::BlsCrypto,
     lanes::{
-        incarnation_instance, lane_height_config,
+        incarnation_instance,
         registry::{LaneStoreAuthorities, LaneStoreAuthority},
     },
 };
-use crate::state::{State, StateReadOnly, WorldReadOnly};
+use crate::{
+    query::native_receipts::lane_payload::{LaneAuthority, LanePayloadError},
+    state::{State, StateReadOnly, WorldReadOnly},
+};
 
-mod history;
+pub(super) mod history;
 mod selection;
 use history::HistoryScan;
 
@@ -153,16 +156,32 @@ impl NativeLaneStoreAuthorities {
         &self,
         lane: LaneId,
         incarnation: [u8; 32],
-    ) -> io::Result<Option<iroha_data_model::sumeragi_lanes::SumeragiLaneRecord>> {
+    ) -> io::Result<Option<LaneAuthority>> {
         let mut pending_scan = self
             .scan
             .try_lock()
             .ok_or_else(|| pending("native authority scan is busy"))?;
-        if let Some(scan) = pending_scan.as_ref() {
-            if !scan.matches(lane, &incarnation) {
-                return Err(pending("another original native authority scan is pending"));
+        if pending_scan
+            .as_ref()
+            .is_some_and(|scan| !scan.matches(lane, &incarnation))
+        {
+            // A cancelled/evicted caller must not strand the original refused read forever.
+            // Progress its exact owner first; no new request can replace it on refusal.
+            if let Err(error) = pending_scan
+                .as_mut()
+                .expect("original pending scan")
+                .complete()
+            {
+                if error.kind() != io::ErrorKind::WouldBlock {
+                    *pending_scan = None;
+                }
+                return Err(error);
             }
-        } else {
+            // This completed result belongs to the cancelled request. Explicitly abandon it,
+            // returning its source/config charges before admitting the newly requested owner.
+            *pending_scan = None;
+        }
+        if pending_scan.is_none() {
             *pending_scan = HistoryScan::open(&self.state, lane, incarnation)?;
         }
         let Some(scan) = pending_scan.as_mut() else {
@@ -196,7 +215,7 @@ impl NativeLaneStoreAuthorities {
 
 struct PinnedLaneAvailability {
     instance: Hash32,
-    config: HeightConfig,
+    authority: LaneAuthority,
 }
 impl AvailabilitySchedule for PinnedLaneAvailability {
     fn instance(&self) -> Hash32 {
@@ -204,10 +223,11 @@ impl AvailabilitySchedule for PinnedLaneAvailability {
     }
     fn height_config(&self, height: u64) -> io::Result<Option<HeightConfig>> {
         Ok(self
-            .config
+            .authority
+            .config()
             .epoch
             .contains(height)
-            .then(|| self.config.clone()))
+            .then(|| self.authority.config().clone()))
     }
 }
 impl LaneStoreAuthorities for NativeLaneStoreAuthorities {
@@ -230,27 +250,52 @@ impl LaneStoreAuthorities for NativeLaneStoreAuthorities {
                 "requested lane instance differs from native network and incarnation",
             ));
         }
-        let Some(record) = self.historical_record(lane, *incarnation)? else {
+        let Some(authority) = self.historical_record(lane, *incarnation)? else {
             return Ok(None);
         };
-        let config = lane_height_config(&record).map_err(invalid)?;
-        self.crypto
-            .admit_committee(
-                record
-                    .committee
-                    .iter()
-                    .map(|member| (member.peer.public_key(), member.pop.as_slice())),
-            )
-            .map_err(|(index, error)| {
-                invalid(format!("historical lane member {index}: {error}"))
-            })?;
+        if authority.lane() != lane {
+            return Err(invalid("selected original authority names another lane"));
+        }
+        admit_lane_authority(&self.crypto, &authority)?;
         Ok(Some(LaneStoreAuthority {
-            schedule: Arc::new(PinnedLaneAvailability { instance, config }),
+            schedule: Arc::new(PinnedLaneAvailability {
+                instance,
+                authority,
+            }),
             verifier: Arc::new(NativePastaVerifier::new(instance, network)),
         }))
     }
 }
 
+// The fixed native geometry bounds this borrowed credential view. Original PoPs stay in
+// the creation frame. TODO(S8): fund BLS parsing/cache and schedule-returned config clones;
+// the source/config owner here does not account for those independent allocations.
+fn admit_lane_authority(crypto: &BlsCrypto, authority: &LaneAuthority) -> io::Result<()> {
+    let mut members: [Option<(iroha_crypto::PublicKey, &[u8])>;
+        iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT] =
+        std::array::from_fn(|_| None);
+    let mut count = 0;
+    authority
+        .visit_members(|key, proof| {
+            let slot = members.get_mut(count).ok_or(LanePayloadError::Source)?;
+            let key = iroha_crypto::PublicKey::from_bytes(iroha_crypto::Algorithm::BlsNormal, key)
+                .map_err(|_| LanePayloadError::Source)?;
+            *slot = Some((key, proof));
+            count += 1;
+            Ok(())
+        })
+        .map_err(invalid)?;
+    crypto
+        .admit_committee(
+            members[..count]
+                .iter()
+                .flatten()
+                .map(|(key, proof)| (key, *proof)),
+        )
+        .map_err(|(index, error)| invalid(format!("historical lane member {index}: {error}")))?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "runtime_availability/tests.rs"]
-mod tests;
+pub(in crate::sumeragi) mod tests;

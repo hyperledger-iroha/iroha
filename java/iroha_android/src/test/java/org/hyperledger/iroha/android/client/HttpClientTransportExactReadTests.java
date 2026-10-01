@@ -41,8 +41,14 @@ public final class HttpClientTransportExactReadTests {
 
   private static void contractManifestUsesKotlinOwnedParserAndModel() {
     final String codeHash = "b".repeat(64);
-    final byte[] body = "{\"manifest\":{\"seiyaku_name\":\"Vault\"}}"
-        .getBytes(StandardCharsets.UTF_8);
+    final String canonicalHash =
+        "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2";
+    final String response =
+        "{\"network_id\":\"" + VERIFYING_KEY_NETWORK_ID
+            + "\",\"artifact_id\":{\"dataspace_id\":9,\"code_hash\":\"" + canonicalHash
+            + "\"},\"manifest\":{\"seiyaku_name\":\"Vault\",\"code_hash\":\"" + canonicalHash
+            + "\",\"abi_hash\":null},\"code_hash\":\"" + codeHash + "\",\"abi_hash\":null}";
+    final byte[] body = response.getBytes(StandardCharsets.UTF_8);
     final OneResponseExecutor success =
         new OneResponseExecutor(new TransportResponse(200, body, "ok", Map.of(), null, false));
     final HttpClientTransport client =
@@ -53,6 +59,10 @@ public final class HttpClientTransportExactReadTests {
     final org.hyperledger.iroha.sdk.client.ContractManifestRecord record =
         client.getContractManifest(codeHash).join();
     assert "Vault".equals(record.manifest.seiyakuName);
+    assert VERIFYING_KEY_NETWORK_ID.toString().equals(record.networkId.toString());
+    assert BigInteger.valueOf(9).equals(record.artifactId.dataspaceId);
+    assert codeHash.equals(record.artifactId.codeHashHex);
+    assert codeHash.equals(record.manifest.codeHashHex);
     assert ("https://torii.example/api/v1/contracts/code/" + codeHash)
         .equals(success.lastRequest.uri().toString());
     assert success.requestCount == 1;
@@ -63,7 +73,7 @@ public final class HttpClientTransportExactReadTests {
       assert success.requestCount == 1;
     }
 
-    final byte[] malformed = "{\"manifest\":{\"seiyaku_name\":\"Vault!\"}}"
+    final byte[] malformed = response.replace("\"Vault\"", "\"Vault!\"")
         .getBytes(StandardCharsets.UTF_8);
     final HttpClientTransport rejectingClient =
         HttpClientTransport.withExecutor(
@@ -75,6 +85,8 @@ public final class HttpClientTransportExactReadTests {
       throw new AssertionError("invalid Kotlin-owned manifest must fail closed");
     } catch (final CompletionException expected) {
       assert expected.getCause() instanceof IllegalStateException;
+      assert expected.getCause().getMessage().contains("canonical Kotodama identifier")
+          : "the original malformed name must be the rejection cause";
     }
   }
 
