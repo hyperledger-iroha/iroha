@@ -313,9 +313,9 @@ pub(in crate::mcp) fn authority_for_route(route: &RouteDescriptor) -> AuthorityC
     }
 
     let authentication = match route.authentication() {
-        AuthenticationPolicy::ToriiDefault | AuthenticationPolicy::OnboardingToken => {
-            AuthorityClass::ListenerCredential
-        }
+        AuthenticationPolicy::ToriiDefault
+        | AuthenticationPolicy::PrivateRootOwnerToken
+        | AuthenticationPolicy::OnboardingToken => AuthorityClass::ListenerCredential,
         AuthenticationPolicy::CanonicalAccountSignature => AuthorityClass::Account,
         AuthenticationPolicy::OptionalCanonicalAccountSignature
         | AuthenticationPolicy::ManifestConditionalContent => AuthorityClass::DataspaceVisible,

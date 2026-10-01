@@ -30,6 +30,8 @@ use std::{string::String, vec::Vec};
 pub mod fingerprint;
 mod root_scope;
 pub use root_scope::SumeragiRootScope;
+mod private_root_fees;
+pub use private_root_fees::{PrivateRootFeePolicy, PrivateRootFeePolicyError};
 /// Height alias for consensus.
 pub type Height = u64;
 /// View/round number alias.

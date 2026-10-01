@@ -363,6 +363,45 @@ strict-ingress preflight does not provide the real external moderation signer,
 settlement, publication, notification, archive, or multi-replica deployment
 evidence required for production readiness.
 
+Stream-token gateway admission uses the native consensus owner. Enabled issuance requires
+`stream_tokens.admission_native` with distinct direct Ed25519 operator, observer and reputation-recorder accounts,
+owner-only credential paths, explicit operator/observer fee intent and declared UTC uncertainty in `0..=5000` ms.
+The admission handle and policy revision/digest pin the governed policy. Startup performs a
+live qualification; each operation authenticates its exact purpose and current permissions.
+The local configured qualification is only an identity pin. External gateway broker providers
+are retired, and daemon launch rejects injected gateway admission providers.
+
+The same native owner supplies reputation delivery directly; it does not activate the broader
+reputation publication or PoR runtime. The original admitted source retains the full governed
+Append payload, including its fee intent and finite lifetime. A preloaded recorder credential
+signs only an opaque current Core delivery capability. Queue presence is a readiness hint;
+an independently verified terminal disposition must precede success and acknowledgement.
+Expired or governance-cancelled sources can drain their original row, while Accepted serving
+requires Delivered. Recovery preserves the original payload and deadline. The independent
+`admission_reconcile_interval_ms` defaults to 1,000 ms and accepts `1..=60000`.
+
+`admission_operation_timeout_ms` defaults to 30,000 ms and accepts `1..=60000`. Its absolute
+deadline starts before the worker queue and covers admission, callback reconciliation,
+acknowledgement and final Serving confirmation. That confirmation requires the original
+physical attempt and an acknowledged, unexpired original lease. Expiry maintenance is bounded;
+permanent native execution history owns exact acknowledgement/release replay. The publication
+fence encloses the immediate synchronous admission handoff. HTTP transport runs afterward.
+
+The token issuer's receipt journal uses the shared `iroha_fs` owner on Unix and Windows.
+It retains exact path and lock identities, consumes each bounded writer into an opaque sealed
+reader, and preserves interrupted writes and no-replace publication evidence. One configured
+`signer_journal_inventory` pool funds complete scans, pinned receipts and rereads; see the
+[source accounting](src/signer_operation/journal/inventory_budget.md) for native probe,
+allocation and handle limits. The token issuer no longer has a Unix-only startup branch.
+Native Windows custody and installed runtime qualification remain required, along with the
+separate platform requirements of other SoraFS services.
+
+The combined candidate still needs runtime validation and multi-replica recovery. Component
+coverage does not qualify the complete native service graph, cold registry fetches or deployed
+ingress. Native release matrices, the complete 64 MiB fetch-process RSS bound and reference-host
+p95 startup/deployment measurements remain separate gates in the
+[developer goals](../../specs/kagami_mochi_devex_goals.md).
+
 ## Configuration
 
 To run the Iroha peer binary, you must [generate the keys](#generating-keys) and provide a [configuration file](#configuration-file).

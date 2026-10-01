@@ -296,3 +296,61 @@ async fn dropping_accepted_guard_does_not_call_provider_or_hold_query_gates() {
     assert_eq!(probe.release_calls.lock().unwrap().len(), 1);
     drop((query, heavy));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn queued_admission_expiry_prevents_signer_observer_and_gateway_provider_work() {
+    use std::sync::atomic::Ordering;
+    let mut context = token_test_context();
+    let mut app = Arc::try_unwrap(context.app).unwrap_or_else(|_| panic!("exclusive test app"));
+    let signed = SignedFixture::for_api([0xAB; 32], 7, TestSignerMode::Sign);
+    app.stream_token_issuer = Some(Arc::new(signed.issuer().unwrap()));
+    let durable = ServingAdmissionFixture::new();
+    let probe = ProbeProvider::new(durable.provider());
+    app.stream_token_admission_capture = Some(
+        durable.capture_with_provider_timeout(probe.clone(), std::time::Duration::from_millis(10)),
+    );
+    app.query_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+    app.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+    app.query_queue_timeout = std::time::Duration::from_secs(2);
+    let cleanup = RangeCleanupTestOwner::install(&mut app, 1);
+    context.app = Arc::new(app);
+    let encoded = issue_token_base64(&context, TokenOverrides::default()).await;
+    let observed = signed.observer_calls.load(Ordering::SeqCst);
+    let qualified = probe.qualification_calls.load(Ordering::Acquire);
+    let manifest = context.manifest();
+    let headers = enforcement_headers(&encoded);
+    let occupied = context
+        .app
+        .query_heavy_inflight
+        .clone()
+        .acquire_owned()
+        .await
+        .unwrap();
+    let admission = enforce_stream_token_for_request(
+        &context.app,
+        &headers,
+        &manifest,
+        "expired-while-queued",
+        enforcement_route(1),
+    );
+    tokio::pin!(admission);
+    // Poll the actual request while the worker gate is occupied: the deadline must be created
+    // before this wait. It expires while queued, rather than being renewed when a worker starts.
+    tokio::select! {
+        biased;
+        result = &mut admission => panic!("occupied worker gate unexpectedly completed: {result:?}"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(30)) => {}
+    }
+    drop(occupied);
+    let response = admission
+        .await
+        .expect_err("the original queued budget has expired");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(signed.observer_calls.load(Ordering::SeqCst), observed);
+    assert_eq!(probe.qualification_calls.load(Ordering::Acquire), qualified);
+    assert_eq!(probe.admission_calls.load(Ordering::Acquire), 0);
+    assert!(durable.requests().is_empty());
+    assert!(durable.outcomes().is_empty());
+    assert_eq!(durable.active_leases(), 0);
+    cleanup.finish().await;
+}

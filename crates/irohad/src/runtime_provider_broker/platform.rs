@@ -1,5 +1,4 @@
 use super::*;
-use iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1 as _;
 use std::{
     fmt, fs,
     os::unix::{
@@ -18,11 +17,8 @@ mod endpoint_recovery;
 #[cfg(test)]
 #[path = "protocol/platform/process_admission_fixture.rs"]
 mod process_admission_fixture;
-#[path = "protocol/platform/stream_token_gateway_client.rs"]
-mod stream_token_gateway_client;
 #[cfg(test)]
 use std::io;
-use stream_token_gateway_client::StreamTokenGatewayAdmissionBrokerProvider;
 const STOCK_BROKER_SOCKET_MODE_V1: u32 = 0o660;
 const BROKER_IO_TIMEOUT_V1: Duration = Duration::from_secs(15);
 const MAX_BROKER_SESSIONS_V1: usize = 8;

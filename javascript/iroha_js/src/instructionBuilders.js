@@ -4980,6 +4980,9 @@ function normalizeCanonicalU64(value, name) {
 function normalizeContractArtifactId(value) {
   const source = assertPlainObject(value, "artifactId");
   assertExactFields(source, ["dataspaceId", "codeHash"], "artifactId");
+  if (typeof source.dataspaceId === "string" && source.dataspaceId.length > 20) {
+    throw new TypeError("artifactId.dataspaceId must fit u64");
+  }
   return {
     dataspace_id: normalizeCanonicalU64(source.dataspaceId, "artifactId.dataspaceId"),
     code_hash: normalizeHash(source.codeHash, "artifactId.codeHash"),
@@ -5018,7 +5021,7 @@ function normalizeSmartContractChunk(value, name) {
 
 /**
  * Build one bounded `UploadSmartContractCodeChunk` instruction.
- * @param {{codeHash: string|Buffer, totalSize: number|bigint|string, chunkIndex: number, chunkCount: number, chunk: ArrayBufferView|ArrayBuffer|Buffer|string}} options
+ * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, totalSize: number|bigint|string, chunkIndex: number, chunkCount: number, chunk: ArrayBufferView|ArrayBuffer|Buffer|string}} options
  */
 export function buildUploadSmartContractCodeChunkInstruction(options) {
   const source = assertPlainObject(options, "uploadSmartContractCodeChunk");

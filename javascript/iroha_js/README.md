@@ -3199,6 +3199,18 @@ hashes without the Iroha marker bit are rejected. Native Norito encoding retains
 authoritative. Bytecode helpers accept `Buffer`, typed arrays, or base64 strings.
 `buildRemoveSmartContractBytesInstruction/Transaction` rejects empty reason strings.
 
+Use `deploySmartContractBrowser` for the alias-first upload, manifest, and binding
+workflow. Its authenticated deployment state supplies the dataspace ID.
+`getContractManifest` and `getContractCodeBytes` take that explicit artifact ID
+and canonical account authentication, and verify the returned network and scope.
+Byte reads also verify the artifact hash. Standalone manifest registration uses
+the ordinary signed transaction builders shown above.
+
+The recipe mirrors the same validation rules: keys can be supplied as
+`PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, `CONTRACT_ALIAS`
+selects the deploy dataspace via its suffix, and `CONTRACT_LEASE_EXPIRY_MS`
+can stage a leased alias binding for rehearsal environments.
+
 ### Contract calls via Torii
 
 `ToriiClient.prepareContractCall` wraps `/v1/contracts/call` and prepares an

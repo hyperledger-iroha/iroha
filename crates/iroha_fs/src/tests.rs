@@ -14,6 +14,84 @@ fn store() -> (tempfile::TempDir, PrivateDirectory) {
 }
 
 #[test]
+fn complete_private_directory_publication_never_exposes_partial_destination() {
+    let (temporary, _) = store();
+    let parent = OwnerDirectory::open(temporary.path()).unwrap();
+    // A crash before rename leaves only an unpublished private sibling. A retry can still
+    // publish the complete destination; no caller has to delete ambiguous operation evidence.
+    let interrupted = parent.create_private_child("unpublished").unwrap();
+    interrupted
+        .write_atomic("lock", b"", PublishMode::CreateNew)
+        .unwrap();
+    let published = parent
+        .publish_private_child("ready", &[("lock", b""), ("record", b"original")])
+        .unwrap();
+    assert_eq!(
+        published.read("record", 16).unwrap().as_slice(),
+        b"original"
+    );
+    let lock = published.open_existing_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    assert!(
+        parent
+            .publish_private_child("ready", &[("record", b"replacement")])
+            .is_err()
+    );
+    assert_eq!(
+        published.read("record", 16).unwrap().as_slice(),
+        b"original"
+    );
+    for files in [
+        vec![],
+        vec![("same", b"a".as_slice()), ("same", b"b".as_slice())],
+        vec![("../escape", b"a".as_slice())],
+    ] {
+        assert!(parent.publish_private_child("absent", &files).is_err());
+        assert!(!temporary.path().join("absent").exists());
+    }
+    assert!(interrupted.path().join("lock").is_file());
+}
+
+#[test]
+fn exact_lock_creation_and_open_never_change_missing_or_existing_custody() {
+    let (_temporary, store) = store();
+    assert_eq!(
+        store.open_existing_lock("journal.lock").unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(store.entries(0).unwrap().is_empty());
+    let mut first = store.create_lock("journal.lock").unwrap();
+    first.write_all(b"retained").unwrap();
+    first.sync_all().unwrap();
+    assert!(store.create_lock("journal.lock").is_err());
+    first.try_lock().unwrap();
+    let second = store.open_existing_lock("journal.lock").unwrap();
+    assert!(second.try_lock().is_err());
+    assert_eq!(
+        store.read("journal.lock", 8).unwrap().as_slice(),
+        b"retained"
+    );
+}
+
+#[test]
+fn consuming_empty_directory_removal_preserves_parent_and_refuses_descendants() {
+    let (_temporary, store) = store();
+    let parent = OwnerDirectory::open(store.path()).unwrap();
+    let pending = parent.create_private_child("pending").unwrap();
+    assert!(parent.create_private_child("pending").is_err());
+    let child = pending.create_child("nested").unwrap();
+    assert!(pending.remove_empty().is_err());
+    drop(child);
+    assert!(store.open_child("pending").unwrap().remove_empty().is_err());
+    let pending = store.open_child("pending").unwrap();
+    pending.clear_contents_preserving(&[]).unwrap();
+    pending.remove_empty().unwrap();
+    assert!(store.open_child("pending").is_err());
+    parent.revalidate().unwrap();
+    assert!(store.entries(0).unwrap().is_empty());
+}
+
+#[test]
 fn retained_directory_listing_is_bounded_and_does_not_follow_children() {
     let (_temporary, store) = store();
     assert!(store.entries(0).unwrap().is_empty());

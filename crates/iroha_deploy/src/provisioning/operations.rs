@@ -1,0 +1,126 @@
+//! Native wallet adapters; public orchestration retains the original intent before dispatch.
+
+use super::*;
+
+pub(super) struct LeaseRead<'a> {
+    pub alias: &'a str,
+    pub owner: &'a AccountId,
+    pub native_schema: Hash,
+    pub block: &'a VerifiedSumeragiBlock,
+    pub deadline: Instant,
+}
+
+pub(super) trait ProvisioningOperations {
+    fn fund(
+        &self,
+        config: &Config,
+        request: &FaucetRequest,
+        journal: &Path,
+        deadline: Instant,
+    ) -> Result<OperationStatus>;
+    fn namespace_request(
+        &self,
+        config: &Config,
+        alias: &str,
+        deadline: Instant,
+    ) -> Result<AliasSetupPlanRequestV1>;
+    fn reserve(
+        &self,
+        config: &Config,
+        request: &AliasSetupPlanRequestV1,
+        options: &BoundedTransactionOptions,
+        journal: &Path,
+    ) -> Result<OperationStatus>;
+    fn lease(&self, config: &Config, request: &LeaseRead<'_>) -> Result<VerifiedSnsLeaseV1>;
+}
+
+pub(super) struct NativeOperations;
+
+impl ProvisioningOperations for NativeOperations {
+    fn fund(
+        &self,
+        config: &Config,
+        request: &FaucetRequest,
+        journal: &Path,
+        deadline: Instant,
+    ) -> Result<OperationStatus> {
+        let service = OnboardingService::new(config.clone())
+            .and_then(|service| service.with_deadline(deadline))
+            .map_err(|_| ProvisioningError::Invalid("cannot construct exact faucet context"))?;
+        if !path_exists(journal)? {
+            service
+                .prepare_faucet(
+                    request,
+                    &PreparationOptions {
+                        timeout_secs: 60,
+                        ..PreparationOptions::default()
+                    },
+                    journal,
+                )
+                .map_err(|_| ProvisioningError::FaucetPreparation)?;
+        }
+        Ok(service
+            .submit_faucet_with_request(journal, request, 60)
+            .map_err(|_| ProvisioningError::FaucetRecovery)?
+            .status)
+    }
+
+    fn namespace_request(
+        &self,
+        config: &Config,
+        alias: &str,
+        deadline: Instant,
+    ) -> Result<AliasSetupPlanRequestV1> {
+        Ok(prepare_private_dataspace_request(config, alias, deadline)
+            .map_err(|_| ProvisioningError::NamespaceQuote)?
+            .request)
+    }
+
+    fn reserve(
+        &self,
+        config: &Config,
+        request: &AliasSetupPlanRequestV1,
+        options: &BoundedTransactionOptions,
+        journal: &Path,
+    ) -> Result<OperationStatus> {
+        let service = AccountService::new(config.clone())
+            .and_then(|service| service.with_deadline(options.deadline))
+            .map_err(|_| ProvisioningError::Invalid("cannot construct exact namespace context"))?;
+        if !path_exists(journal)? {
+            let report = service
+                .prepare_alias_bounded(request, options, journal)
+                .map_err(|_| ProvisioningError::NamespacePreparation)?;
+            if report.status == OperationStatus::AlreadyPresent {
+                return Ok(report.status);
+            }
+        }
+        Ok(service
+            .submit_alias_bounded(journal, request, options)
+            .map_err(|_| ProvisioningError::NamespaceRecovery)?
+            .status)
+    }
+
+    fn lease(&self, config: &Config, request: &LeaseRead<'_>) -> Result<VerifiedSnsLeaseV1> {
+        let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+        if Instant::now() >= request.deadline {
+            return Err(ProvisioningError::Deadline);
+        }
+        let client = Client::builder(config.clone())
+            .build()
+            .map_err(|_| ProvisioningError::Invalid("namespace observation client"))?
+            .with_request_deadline(request.deadline);
+        let lease = client
+            .get_dataspace_lease(
+                request.alias,
+                request.owner,
+                request.native_schema,
+                request.block,
+                unix_ms()?,
+            )
+            .map_err(|_| ProvisioningError::NamespaceObservation)?;
+        if Instant::now() >= request.deadline {
+            return Err(ProvisioningError::Deadline);
+        }
+        Ok(lease)
+    }
+}

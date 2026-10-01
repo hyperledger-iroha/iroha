@@ -12,12 +12,10 @@ use iroha_data_model::sorafs::{
         governance::{PROVIDER_ADMISSION_MAX_REVISIONS_V1, decode_frame},
     },
 };
-use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use sorafs_manifest::{
     AdmissionRecord, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1,
 };
-use std::str::FromStr;
 
 /// Native admission is unavailable, malformed, stale or not finalized at this exact State cut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -25,66 +23,31 @@ use std::str::FromStr;
 pub struct ProviderAdmissionErrorV1;
 pub(crate) type Error = ProviderAdmissionErrorV1;
 
-/// Canonical retained policy or provider transition, including terminal provider tombstones.
-#[derive(
-    Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode, norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_core::query::provider_admission::AdmissionHistoryRecordV1")]
-pub(crate) struct AdmissionHistoryRecordV1 {
-    pub(crate) network_id: [u8; 32],
-    /// Exact signed-genesis initializer, never present on subsequent Parliament effects.
-    pub(crate) genesis_origin: Option<GenesisAdmissionOriginV1>,
-    pub(crate) revision: u64,
-    pub(crate) predecessor: Option<[u8; 32]>,
-    pub(crate) height: u64,
-    pub(crate) recorded_at_unix_ms: u64,
-    pub(crate) owner: Option<iroha_data_model::account::AccountId>,
-    pub(crate) revoked: bool,
-    pub(crate) material: Vec<u8>,
-}
+pub(crate) use iroha_data_model::sorafs::provider_admission::history::{
+    AdmissionHistoryPathV1, AdmissionHistoryRecordV1, GenesisAdmissionOriginV1,
+    admission_history_path as path,
+};
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode, norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_core::query::provider_admission::GenesisAdmissionOriginV1")]
-pub(crate) struct GenesisAdmissionOriginV1 {
-    pub(crate) entrypoint_index: u32,
-    pub(crate) instruction_digest: [u8; 32],
-}
-
-pub(crate) fn path(subject: Option<ProviderId>, suffix: &str) -> StatePath {
-    let subject = subject.map_or_else(|| "council".into(), |id| hex::encode(id.as_bytes()));
-    StatePath::from_str(&format!("sorafs/provider_admission/{subject}/{suffix}"))
-        .expect("fixed namespace and hex provider form a valid state path")
-}
 pub(crate) fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
-    let size = norito::canonical_frame_len(value).map_err(|_| ProviderAdmissionErrorV1)?;
-    if size > 2 * 1024 * 1024 {
-        return Err(ProviderAdmissionErrorV1);
-    }
-    norito::encode_canonical(value).map_err(|_| ProviderAdmissionErrorV1)
+    iroha_data_model::sorafs::provider_admission::history::encode_history_value(value)
+        .map_err(|_| ProviderAdmissionErrorV1)
 }
 pub(crate) fn digest(record: &AdmissionHistoryRecordV1) -> Result<[u8; 32], Error> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"iroha.sorafs.provider-admission.native-history.v1\0");
-    hasher.update(&encode(record)?);
-    Ok(*hasher.finalize().as_bytes())
+    record
+        .canonical_digest()
+        .map_err(|_| ProviderAdmissionErrorV1)
 }
 fn decode_record(bytes: &[u8]) -> Result<AdmissionHistoryRecordV1, Error> {
-    if bytes.len() > 2 * 1024 * 1024 {
-        return Err(ProviderAdmissionErrorV1);
-    }
-    norito::decode_canonical_with_limits(
-        bytes,
-        norito::DecodeLimits::new(65536, 2 * 1024 * 1024, 65536, 8 * 1024 * 1024, 64),
-    )
-    .map_err(|_| ProviderAdmissionErrorV1)
+    AdmissionHistoryRecordV1::decode_frame(bytes).map_err(|_| ProviderAdmissionErrorV1)
 }
 pub(crate) fn read_head(
     world: &impl WorldReadOnly,
     subject: Option<ProviderId>,
 ) -> Result<Option<AdmissionHistoryRecordV1>, Error> {
-    let Some(bytes) = world.smart_contract_state().get(&path(subject, "head")) else {
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(&path(subject, AdmissionHistoryPathV1::Head))
+    else {
         return Ok(None);
     };
     let head = decode_record(bytes)?;
@@ -100,12 +63,18 @@ pub(crate) fn read_head(
     }
     let retained = world
         .smart_contract_state()
-        .get(&path(subject, &format!("history/{}", head.revision)))
+        .get(&path(
+            subject,
+            AdmissionHistoryPathV1::Revision(head.revision),
+        ))
         .ok_or(ProviderAdmissionErrorV1)?;
     if retained != bytes
         || world
             .smart_contract_state()
-            .get(&path(subject, &format!("history/{}", head.revision + 1)))
+            .get(&path(
+                subject,
+                AdmissionHistoryPathV1::Revision(head.revision + 1),
+            ))
             .is_some()
     {
         return Err(ProviderAdmissionErrorV1);
@@ -113,7 +82,10 @@ pub(crate) fn read_head(
     if let Some(expected) = head.predecessor {
         let previous = world
             .smart_contract_state()
-            .get(&path(subject, &format!("history/{}", head.revision - 1)))
+            .get(&path(
+                subject,
+                AdmissionHistoryPathV1::Revision(head.revision - 1),
+            ))
             .ok_or(ProviderAdmissionErrorV1)?;
         let previous = decode_record(previous)?;
         if digest(&previous)? != expected
@@ -192,7 +164,7 @@ fn active_record(
             .smart_contract_state()
             .get(&path(
                 Some(provider),
-                &format!("history/{}", head.revision - 1),
+                AdmissionHistoryPathV1::Revision(head.revision - 1),
             ))
             .ok_or(ProviderAdmissionErrorV1)?;
         let previous = decode_record(previous)?;
@@ -296,7 +268,7 @@ pub fn retained_provider_count_v1(view: &impl StateReadOnly) -> Result<u64, Erro
     let count: u64 = view
         .world()
         .smart_contract_state()
-        .get(&path(None, "provider_count"))
+        .get(&path(None, AdmissionHistoryPathV1::ProviderCount))
         .map(|bytes| decode_frame(bytes))
         .transpose()
         .map_err(|_| ProviderAdmissionErrorV1)?

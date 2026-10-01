@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 pub struct InstalledRuntime {
     kagami: PathBuf,
     daemon: PathBuf,
+    profiles: PathBuf,
 }
 
 impl InstalledRuntime {
@@ -31,12 +32,17 @@ impl InstalledRuntime {
         )
     }
 
-    /// Resolve a complete runtime in an explicit installation directory.
+    /// Resolve matching programs in a canonical package or an explicit loose development directory.
+    ///
+    /// macOS applications use only their `.app/Contents/MacOS` directory; resources belong in
+    /// `Contents/Resources`. Loose developer binaries load profiles from their own directory.
     ///
     /// # Errors
     /// Missing binaries and indirect or nonregular program files are rejected.
     pub fn from_directory(directory: &Path) -> Result<Self> {
+        super::bundle::runtime_profiles_path(directory)?;
         let directory = directory.canonicalize()?;
+        let profiles = super::bundle::runtime_profiles_path(&directory)?;
         let kagami = directory.join(format!("kagami{}", std::env::consts::EXE_SUFFIX));
         let daemon = directory.join(format!("iroha3d{}", std::env::consts::EXE_SUFFIX));
         for binary in [&kagami, &daemon] {
@@ -47,7 +53,11 @@ impl InstalledRuntime {
                 ));
             }
         }
-        Ok(Self { kagami, daemon })
+        Ok(Self {
+            kagami,
+            daemon,
+            profiles,
+        })
     }
 
     /// Construct a startup request with the same installed worker and daemon.
@@ -57,6 +67,18 @@ impl InstalledRuntime {
         request.name = name.into();
         request.startup_timeout = timeout;
         request
+    }
+
+    /// Load independently installed network authorities from the exact runtime resource location.
+    ///
+    /// The authenticated installation supplies this artifact. Neither a remote response nor a
+    /// missing artifact can choose a trust key, checkpoint URL or default network.
+    ///
+    /// # Errors
+    /// Missing, unsafe or malformed installation custody is refused without network I/O.
+    pub fn network_profiles(&self) -> Result<crate::bootstrap::InstalledNetworkProfiles> {
+        crate::bootstrap::InstalledNetworkProfiles::load(&self.profiles)
+            .map_err(|error| Error::Invalid(format!("installed network profiles: {error}")))
     }
 }
 
@@ -74,12 +96,18 @@ impl ManagedStore {
         requested: Option<&str>,
         timeout: std::time::Duration,
     ) -> Result<ManagedStatus> {
-        let name = match self.context(requested) {
-            Ok(context) => context.name,
-            Err(Error::NoSelection) if requested.is_none() => "local".into(),
+        let (name, retained) = match self.context(requested) {
+            Ok(context) => (context.name, true),
+            Err(Error::NoSelection) if requested.is_none() => ("local".into(), false),
             Err(error) => return Err(error),
         };
-        let status = self.up(&runtime.localnet_request(&name, timeout))?;
+        let mut request = runtime.localnet_request(&name, timeout);
+        let status = if retained {
+            request.service_profile = self.prepared(&name)?.service_profile;
+            self.up_retained(&request)?
+        } else {
+            self.up(&request)?
+        };
         if status.phase != ManagedPhase::Ready {
             return Err(Error::Invalid(status.failure.unwrap_or_else(|| {
                 "selected developer environment is not ready".into()
@@ -215,6 +243,140 @@ mod tests {
     }
 
     #[test]
+    fn installed_network_profiles_require_the_exact_bundle_without_defaults() {
+        use crate::bootstrap::{InstalledNetworkProfiles, NETWORK_PROFILES_FILENAME};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("bundle")).unwrap();
+        for program in ["kagami", "iroha3d"] {
+            directory
+                .write_atomic(
+                    &format!("{program}{}", std::env::consts::EXE_SUFFIX),
+                    b"test executable",
+                    PublishMode::CreateNew,
+                )
+                .unwrap();
+        }
+        let runtime = InstalledRuntime::from_directory(directory.path()).unwrap();
+        assert!(runtime.network_profiles().is_err());
+        directory
+            .write_atomic(
+                NETWORK_PROFILES_FILENAME,
+                &InstalledNetworkProfiles::new(Vec::new())
+                    .unwrap()
+                    .encode_installation()
+                    .unwrap(),
+                PublishMode::CreateNew,
+            )
+            .unwrap();
+        assert!(runtime.network_profiles().unwrap().select("taira").is_err());
+        directory
+            .write_atomic(
+                NETWORK_PROFILES_FILENAME,
+                b"untrusted malformed profile",
+                PublishMode::Replace,
+            )
+            .unwrap();
+        assert!(runtime.network_profiles().is_err());
+    }
+
+    #[test]
+    fn relocated_and_renamed_app_uses_only_its_exact_resources() {
+        use super::super::{NativeBundleLayout, macos_info_plist};
+        use crate::bootstrap::{InstalledNetworkProfiles, NETWORK_PROFILES_FILENAME};
+        let temporary = tempfile::tempdir().unwrap();
+        let bundle = temporary.path().join("assembled");
+        let layout = NativeBundleLayout::MacOs;
+        let programs = layout.runtime_directory(&bundle);
+        std::fs::create_dir_all(&programs).unwrap();
+        std::fs::create_dir_all(layout.resources_directory(&bundle)).unwrap();
+        std::fs::write(
+            bundle.join("Mochi.app/Contents/Info.plist"),
+            macos_info_plist("0.1.0").unwrap(),
+        )
+        .unwrap();
+        for program in ["kagami", "iroha3d"] {
+            std::fs::write(
+                programs.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
+                b"test executable",
+            )
+            .unwrap();
+        }
+        let profiles = InstalledNetworkProfiles::new(Vec::new())
+            .unwrap()
+            .encode_installation()
+            .unwrap();
+        // An adjacent file must never replace a missing packaged resource.
+        std::fs::write(programs.join(NETWORK_PROFILES_FILENAME), &profiles).unwrap();
+        assert!(
+            InstalledRuntime::from_directory(&programs)
+                .unwrap()
+                .network_profiles()
+                .is_err()
+        );
+        std::fs::write(layout.profiles_path(&bundle), &profiles).unwrap();
+        let moved_app = temporary.path().join("Renamed Mochi.app");
+        std::fs::rename(bundle.join("Mochi.app"), &moved_app).unwrap();
+        let runtime = InstalledRuntime::from_directory(&moved_app.join("Contents/MacOS")).unwrap();
+        assert!(runtime.network_profiles().is_ok());
+        assert!(
+            runtime
+                .localnet_request("local", std::time::Duration::from_secs(1))
+                .launcher
+                .starts_with(moved_app.canonicalize().unwrap())
+        );
+        // Malformed resource custody cannot be replaced by the valid adjacent artifact either.
+        std::fs::write(
+            moved_app
+                .join("Contents/Resources")
+                .join(NETWORK_PROFILES_FILENAME),
+            b"invalid",
+        )
+        .unwrap();
+        assert!(runtime.network_profiles().is_err());
+        assert!(InstalledRuntime::from_directory(&moved_app.join("Contents")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn packaged_runtime_rejects_indirect_application_resources_and_metadata() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let contents = temporary.path().join("Mochi.app/Contents");
+        let programs = contents.join("MacOS");
+        std::fs::create_dir_all(&programs).unwrap();
+        for program in ["kagami", "iroha3d"] {
+            std::fs::write(programs.join(program), b"test executable").unwrap();
+        }
+        std::fs::write(contents.join("Info.plist"), b"installed metadata").unwrap();
+        let resources = temporary.path().join("resources");
+        std::fs::create_dir(&resources).unwrap();
+        symlink(&resources, contents.join("Resources")).unwrap();
+        assert!(InstalledRuntime::from_directory(&programs).is_err());
+        std::fs::remove_file(contents.join("Resources")).unwrap();
+        std::fs::create_dir(contents.join("Resources")).unwrap();
+        assert!(InstalledRuntime::from_directory(&programs).is_ok());
+        std::fs::rename(contents.join("Info.plist"), temporary.path().join("plist")).unwrap();
+        symlink(temporary.path().join("plist"), contents.join("Info.plist")).unwrap();
+        assert!(InstalledRuntime::from_directory(&programs).is_err());
+        std::fs::remove_file(contents.join("Info.plist")).unwrap();
+        std::fs::rename(temporary.path().join("plist"), contents.join("Info.plist")).unwrap();
+        let external_programs = temporary.path().join("loose");
+        std::fs::rename(&programs, &external_programs).unwrap();
+        symlink(&external_programs, &programs).unwrap();
+        assert!(InstalledRuntime::from_directory(&external_programs).is_ok());
+        assert!(InstalledRuntime::from_directory(&programs).is_err());
+        std::fs::remove_file(&programs).unwrap();
+        std::fs::rename(&external_programs, &programs).unwrap();
+        let parent_alias = temporary.path().join("parent-alias");
+        symlink(temporary.path(), &parent_alias).unwrap();
+        assert!(
+            InstalledRuntime::from_directory(&parent_alias.join("Mochi.app/Contents/MacOS"))
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn workspace_selection_is_stable_separate_and_outside_the_project() {
         let temporary = tempfile::tempdir().unwrap();
         let a = temporary.path().join("a");
@@ -230,6 +392,52 @@ mod tests {
         assert!(workspace_state_root(Path::new("relative"), &a).is_err());
         assert!(workspace_state_root(&root, &root).is_err());
         assert!(default_state_root().unwrap().is_absolute());
+    }
+
+    #[test]
+    fn selected_authority_profile_reaches_native_spawn_without_repreparing_identity() {
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
+        let networks = PrivateDirectory::open(store.root().join("networks")).unwrap();
+        let directory = networks.create_child("native-authorities").unwrap();
+        for program in ["kagami", "iroha3d"] {
+            directory
+                .write_atomic(
+                    format!("{program}{}", std::env::consts::EXE_SUFFIX),
+                    b"intentionally not an executable",
+                    PublishMode::CreateNew,
+                )
+                .unwrap();
+        }
+        let runtime = InstalledRuntime::from_directory(directory.path()).unwrap();
+        let mut request =
+            runtime.localnet_request("native-authorities", std::time::Duration::from_secs(60));
+        request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
+        let retained = {
+            let _operation =
+                super::super::store::acquire(&directory, "operation.lock", &request.name).unwrap();
+            let ports = super::super::LocalnetPorts::reserve().unwrap();
+            super::super::generation::prepare(
+                &directory,
+                &request,
+                super::super::RootKind::Global,
+                super::super::store::pin_binary(&runtime.kagami).unwrap(),
+                super::super::store::pin_binary(&runtime.daemon).unwrap(),
+                &ports,
+            )
+            .unwrap()
+        };
+        store.select(&request.name).unwrap();
+        let error = store
+            .ensure_selected(&runtime, None, std::time::Duration::from_secs(60))
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::Io(_)),
+            "expected actual native spawn failure after exact profile selection: {error}"
+        );
+        assert_eq!(store.prepared(&request.name).unwrap(), retained.prepared);
+        assert!(!directory.path().join(".preparing").exists());
     }
 
     #[test]

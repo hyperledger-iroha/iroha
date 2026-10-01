@@ -6,16 +6,23 @@
 use color_eyre::eyre::{Result, ensure};
 pub use iroha_contract_deploy::{DeploymentPreflight, DeploymentProgress};
 use iroha_data_model::{smart_contract::ContractAlias, transaction::FeePaymentIntent};
-pub use iroha_deploy::managed::ManagedPhase;
 use iroha_deploy::managed::{
     InstalledRuntime, ManagedContext, ManagedStatus, ManagedStore, PreparedLocalnet,
     default_state_root, workspace_state_root,
 };
-use musubi::deployment_runtime::{AliasSelection, DeploymentRuntime};
-pub use musubi::deployment_runtime::{ContractInput, DeploymentRun};
+pub use iroha_deploy::managed::{
+    ManagedAttachmentFailure, ManagedAttachmentPhase, ManagedAttachmentStatus,
+    ManagedConfirmedAnchor, ManagedDataspaceStatus, ManagedDeploymentReport, ManagedPhase,
+};
+pub use musubi::deployment_runtime::ContractInput;
+use musubi::{
+    archive_fetch::{MusubiArchiveDiscoveryErrorV1, PreparedProductionSorafsArchiveTransportV1},
+    deployment_runtime::{AliasSelection, DeploymentRuntime},
+};
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 /// An immutable workspace choice for desktop background actions.
@@ -81,6 +88,48 @@ impl DeveloperWorkspace {
         Ok(ManagedStore::open(&self.root)?.contexts()?)
     }
 
+    /// Names authenticated by the installed network profile artifact, without contacting a node.
+    /// # Errors
+    /// Missing, unsafe or malformed installation authority. Local contexts remain usable.
+    pub fn network_profiles(&self) -> Result<Vec<String>> {
+        Ok(self
+            .runtime
+            .network_profiles()?
+            .names()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// Create or recover one owner-private dataspace using the installed parent profile.
+    ///
+    /// The shared native worker owns all custody, funding, namespace and outbound relay work.
+    /// A timeout retains exact work for retry; the complete foreground budget is sixty seconds.
+    /// # Errors
+    /// Invalid identity/profile, unsafe custody, failed private startup or unconfirmed attachment.
+    pub fn start_dataspace(
+        &self,
+        name: &str,
+        network: &str,
+        alias: &str,
+    ) -> Result<ManagedDataspaceStatus> {
+        Ok(ManagedStore::open(&self.root)?.up_dataspace(
+            &self.runtime,
+            &iroha_deploy::managed::DataspaceRequest {
+                name: name.to_owned(),
+                network: network.to_owned(),
+                alias: alias.to_owned(),
+                timeout: Duration::from_secs(60),
+            },
+        )?)
+    }
+
+    /// Observe shared parent attachment progress without treating retained receipts as liveness.
+    /// # Errors
+    /// Missing generation, malformed custody, replaced identity or unauthenticated worker.
+    pub fn dataspace_status(&self, name: &str) -> Result<Option<ManagedDataspaceStatus>> {
+        Ok(ManagedStore::open(&self.root)?.dataspace_status(name)?)
+    }
+
     /// Return the selected context name, distinguishing an empty selection from invalid custody.
     ///
     /// # Errors
@@ -121,13 +170,25 @@ impl DeveloperWorkspace {
         Ok(ManagedStore::open(&self.root)?.select(name)?)
     }
 
-    /// Start a persistent localnet with generated configuration and signed readiness.
+    /// Start a new localnet or restart the exact retained global or private generation.
     ///
     /// # Errors
     /// Generation, custody, startup, or readiness failure.
     pub fn start(&self, name: &str) -> Result<ManagedStatus> {
         let store = ManagedStore::open(&self.root)?;
-        Ok(store.up(&self.runtime.localnet_request(name, Duration::from_secs(30)))?)
+        let mut request = self.runtime.localnet_request(name, Duration::from_secs(30));
+        match store.context(Some(name)) {
+            Ok(_) => {
+                request.service_profile = store.prepared(name)?.service_profile;
+                Ok(store.up_retained(&request)?)
+            }
+            Err(iroha_deploy::managed::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(store.up(&request)?)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Observe the native worker without inferring liveness from stored numeric PIDs.
@@ -176,14 +237,14 @@ impl DeveloperWorkspace {
         alias: Option<ContractAlias>,
         review: &mut dyn FnMut(&DeploymentPreflight) -> Result<()>,
         progress: &mut dyn FnMut(DeploymentProgress),
-    ) -> Result<DeploymentRun> {
+    ) -> Result<ManagedDeploymentReport> {
         let store = ManagedStore::open(&self.root)?;
         let selected = store
             .ensure_selected(&self.runtime, context, Duration::from_secs(30))?
             .context;
+        let target = store.capture_deployment(&selected)?;
         let config = selected.load_client_config()?;
-        let runtime =
-            DeploymentRuntime::new(config, self.root.join("deployments").join(&selected.name));
+        let runtime = self.deployment_runtime(config, &selected.name);
         let alias = alias.map_or_else(
             || AliasSelection::Scope {
                 domain: None,
@@ -191,7 +252,7 @@ impl DeveloperWorkspace {
             },
             AliasSelection::Exact,
         );
-        runtime.deploy(
+        let run = runtime.deploy(
             input,
             &alias,
             FeePaymentIntent::authority(Vec::new(), None),
@@ -203,7 +264,8 @@ impl DeveloperWorkspace {
                 review(preflight)
             },
             progress,
-        )
+        )?;
+        Ok(target.finish(&store, run.receipt, run.journal)?)
     }
 
     /// Recover an exact retained journal using its selected environment without rebuilding.
@@ -216,17 +278,15 @@ impl DeveloperWorkspace {
         context: Option<&str>,
         review: &mut dyn FnMut(&DeploymentPreflight) -> Result<()>,
         progress: &mut dyn FnMut(DeploymentProgress),
-    ) -> Result<DeploymentRun> {
+    ) -> Result<ManagedDeploymentReport> {
         let store = ManagedStore::open(&self.root)?;
         store.context(context)?;
         let selected = store
             .ensure_selected(&self.runtime, context, Duration::from_secs(30))?
             .context;
-        let runtime = DeploymentRuntime::new(
-            selected.load_client_config()?,
-            self.root.join("deployments").join(&selected.name),
-        );
-        runtime.resume(
+        let target = store.capture_deployment(&selected)?;
+        let runtime = self.deployment_runtime(selected.load_client_config()?, &selected.name);
+        let run = runtime.resume(
             journal,
             &mut |preflight| {
                 ensure!(
@@ -236,7 +296,47 @@ impl DeveloperWorkspace {
                 review(preflight)
             },
             progress,
-        )
+        )?;
+        Ok(target.finish(&store, run.receipt, run.journal)?)
+    }
+
+    fn deployment_runtime(&self, config: iroha::config::Config, name: &str) -> DeploymentRuntime {
+        let registry_root = self.root.clone();
+        let registry_context = name.to_owned();
+        let installed = self.runtime.clone();
+        DeploymentRuntime::new(config, self.root.join("deployments").join(name))
+            .with_build_registry_resolver(Arc::new(move || {
+                // Musubi calls this only after local resolution and exact authenticated cache
+                // hits cannot satisfy the graph. Selecting a private context does no parent I/O.
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let store = ManagedStore::open(&registry_root)?;
+                let Some(registry) =
+                    store.build_registry(&installed, &registry_context, deadline)?
+                else {
+                    return Ok(None);
+                };
+                let parent = registry.config().clone();
+                let transport = PreparedProductionSorafsArchiveTransportV1::from_account_registry(
+                    parent.clone(),
+                    Arc::new(move |provider| {
+                        registry.discover(provider, deadline).map_err(|error| {
+                            if Instant::now() >= deadline {
+                                MusubiArchiveDiscoveryErrorV1::Deadline
+                            } else {
+                                match error {
+                                    iroha_deploy::bootstrap::BootstrapError::Busy
+                                    | iroha_deploy::bootstrap::BootstrapError::Io(_) => {
+                                        MusubiArchiveDiscoveryErrorV1::Unavailable
+                                    }
+                                    _ => MusubiArchiveDiscoveryErrorV1::Rejected,
+                                }
+                            }
+                        })
+                    }),
+                    Duration::from_secs(30),
+                )?;
+                Ok(Some((parent, transport)))
+            }))
     }
 }
 
@@ -380,6 +480,83 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desktop_restart_keeps_the_cli_prepared_private_root_and_owner() {
+        use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("project");
+        let bin = temporary.path().join("bin");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&bin).unwrap();
+        for program in ["kagami", "iroha3d"] {
+            std::fs::write(
+                bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
+                b"not executable",
+            )
+            .unwrap();
+        }
+        let desktop = DeveloperWorkspace::with_runtime(
+            &temporary.path().join("state"),
+            &project,
+            InstalledRuntime::from_directory(&bin).unwrap(),
+        )
+        .unwrap();
+        let alias = "desktop-private";
+        let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias).unwrap();
+        let spec = iroha_deploy::localnet::PrivateRootSpec {
+            parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"desktop parent",
+                )),
+            ),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::from_hash(&selector.name_hash()),
+            dataspace_alias: alias.into(),
+        };
+        let store = ManagedStore::open(desktop.state_root()).unwrap();
+        let request = desktop
+            .runtime
+            .localnet_request("private", Duration::from_secs(120));
+        assert!(
+            matches!(
+                store.up_private_root(&request, &spec),
+                Err(iroha_deploy::managed::Error::Io(_))
+            ),
+            "genuine CLI preparation reaches the intentionally unavailable native worker"
+        );
+        let prepared = store.prepared("private").unwrap();
+        let owner = prepared.context.load_client_config().unwrap();
+        assert!(owner.api_token.is_some());
+        let failure = desktop.start("private").unwrap_err();
+        assert!(
+            matches!(
+                failure.downcast_ref::<iroha_deploy::managed::Error>(),
+                Some(iroha_deploy::managed::Error::Io(_))
+            ),
+            "desktop restart must reach native spawning with the same private root: {failure}"
+        );
+        assert_eq!(store.prepared("private").unwrap(), prepared);
+        let restarted = store
+            .prepared("private")
+            .unwrap()
+            .context
+            .load_client_config()
+            .unwrap();
+        assert_eq!(restarted.account, owner.account);
+        assert!(
+            restarted
+                .api_token
+                .as_ref()
+                .map(|token| token.expose_secret())
+                == owner.api_token.as_ref().map(|token| token.expose_secret())
+        );
+        let observed = desktop.network(Some("private")).unwrap();
+        assert_eq!(observed.prepared(), &prepared);
+        assert_eq!(
+            observed.ledger_reader(0).unwrap().network_id(),
+            &owner.network_id
+        );
+    }
+
+    #[test]
     fn desktop_and_cli_share_store_identity_without_writing_the_project_or_starting_nodes() {
         let temporary = tempfile::tempdir().unwrap();
         let workspace = temporary.path().join("project");
@@ -404,6 +581,31 @@ mod tests {
         );
         assert_eq!(desktop.resolve_path(&installation), installation);
         assert!(desktop.contexts().unwrap().is_empty());
+        assert!(desktop.network_profiles().is_err());
+        assert!(
+            desktop
+                .start_dataspace("private", "missing", "private")
+                .is_err()
+        );
+        assert!(desktop.dataspace_status("missing").is_err());
+        let profiles = iroha_deploy::bootstrap::InstalledNetworkProfiles::new(vec![
+            iroha_deploy::bootstrap::InstalledNetworkProfile::new(
+                "fixture".into(),
+                iroha_crypto::KeyPair::from_seed(vec![231; 32], iroha_crypto::Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+                1,
+                "https://checkpoint.example/release.nrt".into(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        std::fs::write(
+            installation.join(iroha_deploy::bootstrap::NETWORK_PROFILES_FILENAME),
+            profiles.encode_installation().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(desktop.network_profiles().unwrap(), vec!["fixture"]);
         assert_eq!(desktop.selected_name().unwrap(), None);
         assert!(
             ManagedStore::open(&expected)
@@ -463,6 +665,23 @@ mod tests {
         let context = desktop.select("fixture").unwrap();
         let network = desktop.network(None).unwrap();
         assert_eq!(network.prepared().peers.len(), 4);
+        // Even a deliberately absent registry context cannot affect a local source build.
+        // The desktop adapter must preserve Musubi's lazy registry discovery boundary.
+        let source = temporary.path().join("offline.ko");
+        std::fs::write(
+            &source,
+            "seiyaku Offline { view fn quote(int cups) -> int { return cups * 10; } }",
+        )
+        .unwrap();
+        assert_eq!(
+            desktop
+                .deployment_runtime(network.config.clone(), "missing-registry-context")
+                .build(&ContractInput::Source(source))
+                .unwrap()
+                .name(),
+            "Offline"
+        );
+        assert!(!desktop.state_root().join("deployments").exists());
         assert_eq!(
             network.signer().account_id().to_string(),
             context.account_id

@@ -10,7 +10,7 @@ use sorafs_manifest::signer::stream_token_evidence::{
     SignerStreamTokenObservationExpectedV1, SignerStreamTokenObservationPhaseV1,
     verify_stream_token_signer_current_evidence_v1,
 };
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::fs;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -29,15 +29,22 @@ fn raw(seed: u8) -> [u8; 32] {
         .unwrap()
 }
 fn write(path: &Path, bytes: &[u8]) {
-    fs::write(path, bytes).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    let directory = iroha_fs::PrivateDirectory::open(path.parent().unwrap()).unwrap();
+    let mode = if path.exists() {
+        iroha_fs::PublishMode::Replace
+    } else {
+        iroha_fs::PublishMode::CreateNew
+    };
+    directory
+        .write_atomic(path.file_name().unwrap(), bytes, mode)
+        .unwrap();
 }
 fn config(fixture: &Fixture) -> (tempfile::TempDir, actual::SorafsStorage) {
     let parent = std::env::current_dir().unwrap().join("target");
     fs::create_dir_all(&parent).unwrap();
     let dir = tempfile::tempdir_in(parent).unwrap();
-    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let root = dir.path().canonicalize().unwrap();
+    let private = iroha_fs::PrivateDirectory::open_or_create(dir.path().join("private")).unwrap();
+    let root = private.path().to_path_buf();
     for (name, seed) in [("role", 4), ("operator", 2), ("observer", 3)] {
         let key = Zeroizing::new(
             ExposedPrivateKey(Fixture::key(seed).private_key().clone())
@@ -49,8 +56,7 @@ fn config(fixture: &Fixture) -> (tempfile::TempDir, actual::SorafsStorage) {
         write(&root.join(name), &bytes);
     }
     write(&root.join("record"), &fixture.record);
-    fs::create_dir(root.join("receipts")).unwrap();
-    fs::set_permissions(root.join("receipts"), fs::Permissions::from_mode(0o700)).unwrap();
+    private.create_child("receipts").unwrap();
     let policy = &fixture.policy;
     let authority = |seed, service: &str, administrator: &str, digest| {
         actual::SorafsStreamTokenAuthorityConfig {
@@ -276,9 +282,9 @@ fn emergency_fast_skips_native_stream_credentials_on_every_platform() {
         .chars()
         .filter(|value| !value.is_whitespace())
         .collect();
-    for platform in ["#[cfg(unix)]", "#[cfg(not(unix))]"] {
-        assert!(compact.contains(&format!("{platform}if!emergency_fast&&config.torii.sorafs_storage.stream_tokens.signer.as_ref().is_some_and(|signer|signer.native.is_some()){{")));
-    }
+    assert!(compact.contains("if!emergency_fast&&config.torii.sorafs_storage.stream_tokens.signer.as_ref().is_some_and(|signer|signer.native.is_some()){"));
+    assert!(!compact.contains("#[cfg(unix)]"));
+    assert!(!compact.contains("#[cfg(not(unix))]"));
     assert_eq!(
         source
             .matches("::runtime::build_native_stream_token_runtime_v1(")
@@ -468,6 +474,98 @@ fn native_current_authority_disappears_when_its_durable_qc_is_removed() {
     );
 }
 
+fn commit_native_with_timing(
+    fixture: &mut Fixture,
+    signed: iroha_data_model::transaction::SignedTransaction,
+    scenario: &str,
+    sequence: usize,
+    started: std::time::Instant,
+) -> bool {
+    use iroha_data_model::{
+        ValidationFail,
+        transaction::{Executable, error::TransactionRejectionReason},
+    };
+
+    let Executable::Instructions(instructions) = signed.instructions() else {
+        panic!("native source must submit instructions");
+    };
+    assert_eq!(instructions.len(), 1);
+    let native = instructions[0]
+        .as_any()
+        .downcast_ref::<MutateSorafsStreamTokenAuthority>()
+        .expect("native source must submit the role-11 instruction");
+    let (phase, token_expiry, reservation_expiry) = match &native.request.action {
+        Action::Reserve(reviewed) => ("Reserve", Some(reviewed.request.expires_at_unix_ms), None),
+        Action::Complete(request) => (
+            "Complete",
+            Some(request.reviewed.request.expires_at_unix_ms),
+            Some(request.reservation.expires_at_unix_ms),
+        ),
+        Action::Expire(request) => ("Expire", None, Some(request.reservation.expires_at_unix_ms)),
+        Action::Check(check) => {
+            let phase = match check.phase {
+                Phase::Current(_) => "Check/Current",
+                Phase::BeforeProvider(_) => "Check/BeforeProvider",
+                Phase::AfterProvider(_) => "Check/AfterProvider",
+                Phase::BeforeCommit(_) => "Check/BeforeCommit",
+                Phase::AfterCommit(_) => "Check/AfterCommit",
+                Phase::BeforeRelease(_) => "Check/BeforeRelease",
+            };
+            let reservation_expiry = match &check.phase {
+                Phase::Current(_) => None,
+                Phase::BeforeProvider(row)
+                | Phase::AfterProvider(row)
+                | Phase::BeforeCommit(row)
+                | Phase::AfterCommit(row)
+                | Phase::BeforeRelease(row) => Some(row.operation.reservation.expires_at_unix_ms),
+            };
+            (
+                phase,
+                Some(check.reviewed.request.expires_at_unix_ms),
+                reservation_expiry,
+            )
+        }
+    };
+    let transaction_expiry = signed.creation_time() + signed.time_to_live().unwrap();
+    let begin_elapsed_ms = started.elapsed().as_millis();
+    let requested_block_time_ms = now_ms();
+    let executed = fixture.commit_signed(signed, requested_block_time_ms);
+    let finish_elapsed_ms = started.elapsed().as_millis();
+    let finished_at_ms = now_ms();
+    // Successful signing has 22 instructions; recovery and the issuer add fresh Checks.
+    // Bound diagnostic output while always including the first failed execution.
+    if sequence <= 32 || !executed {
+        let block = fixture.state.view().latest_block().unwrap();
+        let failure = block.network_output_at(0).and_then(|(_, output)| {
+            output.result.0.as_ref().err().map(|error| {
+                // Print only the native rejection reason, never the signed instruction,
+                // receipt, signature, credentials or an unrelated internal-error payload.
+                let reason = match error {
+                    TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                        reason,
+                    )) => reason.to_string(),
+                    TransactionRejectionReason::InstructionExecution(failure) => {
+                        failure.reason.clone()
+                    }
+                    _ => "non-native rejection (details omitted)".into(),
+                };
+                reason.chars().take(256).collect::<String>()
+            })
+        });
+        eprintln!(
+            "native_phase scenario={scenario} sequence={sequence} phase={phase} \
+             begin_elapsed_ms={begin_elapsed_ms} finish_elapsed_ms={finish_elapsed_ms} \
+             requested_block_time_ms={requested_block_time_ms} \
+             block_time_ms={} finished_at_ms={finished_at_ms} \
+             transaction_expiry_ms={} token_expiry_ms={token_expiry:?} \
+             reservation_expiry_ms={reservation_expiry:?} executed={executed} failure={failure:?}",
+            block.header().creation_time().as_millis(),
+            transaction_expiry.as_millis(),
+        );
+    }
+    executed
+}
+
 #[test]
 fn native_software_issue_and_recovery_execute_exact_signed_queue_operations() {
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
@@ -481,6 +579,7 @@ fn native_software_issue_and_recovery_execute_exact_signed_queue_operations() {
     let binding = fixture.policy.binding.clone();
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stopped = stop.clone();
+    let started = std::time::Instant::now();
     let worker = std::thread::spawn(move || {
         let mut applied = std::collections::HashSet::new();
         while !stopped.load(std::sync::atomic::Ordering::Acquire) {
@@ -492,7 +591,13 @@ fn native_software_issue_and_recovery_execute_exact_signed_queue_operations() {
                 let signed = tx.external().unwrap().clone();
                 if applied.insert(signed.hash()) {
                     assert!(
-                        fixture.commit_signed(signed, now_ms()),
+                        commit_native_with_timing(
+                            &mut fixture,
+                            signed,
+                            "native_issue_and_recovery",
+                            applied.len(),
+                            started,
+                        ),
                         "actual native execution must succeed"
                     );
                 }
@@ -578,6 +683,7 @@ fn native_production_issuer_releases_verifiable_cid_token_and_rechecks_revocatio
     let provider = *fixture.provider.as_bytes();
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stopped = stop.clone();
+    let started = std::time::Instant::now();
     let worker = std::thread::spawn(move || {
         let mut applied = std::collections::HashSet::new();
         let mut actions = Vec::new();
@@ -600,7 +706,13 @@ fn native_production_issuer_releases_verifiable_cid_token_and_rechecks_revocatio
                         assert_eq!(native.request.provider_id.as_bytes(), &provider);
                         actions.push(native.request.action.clone());
                     }
-                    assert!(fixture.commit_signed(signed, now_ms()));
+                    assert!(commit_native_with_timing(
+                        &mut fixture,
+                        signed,
+                        "native_production_issuer",
+                        applied.len(),
+                        started,
+                    ));
                 }
             }
             std::thread::sleep(Duration::from_millis(5));

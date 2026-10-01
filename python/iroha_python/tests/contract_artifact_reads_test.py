@@ -102,3 +102,37 @@ def test_artifact_read_rejects_hash_only_input_before_any_request() -> None:
             read("b" * 64, canonical_auth=_auth([]))
     assert session.calls == []
     assert not hasattr(client, "register_contract_code")
+
+
+@pytest.mark.parametrize("mutation", [None, "count", "digest", "base64", "null"])
+def test_manifest_optional_code_bytes_is_authenticated_bytes(mutation: str | None) -> None:
+    from iroha_python.client import ContractManifestRecord
+
+    code = b"complete artifact"
+    digest = bytearray(hashlib.blake2b(b"iroha:ivm:contract-artifact:v1\0" + code, digest_size=32).digest())
+    digest[-1] |= 1
+    artifact = ContractArtifactId(17, digest.hex())
+    manifest = _full_manifest_payload()
+    manifest["code_hash"] = artifact.to_payload()["code_hash"]
+    payload = {
+        "network_id": NETWORK_ID.literal,
+        "artifact_id": artifact.to_payload(),
+        "manifest": manifest,
+        "code_hash": artifact.code_hash,
+        "abi_hash": "d" * 64,
+        "code_bytes": base64.b64encode(code).decode(),
+    }
+    if mutation == "count":
+        payload["code_bytes"] = len(code)
+    elif mutation == "digest":
+        payload["code_bytes"] = base64.b64encode(code + b"changed").decode()
+    elif mutation == "base64":
+        payload["code_bytes"] += "\n"
+    elif mutation == "null":
+        payload["code_bytes"] = None
+    if mutation in (None, "null"):
+        result = ContractManifestRecord.from_payload(payload)
+        assert result.code_bytes == (None if mutation == "null" else code)
+    else:
+        with pytest.raises((TypeError, ValueError, RuntimeError)):
+            ContractManifestRecord.from_payload(payload)

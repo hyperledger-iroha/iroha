@@ -22,6 +22,7 @@ fn issued_for_admission(ttl_secs: u64) -> (StreamTokenIssuer, Arc<SignedFixture>
                 ttl_secs: Some(ttl_secs),
                 ..TokenOverrides::default()
             },
+            None,
         )
         .unwrap();
     issue.token.verify(issuer.verifying_key()).unwrap();

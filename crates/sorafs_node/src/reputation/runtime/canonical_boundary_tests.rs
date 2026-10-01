@@ -1,7 +1,7 @@
 // Fixed V1 runtime checkpoints, exact retention ceilings, and restart admission.
 
 #[test]
-fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombstones() {
+fn journal_checkpoint_exact_byte_ceiling_preserves_por_and_global_replay_tombstones() {
     let mut policy = producer_policy();
     policy.max_attempts = 1;
     policy.checkpoint_max_bytes = REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1;
@@ -28,17 +28,8 @@ fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombston
             vec![finalized_event(1, 10, [0xD3; 32], 0, observed_entry)],
         ))
         .expect("retain observed tombstone");
-    let token_producer = token_producer(Arc::clone(&outbox));
-    let mut head_event_id = ReputationJournalEventIdV1::ZERO;
-    for sequence in 1_u8..=17 {
-        let mut token = counted_token(0x97, sequence);
-        token.binding.gateway_sequence = u64::from(sequence);
-        head_event_id = admission_event_id(
-            &token_producer,
-            token,
-            "token admission",
-            "unexpected token admission",
-        );
+    for marker in 0x80_u8..=0x90 {
+        enqueue_por(&outbox, provider(9), verified_por(marker)).expect("pending PoR source");
     }
     let completed_outcome = shifted_por(0x32, 50, true);
     let before_source_check = outbox.state.lock().unwrap().checkpoint.clone();
@@ -88,56 +79,14 @@ fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombston
     assert_eq!(original.observed.len(), 1);
     assert_eq!(original.completed.len(), 1);
     assert_eq!(original.dead_letters.len(), 1);
-    assert_eq!(original.stream_token_gateway_admissions.len(), 17);
+    assert_eq!(original.pending.len(), 17);
     let original_pending = original.pending.clone();
     let original_completed = original.completed.clone();
     let original_observed = original.observed.clone();
     let original_dead_letters = original.dead_letters.clone();
-    let original_heads = original.stream_token_gateway_heads.clone();
-    // Derive the minimal fitting prefix independently from the production
-    // search, plan, and eviction helpers. The fixture fixes sequences
-    // 1..=16 as evictable oldest-to-newest and sequence 17 as the head.
-    const EXPECTED_PREFIX: usize = 9;
-    let expected_eviction_order = (1_u64..17)
-        .map(|sequence| {
-            original
-                .stream_token_gateway_admissions
-                .iter()
-                .find(|admission| admission.binding.gateway_sequence == sequence)
-                .expect("hard-coded non-head admission")
-                .event_id
-        })
-        .collect::<Vec<_>>();
-    let mut iterative = original.clone();
-    let mut iterative_lengths = vec![canonical_test_frame(&iterative).len()];
-    let mut expected = None;
-    for (index, event_id) in expected_eviction_order.iter().copied().enumerate() {
-        let position = iterative
-            .stream_token_gateway_admissions
-            .iter()
-            .position(|admission| admission.event_id == event_id)
-            .expect("hard-coded admission remains");
-        iterative.stream_token_gateway_admissions.remove(position);
-        iterative_lengths.push(canonical_test_frame(&iterative).len());
-        if index + 1 == EXPECTED_PREFIX {
-            expected = Some(iterative.clone());
-        }
-    }
-    assert_eq!(iterative.stream_token_gateway_admissions.len(), 1);
-    assert!(
-        iterative_lengths
-            .windows(2)
-            .all(|adjacent| adjacent[0] > adjacent[1]),
-        "each complete admission removal must strictly reduce the frame"
-    );
-    let expected = expected.expect("capture independently compacted checkpoint");
+    let expected = original.clone();
     let ceiling =
-        u64::try_from(iterative_lengths[EXPECTED_PREFIX]).expect("fixture length fits u64");
-    assert!(
-        u64::try_from(iterative_lengths[EXPECTED_PREFIX - 1]).expect("fixture length fits u64")
-            > ceiling,
-        "the preceding prefix must remain over the selected ceiling"
-    );
+        u64::try_from(canonical_test_frame(&expected).len()).expect("exact frame ceiling");
     let expected_bytes = canonical_test_frame(&expected);
     let expected_seal =
         ReputationJournalSealedCheckpointRecordV1::new(1, None, expected_bytes.clone())
@@ -156,29 +105,9 @@ fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombston
             hash_canonical(b"reputation-test-journal-checkpoint-v1", &original).unwrap(),
             expected_hash
         );
-        let eviction_plan = stream_token_admission_eviction_plan(&original);
-        assert_eq!(eviction_plan, expected_eviction_order);
-        let search = smallest_stream_token_admission_eviction_prefix(
-            &original,
-            &eviction_plan,
-            ceiling,
-            iterative_lengths[0],
-        )
-        .expect("find smallest fitting admission prefix");
-        assert_eq!(search.prefix, EXPECTED_PREFIX);
-        let mut ceiling_log2 = 0;
-        let mut covered = 1;
-        while covered < eviction_plan.len() {
-            covered *= 2;
-            ceiling_log2 += 1;
-        }
-        assert!(
-            search.probes <= ceiling_log2 + 1,
-            "full-plan qualification plus binary search must be logarithmic"
-        );
         let (bounded, bounded_bytes) =
             encode_bounded_journal_checkpoint(original.clone(), &policy, policy_digest, ceiling)
-                .expect("evict the independently minimal admission prefix");
+                .expect("accept the exact canonical checkpoint byte ceiling");
         assert_eq!(bounded, expected);
         assert_eq!(
             bounded_bytes.len(),
@@ -189,20 +118,6 @@ fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombston
         assert_eq!(bounded.completed, original_completed);
         assert_eq!(bounded.observed, original_observed);
         assert_eq!(bounded.dead_letters, original_dead_letters);
-        assert_eq!(bounded.stream_token_gateway_heads, original_heads);
-        let head = bounded
-            .stream_token_gateway_heads
-            .first()
-            .expect("gateway head");
-        assert_eq!(head.event_id, head_event_id);
-        assert!(
-            bounded
-                .stream_token_gateway_admissions
-                .iter()
-                .any(|admission| admission.binding == head.binding
-                    && admission.event_id == head.event_id),
-            "the canonical head admission must remain pinned"
-        );
         assert_eq!(
             decode_journal_checkpoint(&bounded_bytes, &policy, policy_digest)
                 .expect("decode bounded checkpoint"),
@@ -217,7 +132,7 @@ fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombston
             ));
         }
         let seal = ReputationJournalSealedCheckpointRecordV1::new(1, None, bounded_bytes)
-            .expect("seal the exact minimal retained prefix");
+            .expect("seal the exact retained PoR and global observation rows");
         assert_eq!(seal, expected_seal);
         assert_eq!(
             seal.to_canonical_bytes(ceiling).unwrap(),
@@ -244,19 +159,7 @@ fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombston
         assert_eq!(norito::core::get_decode_flags(), flags);
     }
     assert!(saw_alternate_frame);
-    let irreducible = iterative;
-    let mut irreducible_probe = irreducible.clone();
-    assert!(!evict_oldest_non_head_stream_token_admission(
-        &mut irreducible_probe
-    ));
-    assert_eq!(irreducible.pending, original_pending);
-    assert_eq!(irreducible.completed, original_completed);
-    assert_eq!(irreducible.observed, original_observed);
-    assert_eq!(irreducible.dead_letters, original_dead_letters);
-    assert_eq!(irreducible.stream_token_gateway_heads, original_heads);
-    let irreducible_ceiling = u64::try_from(canonical_test_frame(&irreducible).len())
-        .expect("fixture length fits u64")
-        .saturating_sub(1);
+    let irreducible_ceiling = ceiling.checked_sub(1).expect("nonempty checkpoint");
     for flags in supported_layouts() {
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
         assert!(matches!(
@@ -270,8 +173,10 @@ fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombston
         ));
         assert_eq!(norito::core::get_decode_flags(), flags);
     }
+    assert_eq!(original.pending, original_pending);
     assert_eq!(original.completed, original_completed);
     assert_eq!(original.observed, original_observed);
+    assert_eq!(original.dead_letters, original_dead_letters);
 }
 
 #[test]

@@ -121,13 +121,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "c7a0e0f06c43820de8941a363fb420e694cb00dbfaa1b5bf203b303d2f4b2d91",
+                "4e8d5d5a88eb58a5655db465bb3ea1c0f71f0ee499d5ae4acae60bcdd4e98012",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 329, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 331, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -145,12 +145,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 365, "complete populated record case inventory");
+            assert_eq!(case_count, 367, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 329, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 331, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));
@@ -350,9 +350,8 @@ fn print_contract_artifact_record_fixture_rows() {
         hex(abi_hash.as_ref()),
         "18b2577f70fcf90193eff287aacd10b76dd36b99c0f5935fdcc67443f8bc148d"
     );
-    // These populated codec fixtures previously implied the universal dataspace.
-    // Preserve the original hash and data while supplying that exact current field.
-    let artifact_id = ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+    // Match the selected full-width dataspace in the current populated capture.
+    let artifact_id = ContractArtifactId::new(DataSpaceId::new(u64::MAX), code_hash);
     let values = vec![
         capture(CancelSmartContractCodeUpload { artifact_id }),
         capture(FinalizeSmartContractCodeUpload {

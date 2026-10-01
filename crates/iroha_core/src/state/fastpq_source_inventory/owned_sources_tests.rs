@@ -356,6 +356,67 @@ fn seal_metadata(block: &mut StateBlock<'_>) -> Result<ExecutionOutputSealMetada
 }
 
 #[test]
+fn source_inspection_refuses_capture_and_publication_across_success_error_and_unwind() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for terminal in 0..3 {
+        let (state, source, _, _) = fixture();
+        let (mut block, _recording) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &source,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .unwrap();
+        execute(&mut block, &source);
+        let mut escaped_inventory = None;
+        let completed = catch_unwind(AssertUnwindSafe(|| {
+            block.inspect_owned_execution_sources_for_test(&source, |state, sources| {
+                state.finalize_owned_fastpq_source_inventory_with_pending(sources, None)?;
+                assert!(state.fastpq_source_inventory().unwrap().is_some());
+                let captured = state.verified_fastpq_source_inventory_for_capture();
+                assert_eq!(
+                    captured.as_ref().unwrap_err(),
+                    "FASTPQ witness capture refuses a source inspection carrier"
+                );
+                escaped_inventory = captured.ok();
+                assert_eq!(
+                    state.verify_execution_output_publication().unwrap_err(),
+                    "execution output inspection cannot authorize publication"
+                );
+                match terminal {
+                    0 => Ok(()),
+                    1 => Err("inspection callback refused".into()),
+                    2 => panic!("inspection callback interrupted"),
+                    _ => unreachable!(),
+                }
+            })
+        }));
+        match terminal {
+            0 => assert_eq!(completed.unwrap(), Ok(())),
+            1 => assert_eq!(
+                completed.unwrap(),
+                Err("inspection callback refused".into())
+            ),
+            2 => assert!(completed.is_err()),
+            _ => unreachable!(),
+        }
+        assert!(escaped_inventory.is_none());
+        assert_eq!(
+            block
+                .verified_fastpq_source_inventory_for_capture()
+                .unwrap_err(),
+            "FASTPQ witness capture refuses a poisoned carrier"
+        );
+        assert!(block.verify_execution_output_publication().is_err());
+        assert!(matches!(
+            block.commit().unwrap_err(),
+            TransactionsBlockError::ExecutionOutputCapacity
+        ));
+    }
+}
+
+#[test]
 fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_order() {
     let (state, mut source, pipeline, time) = fixture();
 

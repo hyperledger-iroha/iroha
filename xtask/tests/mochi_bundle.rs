@@ -1,9 +1,10 @@
 //! Acceptance checks for complete native Mochi developer runtime bundles.
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use iroha_deploy::managed::NativeBundleLayout;
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
-use std::{env, fs};
+use std::{env, fs, path::Path};
 use tempfile::TempDir;
 #[test]
 fn mochi_bundle_command_generates_manifest() {
@@ -39,21 +40,30 @@ fn mochi_bundle_command_generates_manifest() {
     let files = manifest_json["files"]
         .as_array()
         .expect("files array in manifest");
-    let executable_name = format!("bin/mochi{}", env::consts::EXE_SUFFIX);
+    let executable_name = NativeBundleLayout::current()
+        .executable(Path::new(""), "mochi")
+        .to_string_lossy()
+        .replace('\\', "/");
     assert!(
         files
             .iter()
             .any(|entry| entry["path"] == Value::String(executable_name.clone())),
         "manifest should list {executable_name}"
     );
-    let kagami_name = format!("bin/kagami{}", env::consts::EXE_SUFFIX);
+    let kagami_name = NativeBundleLayout::current()
+        .executable(Path::new(""), "kagami")
+        .to_string_lossy()
+        .replace('\\', "/");
     assert!(
         files
             .iter()
             .any(|entry| entry["path"] == Value::String(kagami_name.clone())),
         "manifest should list {kagami_name}"
     );
-    let daemon_name = format!("bin/iroha3d{}", env::consts::EXE_SUFFIX);
+    let daemon_name = NativeBundleLayout::current()
+        .executable(Path::new(""), "iroha3d")
+        .to_string_lossy()
+        .replace('\\', "/");
     assert!(
         files
             .iter()

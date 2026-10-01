@@ -143,7 +143,14 @@ fn service() -> (AccountService, Arc<Transport>) {
     let config = fixture_config();
     let transport = Arc::new(Transport::default());
     let client = Client::with_http_transport(config.clone(), transport.clone()).unwrap();
-    (AccountService { config, client }, transport)
+    (
+        AccountService {
+            config,
+            client,
+            deadline: None,
+        },
+        transport,
+    )
 }
 fn request() -> TransferRequest {
     TransferRequest {
@@ -276,8 +283,11 @@ fn xor_balance_uses_the_canonical_native_account_holding() {
     let balance = service.xor_balance().unwrap();
     assert_eq!(balance.amount, Quantity::from(77_u32));
     assert_eq!(
-        balance.asset_definition,
-        XOR_ASSET_DEFINITION.parse().unwrap()
+        balance.asset_id,
+        AssetId::new(
+            XOR_ASSET_DEFINITION.parse().unwrap(),
+            service.config.account.clone()
+        )
     );
 }
 
@@ -526,6 +536,7 @@ fn alias_creation_preserves_the_exact_plan_and_checks_its_rent_before_signing() 
             let NativeOperation::AliasSetup {
                 request: retained_request,
                 plan: retained_plan,
+                ..
             } = &record.operation
             else {
                 panic!("alias operation required")
@@ -565,4 +576,509 @@ fn incompatible_submission_surface_preserves_an_unattempted_operation() {
     assert!(error.to_string().contains("unattempted"));
     assert!(!path.join("submission.json").exists());
     assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+}
+
+fn private_root_fixture() -> (
+    iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture,
+    PrivateDataspaceRegistration,
+) {
+    use iroha_data_model::{
+        block::consensus::SumeragiRootScope,
+        sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
+        sumeragi_finality::{genesis_epoch, test_fixtures::NativeFinalityFixture},
+    };
+    let dataspace = iroha_model_base::topology::DataSpaceId::from_hash(
+        &NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, "walletroot")
+            .unwrap()
+            .name_hash(),
+    );
+    let scope = SumeragiRootScope::Dataspace {
+        parent_network_id: fixture_config().network_id,
+        dataspace_id: dataspace,
+    };
+    let fixture = NativeFinalityFixture::start_with_scope("wallet-private-root", scope);
+    let genesis = fixture
+        .verifier()
+        .verify_retained_decision(fixture.genesis_proof())
+        .unwrap();
+    let registration = PrivateDataspaceRegistration::new(
+        scope,
+        fixture.chain_id().parse().unwrap(),
+        fixture.network_id(),
+        genesis.result().0,
+        genesis_epoch(fixture.genesis()).unwrap(),
+    )
+    .unwrap();
+    (fixture, registration)
+}
+
+fn private_options() -> BoundedTransactionOptions {
+    BoundedTransactionOptions {
+        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+        max_total_fees: BTreeMap::from([(
+            XOR_ASSET_DEFINITION.parse().unwrap(),
+            Quantity::from(10_u32),
+        )]),
+        deadline: std::time::Instant::now() + Duration::from_secs(5),
+    }
+}
+
+#[test]
+fn private_registration_is_exact_bounded_and_recovery_never_resubmits() {
+    let (service, transport) = service();
+    let (_fixture, registration) = private_root_fixture();
+    let request = PrivateRootRegistrationRequest {
+        alias: "walletroot".into(),
+        expected_ownership_generation: u64::MAX,
+        registration,
+        options: private_options(),
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("registration");
+    let report = service
+        .prepare_private_root_registration(&request, &path)
+        .unwrap();
+    assert_eq!(report.status, OperationStatus::Prepared);
+    assert_eq!(
+        report.data["operation"].as_str(),
+        Some("private_root_registration")
+    );
+    let record: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    let transaction = record.verify(&service.config).unwrap();
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        panic!("native registration")
+    };
+    assert_eq!(instructions.len(), 1);
+    let isi = instructions[0]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace>()
+        .unwrap();
+    assert_eq!(isi.alias(), "walletroot");
+    assert_eq!(*isi.expected_ownership_generation(), u64::MAX);
+    assert_eq!(
+        PrivateDataspaceRegistration::decode(isi.registration()).unwrap(),
+        request.registration
+    );
+    assert!(record.deadline_ms <= record.operation.bounded_terms().unwrap().deadline_ms);
+    assert!(
+        record.deadline_ms - u64::try_from(transaction.creation_time().as_millis()).unwrap()
+            <= 5000
+    );
+    assert!(
+        service
+            .resume(&path, NativeOperationKind::PrivateRootAnchor)
+            .is_err()
+    );
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+    service
+        .verify_private_root_registration_journal(&path, &request)
+        .unwrap();
+    let mut changed_request = request.clone();
+    changed_request.expected_ownership_generation = 1;
+    assert!(
+        service
+            .submit_private_root_registration(&path, &changed_request)
+            .is_err()
+    );
+    changed_request = request.clone();
+    changed_request
+        .options
+        .max_total_fees
+        .values_mut()
+        .for_each(|maximum| *maximum = Quantity::from(20_u32));
+    assert!(
+        service
+            .verify_private_root_registration_journal(&path, &changed_request)
+            .is_err()
+    );
+    assert!(
+        service
+            .submit(&path, NativeOperationKind::PrivateRootRegistration)
+            .is_err()
+    );
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+    *transport.journal.lock().unwrap() = Some(path.clone());
+    assert_eq!(
+        service
+            .submit_private_root_registration(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        service
+            .submit_private_root_registration(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(
+        service
+            .resume_private_root_registration(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    let mut recovery = request.clone();
+    recovery.options.deadline = std::time::Instant::now() + Duration::from_secs(60);
+    assert_eq!(
+        service
+            .resume_private_root_registration(&path, &recovery)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    let recovered: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    assert_eq!(
+        norito::json::to_vec(&record).unwrap(),
+        norito::json::to_vec(&recovered).unwrap(),
+        "a fresh recovery I/O deadline never extends the signed deadline or original fee limits"
+    );
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 1);
+    let mut changed: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    if let NativeOperation::PrivateRootRegistration {
+        expected_ownership_generation,
+        ..
+    } = &mut changed.operation
+    {
+        *expected_ownership_generation = 1;
+    }
+    assert!(changed.verify(&service.config).is_err());
+}
+
+#[test]
+fn private_operation_http_deadline_cannot_be_extended() {
+    let (service, transport) = service();
+    let original = std::time::Instant::now() + Duration::from_secs(5);
+    let bounded = service.with_deadline(original).unwrap();
+    let repeated = bounded
+        .with_deadline(original + Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(repeated.deadline, Some(original));
+    assert!(repeated.with_deadline(std::time::Instant::now()).is_err());
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn bounded_alias_preserves_exact_request_fee_limits_and_wire_through_recovery() {
+    let (service, transport) = service();
+    let (request, plan) = alias_fixture(&service.config, false, 5);
+    *transport.alias_plan.lock().unwrap() = Some(plan);
+    let options = private_options();
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("bounded-alias");
+    assert_eq!(
+        service
+            .prepare_alias_bounded(&request, &options, &path)
+            .unwrap()
+            .status,
+        OperationStatus::Prepared
+    );
+    let record: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    assert!(record.operation.bounded_terms().is_some());
+    record.verify(&service.config).unwrap();
+    service
+        .verify_alias_journal(&path, &request, &options)
+        .unwrap();
+    let (changed_request, _) = alias_fixture(&service.config, false, 6);
+    assert!(
+        service
+            .submit_alias_bounded(&path, &changed_request, &options)
+            .is_err()
+    );
+    let mut changed_options = options.clone();
+    changed_options.max_total_fees.clear();
+    assert!(
+        service
+            .resume_alias_bounded(&path, &request, &changed_options)
+            .is_err()
+    );
+    assert!(
+        service
+            .submit(&path, NativeOperationKind::AliasSetup)
+            .is_err()
+    );
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+    *transport.journal.lock().unwrap() = Some(path.clone());
+    assert_eq!(
+        service
+            .submit_alias_bounded(&path, &request, &options)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    let mut recovery = options;
+    recovery.deadline = std::time::Instant::now() + Duration::from_secs(60);
+    assert_eq!(
+        service
+            .resume_alias_bounded(&path, &request, &recovery)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(
+        service
+            .submit_alias_bounded(&path, &request, &recovery)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    let after: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    assert_eq!(
+        norito::json::to_vec(&record).unwrap(),
+        norito::json::to_vec(&after).unwrap()
+    );
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 1);
+    let mut missing: Value = norito::json::to_value(&record).unwrap();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .get_mut("operation")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .get_mut("value")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("bounds");
+    assert!(norito::json::from_value::<TransactionJournal>(missing).is_err());
+}
+
+#[test]
+fn bounded_alias_expiry_and_verified_noop_never_create_a_journal_or_submit() {
+    let (service, transport) = service();
+    let (request, plan) = alias_fixture(&service.config, true, 5);
+    *transport.alias_plan.lock().unwrap() = Some(plan);
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("bounded-alias");
+    let mut options = private_options();
+    options.deadline = std::time::Instant::now();
+    assert!(
+        service
+            .prepare_alias_bounded(&request, &options, &path)
+            .is_err()
+    );
+    assert!(!path.exists());
+    options.deadline = std::time::Instant::now() + Duration::from_secs(5);
+    assert_eq!(
+        service
+            .prepare_alias_bounded(&request, &options, &path)
+            .unwrap()
+            .status,
+        OperationStatus::AlreadyPresent
+    );
+    assert!(!path.exists());
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn private_registration_rejects_foreign_parent_alias_and_expiry_before_http_or_journal() {
+    let (service, transport) = service();
+    let (_fixture, registration) = private_root_fixture();
+    let temporary = tempfile::tempdir().unwrap();
+    for alias in ["different", "WalletRoot", "universal"] {
+        let request = PrivateRootRegistrationRequest {
+            alias: alias.into(),
+            expected_ownership_generation: 1,
+            registration: registration.clone(),
+            options: private_options(),
+        };
+        assert!(
+            service
+                .prepare_private_root_registration(&request, &temporary.path().join(alias))
+                .is_err()
+        );
+    }
+    let mut request = PrivateRootRegistrationRequest {
+        alias: "walletroot".into(),
+        expected_ownership_generation: 0,
+        registration,
+        options: private_options(),
+    };
+    assert!(
+        service
+            .prepare_private_root_registration(&request, &temporary.path().join("zero"))
+            .is_err()
+    );
+    request.expected_ownership_generation = 1;
+    let mut other = service.config.clone();
+    other.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"foreign wallet parent",
+        )),
+    );
+    assert!(
+        private_root::registration_instruction(&other, &request.alias, 1, &request.registration)
+            .is_err()
+    );
+    request.options.deadline = std::time::Instant::now();
+    assert!(
+        service
+            .prepare_private_root_registration(&request, &temporary.path().join("expired"))
+            .is_err()
+    );
+    assert!(service.with_deadline(request.options.deadline).is_err());
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+    assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn private_anchor_preparation_requires_a_genuine_contiguous_scoped_certificate() {
+    let (service, transport) = service();
+    let (mut fixture, registration) = private_root_fixture();
+    let state =
+        PrivateDataspaceAnchorState::from_authorized_registration(registration.clone()).unwrap();
+    let block = fixture.block_with_submitted_work(fixture.next_header());
+    let proof = fixture.certify(block);
+    let verified = fixture.verifier().verify_retained_decision(&proof).unwrap();
+    let anchor = PrivateDataspaceAnchor::from_certificate(
+        &registration,
+        verified.block().commit_certificate().unwrap(),
+    )
+    .unwrap();
+    let request = PrivateRootAnchorRequest {
+        state,
+        anchor,
+        options: private_options(),
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("anchor");
+    let report = service
+        .prepare_private_root_anchor(&request, &path)
+        .unwrap();
+    assert_eq!(report.status, OperationStatus::Prepared);
+    assert_eq!(
+        report.data["operation"].as_str(),
+        Some("private_root_anchor")
+    );
+    let record: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    let transaction = record.verify(&service.config).unwrap();
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        panic!("native anchor")
+    };
+    assert_eq!(instructions.len(), 1);
+    let isi = instructions[0]
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace>()
+        .unwrap();
+    assert_eq!(
+        PrivateDataspaceAnchor::decode(isi.anchor()).unwrap(),
+        request.anchor
+    );
+    service
+        .verify_private_root_anchor_journal(&path, &request)
+        .unwrap();
+    assert_eq!(
+        service
+            .resume_private_root_anchor(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Absent
+    );
+    let mut hostile = request.clone();
+    hostile.anchor.child_network_id = service.config.network_id;
+    assert!(
+        service
+            .verify_private_root_anchor_journal(&path, &hostile)
+            .is_err()
+    );
+    assert!(service.submit_private_root_anchor(&path, &hostile).is_err());
+
+    assert!(
+        service
+            .prepare_private_root_anchor(&hostile, &temporary.path().join("foreign"))
+            .is_err()
+    );
+    let mut advanced = request.state.clone();
+    advanced.apply(&request.anchor).unwrap();
+    let block = fixture.block_with_submitted_work(fixture.next_header());
+    let proof = fixture.certify(block);
+    let verified = fixture.verifier().verify_retained_decision(&proof).unwrap();
+    hostile.anchor = PrivateDataspaceAnchor::from_certificate(
+        &registration,
+        verified.block().commit_certificate().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .prepare_private_root_anchor(&hostile, &temporary.path().join("gap"))
+            .is_err()
+    );
+    hostile.state = advanced;
+    assert!(
+        service
+            .prepare_private_root_anchor(&hostile, &temporary.path().join("next"))
+            .is_ok()
+    );
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn private_fee_totals_and_explicit_component_maxima_cannot_be_increased_by_a_quote() {
+    use iroha_data_model::transaction::{FeeChargeKind, FeeChargeLimit};
+    let asset: AssetDefinitionId = XOR_ASSET_DEFINITION.parse().unwrap();
+    let limit = |kind, amount| FeeChargeLimit::new(kind, asset.clone(), Quantity::from(amount));
+    let options = private_options();
+    let terms = BoundedTerms::new(&options).unwrap();
+    let mut quote = FeeQuoteResponse {
+        intent: FeePaymentIntent::authority(
+            vec![
+                limit(FeeChargeKind::Nexus, 6_u32),
+                limit(FeeChargeKind::PipelineGas, 5_u32),
+            ],
+            None,
+        ),
+        observation: iroha_torii_shared::FeeQuoteObservation {
+            ledger_time_ms: 1,
+            next_block_height: 2,
+            route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        },
+        components: Vec::new(),
+        capacities: Vec::new(),
+        decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
+            debit_source: iroha_data_model::nexus::FeeDebitSource::Account(
+                fixture_config().account,
+            ),
+            program_revision: None,
+        },
+    };
+    assert!(
+        terms.verify_quote(&quote).is_err(),
+        "combined fee11 exceeds explicit total10"
+    );
+    quote.intent = FeePaymentIntent::authority(
+        vec![
+            limit(FeeChargeKind::Nexus, 5_u32),
+            limit(FeeChargeKind::PipelineGas, 5_u32),
+        ],
+        None,
+    );
+    assert!(terms.verify_quote(&quote).is_ok());
+    let requested = FeePaymentIntent::authority(
+        vec![
+            limit(FeeChargeKind::Nexus, 4_u32),
+            limit(FeeChargeKind::PipelineGas, 5_u32),
+        ],
+        None,
+    );
+    assert!(
+        verify_quote_limits(&requested, &quote).is_err(),
+        "a fitting total cannot enlarge explicit component4 to5"
+    );
+    let empty_terms = BoundedTerms::new(&BoundedTransactionOptions {
+        max_total_fees: BTreeMap::new(),
+        ..options
+    })
+    .unwrap();
+    assert!(
+        empty_terms.verify_quote(&quote).is_err(),
+        "unlisted currencies are never authorized"
+    );
 }

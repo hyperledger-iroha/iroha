@@ -94,7 +94,7 @@ impl DefaultHttpTransport {
         Ok(request)
     }
 
-    fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
+    pub(crate) fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
         let response = self.inner.send_blocking(self.bound_request(request)?);
         if self
             .deadline
@@ -105,7 +105,7 @@ impl DefaultHttpTransport {
         response
     }
 
-    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+    pub(crate) fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
         Box::pin(async move {
             // Recompute on dispatch, including requests built before earlier I/O.
             let request = self.bound_request(request)?;

@@ -106,6 +106,9 @@ enum Command {
     /// Start and manage a persistent localnet without supplying configuration
     #[command(subcommand)]
     Localnet(developer::LocalnetCommand),
+    /// Run an owner-private local dataspace attached to an installed remote network
+    #[command(subcommand)]
+    Dataspace(developer::DataspaceCommand),
     /// Select and inspect managed developer environments
     #[command(subcommand)]
     Context(developer::ContextCommand),
@@ -163,6 +166,7 @@ impl<T: Write> RunArgs<T> for Command {
         match self {
             Wizard(args) => args.run(writer),
             Localnet(args) => args.run(writer),
+            Dataspace(args) => args.run(writer),
             Context(args) => args.run(writer),
             Contract(args) => args.run(writer),
             ManagedWorker(args) => args.run(writer),

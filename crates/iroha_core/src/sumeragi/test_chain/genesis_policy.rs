@@ -124,6 +124,7 @@ pub(crate) fn signed_genesis_fixture_for_state(
         instructions,
         npos_genesis_parameters(npos),
         mode.into(),
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         genesis_time_ms,
         std::num::NonZeroU64::MIN,
     )?;

@@ -2974,7 +2974,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     upstream_task.abort();
 }
 
-fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
+pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
     use iroha_data_model::{
         block::consensus::{SumeragiRootScope, ValidatorPower},
         parameter::{
@@ -3011,20 +3011,25 @@ fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAp
         sumeragi_context: context,
     };
     metadata.validate().unwrap();
-    {
-        let mut block = world.block();
-        let mut transaction = block.transaction_without_telemetry(Default::default(), 0);
-        transaction
-            .parameters_mut_for_testing()
-            .get_mut()
-            .set_parameter(Parameter::Custom(CustomParameter::new(
-                consensus_metadata::handshake_meta_id(),
-                Json::new(metadata),
-            )));
-        transaction.apply();
-        block.commit();
-    }
-    mk_app_state_for_tests_with_world(world)
+    let app = mk_app_state_for_tests_with_world(world);
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(1).unwrap(),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut transaction = block.transaction();
+    transaction
+        .world_mut_for_testing()
+        .parameters_mut_for_testing()
+        .set_parameter(Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::new(metadata),
+        )));
+    transaction.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    app
 }
 
 #[tokio::test]

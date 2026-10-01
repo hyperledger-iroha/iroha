@@ -1244,3 +1244,70 @@ async fn contract_call_submission_emits_contract_receipt_after_accepted() {
     assert!(actual["transaction_payload_b64"].is_null());
     assert!(actual["signing_message_b64"].is_null());
 }
+
+#[test]
+fn artifact_visibility_binds_private_root_and_rechecks_revoked_grants() {
+    use iroha_core::smartcontracts::Execute as _;
+    use iroha_data_model::smart_contract::ContractArtifactId;
+    let app = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
+        iroha_core::state::World::new(),
+        true,
+    );
+    let caller = checked_torii_test_account_id(0x75, "scoped artifact reader fixture");
+    let owned = ContractArtifactId::new(
+        DataSpaceId::new(u64::MAX - 1),
+        Hash::new(b"scoped artifact"),
+    );
+    let foreign = ContractArtifactId::new(DataSpaceId::new(u64::MAX), owned.code_hash);
+    let grant: Permission = CanReadAllLedgerData.into();
+    {
+        let mut block = app.state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        iroha_data_model::isi::Register::account(Account::new(caller.clone()))
+            .execute(&caller, &mut transaction)
+            .expect("seed universal account");
+        transaction
+            .world_mut_for_testing()
+            .add_account_permission(&caller, grant.clone());
+        transaction.apply();
+        block.commit_world_overlay_for_testing().unwrap();
+    }
+    require_contract_artifact_visibility(&app, &caller, owned)
+        .expect("owner reader can read exact private root");
+    assert!(
+        require_contract_artifact_visibility(&app, &caller, foreign).is_err(),
+        "even a ledger-wide read grant cannot substitute a private listener's root"
+    );
+    {
+        let mut block = app.state.block(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        assert!(
+            transaction
+                .world_mut_for_testing()
+                .remove_account_permission(&caller, &grant)
+        );
+        transaction.apply();
+        block.commit_world_overlay_for_testing().unwrap();
+    }
+    assert!(
+        require_contract_artifact_visibility(&app, &caller, owned).is_err(),
+        "revocation must take effect on the next read"
+    );
+    let absent = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    assert!(
+        require_contract_artifact_visibility(&absent, &caller, owned).is_err(),
+        "missing immutable scope is never an implicit global root"
+    );
+}

@@ -369,24 +369,6 @@ fn make_server_observation(
                 }
             }
         }
-        slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() => {
-            let provider = server_backend!(backends, stream_token_gateway_admission);
-            let expected = binding
-                .stream_token_gateway_admission_qualification
-                .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            let qualification = provider
-                .qualification()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            if provider.handle() != binding.handle || qualification != expected {
-                return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
-            }
-            let qualification_after = provider
-                .qualification()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            if provider.handle() != binding.handle || qualification_after != qualification {
-                return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
-            }
-        }
         slot if slot == IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id() => {
             let signer = appeal_finance_signer_backend(backends, &binding.handle)?;
             let exact = binding
@@ -1496,8 +1478,6 @@ fn validate_exact_backend_set(
                 == backends.stream_token_signer_client.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
                 == backends.stream_token_state_observer.is_some()
-            && requested(IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission)
-                == backends.stream_token_gateway_admission.is_some()
             && requested(IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint)
                 == backends.appeal_finance_checkpoint.is_some()
             && requested(IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner)

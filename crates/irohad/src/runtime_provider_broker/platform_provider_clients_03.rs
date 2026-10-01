@@ -3211,24 +3211,6 @@ fn resolve_with_decode_pool(
                     .with_sorafs_stream_token_signer_client(client)
                     .with_sorafs_stream_token_state_observer(observer);
             }
-            slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() => {
-                let qualification = binding
-                    .stream_token_gateway_admission_qualification
-                    .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-                qualification
-                    .validate()
-                    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-                let provider = Arc::new(StreamTokenGatewayAdmissionBrokerProvider {
-                    session: Arc::clone(&session),
-                    binding: binding.clone(),
-                    metadata_digest: observation.metadata_digest,
-                    qualification,
-                });
-                provider
-                    .qualification()
-                    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
-                dependencies = dependencies.with_sorafs_stream_token_gateway_admission(provider);
-            }
             slot if slot
                 == IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id() =>
             {

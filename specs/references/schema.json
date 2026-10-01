@@ -680,6 +680,46 @@
       }
     ]
   },
+  "AdmissionHistoryRecordV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "genesis_origin",
+        "type": "Option<GenesisAdmissionOriginV1>"
+      },
+      {
+        "name": "revision",
+        "type": "u64"
+      },
+      {
+        "name": "predecessor",
+        "type": "Option<Array<u8, 32>>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "recorded_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "owner",
+        "type": "Option<AccountId>"
+      },
+      {
+        "name": "revoked",
+        "type": "bool"
+      },
+      {
+        "name": "material",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "AggregationRule": {
     "Enum": [
       {
@@ -771,6 +811,18 @@
       {
         "name": "previous",
         "type": "Option<ValidatorEpochContextV1>"
+      }
+    ]
+  },
+  "AmxWriteProofV1": {
+    "Struct": [
+      {
+        "name": "present",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "siblings",
+        "type": "Vec<Array<u8, 32>>"
       }
     ]
   },
@@ -9852,6 +9904,18 @@
       }
     ]
   },
+  "GenesisAdmissionOriginV1": {
+    "Struct": [
+      {
+        "name": "entrypoint_index",
+        "type": "u32"
+      },
+      {
+        "name": "instruction_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "GlobalThresholdBeaconChainAnchorV1": {
     "Struct": [
       {
@@ -16178,6 +16242,9 @@
   "Option<GameOutcomeV1>": {
     "Option": "GameOutcomeV1"
   },
+  "Option<GenesisAdmissionOriginV1>": {
+    "Option": "GenesisAdmissionOriginV1"
+  },
   "Option<GovernanceCertificateId>": {
     "Option": "GovernanceCertificateId"
   },
@@ -16447,6 +16514,9 @@
   },
   "Option<SortOrder>": {
     "Option": "SortOrder"
+  },
+  "Option<StreamTokenDiscoveryProofV1>": {
+    "Option": "StreamTokenDiscoveryProofV1"
   },
   "Option<StreamTokenExecutionV1>": {
     "Option": "StreamTokenExecutionV1"
@@ -20136,6 +20206,30 @@
       }
     ]
   },
+  "PrivateDataspaceRecordProof": {
+    "Struct": [
+      {
+        "name": "parent_network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "parent_height",
+        "type": "u64"
+      },
+      {
+        "name": "parent_result",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "record",
+        "type": "PrivateDataspaceRecord"
+      },
+      {
+        "name": "inclusion",
+        "type": "AmxWriteProofV1"
+      }
+    ]
+  },
   "PrivateDataspaceRegistration": {
     "Struct": [
       {
@@ -20169,6 +20263,30 @@
       {
         "name": "records",
         "type": "Vec<PrivateDataspaceRecord>"
+      }
+    ]
+  },
+  "PrivateRootFeePolicy": {
+    "Struct": [
+      {
+        "name": "asset_definition_id",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "base_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_byte_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_instruction_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_gas_unit_fee",
+        "type": "Quantity"
       }
     ]
   },
@@ -20598,6 +20716,46 @@
     ]
   },
   "ProposalContentId": "Array<u8, 32>",
+  "ProviderAdmissionHeadProofV1": {
+    "Struct": [
+      {
+        "name": "head",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "predecessor",
+        "type": "Option<Vec<u8>>"
+      }
+    ]
+  },
+  "ProviderDiscoveryProofV1": {
+    "Struct": [
+      {
+        "name": "world",
+        "type": "WorldStateSnapshotV1"
+      },
+      {
+        "name": "council",
+        "type": "ProviderAdmissionHeadProofV1"
+      },
+      {
+        "name": "provider",
+        "type": "ProviderAdmissionHeadProofV1"
+      },
+      {
+        "name": "owner",
+        "type": "AccountId"
+      },
+      {
+        "name": "advert",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "stream_token",
+        "type": "Option<StreamTokenDiscoveryProofV1>"
+      }
+    ]
+  },
   "ProviderDisputeEventV1": {
     "Struct": [
       {
@@ -21212,6 +21370,34 @@
       {
         "name": "registration",
         "type": "Vec<u8>"
+      }
+    ]
+  },
+  "RegisteredAccountReadV1": {
+    "Struct": [
+      {
+        "name": "https_host",
+        "type": "String"
+      },
+      {
+        "name": "https_port",
+        "type": "u16"
+      },
+      {
+        "name": "ttl_secs",
+        "type": "u64"
+      },
+      {
+        "name": "max_streams",
+        "type": "u16"
+      },
+      {
+        "name": "rate_limit_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "requests_per_minute",
+        "type": "u32"
       }
     ]
   },
@@ -25859,6 +26045,18 @@
       }
     ]
   },
+  "SnsLeaseProofV1": {
+    "Struct": [
+      {
+        "name": "world",
+        "type": "WorldStateSnapshotV1"
+      },
+      {
+        "name": "record",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "SocialEvent": {
     "Enum": [
       {
@@ -27560,6 +27758,26 @@
       }
     ]
   },
+  "StreamTokenCustodyControlIndexV1": {
+    "Struct": [
+      {
+        "name": "revision",
+        "type": "u64"
+      },
+      {
+        "name": "digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "ordinal",
+        "type": "u32"
+      }
+    ]
+  },
   "StreamTokenCustodyControlRecordV1": {
     "Struct": [
       {
@@ -27596,6 +27814,22 @@
       },
       {
         "name": "control_state",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "active_enrollment",
+        "type": "Option<Vec<u8>>"
+      }
+    ]
+  },
+  "StreamTokenDiscoveryProofV1": {
+    "Struct": [
+      {
+        "name": "head",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "record",
         "type": "Vec<u8>"
       }
     ]
@@ -30957,6 +31191,9 @@
   "Vec<Vec<u8>>": {
     "Vec": "Vec<u8>"
   },
+  "Vec<WorldStateSnapshotEntryV1>": {
+    "Vec": "WorldStateSnapshotEntryV1"
+  },
   "Vec<u32>": {
     "Vec": "u32"
   },
@@ -31280,6 +31517,50 @@
       {
         "name": "view",
         "type": "Option<u64>"
+      }
+    ]
+  },
+  "WorldStateElementKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Table"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Cell"
+      }
+    ]
+  },
+  "WorldStateSnapshotEntryV1": {
+    "Struct": [
+      {
+        "name": "field_id",
+        "type": "String"
+      },
+      {
+        "name": "kind",
+        "type": "WorldStateElementKindV1"
+      },
+      {
+        "name": "key_hash",
+        "type": "Option<Hash>"
+      },
+      {
+        "name": "value_hash",
+        "type": "Hash"
+      }
+    ]
+  },
+  "WorldStateSnapshotV1": {
+    "Struct": [
+      {
+        "name": "schema_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "entries",
+        "type": "Vec<WorldStateSnapshotEntryV1>"
       }
     ]
   },

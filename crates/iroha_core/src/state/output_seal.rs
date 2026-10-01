@@ -259,6 +259,10 @@ impl StateBlock<'_> {
     pub(in crate::state) fn verify_execution_output_publication(&self) -> Result<(), String> {
         match self.execution_output_plan.as_ref() {
             None => Ok(()),
+            #[cfg(test)]
+            Some(ExecutionOutputPlanState::Inspecting) => {
+                Err("execution output inspection cannot authorize publication".into())
+            }
             Some(ExecutionOutputPlanState::Finalized(finalized)) => {
                 if finalized.authorized.sealed.proposal != self._curr_block.hash() {
                     return Err("finalized execution belongs to another carrier".into());

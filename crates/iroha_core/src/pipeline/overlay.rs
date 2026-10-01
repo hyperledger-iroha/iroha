@@ -5256,16 +5256,21 @@ seiyaku GuardedOverlay {
             world
                 .bind_contract_alias(&contract_address, contract_alias.clone(), None, None, 0)
                 .expect("bind guarded contract alias");
-            // Entrypoint admission and subject-owned effects have separate grants.
-            let mut effect_permissions = Permissions::new();
-            assert!(effect_permissions.insert(Permission::from(
+            // The contract executes queued metadata writes as its own subject. The
+            // ordinary account permission is independent of entrypoint admission.
+            let mut contract_permissions = Permissions::new();
+            assert!(contract_permissions.insert(Permission::from(
                 iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
                     account: authority.clone(),
                 },
             )));
+            // The queued revocation executes as the contract subject. Give that subject
+            // the exact permission it may revoke so the negative control reaches the
+            // subsequent caller-authorization recheck instead of failing issuer policy.
+            assert!(contract_permissions.insert(entrypoint_permission.clone()));
             world
                 .account_permissions_mut_for_testing()
-                .insert(contract_address.subject_id(), effect_permissions);
+                .insert(contract_address.subject_id(), contract_permissions);
             if authorized {
                 let mut permissions = Permissions::new();
                 assert!(permissions.insert(entrypoint_permission.clone()));

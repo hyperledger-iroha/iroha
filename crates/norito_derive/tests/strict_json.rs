@@ -362,3 +362,112 @@ fn preparse_rejects_escaped_duplicate_keys_recursively() {
             .expect_err("escaped duplicate key must reject before typed decode");
     assert_duplicate_field(error, "value");
 }
+
+// This type deliberately has no JSON traits: the helper must own both directions and the
+// derive must not add a default JsonDeserialize bound for the named enum field.
+#[derive(Debug, PartialEq, Eq)]
+struct HelperBytes([u8; 4]);
+
+mod helper_bytes {
+    use super::HelperBytes;
+    use norito::json::{self, JsonDeserialize as _, JsonSerialize as _};
+
+    pub(super) fn serialize(value: &HelperBytes, out: &mut String) {
+        value.0.to_vec().json_serialize(out);
+    }
+
+    pub(super) fn serialize_bounded(
+        value: &HelperBytes,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        value.0.to_vec().json_serialize_to(out)
+    }
+
+    pub(super) fn deserialize(parser: &mut json::Parser<'_>) -> Result<HelperBytes, json::Error> {
+        let bytes = Vec::<u8>::json_deserialize(parser)?;
+        let bytes = bytes.try_into().map_err(|_: Vec<u8>| {
+            json::Error::Message("expected exactly four helper bytes".into())
+        })?;
+        Ok(HelperBytes(bytes))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize, norito_derive::FastJson)]
+#[norito(
+    tag = "kind",
+    content = "payload",
+    deny_unknown_fields,
+    no_fast_from_json
+)]
+enum StrictHelperEvent {
+    Combined {
+        #[norito(json = "helper_bytes")]
+        bytes: HelperBytes,
+    },
+    Separate {
+        #[norito(
+            with = "helper_bytes",
+            bounded_with = "helper_bytes::serialize_bounded"
+        )]
+        bytes: HelperBytes,
+    },
+}
+
+#[test]
+fn named_enum_helpers_roundtrip_without_default_field_traits_and_remain_strict() {
+    for (kind, value) in [
+        (
+            "Combined",
+            StrictHelperEvent::Combined {
+                bytes: HelperBytes([1, 2, 3, 4]),
+            },
+        ),
+        (
+            "Separate",
+            StrictHelperEvent::Separate {
+                bytes: HelperBytes([1, 2, 3, 4]),
+            },
+        ),
+    ] {
+        let expected = format!(r#"{{"kind":"{kind}","payload":{{"bytes":[1,2,3,4]}}}}"#);
+        assert_eq!(json::to_json(&value).unwrap(), expected);
+        assert_eq!(
+            json::to_json_bounded(&value, expected.len()).unwrap(),
+            expected
+        );
+        assert!(json::to_json_bounded(&value, expected.len() - 1).is_err());
+        assert_eq!(
+            json::from_str::<StrictHelperEvent>(&expected).unwrap(),
+            value
+        );
+        assert_eq!(decode_fast::<StrictHelperEvent>(&expected).unwrap(), value);
+        assert_eq!(
+            json::from_slice::<StrictHelperEvent>(expected.as_bytes()).unwrap(),
+            value
+        );
+        let parsed = json::from_str::<json::Value>(&expected).unwrap();
+        assert_eq!(
+            json::from_value::<StrictHelperEvent>(parsed).unwrap(),
+            value
+        );
+        for payload in [
+            r#"{}"#,
+            r#"{"bytes":[1,2,3]}"#,
+            r#"{"bytes":[1,2,3,4,5]}"#,
+            r#"{"bytes":[1,2,3,256]}"#,
+            r#"{"bytes":"01020304"}"#,
+            r#"{"bytes":[1,2,3,4],"bytes":[1,2,3,4]}"#,
+            r#"{"bytes":[1,2,3,4],"unexpected":true}"#,
+        ] {
+            let wrong = format!(r#"{{"kind":"{kind}","payload":{payload}}}"#);
+            assert!(
+                json::from_str::<StrictHelperEvent>(&wrong).is_err(),
+                "{wrong}"
+            );
+            assert!(decode_fast::<StrictHelperEvent>(&wrong).is_err(), "{wrong}");
+        }
+        let unknown = expected.replacen('{', r#"{"unexpected":true,"#, 1);
+        assert!(json::from_str::<StrictHelperEvent>(&unknown).is_err());
+        assert!(decode_fast::<StrictHelperEvent>(&unknown).is_err());
+    }
+}

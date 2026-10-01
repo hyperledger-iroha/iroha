@@ -203,6 +203,13 @@ fn actual_sns_time_sweep_retains_one_native_purpose_and_exact_payment() {
         FastpqSourceExecutionKindV1::ProtocolPurpose
     );
     assert_eq!(entries[0].entry_hash, entry_hash);
+    assert_eq!(
+        block
+            .verified_fastpq_source_inventory_for_capture()
+            .unwrap_err(),
+        "FASTPQ witness capture refuses a poisoned carrier",
+        "source-only inspection cannot authorize capture or publication"
+    );
 }
 
 #[test]

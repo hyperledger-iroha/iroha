@@ -4,6 +4,8 @@
 //! [`iroha_config`]. The deployment registry never receives the full node
 //! configuration, because that structure also contains validator keys, API
 //! tokens, and other values that runtime-provider discovery must not observe.
+//! Gateway admission uses the daemon's local Core authority and is never a
+//! broker binding; externally injected gateway providers fail scope validation.
 use crate::IrohaRuntimeDeps;
 use iroha_config::parameters::{
     actual::Root as Config,
@@ -26,7 +28,6 @@ mod binding_collection;
 mod binding_types;
 mod catalog;
 mod dependency_scope;
-mod stream_token_gateway;
 mod stream_token_signer;
 mod stream_token_signer_binding;
 use binding_collection::{
@@ -149,8 +150,6 @@ pub enum IrohaRuntimeProviderSlotV1 {
     ModerationCheckpointStore = sorafs_node::moderation_orchestrator::MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
     /// Evidence-viewer signed monotonic transparency-head publisher.
     EvidenceViewerTransparencyPublisher = 52,
-    /// Stream-token quota, sealed-sequence, and ordered callback-outbox owner.
-    StreamTokenGatewayAdmission = 53,
     /// Authenticated immutable moderation panel-notification receipt archive.
     ModerationPanelNotificationArchive =
         sorafs_node::moderation_orchestrator::MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1,
@@ -169,7 +168,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
 }
 impl IrohaRuntimeProviderSlotV1 {
     /// Every first-release runtime-provider slot in wire-ID order.
-    pub const ALL: [Self; 60] = [
+    pub const ALL: [Self; 59] = [
         Self::ModerationQuarantineKeyWrapper,
         Self::PrivacyCyclePrfProvider,
         Self::PrivacyReleaseAnchor,
@@ -222,7 +221,6 @@ impl IrohaRuntimeProviderSlotV1 {
         Self::ReputationJournalCheckpoint,
         Self::ModerationCheckpointStore,
         Self::EvidenceViewerTransparencyPublisher,
-        Self::StreamTokenGatewayAdmission,
         Self::ModerationPanelNotificationArchive,
         Self::BootleLanternIssuanceProviderRegistry,
         Self::MusubiProviderAttestationClockSeal,
@@ -292,7 +290,6 @@ impl IrohaRuntimeProviderSlotV1 {
             50 => Some(Self::ReputationJournalCheckpoint),
             51 => Some(Self::ModerationCheckpointStore),
             52 => Some(Self::EvidenceViewerTransparencyPublisher),
-            53 => Some(Self::StreamTokenGatewayAdmission),
             54 => Some(Self::ModerationPanelNotificationArchive),
             55 => Some(Self::BootleLanternIssuanceProviderRegistry),
             56 => Some(Self::MusubiProviderAttestationClockSeal),
@@ -336,11 +333,6 @@ pub struct IrohaRuntimeProviderBindingV1 {
     bootle_lantern_issuance_bindings:
         Option<iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1>,
     stream_token_signer_binding: Option<StreamTokenSignerRuntimeBindingV1>,
-    stream_token_gateway_admission_qualification:
-        Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
-    stream_token_gateway_admission_max_pending: Option<u32>,
-    stream_token_gateway_admission_max_tracked_tokens: Option<u32>,
-    stream_token_gateway_admission_reconcile_max_items: Option<u32>,
     appeal_finance_signer_binding:
         Option<iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding>,
     appeal_finance_checkpoint_binding:
@@ -423,10 +415,6 @@ impl IrohaRuntimeProviderBindingV1 {
             policy_digest,
             bootle_lantern_issuance_bindings: None,
             stream_token_signer_binding: None,
-            stream_token_gateway_admission_qualification: None,
-            stream_token_gateway_admission_max_pending: None,
-            stream_token_gateway_admission_max_tracked_tokens: None,
-            stream_token_gateway_admission_reconcile_max_items: None,
             appeal_finance_signer_binding: None,
             appeal_finance_checkpoint_binding: None,
             appeal_finance_checkpoint_max_bytes: None,
@@ -523,41 +511,6 @@ impl IrohaRuntimeProviderBindingV1 {
             Some(custody.policy_digest),
         )?;
         projected.stream_token_signer_binding = Some(signer_backend);
-        Ok(projected)
-    }
-    fn try_new_stream_token_gateway_admission(
-        handle: impl Into<String>,
-        qualification: iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1,
-        max_pending: u32,
-        max_tracked_tokens: u32,
-        reconcile_max_items: u32,
-    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
-        let slot = IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission;
-        qualification
-            .validate()
-            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-        if max_pending != qualification.max_pending
-            || max_tracked_tokens != qualification.max_tracked_tokens
-            || max_pending == 0
-            || max_pending > 1_000_000
-            || max_tracked_tokens == 0
-            || max_tracked_tokens > 1_000_000
-            || reconcile_max_items == 0
-            || reconcile_max_items
-                > iroha_torii::sorafs::STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1
-        {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
-        }
-        let mut projected = Self::try_new(
-            slot,
-            handle,
-            Some(qualification.revision),
-            Some(qualification.policy_digest),
-        )?;
-        projected.stream_token_gateway_admission_qualification = Some(qualification);
-        projected.stream_token_gateway_admission_max_pending = Some(max_pending);
-        projected.stream_token_gateway_admission_max_tracked_tokens = Some(max_tracked_tokens);
-        projected.stream_token_gateway_admission_reconcile_max_items = Some(reconcile_max_items);
         Ok(projected)
     }
     fn try_new_moderation_checkpoint_store(
@@ -1128,28 +1081,6 @@ impl IrohaRuntimeProviderBindingV1 {
     #[must_use]
     pub const fn stream_token_signer_binding(&self) -> Option<&StreamTokenSignerRuntimeBindingV1> {
         self.stream_token_signer_binding.as_ref()
-    }
-    /// Return the exact public gateway-admission qualification.
-    #[must_use]
-    pub const fn stream_token_gateway_admission_qualification(
-        &self,
-    ) -> Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1> {
-        self.stream_token_gateway_admission_qualification
-    }
-    /// Return the exact external pending-row bound.
-    #[must_use]
-    pub const fn stream_token_gateway_admission_max_pending(&self) -> Option<u32> {
-        self.stream_token_gateway_admission_max_pending
-    }
-    /// Return the exact external active-token bound.
-    #[must_use]
-    pub const fn stream_token_gateway_admission_max_tracked_tokens(&self) -> Option<u32> {
-        self.stream_token_gateway_admission_max_tracked_tokens
-    }
-    /// Return the exact callback reconciliation batch bound.
-    #[must_use]
-    pub const fn stream_token_gateway_admission_reconcile_max_items(&self) -> Option<u32> {
-        self.stream_token_gateway_admission_reconcile_max_items
     }
     /// Return the exact configured appeal-finance transaction-signer binding.
     pub(crate) const fn appeal_finance_signer_binding(
@@ -2054,7 +1985,6 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     qualify_governance_dag_signer_dependency(bindings, &dependencies)?;
     qualify_governance_request_auth_dependencies(bindings, &dependencies)?;
     stream_token_signer::validate_dependency_bindings(bindings, &dependencies)?;
-    stream_token_gateway::qualify_dependency(bindings, &dependencies)?;
     qualify_native_transaction_signers(bindings, &mut dependencies)?;
     qualify_soracloud_runtime_signer(bindings, &mut dependencies)?;
     qualify_moderation_checkpoint_dependency(bindings, &dependencies)?;
@@ -3696,12 +3626,14 @@ mod tests {
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
         let mut seen = [false; 61];
-        for (index, slot) in IrohaRuntimeProviderSlotV1::ALL.into_iter().enumerate() {
+        for (expected, slot) in (1_u16..=60)
+            .filter(|id| *id != 53)
+            .zip(IrohaRuntimeProviderSlotV1::ALL)
+        {
             let wire_id = slot.wire_id();
             assert_eq!(
-                usize::from(wire_id),
-                index + 1,
-                "V1 broker role identifiers must stay contiguous and immutable"
+                wire_id, expected,
+                "V1 broker role identifiers must retain their exact assigned IDs"
             );
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(wire_id),
@@ -3714,10 +3646,13 @@ mod tests {
             );
         }
         assert!(
-            seen[1..].iter().all(|present| *present),
-            "the V1 slot inventory must not omit a wire ID"
+            seen[1..]
+                .iter()
+                .enumerate()
+                .all(|(index, present)| *present == (index + 1 != 53)),
+            "the V1 slot inventory must contain exactly the registered wire IDs"
         );
-        for unknown in [0, 61, u16::MAX] {
+        for unknown in [0, 53, 61, u16::MAX] {
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
                 None,
@@ -5040,10 +4975,6 @@ mod tests {
         tokens.signer = Some(super::stream_token_signer_binding::tests::hardware_config(
             signer_public_key,
         ));
-        tokens.admission_provider_handle =
-            Some("sealed-cas://sorafs/stream-token/admission-primary".to_owned());
-        tokens.admission_provider_revision = Some(4);
-        tokens.admission_provider_policy_digest = Some([0x83; 32]);
         let compliance_key = evidence_archive_public_key();
         config.torii.sorafs_gateway.compliance =
             Some(iroha_config::parameters::actual::SorafsGatewayCompliance {
@@ -5593,10 +5524,7 @@ mod tests {
         assert_canonical_config_catalog_roundtrip(
             "stream token",
             &stream_tokens,
-            &[
-                IrohaRuntimeProviderSlotV1::StreamTokenSigner,
-                IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission,
-            ],
+            &[IrohaRuntimeProviderSlotV1::StreamTokenSigner],
         );
         let mut appeal_finance = default_runtime_config();
         configure_appeal_finance_runtime(&mut appeal_finance);

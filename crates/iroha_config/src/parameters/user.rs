@@ -9678,7 +9678,8 @@ pub struct Nexus {
     /// Optional physical data-space catalog entries.
     ///
     /// Lanes and namespaces reference these entries but never create them
-    /// implicitly.
+    /// implicitly. An empty catalog selects the universal default; an explicit
+    /// catalog is exact and must list universal itself when that scope is needed.
     #[config(default)]
     pub dataspace_catalog: Vec<DataSpaceDescriptor>,
     /// Public-lane staking guardrails.
@@ -10528,6 +10529,9 @@ impl NexusRelayWorker {
 #[cfg(test)]
 #[path = "user/nexus_asset_selector_tests.rs"]
 mod nexus_asset_selector_tests;
+#[cfg(test)]
+#[path = "user/nexus_dataspace_catalog_tests.rs"]
+mod nexus_dataspace_catalog_tests;
 /// User-level configuration container for governance catalog.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct GovernanceCatalogConfig {
@@ -12311,6 +12315,16 @@ impl Nexus {
                 lane_entries.push(lane_metadata);
             }
         }
+        for lane in &lane_entries {
+            if dataspace_catalog.by_id(lane.dataspace_id).is_none() {
+                lane_errors = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "lane {} references dataspace {} missing from the explicit dataspace_catalog",
+                    lane.id.as_u32(),
+                    lane.dataspace_id.as_u64()
+                )));
+            }
+        }
         if lane_errors {
             return None;
         }
@@ -12503,15 +12517,6 @@ impl Nexus {
         }
         if dataspace_errors {
             return None;
-        }
-        let has_universal = dataspace_entries
-            .iter()
-            .any(|entry| entry.id == DataSpaceId::UNIVERSAL);
-        let has_universal_alias = dataspace_entries
-            .iter()
-            .any(|entry| entry.alias == defaults::nexus::DEFAULT_DATASPACE_ALIAS);
-        if !has_universal && !has_universal_alias {
-            dataspace_entries.push(DataSpaceMetadata::default());
         }
         match DataSpaceCatalog::new(dataspace_entries) {
             Ok(catalog) => Some((catalog, dataspace_fee_sponsor_program_ids)),
@@ -27864,15 +27869,15 @@ impl SorafsSignerJournalInventory {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsSignerJournalInventory {
         // A complete maximum receipt scan must fit a single operation. Lower settings would
         // permanently refuse a valid full journal, regardless of concurrency.
-        const MIN_RESIDENT_BYTES: u64 = 1024 * 1024;
-        const MIN_METADATA_PROBES: u64 = 65_537 + 4 * 65 + 4 + 4 * 65 + 1;
-        const MIN_OPEN_HANDLES: u32 = 67;
+        const MIN_RESIDENT_BYTES: u64 = actual::SorafsSignerJournalInventory::MIN_RESIDENT_BYTES;
+        const MIN_METADATA_PROBES: u64 = actual::SorafsSignerJournalInventory::MIN_METADATA_PROBES;
+        const MIN_OPEN_HANDLES: u32 = actual::SorafsSignerJournalInventory::MIN_OPEN_HANDLES;
         if self.resident_bytes.0 < MIN_RESIDENT_BYTES
             || self.metadata_probes < MIN_METADATA_PROBES
             || self.open_handles < MIN_OPEN_HANDLES
         {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.storage.signer_journal_inventory cannot fund one maximum inventory scan and pinned path",
+                format!("sorafs.storage.signer_journal_inventory requires resident_bytes >= {MIN_RESIDENT_BYTES}, metadata_probes >= {MIN_METADATA_PROBES}, and open_handles >= {MIN_OPEN_HANDLES} to fund native private custody and one maximum inventory scan"),
             ));
         }
         actual::SorafsSignerJournalInventory {
@@ -27899,30 +27904,33 @@ mod sorafs_signer_journal_inventory_tests {
         assert_eq!(default.open_handles, expected.open_handles);
         let mut emitter = Emitter::new();
         let exact = SorafsSignerJournalInventory {
-            resident_bytes: Bytes(1024 * 1024),
-            metadata_probes: 65_537 + 4 * 65 + 4 + 4 * 65 + 1,
-            open_handles: 67,
+            resident_bytes: Bytes(actual::SorafsSignerJournalInventory::MIN_RESIDENT_BYTES),
+            metadata_probes: actual::SorafsSignerJournalInventory::MIN_METADATA_PROBES,
+            open_handles: actual::SorafsSignerJournalInventory::MIN_OPEN_HANDLES,
         }
         .parse(&mut emitter);
         emitter
             .into_result()
             .expect("inclusive signer inventory minimum");
-        assert_eq!(exact.open_handles, 67);
+        assert_eq!(
+            exact.open_handles,
+            actual::SorafsSignerJournalInventory::MIN_OPEN_HANDLES
+        );
     }
 
     #[test]
     fn one_below_any_resource_is_rejected() {
         for policy in [
             SorafsSignerJournalInventory {
-                resident_bytes: Bytes(1024 * 1024 - 1),
+                resident_bytes: Bytes(actual::SorafsSignerJournalInventory::MIN_RESIDENT_BYTES - 1),
                 ..SorafsSignerJournalInventory::default()
             },
             SorafsSignerJournalInventory {
-                metadata_probes: 65_537 + 4 * 65 + 4 + 4 * 65,
+                metadata_probes: actual::SorafsSignerJournalInventory::MIN_METADATA_PROBES - 1,
                 ..SorafsSignerJournalInventory::default()
             },
             SorafsSignerJournalInventory {
-                open_handles: 66,
+                open_handles: actual::SorafsSignerJournalInventory::MIN_OPEN_HANDLES - 1,
                 ..SorafsSignerJournalInventory::default()
             },
         ] {
@@ -32314,6 +32322,7 @@ fn sorafs_por_rejects_obsolete_competing_state_paths() {
 }
 #[path = "user/stream_token_admission.rs"]
 mod stream_token_admission;
+pub use stream_token_admission::SorafsStreamTokenGatewayNativeConfig;
 #[path = "user/stream_token_signer.rs"]
 mod stream_token_signer;
 pub use stream_token_signer::{
@@ -32328,21 +32337,30 @@ pub struct SorafsStreamTokenConfig {
     /// Complete signer and independent attester/observer trust.
     #[config(nested)]
     pub signer: SorafsStreamTokenSignerConfig,
-    /// Credential-free deployment-owned quota/sequence/outbox provider handle.
+    /// Native gateway transaction custody; explicit and complete when issuance is enabled.
+    #[config(nested)]
+    pub admission_native: SorafsStreamTokenGatewayNativeConfig,
+    /// Credential-free handle pinned to the native consensus gateway owner.
     pub admission_provider_handle: Option<String>,
-    /// Exact non-zero external admission-provider contract revision.
+    /// Exact non-zero native admission policy revision.
     pub admission_provider_revision: Option<u64>,
     /// Exact non-zero public-policy digest as lowercase hexadecimal.
     pub admission_provider_policy_digest_hex: Option<String>,
     /// Durable callback row ceiling; also bounds local queued/reserved lease cleanup tickets.
     #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_MAX_PENDING")]
     pub admission_max_pending: u32,
-    /// Maximum active token quota windows admitted by the external provider.
+    /// Maximum active token quota windows admitted by native consensus.
     #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS")]
     pub admission_max_tracked_tokens: u32,
     /// Maximum ordered callback rows replayed by one reconciliation tick.
     #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS")]
     pub admission_reconcile_max_items: u32,
+    /// Interval between supervised native callback reconciliation attempts.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_INTERVAL_MS")]
+    pub admission_reconcile_interval_ms: u64,
+    /// Absolute budget shared by admission, callback reconciliation and final Serving proof.
+    #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_OPERATION_TIMEOUT_MS")]
+    pub admission_operation_timeout_ms: u64,
     /// Maximum lifetime of one cross-replica concurrency lease.
     #[config(default = "defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS")]
     pub admission_lease_ttl_ms: u64,
@@ -32364,6 +32382,7 @@ impl Default for SorafsStreamTokenConfig {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
             signer: SorafsStreamTokenSignerConfig::default(),
+            admission_native: SorafsStreamTokenGatewayNativeConfig::default(),
             admission_provider_handle: None,
             admission_provider_revision: None,
             admission_provider_policy_digest_hex: None,
@@ -32372,6 +32391,10 @@ impl Default for SorafsStreamTokenConfig {
                 defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS,
             admission_reconcile_max_items:
                 defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS,
+            admission_reconcile_interval_ms:
+                defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_INTERVAL_MS,
+            admission_operation_timeout_ms:
+                defaults::sorafs::storage::tokens::ADMISSION_OPERATION_TIMEOUT_MS,
             admission_lease_ttl_ms: defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
@@ -32406,6 +32429,7 @@ impl SorafsStreamTokenConfig {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
                 "sorafs.storage.stream_tokens runtime bindings are forbidden while issuance is disabled"));
         }
+        let admission_native = self.admission_native.parse(self.enabled, emitter);
         let signer = self.signer.parse(self.enabled, emitter);
         let admission_provider_policy_digest = stream_token_admission::decode_policy_digest(
             self.admission_provider_policy_digest_hex.as_deref(),
@@ -32416,12 +32440,15 @@ impl SorafsStreamTokenConfig {
         actual::SorafsTokenConfig {
             enabled: self.enabled,
             signer,
+            admission_native,
             admission_provider_handle: self.admission_provider_handle,
             admission_provider_revision: self.admission_provider_revision,
             admission_provider_policy_digest,
             admission_max_pending: self.admission_max_pending,
             admission_max_tracked_tokens: self.admission_max_tracked_tokens,
             admission_reconcile_max_items: self.admission_reconcile_max_items,
+            admission_reconcile_interval_ms: self.admission_reconcile_interval_ms,
+            admission_operation_timeout_ms: self.admission_operation_timeout_ms,
             admission_lease_ttl_ms: self.admission_lease_ttl_ms,
             default_ttl_secs: self.default_ttl_secs,
             default_max_streams: self.default_max_streams,
@@ -33657,12 +33684,13 @@ impl SorafsMeteringSmoothing {
         }
     }
 }
-const SORAFS_DISCOVERY_CAPABILITY_NAMES_V1: [&str; 6] = [
+const SORAFS_DISCOVERY_CAPABILITY_NAMES_V1: [&str; 7] = [
     "torii_gateway",
     "quic_noise",
     "chunk_range_fetch",
     "soranet_pq",
     "potr_mldsa",
+    "registered_account_read",
     "vendor_reserved",
 ];
 

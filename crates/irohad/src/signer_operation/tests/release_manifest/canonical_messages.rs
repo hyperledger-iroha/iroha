@@ -472,7 +472,10 @@ fn release_caller_keeps_key_substitution_expiry_and_revocation_failures_unreleas
                 .contains(&expected().operation_id)
         );
         assert!(source.state.lock().unwrap().completed.is_none());
-        assert_eq!(fs::read_dir(&canonical).unwrap().count(), 0);
+        assert_eq!(
+            crate::signer_operation::journal::test_record_count(&canonical),
+            0
+        );
         assert!(service.recover(manifest()).is_err());
         assert!(service.sign(manifest()).is_err());
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);

@@ -1,11 +1,13 @@
 //! Bounded blocking probes around the existing durable admission/callback fixture.
 use super::*;
 use crate::sorafs::{
+    StreamTokenGatewayAdmissionProviderV1, stream_token_admission::tests::ServingAdmissionFixture,
+};
+use iroha_data_model::sorafs::stream_token_gateway::{
     StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1,
-    StreamTokenGatewayAdmissionProviderV1, StreamTokenGatewayAdmissionQualificationV1,
-    StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionRequestV1,
-    StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayQuotaRequestV1,
-    stream_token_admission::tests::ServingAdmissionFixture,
+    StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionReadbackV1,
+    StreamTokenGatewayAdmissionRequestV1, StreamTokenGatewayAdmissionResultV1,
+    StreamTokenGatewayQuotaRequestV1,
 };
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -16,7 +18,7 @@ use iroha_data_model::sorafs::{
 };
 use std::{
     sync::{Condvar, atomic::AtomicU8},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// A failure-safe gate: a bounded wait and a separately retained release guard.
@@ -88,41 +90,49 @@ impl StreamTokenGatewayAdmissionProviderV1 for ProbeProvider {
     fn handle(&self) -> &str {
         self.inner.handle()
     }
+    fn configured_qualification(&self) -> StreamTokenGatewayAdmissionQualificationV1 {
+        self.inner.configured_qualification()
+    }
     fn qualification(
         &self,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionErrorV1>
     {
         self.qualification_calls.fetch_add(1, Ordering::AcqRel);
         if self.gate_point.load(Ordering::Acquire) == 3 {
             self.gate.block();
         }
-        self.inner.qualification()
+        self.inner.qualification(deadline)
     }
     fn admit(
         &self,
         request: &StreamTokenGatewayAdmissionRequestV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayAdmissionErrorV1> {
         self.admission_calls.fetch_add(1, Ordering::AcqRel);
         if self.gate_point.load(Ordering::Acquire) == 2 {
             self.gate.block();
         }
-        self.inner.admit(request)
+        self.inner.admit(request, deadline)
     }
     fn pending(
         &self,
         max_items: u32,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionErrorV1> {
-        self.inner.pending(max_items)
+        self.inner.pending(max_items, deadline)
     }
     fn acknowledge(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
-        self.inner.acknowledge(record)
+        self.inner.acknowledge(record, deadline)
     }
     fn release_lease(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
         self.release_calls.lock().unwrap().push(record);
         if self.gate_point.load(Ordering::Acquire) == 1 {
@@ -131,8 +141,16 @@ impl StreamTokenGatewayAdmissionProviderV1 for ProbeProvider {
         match self.release_fault.load(Ordering::Acquire) {
             1 => Err(StreamTokenGatewayAdmissionErrorV1::Ambiguous),
             2 => panic!("injected bounded release failure"),
-            _ => self.inner.release_lease(record),
+            _ => self.inner.release_lease(record, deadline),
         }
+    }
+    fn confirm_serving(
+        &self,
+        request: &StreamTokenGatewayAdmissionRequestV1,
+        record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
+    ) -> Result<StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionErrorV1> {
+        self.inner.confirm_serving(request, record, deadline)
     }
 }
 
@@ -140,6 +158,7 @@ impl StreamTokenGatewayAdmissionProviderV1 for ProbeProvider {
 pub(crate) fn request(nonce: &str) -> StreamTokenGatewayAdmissionRequestV1 {
     const NOW: u64 = 1_800_000_000_000;
     StreamTokenGatewayAdmissionRequestV1 {
+        serving_attempt_id: [0x61; 32],
         context: StreamTokenValidationRequestContextV1::try_new(
             ProviderId::new([0x41; 32]),
             [0x42; 32],

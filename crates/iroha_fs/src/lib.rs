@@ -16,6 +16,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod private_files;
+pub use private_files::{PendingPrivateFile, PrivateFileMetadata, SealedPrivateFile};
+
 #[cfg(unix)]
 #[path = "unix.rs"]
 mod platform;
@@ -197,6 +200,35 @@ impl PrivateDirectory {
         self.inner.open_mutable(checked_name(name.as_ref())?, false)
     }
 
+    /// Create a new private read/write lock file, refusing an existing name.
+    ///
+    /// # Errors
+    /// Refuses existing names, unsafe custody and native I/O errors.
+    pub fn create_lock(&self, name: impl AsRef<OsStr>) -> io::Result<File> {
+        self.inner
+            .open_exact_lock(checked_name(name.as_ref())?, true)
+    }
+
+    /// Open an existing private read/write lock without creating or truncating it.
+    ///
+    /// # Errors
+    /// Refuses missing names, unsafe custody and native I/O errors.
+    pub fn open_existing_lock(&self, name: impl AsRef<OsStr>) -> io::Result<File> {
+        self.inner
+            .open_exact_lock(checked_name(name.as_ref())?, false)
+    }
+
+    /// Remove this exact empty directory and durably publish its absence in the parent.
+    ///
+    /// All descendant handles must be dropped first. Nonempty directories are refused.
+    /// An error after removal can indicate uncertain durability and requires reconciliation.
+    ///
+    /// # Errors
+    /// Refuses live descendants, nonempty or replaced directories and native I/O errors.
+    pub fn remove_empty(self) -> io::Result<()> {
+        self.inner.remove_empty()
+    }
+
     /// Open a private ownership lock suitable for retaining in supervised child processes.
     ///
     /// Windows additionally denies other writable opens while any inherited handle remains.
@@ -362,6 +394,72 @@ impl OwnerDirectory {
                 .inner
                 .child_owned(checked_name(name.as_ref())?, true, true)?,
         })
+    }
+
+    /// Create a private child under this retained safe owner directory.
+    ///
+    /// # Errors
+    /// Refuses existing names, unsafe custody and native I/O errors.
+    pub fn create_private_child(&self, name: impl AsRef<OsStr>) -> io::Result<PrivateDirectory> {
+        Ok(PrivateDirectory {
+            inner: self.inner.child(checked_name(name.as_ref())?, true, true)?,
+        })
+    }
+
+    /// Atomically publish a complete private directory containing the supplied direct files.
+    ///
+    /// Every file and the staging directory are synced before the destination becomes visible.
+    /// Existing destinations are never replaced. A crash before publication can leave a private
+    /// temporary sibling, but cannot leave a partial directory at the requested name. Empty bytes
+    /// may initialize a lock file; callers acquire it only after this method returns.
+    ///
+    /// # Errors
+    /// Rejects duplicate/invalid names, more than 128 files, unsafe custody and native failures.
+    /// An error after publication can mean uncertain durability; reconcile the destination before
+    /// retrying rather than treating it as absent or deleting it.
+    pub fn publish_private_child(
+        &self,
+        name: impl AsRef<OsStr>,
+        files: &[(&str, &[u8])],
+    ) -> io::Result<PrivateDirectory> {
+        let name = checked_name(name.as_ref())?;
+        if files.is_empty() || files.len() > 128 {
+            return Err(invalid("completed private directory requires 1..128 files"));
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for (file, _) in files {
+            if !names.insert(checked_name(OsStr::new(file))?) {
+                return Err(invalid("duplicate completed private directory filename"));
+            }
+        }
+        match self.inner.child(name, false, false) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "private destination already exists",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let mut staging = None;
+        for _ in 0..32 {
+            match self.create_private_child(temporary_name()) {
+                Ok(directory) => {
+                    staging = Some(directory);
+                    break;
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let directory =
+            staging.ok_or_else(|| io::Error::other("cannot allocate private directory staging"))?;
+        for (file, bytes) in files {
+            directory.write_atomic(file, bytes, PublishMode::CreateNew)?;
+        }
+        directory.sync()?;
+        directory.rename_to_sibling(name, PublishMode::CreateNew)
     }
 
     /// Read one bounded stable source file through this retained directory.

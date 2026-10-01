@@ -4,7 +4,10 @@ use eframe::egui;
 use mochi_core::{
     DashboardAccountInput, DashboardSnapshot, InstructionDraft, ManagedBlockStream,
     ManagedEventStream, StatePage, StateQueryKind, TransactionPreview,
-    developer::{ContractInput, DeveloperWorkspace, ManagedNetwork, ManagedPhase},
+    developer::{
+        ContractInput, DeveloperWorkspace, ManagedAttachmentPhase, ManagedAttachmentStatus,
+        ManagedDataspaceStatus, ManagedNetwork, ManagedPhase,
+    },
     drafts_from_json_str, drafts_to_pretty_json, fetch_dashboard_snapshot, run_state_query,
 };
 use std::{
@@ -60,6 +63,7 @@ struct Selection {
     phase: ManagedPhase,
     running: usize,
     failure: Option<String>,
+    attachment: UiResult<Option<ManagedAttachmentStatus>>,
 }
 
 fn load_selection(workspace: &DeveloperWorkspace, name: Option<&str>) -> UiResult<Selection> {
@@ -67,11 +71,16 @@ fn load_selection(workspace: &DeveloperWorkspace, name: Option<&str>) -> UiResul
     let status = workspace
         .status(&network.prepared().context.name)
         .map_err(|e| e.to_string())?;
+    let attachment = workspace
+        .dataspace_status(&network.prepared().context.name)
+        .map(|status| status.map(|status| status.attachment))
+        .map_err(|e| e.to_string());
     Ok(Selection {
         network,
         phase: status.phase,
         running: status.running_peers,
         failure: status.failure,
+        attachment,
     })
 }
 
@@ -79,6 +88,7 @@ struct Opened {
     workspace: DeveloperWorkspace,
     names: Vec<String>,
     selected: UiResult<Option<Selection>>,
+    profiles: UiResult<Vec<String>>,
 }
 
 fn open_workspace(path: PathBuf) -> UiResult<Opened> {
@@ -87,6 +97,7 @@ fn open_workspace(path: PathBuf) -> UiResult<Opened> {
 }
 
 fn inspect_workspace(workspace: DeveloperWorkspace) -> UiResult<Opened> {
+    let profiles = workspace.network_profiles().map_err(|e| e.to_string());
     let names = workspace
         .contexts()
         .map_err(|e| e.to_string())?
@@ -105,6 +116,7 @@ fn inspect_workspace(workspace: DeveloperWorkspace) -> UiResult<Opened> {
         workspace,
         names,
         selected,
+        profiles,
     })
 }
 
@@ -125,6 +137,14 @@ enum Message {
         result: UiResult<String>,
         refreshed: UiResult<Opened>,
     },
+    Attached {
+        result: UiResult<String>,
+        refreshed: UiResult<Opened>,
+    },
+    AttachmentObserved {
+        name: String,
+        result: UiResult<Option<ManagedDataspaceStatus>>,
+    },
 }
 
 struct Review {
@@ -142,6 +162,13 @@ struct Desktop {
     workspace: Option<DeveloperWorkspace>,
     names: Vec<String>,
     new_name: String,
+    profiles: UiResult<Vec<String>>,
+    private_dialog: bool,
+    private_alias: String,
+    private_network: String,
+    attaching: Option<String>,
+    attachment_poll_pending: bool,
+    attachment_progress: Option<ManagedDataspaceStatus>,
     selected: Option<Selection>,
     peer: usize,
     view: View,
@@ -212,6 +239,13 @@ impl Desktop {
             workspace: None,
             names: Vec::new(),
             new_name: "local".into(),
+            profiles: Ok(Vec::new()),
+            private_dialog: false,
+            private_alias: "myapp".into(),
+            private_network: String::new(),
+            attaching: None,
+            attachment_poll_pending: false,
+            attachment_progress: None,
             selected: None,
             peer: 0,
             view: View::Dashboard,
@@ -277,6 +311,11 @@ impl Desktop {
         self.workspace = None;
         self.names.clear();
         self.new_name = "local".into();
+        self.profiles = Ok(Vec::new());
+        self.private_dialog = false;
+        self.attaching = None;
+        self.attachment_progress = None;
+        self.attachment_poll_pending = false;
         let path = PathBuf::from(&self.workspace_path);
         self.spawn(move || Message::Opened(open_workspace(path)));
     }
@@ -316,6 +355,72 @@ impl Desktop {
                 .and_then(|_| load_selection(&workspace, Some(&name))),
             )
         });
+    }
+
+    fn attach(&mut self) {
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        let alias = self.private_alias.trim().to_owned();
+        let network = self.private_network.clone();
+        if alias.is_empty()
+            || !self
+                .profiles
+                .as_ref()
+                .is_ok_and(|profiles| profiles.contains(&network))
+        {
+            return;
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        self.clear_network();
+        self.private_dialog = false;
+        self.attaching = Some(alias.clone());
+        self.attachment_poll_pending = false;
+        self.attachment_progress = None;
+        self.last_poll = Instant::now();
+        self.spawn(move || {
+            let result = workspace
+                .start_dataspace(&alias, &network, &alias)
+                .map(|status| attachment_summary(&status.attachment))
+                .map_err(|e| e.to_string());
+            Message::Attached {
+                result,
+                refreshed: inspect_workspace(workspace),
+            }
+        });
+    }
+
+    fn observe_attachment(&mut self) {
+        let (Some(workspace), Some(name)) = (self.workspace.clone(), self.attaching.clone()) else {
+            return;
+        };
+        self.attachment_poll_pending = true;
+        self.last_poll = Instant::now();
+        let sender = self.sender.clone();
+        let epoch = self.epoch;
+        std::thread::spawn(move || {
+            let result = workspace.dataspace_status(&name).map_err(|e| e.to_string());
+            let _ = sender.send((epoch, Message::AttachmentObserved { name, result }));
+        });
+    }
+
+    fn install_opened(&mut self, opened: Opened) {
+        self.workspace = Some(opened.workspace);
+        self.names = opened.names;
+        self.profiles = opened.profiles;
+        if let Ok(profiles) = &self.profiles {
+            if !profiles.contains(&self.private_network) {
+                self.private_network = profiles.first().cloned().unwrap_or_default();
+            }
+        }
+        match opened.selected {
+            Ok(Some(selected)) => self.install_selection(selected),
+            Ok(None) => self.clear_network(),
+            Err(error) => {
+                self.clear_network();
+                self.error = Some(error);
+            }
+        }
     }
 
     fn refresh_selection(&mut self) {
@@ -391,22 +496,20 @@ impl Desktop {
                     push_activity(&mut self.activity, progress);
                     continue;
                 }
+                Message::AttachmentObserved { name, result } => {
+                    if self.attaching.as_deref() == Some(&name) {
+                        self.attachment_poll_pending = false;
+                        if let Ok(Some(status)) = result {
+                            self.attachment_progress = Some(status);
+                        }
+                    }
+                    continue;
+                }
                 _ => self.busy = false,
             }
             match message {
                 Message::Opened(result) => match result {
-                    Ok(opened) => {
-                        self.workspace = Some(opened.workspace);
-                        self.names = opened.names;
-                        match opened.selected {
-                            Ok(Some(selected)) => self.install_selection(selected),
-                            Ok(None) => self.clear_network(),
-                            Err(error) => {
-                                self.clear_network();
-                                self.error = Some(error);
-                            }
-                        }
-                    }
+                    Ok(opened) => self.install_opened(opened),
                     Err(error) => self.error = Some(error),
                 },
                 Message::Selected(result) => match result {
@@ -421,7 +524,8 @@ impl Desktop {
                         self.clear_network();
                         self.names = names;
                         self.notice = Some(
-                            "Localnet reset. Start to create a fresh identity and ledger.".into(),
+                            "Local data reset. Any remote attachment history remains retained."
+                                .into(),
                         );
                     }
                     Err(error) => self.error = Some(error),
@@ -445,17 +549,12 @@ impl Desktop {
                 Message::Deployed { result, refreshed } => {
                     self.review = None;
                     match refreshed {
-                        Ok(opened) => {
-                            self.workspace = Some(opened.workspace);
-                            self.names = opened.names;
-                            match opened.selected {
-                                Ok(Some(selected)) => self.install_selection(selected),
-                                Ok(None) => self.clear_network(),
-                                Err(error) => {
-                                    self.clear_network();
-                                    self.error = Some(error);
-                                }
-                            }
+                        Ok(opened) => self.install_opened(opened),
+                        Err(_) if result.is_ok() => {
+                            self.clear_network();
+                            self.notice = Some(
+                                "Deployment applied. Workspace observation is unavailable; reopen the workspace to refresh it.".into(),
+                            );
                         }
                         Err(error) => self.error = Some(error),
                     }
@@ -464,7 +563,22 @@ impl Desktop {
                         Err(error) => self.error = Some(error),
                     }
                 }
-                Message::Review { .. } | Message::Progress(_) => {}
+                Message::Attached { result, refreshed } => {
+                    self.attaching = None;
+                    self.attachment_poll_pending = false;
+                    self.attachment_progress = None;
+                    match refreshed {
+                        Ok(opened) => self.install_opened(opened),
+                        Err(error) => self.error = Some(error),
+                    }
+                    match result {
+                        Ok(message) => self.notice = Some(message),
+                        Err(error) => self.error = Some(error),
+                    }
+                }
+                Message::Review { .. }
+                | Message::Progress(_)
+                | Message::AttachmentObserved { .. } => {}
             }
         }
         if let Some((_, receiver)) = self.blocks.as_mut() {
@@ -473,7 +587,12 @@ impl Desktop {
         if let Some((_, receiver)) = self.events.as_mut() {
             drain_stream(receiver, &mut self.activity, event_activity);
         }
-        if !self.busy
+        if self.attaching.is_some()
+            && !self.attachment_poll_pending
+            && self.last_poll.elapsed() >= Duration::from_secs(1)
+        {
+            self.observe_attachment();
+        } else if !self.busy
             && self.selected.is_some()
             && self.last_poll.elapsed() >= Duration::from_secs(5)
         {
@@ -505,7 +624,7 @@ impl Desktop {
                     .map(|s| s.network.prepared().context.name.clone());
                 let mut chosen = selected.clone();
                 egui::ComboBox::from_id_salt("context")
-                    .selected_text(selected.as_deref().unwrap_or("Choose localnet"))
+                    .selected_text(selected.as_deref().unwrap_or("Choose environment"))
                     .show_ui(ui, |ui| {
                         for name in &self.names {
                             ui.selectable_value(&mut chosen, Some(name.clone()), name);
@@ -527,11 +646,24 @@ impl Desktop {
                 if ui
                     .add_enabled(
                         self.workspace.is_some() && phase != Some(ManagedPhase::Ready),
-                        egui::Button::new("Start localnet"),
+                        egui::Button::new(if self.selected.is_some() {
+                            "Start"
+                        } else {
+                            "Start localnet"
+                        }),
                     )
                     .clicked()
                 {
                     self.lifecycle(true);
+                }
+                if ui
+                    .add_enabled(
+                        self.workspace.is_some(),
+                        egui::Button::new("Private dataspace…"),
+                    )
+                    .clicked()
+                {
+                    self.private_dialog = true;
                 }
                 if ui
                     .add_enabled(
@@ -570,13 +702,32 @@ impl Desktop {
             if let Some(failure) = &selected.failure {
                 ui.colored_label(egui::Color32::LIGHT_RED, failure);
             }
+            match &selected.attachment {
+                Ok(Some(status)) => attachment_details(ui, status),
+                Err(error) => {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        format!("Parent status unavailable: {error}"),
+                    );
+                }
+                Ok(None) => {}
+            }
+        } else if let Some(name) = &self.attaching {
+            ui.label(format!("Setting up private dataspace {name}…"));
+            if let Some(status) = &self.attachment_progress {
+                ui.label(format!(
+                    "{:?} · {} / 4 local validators",
+                    status.local.phase, status.local.running_peers
+                ));
+                attachment_details(ui, &status.attachment);
+            }
         } else if self.workspace.is_some() {
             ui.label("Start creates four local validators, a funded account and your client context. No configuration files needed.");
         }
     }
 
     fn dashboard(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Local network");
+        ui.heading("Your environment");
         ui.label(
             "Kagami and Mochi share this network. It stays available when you close the desktop.",
         );
@@ -1053,14 +1204,17 @@ impl Desktop {
                     )
                 }
                 .map_err(|e| e.to_string())?;
-                Ok(format!(
-                    "Journal: {}\n{}",
-                    run.journal.display(),
-                    norito::json::to_string_pretty(
-                        &run.receipt.to_json().map_err(|e| e.to_string())?
-                    )
-                    .map_err(|e| e.to_string())?
-                ))
+                let mut result = run.execution_summary();
+                if let Some(parent) = run.parent_summary() {
+                    result.push('\n');
+                    result.push_str(&parent);
+                }
+                result.push('\n');
+                result.push_str(
+                    &norito::json::to_string_pretty(&run.to_json().map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())?,
+                );
+                Ok(result)
             })();
             let refreshed = inspect_workspace(workspace);
             Message::Deployed { result, refreshed }
@@ -1071,6 +1225,35 @@ impl Desktop {
         self.selected
             .as_ref()
             .is_some_and(|s| s.phase == ManagedPhase::Ready)
+    }
+
+    fn private_dataspace_dialog(&mut self, context: &egui::Context) {
+        if !self.private_dialog {
+            return;
+        }
+        egui::Window::new("Private dataspace")
+            .collapsible(false).resizable(false).show(context, |ui| {
+                ui.label("Run four private validators here and connect them to your selected network.");
+                ui.label("Contract data stays on this computer. The parent receives certified commitments.");
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut self.private_alias);
+                });
+                let available = match &self.profiles {
+                    Ok(profiles) if !profiles.is_empty() => {
+                        egui::ComboBox::from_id_salt("private-network").selected_text(&self.private_network).show_ui(ui, |ui| {
+                            for name in profiles { ui.selectable_value(&mut self.private_network, name.clone(), name); }
+                        });
+                        true
+                    }
+                    Ok(_) => { ui.label("This installation has no network profiles. Install a bundle that includes your network."); false }
+                    Err(error) => { ui.label("Installed network profiles are unavailable. Localnets remain available."); ui.colored_label(egui::Color32::LIGHT_RED, bounded_text(error)); false }
+                };
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() { self.private_dialog = false; }
+                    if ui.add_enabled(available && !self.busy && self.workspace.is_some() && !self.private_alias.trim().is_empty(), egui::Button::new("Start private dataspace")).clicked() { self.attach(); }
+                });
+            });
     }
 }
 
@@ -1126,11 +1309,11 @@ impl eframe::App for Desktop {
             });
         });
         if self.reset_intent {
-            egui::Window::new("Reset localnet?").collapsible(false).resizable(false).show(context, |ui| {
-                ui.label("This removes the stopped localnet's keys and ledger. Its old identity cannot be restored.");
+            egui::Window::new("Reset local environment?").collapsible(false).resizable(false).show(context, |ui| {
+                ui.label("This removes the stopped environment's local keys and ledger. Its old ledger cannot be restored. Remote attachment history remains retained.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() { self.reset_intent = false; }
-                    if ui.add_enabled(!self.busy, egui::Button::new("Reset this localnet")).clicked() {
+                    if ui.add_enabled(!self.busy, egui::Button::new("Reset local data")).clicked() {
                         self.reset_intent = false;
                         if let (Some(workspace), Some(selected)) = (self.workspace.clone(), &self.selected) {
                             let name = selected.network.prepared().context.name.clone();
@@ -1141,6 +1324,7 @@ impl eframe::App for Desktop {
                 });
             });
         }
+        self.private_dataspace_dialog(context);
         context.request_repaint_after(Duration::from_millis(100));
     }
 }
@@ -1148,6 +1332,36 @@ impl eframe::App for Desktop {
 fn optional_selector(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn attachment_summary(status: &ManagedAttachmentStatus) -> String {
+    let phase =
+        if status.stage == ManagedAttachmentPhase::Attached && status.parent_confirmed.is_none() {
+            "awaiting verified receipt"
+        } else {
+            status.stage.as_str()
+        };
+    let mut summary = format!("Parent {} · {phase}", status.network);
+    if let Some(confirmed) = &status.parent_confirmed {
+        summary.push_str(&format!(
+            " · last confirmed child block #{} in parent block #{}",
+            confirmed.child.height, confirmed.parent_height
+        ));
+    }
+    summary
+}
+
+fn attachment_details(ui: &mut egui::Ui, status: &ManagedAttachmentStatus) {
+    ui.label(attachment_summary(status));
+    if let Some(cursor) = &status.local_successor {
+        ui.label(format!("Last observed private block #{}", cursor.height));
+    }
+    if let Some(wallet) = &status.wallet_status {
+        ui.label(format!("Parent operation: {wallet}"));
+    }
+    if let Some(failure) = &status.failure {
+        ui.colored_label(egui::Color32::LIGHT_RED, failure.to_string());
+    }
 }
 
 fn public_value(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -1236,6 +1450,119 @@ fn drain_stream<T: Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_deployment_survives_failed_workspace_refresh() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        desktop
+            .sender
+            .send((
+                0,
+                Message::Deployed {
+                    result: Ok(
+                        "Applied on private dataspace original; exact retained receipt".into(),
+                    ),
+                    refreshed: Err("generation was replaced".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert!(!desktop.busy);
+        assert!(desktop.error.is_none());
+        assert_eq!(
+            desktop.receipt.as_deref(),
+            Some("Applied on private dataspace original; exact retained receipt")
+        );
+        assert!(
+            desktop
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Deployment applied")
+        );
+        assert!(desktop.selected.is_none());
+    }
+
+    #[test]
+    fn parent_status_requires_a_receipt_and_keeps_historical_confirmation_distinct() {
+        let mut status = ManagedAttachmentStatus {
+            network: "installed".into(),
+            stage: ManagedAttachmentPhase::Attached,
+            wallet_status: Some("Applied".into()),
+            local_successor: None,
+            parent_confirmed: None,
+            failure: None,
+        };
+        assert_eq!(
+            attachment_summary(&status),
+            "Parent installed · awaiting verified receipt"
+        );
+        status.stage = ManagedAttachmentPhase::Unavailable;
+        status.parent_confirmed = Some(mochi_core::developer::ManagedConfirmedAnchor {
+            parent_height: u64::MAX,
+            child: iroha_data_model::private_dataspace::PrivateDataspaceCursor {
+                height: 7,
+                consensus_hash: [1; 32],
+                result: [2; 32],
+            },
+        });
+        let summary = attachment_summary(&status);
+        assert!(summary.contains("unavailable"));
+        assert!(summary.contains("last confirmed child block #7"));
+        assert!(summary.contains(&u64::MAX.to_string()));
+    }
+
+    #[test]
+    fn attachment_observation_does_not_finish_background_work_or_escape_its_context() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        desktop.attaching = Some("private".into());
+        desktop.attachment_poll_pending = true;
+        desktop
+            .sender
+            .send((
+                0,
+                Message::AttachmentObserved {
+                    name: "private".into(),
+                    result: Err("generation is still preparing".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert!(desktop.busy);
+        assert!(!desktop.attachment_poll_pending);
+        assert!(desktop.error.is_none());
+        desktop.attaching = None;
+        desktop.attachment_poll_pending = true;
+        desktop
+            .sender
+            .send((
+                0,
+                Message::AttachmentObserved {
+                    name: "private".into(),
+                    result: Err("late observation".into()),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert!(desktop.attachment_poll_pending);
+        assert!(desktop.busy);
+    }
+
+    #[test]
+    fn private_dialog_without_installed_profiles_never_starts_or_invents_a_network() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.private_dialog = true;
+        let context = egui::Context::default();
+        let output = context.run(egui::RawInput::default(), |context| {
+            desktop.private_dataspace_dialog(context)
+        });
+        assert!(!output.shapes.is_empty());
+        assert!(!desktop.busy);
+        assert!(desktop.attaching.is_none());
+        assert!(desktop.private_network.is_empty());
+    }
 
     #[test]
     fn stream_summaries_bound_untrusted_text_and_show_lifecycle() {

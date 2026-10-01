@@ -46,6 +46,17 @@ fn state(
     scope: Option<SumeragiRootScope>,
     admission: Option<PrivateDataspaceAdmissionPolicy>,
 ) -> State {
+    State::new_for_testing(
+        world(scope, admission),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    )
+}
+
+fn world(
+    scope: Option<SumeragiRootScope>,
+    admission: Option<PrivateDataspaceAdmissionPolicy>,
+) -> World {
     let owner = authority(1);
     let relayer = authority(2);
     let accounts = [
@@ -68,11 +79,7 @@ fn state(
         }
         parameters.commit();
     }
-    State::new_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    )
+    world
 }
 
 fn registration(state: &State) -> (NativeFinalityFixture, RegisterPrivateDataspace) {
@@ -307,4 +314,55 @@ fn admission_parameter_rejects_malformed_payload_and_retains_previous_policy() {
             policy()
         );
     }
+}
+
+#[test]
+fn parent_receipt_uses_original_certified_archive_and_survives_native_replay() {
+    use crate::query::native_receipts::private_dataspace_record_proof;
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier};
+
+    let config = || TestChainConfig::new(world(None, Some(policy())), 1_000);
+    let mut chain = CertifiedTestChain::start(config()).unwrap();
+    let (_, register) = registration(chain.state());
+    let id = crate::sns::dataspace_id_for_sns_alias("acme").unwrap();
+    let key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
+    let transaction = chain.sign(&key, [register.into()], 1_999);
+    assert_eq!(chain.commit_at(2_000, vec![transaction]), vec![true]);
+    let receipt = private_dataspace_record_proof(&chain.state().view(), 2, id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.record.anchor.cursor().height, 1);
+    let validators = genesis_epoch(chain.genesis())
+        .unwrap()
+        .committee
+        .into_iter()
+        .map(|member| FinalityValidator {
+            public_key: member.validator.public_key().clone(),
+            proof_of_possession: member.proof_of_possession,
+        })
+        .collect();
+    let mut verifier =
+        SumeragiFinalityVerifier::new(chain.genesis(), "sumeragi-certified-test-chain", validators)
+            .unwrap();
+    verifier
+        .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 1).unwrap())
+        .unwrap();
+    let certified = verifier
+        .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 2).unwrap())
+        .unwrap();
+    receipt.verify(id, &certified).unwrap();
+    assert!(private_dataspace_record_proof(&chain.state().view(), 1, id).is_err());
+    assert!(
+        private_dataspace_record_proof(&chain.state().view(), 2, DataSpaceId::UNIVERSAL)
+            .unwrap()
+            .is_none()
+    );
+    let mut replayed = CertifiedTestChain::start(config()).unwrap();
+    replayed.replay_from(&chain).unwrap();
+    assert_eq!(
+        private_dataspace_record_proof(&replayed.state().view(), 2, id).unwrap(),
+        Some(receipt)
+    );
 }

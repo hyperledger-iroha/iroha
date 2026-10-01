@@ -496,6 +496,13 @@ impl StateBlock<'_> {
     pub(crate) fn verified_fastpq_source_inventory_for_capture(
         &self,
     ) -> Result<Arc<FastpqSourceInventoryV1>, String> {
+        #[cfg(test)]
+        if matches!(
+            self.execution_output_plan,
+            Some(super::output_capacity::ExecutionOutputPlanState::Inspecting)
+        ) {
+            return Err("FASTPQ witness capture refuses a source inspection carrier".into());
+        }
         if matches!(
             self.execution_output_plan,
             Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)

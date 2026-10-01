@@ -9871,6 +9871,8 @@ pub mod tests {
             Json::new(manifest),
         );
         let mut ivm_cache = IvmCache::new();
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,
@@ -10228,6 +10230,8 @@ pub mod tests {
             ),
         );
         let mut ivm_cache = IvmCache::new();
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
             &mut state_tx,

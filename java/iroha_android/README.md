@@ -1271,9 +1271,12 @@ resolved.ifPresentOrElse(
 
 ### Reading Kotodama Manifests
 
-`HttpClientTransport.getContractManifest(codeHash)` reads
-`/v1/contracts/code/{code_hash}` into the Kotlin-owned Kotodama V1 manifest
-model in `core-jvm`. The strict Kotlin decoder retains `seiyaku_name`, branded
+`HttpClientTransport.getContractManifest(artifactId, canonicalAuth)` reads
+`/v1/contracts/artifacts/{dataspace_id}/{code_hash}` into the Kotlin-owned
+Kotodama V1 manifest model in `core-jvm`. `ContractArtifactId` carries the full
+unsigned 64-bit dataspace ID as `BigInteger` and the canonical code hash. The
+request requires canonical account authentication and a configured local signing
+context; its response must match that network and exact artifact identity. The strict Kotlin decoder retains `seiyaku_name`, branded
 entrypoint kinds, exact flat-preorder argument/return schemas, dynamic access hints,
 completeness/skips, triggers, state, error codes, `kotoba`, and provenance. A
 `List` node contains only `capacity` and its element subtree immediately follows

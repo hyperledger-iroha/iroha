@@ -533,7 +533,8 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
     for (path, method, response_schema, reject, statuses) in contract_rows! {
         "/v1/contracts/aliases/resolve", "post", "#/components/schemas/ContractAliasResolveResponse", "alias_auth_required", &contract_words("200 400 401 404 429 500")[..];
         "/v1/gov/contracts/{contract_address}", "get", "#/components/schemas/GovernedContractResponse", "contract_code_auth_required", &contract_words("200 400 401 404 429 500");
-        "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes", "get", "#/components/schemas/JsonValue", "contract_code_auth_required", &contract_words("200 400 401 404 429");
+        "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes", "get", "#/components/schemas/ContractArtifactBytesResponse", "contract_code_auth_required", &contract_words("200 400 401 403 404 429");
+        "/v1/contracts/artifacts/{dataspace_id}/{code_hash}", "get", "#/components/schemas/ContractArtifactManifestResponse", "canonical_authentication_required", &contract_words("200 400 401 403 404 429");
     } {
         let operation = openapi_operation(&document, path, method);
         assert_eq!(operation_header_requirements(operation), canonical_account_header_requirements(false));
@@ -582,4 +583,77 @@ fn multisig_read_auth_contract_is_path_specific() {
         assert!(operation_header_requirements(openapi_operation(&document, path, "post")).is_empty(), "POST {path} body-authenticated write contract");
     }
 }
+}
+
+#[test]
+fn scoped_artifact_openapi_binds_network_full_dataspace_and_content() {
+    let document = generate_spec();
+    let schemas = component_schemas(&document);
+    for (name, required) in [
+        ("ContractArtifactId", &["dataspace_id", "code_hash"][..]),
+        (
+            "ContractArtifactBytesResponse",
+            &["network_id", "artifact_id", "code_b64"][..],
+        ),
+        (
+            "ContractArtifactManifestResponse",
+            &["network_id", "artifact_id", "manifest"][..],
+        ),
+    ] {
+        let schema = contract_schema(schemas, name);
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            schema
+                .get("required")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>(),
+            required.iter().copied().collect::<BTreeSet<_>>()
+        );
+    }
+    let identity = contract_schema(schemas, "ContractArtifactId");
+    let properties = identity.get("properties").unwrap().as_object().unwrap();
+    assert_eq!(
+        properties["dataspace_id"]
+            .get("maximum")
+            .and_then(Value::as_u64),
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        properties["code_hash"].get("$ref").and_then(Value::as_str),
+        Some("#/components/schemas/Hash")
+    );
+    for path in [
+        "/v1/contracts/artifacts/{dataspace_id}/{code_hash}",
+        "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes",
+    ] {
+        let operation = openapi_operation(&document, path, "get");
+        let parameters = operation.get("parameters").unwrap().as_array().unwrap();
+        let dataspace = parameters
+            .iter()
+            .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some("dataspace_id"))
+            .unwrap();
+        assert_eq!(dataspace.get("required"), Some(&Value::Bool(true)));
+        assert_eq!(dataspace.get("in").and_then(Value::as_str), Some("path"));
+        assert_eq!(
+            dataspace
+                .get("schema")
+                .unwrap()
+                .get("type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+    }
+    for retired in [
+        "/v1/contracts/code/{code_hash}",
+        "/v1/contracts/code-bytes/{code_hash}",
+    ] {
+        assert!(document.get("paths").unwrap().get(retired).is_none());
+    }
 }

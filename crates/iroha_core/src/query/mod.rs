@@ -41,6 +41,9 @@ pub mod store;
 pub mod stream_token_authority;
 /// Same-State historical native StreamToken custody control reader.
 pub mod stream_token_custody;
+/// Deterministic indexed stream-token gateway admission transitions.
+/// Native gateway transitions and source-bound finalized serving observations.
+pub mod stream_token_gateway;
 /// Read-only bounded role-16 native row and index decoder; admission remains closed.
 pub mod topology_authority;
 use crate::state::{WorldReadOnly, WorldStateSnapshot};

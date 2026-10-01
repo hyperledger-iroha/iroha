@@ -1464,8 +1464,8 @@ mod tests {
             "invalid persisted timing must suspend before any debit"
         );
     }
-    #[test]
-    fn native_auto_renew_debits_exact_owner_quote_once() {
+    #[tokio::test]
+    async fn native_auto_renew_debits_exact_owner_quote_once() {
         // Preserve the native retry reason if the exact debit oracle fails.
         let _logger = iroha_logger::test_logger();
         let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
@@ -3510,10 +3510,7 @@ mod tests {
             permission::query::CanReadAllLedgerData,
         };
         use iroha_primitives::json::Json;
-        use std::{
-            collections::{BTreeMap, BTreeSet},
-            num::NonZeroU16,
-        };
+        use std::{collections::BTreeMap, num::NonZeroU16};
         let registrar_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
         let registrar = AccountId::new(registrar_key.public_key().clone());
         let collector = AccountId::new(
@@ -3590,15 +3587,9 @@ mod tests {
             crate::sns::record_storage_key(&domain_selector),
             norito::codec::Encode::encode(&domain_lease),
         );
-        world.account_permissions.insert(
-            registrar.clone(),
-            BTreeSet::from([
-                Permission::from(CanManageAccountAlias {
-                    scope: AccountAliasPermissionScope::Domain(domain.clone()),
-                }),
-                Permission::from(CanReadAllLedgerData),
-            ]),
-        );
+        let alias_management = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+        });
         let target = AliasTargetV1::AccountAlias(alias.clone());
         let selector = crate::alias_setup::selector_for_resolved_alias_target(&target).unwrap();
         assert!(crate::sns::get_name_record_by_selector(&world.view(), &selector, 2_000).is_err());
@@ -3654,6 +3645,17 @@ mod tests {
         );
         let mut config = TestChainConfig::new(world, 1_000);
         config.genesis_key = registrar_key.clone();
+        // Carry the fixture's management and snapshot-read permissions as
+        // actual grants in the authenticated signed genesis source.
+        config.genesis_instructions.extend([
+            iroha_data_model::isi::Grant::account_permission(alias_management, registrar.clone())
+                .into(),
+            iroha_data_model::isi::Grant::account_permission(
+                Permission::from(CanReadAllLedgerData),
+                registrar.clone(),
+            )
+            .into(),
+        ]);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.dataspace_catalog = catalog.clone();
         nexus.fees.base_fee = Quantity::zero();
@@ -3662,6 +3664,14 @@ mod tests {
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         config.nexus = Some(nexus);
         let mut chain = CertifiedTestChain::start(config).unwrap();
+        assert!(
+            crate::alias::authority_can_manage_resolved_account_alias(
+                chain.state().view().world(),
+                &registrar,
+                &alias,
+            ),
+            "signed genesis retains the registrar's exact domain management permission"
+        );
         let instructions: Vec<iroha_data_model::isi::InstructionBox> = vec![
             Register::account(Account::new(signer.clone())).into(),
             Register::account(bare_wallet.clone()).into(),

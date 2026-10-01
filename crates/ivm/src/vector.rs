@@ -326,11 +326,6 @@ pub(crate) fn metal_parity_ok() -> bool {
         && metal_runtime::current_allowed()
         && !metal_runtime::all_quarantined()
 }
-/// Ensure Metal pipelines are compiled ahead of time to avoid first-use latency.
-#[cfg(all(target_os = "macos", feature = "metal"))]
-pub fn warm_up_metal() {
-    let _ = metal_merkle_cost_profile();
-}
 /// Detect the best available SIMD option for the current platform.
 pub fn simd_choice() -> SimdChoice {
     if !simd_policy_enabled() {
@@ -1319,7 +1314,7 @@ where
 {
     with_metal_state(f).flatten()
 }
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(test, target_os = "macos", feature = "metal"))]
 fn metal_merkle_cost_profile() -> Option<metal_cost::MetalMerkleCostProfile> {
     with_metal_state(|state| {
         state
@@ -3107,7 +3102,7 @@ mod tests {
             return;
         }
         reset_metal_backend_for_tests();
-        warm_up_metal();
+        let _ = metal_merkle_cost_profile();
         let mut block_a = [0u8; 64];
         block_a[0] = b'a';
         block_a[1] = b'b';
@@ -3618,7 +3613,7 @@ mod tests {
 
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
-    fn warm_up_metal_reuses_cached_state() {
+    fn with_metal_state_reuses_cached_state() {
         if !metal_runtime_allowed() {
             eprintln!("Metal runtime disabled; skipping reuse assertion");
             return;
@@ -3627,7 +3622,7 @@ mod tests {
         let first = with_metal_state(|state| objc2::rc::Retained::as_ptr(&state.queue) as usize);
         let second = with_metal_state(|state| objc2::rc::Retained::as_ptr(&state.queue) as usize);
         match (first, second) {
-            (Some(a), Some(b)) => assert_eq!(a, b, "warm_up_metal should reuse cached Metal state"),
+            (Some(a), Some(b)) => assert_eq!(a, b, "reuse the same qualified Metal state"),
             _ => eprintln!("Metal state unavailable; skipping reuse assertion"),
         }
     }

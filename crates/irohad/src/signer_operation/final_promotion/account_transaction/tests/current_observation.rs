@@ -500,9 +500,9 @@ fn pending_reserve_rejects_a_finalized_but_rolled_back_floor_before_staging() {
         Err(CurrentError::Floor)
     ));
     assert_eq!(
-        std::fs::read_dir(directory.path().join("pending-reserve-v1"))
-            .unwrap()
-            .count(),
+        crate::signer_operation::journal::test_record_count(
+            directory.path().join("pending-reserve-v1")
+        ),
         0,
         "rollback must be rejected before staging a durable operation ID"
     );
@@ -1197,7 +1197,7 @@ fn reserved_runtime_rejects_unapplied_or_substituted_reserve_before_floor_advanc
 }
 
 #[test]
-fn reserved_runtime_rejects_post_reserve_floor_and_late_reconstruction() {
+fn reserved_runtime_rejects_post_reserve_floor_before_any_check_work() {
     let mut f = Fixture::new();
     let (request, signed) = signed_reserve(&mut f);
     let mut floor = RetainedFloor::new(&f);
@@ -1226,7 +1226,10 @@ fn reserved_runtime_rejects_post_reserve_floor_and_late_reconstruction() {
     assert_eq!(signer.calls, 0);
     assert_eq!(check_submission.submits, 0);
     assert_eq!(floor.advances, 0);
+}
 
+#[test]
+fn reserved_runtime_rejects_late_reconstruction_after_original_reserve() {
     let mut f = Fixture::new();
     let (request, signed) = signed_reserve(&mut f);
     let original = signed.for_submission(times().0, times().1).unwrap().clone();

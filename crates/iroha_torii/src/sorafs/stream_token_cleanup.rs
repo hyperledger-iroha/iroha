@@ -5,8 +5,9 @@
 //! retained critical worker runs one physical release at a time, independently of query gates.
 //! Queue/reservations are bounded by the configured admission pending limit, plus one physical
 //! work item. This does not promise a finite shutdown if an injected synchronous provider hangs.
-use super::{StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionRecordV1};
+use super::StreamTokenAdmissionCaptureV1;
 use crate::ToriiCriticalWorkerExit;
+use iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionRecordV1;
 use iroha_futures::supervisor::ShutdownSignal;
 use std::{
     fmt,

@@ -110,6 +110,7 @@ fn control(state: &State, provider: ProviderId, operator: &AccountId) -> NativeC
             recorded_at_unix_ms: 1_000,
             authority: operator.clone(),
             control_state: Vec::new(),
+            active_enrollment: None,
         },
         state: SignerCustodyControlStateV1 {
             policy,

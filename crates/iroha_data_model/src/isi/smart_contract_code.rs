@@ -534,6 +534,54 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "explicit maintenance command captures scoped artifact and private-root ISI frames"]
+    fn print_scoped_artifact_instruction_identity_frames() {
+        use super::super::generated_record_identity_tests::capture;
+        let artifact_id = ContractArtifactId::new(DataSpaceId::new(u64::MAX), code_hash());
+        let rows = [
+            capture(crate::isi::private_dataspace::RegisterPrivateDataspace {
+                alias: "acme".into(),
+                expected_ownership_generation: u64::MAX,
+                registration: vec![1, 2],
+            }),
+            capture(crate::isi::private_dataspace::AnchorPrivateDataspace {
+                dataspace_id: DataSpaceId::new(u64::MAX),
+                anchor: vec![3, 4],
+            }),
+            capture(RegisterSmartContractCode {
+                artifact_id,
+                manifest: manifest(),
+            }),
+            capture(RegisterSmartContractBytes {
+                artifact_id,
+                code: vec![1, 2, 3],
+            }),
+            capture(UploadSmartContractCodeChunk {
+                artifact_id,
+                total_size: 3,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![1, 2, 3],
+            }),
+            capture(FinalizeSmartContractCodeUpload {
+                artifact_id,
+                total_size: 3,
+                chunk_count: 1,
+            }),
+            capture(CancelSmartContractCodeUpload { artifact_id }),
+            capture(RemoveSmartContractBytes {
+                artifact_id,
+                reason: Some("superseded".to_owned()),
+            }),
+        ];
+        for row in rows {
+            println!(
+                "SCOPED_ARTIFACT_ISI_FRAME={}",
+                norito::json::to_json(&row).expect("typed artifact capture")
+            );
+        }
+    }
+    #[test]
     fn smart_contract_code_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterSmartContractCode {
             artifact_id: ContractArtifactId::new(DataSpaceId::new(u64::MAX), code_hash()),

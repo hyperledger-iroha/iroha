@@ -4,6 +4,7 @@ use iroha::account_bootstrap::validate_endpoint;
 use iroha::data_model::prelude::TransactionEntrypoint;
 use iroha_crypto::{Hash, KeyPair};
 use iroha_torii_shared::PipelineTransactionStatusResponse;
+#[cfg(unix)]
 use std::fs;
 use url::Url;
 fn vector(name: &str) -> Value {
@@ -28,6 +29,12 @@ fn onboarding_fixture(proof_required: bool) -> (Config, OperationJournalV1) {
     config.network_id = json::from_value(fixture["network_id"].clone()).unwrap();
     config.account_chain_discriminant = 0x02f1;
     config.account = AccountId::parse_encoded(&prepared.account_id).unwrap();
+    // Public target signer from the canonical data-model onboarding fixture.
+    config.key_pair = KeyPair::from_seed(vec![0x22; 32], iroha_crypto::Algorithm::Ed25519);
+    assert_eq!(
+        config.account,
+        AccountId::new(config.key_pair.public_key().clone())
+    );
     let mut binding = prepared.binding.clone();
     let fee = prepared.fee_payment.clone();
     let issuer = prepared.receipt.body.authority.clone();
@@ -63,11 +70,18 @@ fn faucet_fixture() -> (Config, OperationJournalV1) {
     config.network_id = json::from_value(fixture["network_id"].clone()).unwrap();
     config.account_chain_discriminant = 0x02f1;
     config.account = AccountId::parse_encoded(&prepared.account_id).unwrap();
+    // Faucet and onboarding fixtures share the same published recipient identity.
+    config.key_pair = KeyPair::from_seed(vec![0x22; 32], iroha_crypto::Algorithm::Ed25519);
+    assert_eq!(
+        config.account,
+        AccountId::new(config.key_pair.public_key().clone())
+    );
     let operation = new_operation(
         &config,
         prepared.binding.clone(),
         prepared.fee_payment.clone(),
         OperationV1::Faucet(Box::new(FaucetV1 {
+            requested_fee: prepared.fee_payment.clone(),
             issuer: AccountId::parse_encoded(fixture["signer_account_id"].as_str().unwrap())
                 .unwrap(),
             asset_definition: prepared.asset_definition_id.parse().unwrap(),
@@ -402,8 +416,81 @@ fn preparation_report_exposes_exact_review_inputs_without_runtime_secrets() {
 
 #[test]
 fn timeout_bounds_precede_network_access() {
-    assert!(operation_client(&crate::operations::tests::fixture_config(), 0).is_err());
-    assert!(operation_client(&crate::operations::tests::fixture_config(), 301).is_err());
+    let config = crate::operations::tests::fixture_config();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    assert!(operation_client(&config, 0, deadline).is_err());
+    assert!(operation_client(&config, 301, deadline).is_err());
+    assert!(operation_client(&config, 2, Instant::now()).is_err());
+    assert!(operation_client(&config, 2, deadline).is_ok());
+    assert_eq!(operation_deadline(10, Some(deadline)).unwrap(), deadline);
+    assert!(operation_deadline(0, None).is_err());
+    let service = OnboardingService::new(config)
+        .unwrap()
+        .with_deadline(deadline)
+        .unwrap()
+        .with_deadline(deadline + Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(service.deadline, Some(deadline));
+    assert!(service.with_deadline(Instant::now()).is_err());
+}
+
+#[test]
+fn faucet_recovery_binds_original_trusted_request_before_network_or_submission() {
+    let _profile = ChainDiscriminantGuard::enter(0x02f1);
+    let (config, operation) = faucet_fixture();
+    let OperationV1::Faucet(faucet) = &operation.operation else {
+        unreachable!()
+    };
+    let request = FaucetRequest {
+        issuer: faucet.issuer.clone(),
+        asset_definition: faucet.asset_definition.clone(),
+        amount: faucet.amount.clone(),
+        fee_payment: faucet.requested_fee.clone(),
+    };
+    operation.verify_faucet_request(&request).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("faucet");
+    {
+        let journal = Journal::create(&path).unwrap();
+        journal.write_operation(&operation).unwrap();
+    }
+    let service = OnboardingService::new(config.clone()).unwrap();
+    service.verify_faucet_journal(&path, &request).unwrap();
+    let mut changed = request.clone();
+    changed.amount = 999_u64.into();
+    assert!(service.verify_faucet_journal(&path, &changed).is_err());
+    for submit in [false, true] {
+        let result = if submit {
+            service.submit_faucet_with_request(&path, &changed, 1)
+        } else {
+            service.resume_faucet_with_request(&path, &changed, 1)
+        };
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exact trusted request")
+        );
+    }
+    assert!(!path.join("submission.json").exists());
+    let held: OperationJournalV1 = Journal::open(&path).unwrap().read_operation().unwrap();
+    assert_eq!(held, operation);
+    let expired = OnboardingService {
+        config,
+        deadline: Some(Instant::now()),
+    };
+    let fresh = temporary.path().join("not-created");
+    assert!(
+        expired
+            .prepare_faucet(&request, &PreparationOptions::default(), &fresh)
+            .is_err()
+    );
+    assert!(
+        expired
+            .resume_faucet_with_request(&path, &request, 1)
+            .is_err()
+    );
+    assert!(!fresh.exists());
 }
 #[test]
 fn saved_operation_success_requires_verified_completion() {

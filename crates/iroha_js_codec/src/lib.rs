@@ -3241,13 +3241,17 @@ fn register_smart_contract_bytes_from_json(
     mut fields: json::Map,
 ) -> CodecResult<InstructionBox> {
     require_exact_json_fields(envelope, &[], "RegisterSmartContractBytes envelope")?;
+    require_exact_json_fields(
+        &fields,
+        &["artifact_id", "code"],
+        "RegisterSmartContractBytes",
+    )?;
     let artifact_id = lifecycle_instructions::parse_artifact_id(
         required_value(&mut fields, "artifact_id", "RegisterSmartContractBytes")?,
         "RegisterSmartContractBytes.artifact_id",
     )?;
     let code_value = required_value(&mut fields, "code", "RegisterSmartContractBytes")?;
     let code = parse_base64(code_value, "RegisterSmartContractBytes.code")?;
-    require_exact_json_fields(&fields, &[], "RegisterSmartContractBytes")?;
     let instruction = RegisterSmartContractBytes { artifact_id, code };
     Ok(Box::new(instruction).into_instruction_box())
 }
@@ -3258,13 +3262,18 @@ fn remove_smart_contract_bytes_from_json(
     mut fields: json::Map,
 ) -> CodecResult<InstructionBox> {
     require_exact_json_fields(envelope, &[], "RemoveSmartContractBytes envelope")?;
+    let expected = if fields.contains_key("reason") {
+        &["artifact_id", "reason"][..]
+    } else {
+        &["artifact_id"][..]
+    };
+    require_exact_json_fields(&fields, expected, "RemoveSmartContractBytes")?;
     let artifact_id = lifecycle_instructions::parse_artifact_id(
         required_value(&mut fields, "artifact_id", "RemoveSmartContractBytes")?,
         "RemoveSmartContractBytes.artifact_id",
     )?;
     let reason =
         parse_optional_string_value(fields.remove("reason"), "RemoveSmartContractBytes.reason")?;
-    require_exact_json_fields(&fields, &[], "RemoveSmartContractBytes")?;
     let instruction = RemoveSmartContractBytes {
         artifact_id,
         reason,

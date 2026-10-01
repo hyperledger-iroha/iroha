@@ -37,7 +37,6 @@ pub(super) fn dependency_is_present(
             deps.sorafs_stream_token_signer_client.is_some()
                 && deps.sorafs_stream_token_state_observer.is_some()
         }
-        Slot::StreamTokenGatewayAdmission => deps.sorafs_stream_token_gateway_admission.is_some(),
         Slot::AppealFinanceTransactionSigner => {
             deps.sorafs_appeal_finance_runtime_signers.is_some()
         }
@@ -129,6 +128,9 @@ pub(super) fn has_unrequested_dependency(
     // Pasta seed custody is deliberately not a catalog provider slot: only the
     // consumed private descriptor or exact deployment launcher may install it.
     dependencies.kagemusha_mint_finality_authority.is_some()
+        // Gateway admission authority is constructed from local Core; no broker catalog
+        // binding may install an externally asserted admission provider.
+        || dependencies.sorafs_stream_token_gateway_admission.is_some()
         || dependency_is_unrequested(
             bindings,
             IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
@@ -236,10 +238,6 @@ fn has_unrequested_storage_security_dependency(
         dependencies.sorafs_stream_token_signer_client.is_some()
             || dependencies.sorafs_stream_token_state_observer.is_some()
             || dependencies.sorafs_stream_token_approved_anchor.is_some(),
-    ) || dependency_is_unrequested(
-        bindings,
-        Slot::StreamTokenGatewayAdmission,
-        dependencies.sorafs_stream_token_gateway_admission.is_some(),
     ) || dependency_is_unrequested(
         bindings,
         Slot::PorFinalizedReplayArchive,

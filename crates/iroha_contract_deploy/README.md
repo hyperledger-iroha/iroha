@@ -50,8 +50,8 @@ closed and are never silently overwritten. Native macOS component tests pass;
 Linux and Windows runtime and crash qualification remain part of the release matrix.
 
 `inspect_journal` returns a typed `Pending`, `Failed`, `Completed`, or `Cancelled` disposition.
-A fixed failure contains the SDK's exact global, state-resolved rejection or
-expiry response. Inspection rechecks the exact hash and persists that proof.
+A fixed failure contains the SDK's exact state-resolved rejection or expiry
+response from the configured root ledger. Inspection rechecks the exact hash and persists that proof.
 An explicit new deployment requires confirmed failure, completion, or cancellation
 of a fully unattempted local plan.
 Transport uncertainty never becomes a fixed failure. Resuming a completed
@@ -69,8 +69,17 @@ the exact ordered hashes in an immutable cancellation record. Repeated cancel
 is idempotent; a cancelled plan cannot execute or resume. Cancellation does not
 claim transaction expiry and cannot release an attempted ambiguous deployment.
 
-`receipt.json` is produced only after the exact commit reaches global,
-state-resolved `Applied` and authenticated alias/nonce plus stored artifact bytes
-agree. `completed_receipt` authenticates all retained evidence and rechecks the
+`receipt.json` is produced only after the exact commit reaches state-resolved
+`Applied` on the configured root ledger and authenticated alias/nonce plus stored
+artifact bytes agree. On a private root, this proves local execution; parent
+anchoring is separate evidence. The SDK status selector `global` denotes the
+configured ledger's root and does not imply confirmation by its parent network. `completed_receipt` authenticates all retained evidence and rechecks the
 exact commit against the configured network without submission. Signed plans
 are runtime artifacts; only the finalized receipt is intended for sharing.
+
+Funding preflight queries each registered fee asset's balance policy and binds every
+quote to the deployment's exact dataspace. Global assets share one authority balance
+across routes; restricted assets use the quoted dataspace's exact `AssetId` bucket.
+Cumulative principal and fees never merge different dataspace balances or substitute
+parent currency. Missing accounts, definitions, inaccessible routes, and malformed
+reads fail; only typed absence of the exact requested holding means zero.

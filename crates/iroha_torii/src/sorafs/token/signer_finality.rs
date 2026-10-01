@@ -5,11 +5,11 @@ use super::{
     StreamTokenStateObserverClientV1,
     signer_completed_finality::{CompletedFinalityV1, PendingCompletedFinalityV1},
 };
-use iroha_core::query::{
-    signer_finality::verify_signer_finality_v1,
-    stream_token_custody::read_stream_token_custody_control_at_v1,
-};
 use iroha_core::state::{State, StateReadOnly, WorldReadOnly};
+use iroha_core::{
+    query::stream_token_custody::read_stream_token_custody_control_at_v1,
+    sumeragi::certified_chain::{CertifiedChain, QcVerification},
+};
 use iroha_data_model::sorafs::capacity::ProviderId;
 use mv::storage::StorageReadOnly;
 use sorafs_manifest::signer::custody::SignerCustodyAnchorV1;
@@ -35,7 +35,6 @@ pub(super) enum HistoricalFinalityV1 {
     Custody(SignerCustodyAnchorV1),
     Block(FinalityFloorV1),
 }
-#[cfg(test)]
 impl HistoricalFinalityV1 {
     pub(super) fn coordinates(self) -> FinalityFloorV1 {
         match self {
@@ -110,7 +109,6 @@ impl SignerFinalityV1 for CoreFinalityV1 {
     ) -> Result<FinalityFloorV1, StreamTokenIssuerError> {
         let view = self.state.view();
         check_registered_provider(&view, &self.pins)?;
-        check_anchor(&view, &self.pins, minimum)?;
         let height = u64::try_from(view.block_hashes().len()).map_err(|_| unavailable())?;
         let block_hash = view
             .block_hashes()
@@ -120,7 +118,14 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         let current = read_stream_token_custody_control_at_v1(&view, self.pins.binding(), height)
             .map_err(|_| unavailable())?
             .ok_or_else(unavailable)?;
-        check_block(&view, current.anchor.height, current.anchor.block_hash)?;
+        let verified = VerifiedFinalityTargetsV1::verify(
+            &view,
+            &[
+                HistoricalFinalityV1::Custody(minimum).coordinates(),
+                FinalityFloorV1 { height, block_hash },
+            ],
+        )?;
+        verified.check_anchor(&self.pins, minimum)?;
         check_control_pins(&current.state, &self.pins)?;
         if current.state.active_head.is_none()
             || current.state.signer_revoked
@@ -146,12 +151,6 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         }
         let view = self.state.view();
         check_registered_provider(&view, &self.pins)?;
-        // All endpoints belong to one immutable committed history; a larger unsigned height or a
-        // block-hash cache entry alone cannot establish ancestry or certified finality.
-        check_anchor(&view, &self.pins, minimum)?;
-        check_block(&view, floor.height, floor.block_hash)?;
-        let current = check_anchor(&view, &self.pins, candidate)?;
-        check_observed_control(&current, candidate, observation)?;
         if historical.is_empty()
             || historical.len() > 3
             || !matches!(historical[0], HistoricalFinalityV1::Custody(anchor)
@@ -159,14 +158,23 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         {
             return Err(unavailable());
         }
+        // One fresh view and one ascending certified walk authenticate every endpoint. Reopening
+        // a reader for each endpoint would reverify the same prefix many times; retaining it
+        // across calls would conceal changed durable evidence or current policy.
+        let mut targets = Vec::with_capacity(3 + historical.len());
+        targets.extend([
+            HistoricalFinalityV1::Custody(minimum).coordinates(),
+            floor,
+            HistoricalFinalityV1::Custody(candidate).coordinates(),
+        ]);
+        targets.extend(historical.iter().map(|anchor| anchor.coordinates()));
+        let verified = VerifiedFinalityTargetsV1::verify(&view, &targets)?;
+        verified.check_anchor(&self.pins, minimum)?;
+        let current = verified.check_anchor(&self.pins, candidate)?;
+        check_observed_control(&current, candidate, observation)?;
         for anchor in historical {
-            match anchor {
-                HistoricalFinalityV1::Custody(anchor) => {
-                    check_anchor(&view, &self.pins, *anchor)?;
-                }
-                HistoricalFinalityV1::Block(anchor) => {
-                    check_block(&view, anchor.height, anchor.block_hash)?;
-                }
+            if let HistoricalFinalityV1::Custody(anchor) = anchor {
+                verified.check_anchor(&self.pins, *anchor)?;
             }
         }
         let latest = u64::try_from(view.block_hashes().len()).map_err(|_| unavailable())?;
@@ -214,23 +222,80 @@ pub(super) fn check_registered_provider(
     }
     Ok(())
 }
-fn check_anchor(
-    view: &impl StateReadOnly,
-    pins: &StreamTokenSignerPinsV1,
-    anchor: SignerCustodyAnchorV1,
-) -> Result<SignerCustodyControlStateV1, StreamTokenIssuerError> {
-    if anchor.state_digest == [0; 32] {
-        return Err(unavailable());
+/// Private, invocation-local evidence for a bounded set of targets from exactly one State view.
+/// It has no wire form and cannot be retained by the lifecycle or reused with a different view.
+struct VerifiedFinalityTargetsV1<'view, V: StateReadOnly> {
+    view: &'view V,
+    targets: Vec<FinalityFloorV1>,
+}
+
+impl<'view, V: StateReadOnly> VerifiedFinalityTargetsV1<'view, V> {
+    fn verify(view: &'view V, targets: &[FinalityFloorV1]) -> Result<Self, StreamTokenIssuerError> {
+        // Minimum, floor, candidate and at most three historical endpoints. Validate before
+        // allocating or iterating any caller-selected height range.
+        if targets.is_empty()
+            || targets.len() > 6
+            || targets
+                .iter()
+                .any(|target| target.height == 0 || target.block_hash == [0; 32])
+        {
+            return Err(unavailable());
+        }
+        let mut targets = targets.to_vec();
+        targets.sort_unstable_by_key(|target| target.height);
+        let first = targets.first().ok_or_else(unavailable)?.height;
+        let last = targets.last().ok_or_else(unavailable)?.height;
+        // Genesis signatures authenticate the proposal, not its executed result. Always verify
+        // its successor and the parent-result link, even if genesis is the only requested target.
+        let through = if first == 1 { last.max(2) } else { last };
+        if through > u64::try_from(view.block_hashes().len()).map_err(|_| unavailable())? {
+            return Err(unavailable());
+        }
+        let reader = CertifiedChain::new(view).map_err(|_| unavailable())?;
+        let mut matched = 0;
+        for block in reader.walk(first, through) {
+            let block = block.map_err(|_| unavailable())?;
+            if block.height() > 1 && block.verification() != QcVerification::Verified {
+                return Err(unavailable());
+            }
+            // Equal heights are not deduplicated: every independently supplied hash must match.
+            while let Some(target) = targets.get(matched)
+                && target.height == block.height()
+            {
+                if target.block_hash != *block.block_hash().as_ref() {
+                    return Err(unavailable());
+                }
+                matched += 1;
+            }
+        }
+        if matched != targets.len() {
+            return Err(unavailable());
+        }
+        Ok(Self { view, targets })
     }
-    check_block(view, anchor.height, anchor.block_hash)?;
-    let native = read_stream_token_custody_control_at_v1(view, pins.binding(), anchor.height)
-        .map_err(|_| unavailable())?
-        .ok_or_else(unavailable)?;
-    if native.anchor != anchor {
-        return Err(unavailable());
+
+    fn check_anchor(
+        &self,
+        pins: &StreamTokenSignerPinsV1,
+        anchor: SignerCustodyAnchorV1,
+    ) -> Result<SignerCustodyControlStateV1, StreamTokenIssuerError> {
+        if anchor.state_digest == [0; 32]
+            || !self.targets.iter().any(|target| {
+                target.height == anchor.height && target.block_hash == anchor.block_hash
+            })
+        {
+            return Err(unavailable());
+        }
+        let native =
+            read_stream_token_custody_control_at_v1(self.view, pins.binding(), anchor.height)
+                .map_err(|_| unavailable())?
+                .ok_or_else(unavailable)?;
+        if native.anchor != anchor {
+            return Err(unavailable());
+        }
+        check_control_pins(&native.state, pins)?;
+        Ok(native.state)
     }
-    check_control_pins(&native.state, pins)?;
-    Ok(native.state)
 }
 pub(super) fn check_control_pins(
     native: &SignerCustodyControlStateV1,
@@ -266,15 +331,58 @@ pub(super) fn check_observed_control(
     }
     Ok(())
 }
-fn check_block(
-    view: &impl StateReadOnly,
-    height: u64,
-    hash: [u8; 32],
-) -> Result<(), StreamTokenIssuerError> {
-    verify_signer_finality_v1(view, height, hash)
-        .map(|_| ())
-        .map_err(|_| unavailable())
-}
 const fn unavailable() -> StreamTokenIssuerError {
     StreamTokenIssuerError::SignerFinalityUnavailable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FinalityFloorV1, VerifiedFinalityTargetsV1};
+    use iroha_core::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    #[test]
+    fn batched_finality_requires_certified_genesis_successor() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        let genesis = FinalityFloorV1 {
+            height: 1,
+            block_hash: *chain.genesis().hash().as_ref(),
+        };
+        assert!(VerifiedFinalityTargetsV1::verify(&chain.state().view(), &[genesis]).is_err());
+        chain.commit_at(2_000, Vec::new());
+        VerifiedFinalityTargetsV1::verify(&chain.state().view(), &[genesis])
+            .expect("the real successor certifies the genesis execution result");
+    }
+
+    #[test]
+    fn batched_finality_bounds_targets_before_walking() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+        chain.commit_at(2_000, Vec::new());
+        let view = chain.state().view();
+        let valid = FinalityFloorV1 {
+            height: 2,
+            block_hash: *chain.committed(2).block_hash().as_ref(),
+        };
+        VerifiedFinalityTargetsV1::verify(&view, &[valid; 6])
+            .expect("six independently matched targets are allowed");
+        for invalid in [
+            Vec::new(),
+            vec![valid; 7],
+            vec![FinalityFloorV1 { height: 0, ..valid }],
+            vec![FinalityFloorV1 {
+                height: u64::MAX,
+                ..valid
+            }],
+            vec![FinalityFloorV1 {
+                block_hash: [0; 32],
+                ..valid
+            }],
+        ] {
+            assert!(VerifiedFinalityTargetsV1::verify(&view, &invalid).is_err());
+        }
+    }
 }

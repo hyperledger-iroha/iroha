@@ -15,6 +15,8 @@ use norito::{
 use soranet_pq::MlDsaSuite;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+/// Explicit governed registered-account download capability.
+pub mod account_read;
 /// Advertisement schema version.
 pub const PROVIDER_ADVERT_VERSION_V1: u8 = 1;
 /// Domain separator prepended to canonical provider-advert signature payloads.
@@ -379,6 +381,8 @@ pub enum CapabilityType {
     SoraNetHybridPq = 0x0005,
     /// Provider advertises the council-governed ML-DSA-65 key used for PoTR receipts.
     PotrMlDsa = 0x0006,
+    /// Admitted policy permitting registered accounts to read immutable provider objects.
+    RegisteredAccountRead = 0x0007,
     /// Custom capability encoded via payload.
     VendorReserved = 0xFF00,
 }
@@ -1219,6 +1223,8 @@ pub enum AdvertValidationError {
     DuplicateRangeCapability,
     #[error("duplicate PoTR ML-DSA capability TLV detected")]
     DuplicatePotrMldsaCapability,
+    #[error("registered-account read capability is duplicate or invalid")]
+    InvalidAccountReadCapability,
     #[error("advert has {found} capability TLVs; maximum is {maximum}")]
     TooManyCapabilities { found: usize, maximum: usize },
     #[error("capability #{index} has {found} payload bytes; maximum is {maximum}")]
@@ -1417,6 +1423,8 @@ impl ProviderAdvertBodyV1 {
             }
         }
         let mut seen_range_capability = false;
+        account_read::RegisteredAccountReadV1::from_capabilities(&self.capabilities)
+            .map_err(|_| AdvertValidationError::InvalidAccountReadCapability)?;
         let mut seen_potr_mldsa_capability = false;
         for capability in &self.capabilities {
             if capability.cap_type == CapabilityType::ChunkRangeFetch {

@@ -10649,6 +10649,18 @@ mod tests {
 #[cfg(test)]
 mod contract_artifact_route_tests {
     use super::*;
+
+    #[test]
+    fn embedded_manual_descriptors_fit_the_reviewed_bound_and_excess_is_rejected() {
+        assert_eq!(
+            parse_manual_static_tool_descriptors(MANUAL_STATIC_TOOL_ASSET).len(),
+            MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT,
+        );
+        let oversized = vec![b' '; MANUAL_STATIC_TOOL_ASSET_MAX_BYTES + 1];
+        assert!(
+            std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&oversized)).is_err()
+        );
+    }
     #[test]
     fn artifact_tools_require_exact_full_width_scope() {
         let hash = hex::encode(iroha_crypto::Hash::new(b"MCP artifact").as_ref());

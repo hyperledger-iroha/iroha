@@ -52,6 +52,8 @@ use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use std::{str::FromStr, sync::OnceLock};
+pub(crate) mod stream_token_delivery;
+
 const ACTIVE_POLICY_STATE_KEY: &str = "sorafs_reputation_policy_active_v1";
 const POLICY_HISTORY_STATE_KEY_PREFIX: &str = "sorafs_reputation_policy_history_v1_";
 const JOURNAL_HEAD_STATE_KEY: &str = "sorafs_reputation_journal_head_v1";
@@ -1334,10 +1336,35 @@ fn validate_entry_commit_context(
             ))
         })
 }
+struct PreparedReputationAppend {
+    sequence: u64,
+    writes: Vec<(StatePath, Vec<u8>)>,
+    event: SorafsReputationJournalEntryCommittedV1,
+}
+impl PreparedReputationAppend {
+    fn publish(self, tx: &mut StateTransaction<'_, '_>) {
+        for (key, bytes) in self.writes {
+            tx.world.smart_contract_state.insert(key, bytes);
+        }
+        tx.world
+            .emit_events(Some(SorafsGatewayEvent::ReputationJournal(
+                SorafsReputationJournalEvent::EntryCommitted(self.event),
+            )));
+    }
+}
 fn append_validated_entry(
-    state_transaction: &mut StateTransaction<'_, '_>,
+    tx: &mut StateTransaction<'_, '_>,
     entry: ReputationJournalEntryV1,
 ) -> Result<u64, InstructionExecutionError> {
+    let prepared = prepare_validated_entry(tx, entry)?;
+    let sequence = prepared.sequence;
+    prepared.publish(tx);
+    Ok(sequence)
+}
+fn prepare_validated_entry(
+    state_transaction: &StateTransaction<'_, '_>,
+    entry: ReputationJournalEntryV1,
+) -> Result<PreparedReputationAppend, InstructionExecutionError> {
     let recorded_at_unix_ms = block_time_ms(state_transaction)?;
     validate_entry_commit_context(state_transaction.world(), &entry, recorded_at_unix_ms)?;
     validate_new_source_revision(state_transaction.world(), &entry)?;
@@ -1422,22 +1449,6 @@ fn append_validated_entry(
             "reputation append would overwrite an authoritative event index",
         ));
     }
-    state_transaction
-        .world
-        .smart_contract_state
-        .insert(event_key(sequence), event_bytes);
-    state_transaction
-        .world
-        .smart_contract_state
-        .insert(event_id_key(entry.event_id), event_id_bytes);
-    state_transaction
-        .world
-        .smart_contract_state
-        .insert(source_head_key(entry.source_id), source_head_bytes);
-    state_transaction
-        .world
-        .smart_contract_state
-        .insert(journal_head_key().clone(), journal_head_bytes);
     let event = SorafsReputationJournalEntryCommittedV1 {
         sequence,
         event_id: entry.event_id,
@@ -1446,17 +1457,22 @@ fn append_validated_entry(
         source_revision: entry.source_revision,
         provider_id: entry.provider_id,
         policy_digest: entry.authority_policy_digest,
-        authority: entry.recorded_by,
+        authority: entry.recorded_by.clone(),
         source_time_unix_ms: entry.source_time_unix_ms,
         recorded_at_unix_ms,
     };
-    state_transaction
-        .world
-        .emit_events(Some(SorafsGatewayEvent::ReputationJournal(
-            SorafsReputationJournalEvent::EntryCommitted(event),
-        )));
-    Ok(sequence)
+    Ok(PreparedReputationAppend {
+        sequence,
+        writes: vec![
+            (event_key(sequence), event_bytes),
+            (event_id_key(entry.event_id), event_id_bytes),
+            (source_head_key(entry.source_id), source_head_bytes),
+            (journal_head_key().clone(), journal_head_bytes),
+        ],
+        event,
+    })
 }
+
 fn validate_new_entry(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -1483,6 +1499,11 @@ fn execute_standalone_append(
     entry: ReputationJournalEntryV1,
     expected_kind: ReputationJournalSourceKindV1,
 ) -> Result<(), InstructionExecutionError> {
+    if expected_kind == ReputationJournalSourceKindV1::StreamToken {
+        return Err(invalid_parameter(
+            "stream-token append requires its native source delivery owner",
+        ));
+    }
     require_permission(state_transaction, authority, CAN_RECORD_ENTRY)?;
     entry.validate().map_err(|error| {
         invalid_parameter(format!("invalid canonical reputation entry: {error}"))
@@ -1724,6 +1745,17 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
+        let origin = state_transaction
+            .current_direct_reputation_policy_origin
+            .take()
+            .ok_or_else(|| {
+                invalid_parameter("recorder policy requires exact direct signed source custody")
+            })?;
+        if &origin.execution().authority != authority
+            || origin.execution().recorded_at_unix_ms != block_time_ms(state_transaction)?
+        {
+            return Err(invalid_parameter("recorder policy source custody mismatch"));
+        }
         require_permission(state_transaction, authority, CAN_MANAGE_POLICY)?;
         let journal_head = validate_journal_head(state_transaction.world())?;
         self.policy.validate().map_err(|error| {
@@ -1764,13 +1796,17 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
             }
         }
         let now = block_time_ms(state_transaction)?;
-        let candidate =
-            ReputationJournalAuthorityPolicyRecordV1::try_new(self.policy, authority.clone(), now)
-                .map_err(|error| {
-                    invalid_parameter(format!(
-                        "invalid reputation recorder-policy activation: {error}"
-                    ))
-                })?;
+        let candidate = ReputationJournalAuthorityPolicyRecordV1::try_new(
+            self.policy,
+            authority.clone(),
+            now,
+            origin,
+        )
+        .map_err(|error| {
+            invalid_parameter(format!(
+                "invalid reputation recorder-policy activation: {error}"
+            ))
+        })?;
         if candidate.policy_digest != policy_digest {
             return Err(corrupt_state(
                 "reputation recorder policy digest changed during canonical activation",
@@ -1819,6 +1855,13 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
                 ));
             }
         }
+        if stream_token_delivery::source_time_watermark(state_transaction.world())?
+            .is_some_and(|watermark| now <= watermark)
+        {
+            return Err(invalid_parameter(
+                "reputation policy activation must follow every native delivery source time",
+            ));
+        }
         let encoded = encode_state(&candidate, "reputation recorder-policy activation")?;
         state_transaction
             .world
@@ -1861,16 +1904,12 @@ impl Execute for AppendSorafsStreamTokenReputationJournalEntry {
     fn execute(
         self,
         authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
+        tx: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        execute_standalone_append(
-            state_transaction,
-            authority,
-            self.entry,
-            ReputationJournalSourceKindV1::StreamToken,
-        )
+        stream_token_delivery::execute_append(tx, authority, self.entry)
     }
 }
+
 impl Execute for ResolveSorafsCapacityDispute {
     fn execute(
         self,
@@ -2581,13 +2620,14 @@ impl ValidSingularQuery for FindSorafsReputationJournalEvents {
     }
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     include!("sorafs_reputation/schema_identity_tests.rs");
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
     use iroha_data_model::{
@@ -2595,6 +2635,7 @@ mod tests {
         account::Account,
         block::{BlockHeader, builder::BlockBuilder},
         events::data::DataEvent,
+        isi::{Grant, InstructionBox},
         permission::Permissions,
         sorafs::{
             capacity::CapacityDeclarationRecord,
@@ -2603,6 +2644,9 @@ mod tests {
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
                 StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
+        },
+        transaction::{
+            SignedTransaction, TransactionEntrypoint, error::TransactionRejectionReason,
         },
     };
     use iroha_executor_data_model::permission::sorafs::{
@@ -2628,6 +2672,7 @@ mod tests {
             por_recorder_authority: authority.clone(),
             dispute_recorder_authority: authority.clone(),
             token_recorder_authority: authority.clone(),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
@@ -2699,7 +2744,7 @@ mod tests {
         )
         .expect("canonical PoR reputation entry")
     }
-    fn state_with_reputation_accounts() -> (State, AccountId, AccountId, ProviderId) {
+    fn reputation_world() -> (World, AccountId, AccountId, ProviderId) {
         let authority = account(&keypair(1));
         let other = account(&keypair(2));
         let provider_id = ProviderId::new([0x31; 32]);
@@ -2735,6 +2780,43 @@ mod tests {
                 Metadata::default(),
             ),
         );
+        (world, authority, other, provider_id)
+    }
+
+    /// Synthetic World preimages for isolated index/time/dispute tests only. This helper never
+    /// executes SetPolicy, creates executor custody, or supplies a native authenticated proof.
+    pub(crate) fn seed_policy_preimage(
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        policy: ReputationJournalAuthorityPolicyV1,
+    ) -> Result<(), InstructionExecutionError> {
+        let now = block_time_ms(tx)?;
+        let record = ReputationJournalAuthorityPolicyRecordV1::try_new(
+            policy,
+            authority.clone(),
+            now,
+            iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+                iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+                    height: tx._curr_block.height().get().max(2),
+                    transaction_hash: *iroha_crypto::Hash::new(b"synthetic private journal policy preimage").as_ref(),
+                    entry_index: 0,
+                    instruction_index: 0,
+                    recorded_at_unix_ms: now,
+                    authority: authority.clone(),
+                },
+            ),
+        ).map_err(|error| invalid_parameter(error.to_string()))?;
+        let bytes = encode_state(&record, "synthetic private journal policy preimage")?;
+        tx.world
+            .smart_contract_state
+            .insert(active_policy_key().clone(), bytes.clone());
+        tx.world
+            .smart_contract_state
+            .insert(policy_history_key(&record.policy_digest), bytes);
+        Ok(())
+    }
+    fn state_with_reputation_accounts() -> (State, AccountId, AccountId, ProviderId) {
+        let (world, authority, other, provider_id) = reputation_world();
         (
             State::new_for_testing(
                 world,
@@ -2746,6 +2828,134 @@ mod tests {
             provider_id,
         )
     }
+    fn certified_reputation_chain() -> (CertifiedTestChain, AccountId, AccountId, ProviderId) {
+        let (mut world, authority, other, provider_id) = reputation_world();
+        // Test accounts/provider exist before genesis; capabilities come from its signed ISIs.
+        world
+            .account_permissions
+            .insert(authority.clone(), Permissions::new());
+        world
+            .account_permissions
+            .insert(other.clone(), Permissions::new());
+        let mut config = TestChainConfig::new(world, TEST_NOW_MS - 1_000_000);
+        config.genesis_instructions = vec![
+            Grant::account_permission(
+                Permission::from(CanManageSorafsReputationJournalPolicy),
+                authority.clone(),
+            )
+            .into(),
+            Grant::account_permission(
+                Permission::from(CanRecordSorafsReputationJournal),
+                authority.clone(),
+            )
+            .into(),
+            Grant::account_permission(
+                Permission::from(CanResolveSorafsCapacityDispute),
+                authority.clone(),
+            )
+            .into(),
+            Grant::account_permission(
+                Permission::from(CanRecordSorafsReputationJournal),
+                other.clone(),
+            )
+            .into(),
+        ];
+        let chain = CertifiedTestChain::start(config)
+            .map_err(|failure| failure.error)
+            .expect("genuine signed four-validator genesis and capability grants");
+        (chain, authority, other, provider_id)
+    }
+    /// Execute every instruction in its own signed envelope, preserving the sole-SetPolicy fence.
+    fn commit_reputation_instructions(
+        chain: &mut CertifiedTestChain,
+        now: u64,
+        instructions: Vec<(u8, InstructionBox)>,
+    ) -> Vec<Result<(), TransactionRejectionReason>> {
+        let signed: Vec<SignedTransaction> = instructions
+            .into_iter()
+            .enumerate()
+            .map(|(index, (seed, instruction))| {
+                chain.sign(
+                    &keypair(seed),
+                    [instruction],
+                    now - 1 - u64::try_from(index).unwrap(),
+                )
+            })
+            .collect();
+        let hashes: Vec<_> = signed
+            .iter()
+            .cloned()
+            .map(|tx| TransactionEntrypoint::External(tx).hash())
+            .collect();
+        let expected = chain.commit_at(now, signed);
+        let committed = chain.committed(chain.height());
+        assert_eq!(
+            committed.block_time_ms(),
+            now,
+            "fixture never rebases source/cutover time"
+        );
+        let block = committed.block();
+        let results: Vec<_> = hashes
+            .iter()
+            .map(|hash| {
+                let (index, _) = block
+                    .network_entrypoints()
+                    .enumerate()
+                    .find(|(_, entry)| entry.hash() == *hash)
+                    .expect("exact signed fixture transaction");
+                block
+                    .network_output_at(u32::try_from(index).unwrap())
+                    .expect("committed exact output")
+                    .1
+                    .result
+                    .0
+                    .clone()
+                    .map(|_| ())
+            })
+            .collect();
+        assert_eq!(
+            results.iter().map(Result::is_ok).collect::<Vec<_>>(),
+            expected
+        );
+        results
+    }
+    fn commit_reputation_instruction(
+        chain: &mut CertifiedTestChain,
+        now: u64,
+        seed: u8,
+        instruction: impl Into<InstructionBox>,
+    ) -> Result<(), TransactionRejectionReason> {
+        commit_reputation_instructions(chain, now, vec![(seed, instruction.into())]).remove(0)
+    }
+    fn assert_instruction_message(error: &TransactionRejectionReason, expected: &str) {
+        assert!(
+            matches!(error,
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::InstructionFailed(
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message))))
+            if message.contains(expected)),
+            "{error:?}"
+        );
+    }
+    fn inspect_journal_overlay(
+        chain: &CertifiedTestChain,
+        operation: impl FnOnce(&mut StateTransaction<'_, '_>),
+    ) {
+        let view = chain.state().view();
+        let header = BlockHeader::new(
+            (chain.height() + 1).try_into().unwrap(),
+            view.latest_block_hash(),
+            None,
+            chain.committed(chain.height()).block_time_ms() + 1_000,
+            0,
+        );
+        drop(view);
+        let mut block = chain.state().block(header);
+        let mut transaction = block.transaction();
+        operation(&mut transaction);
+        // Deliberately discard corruption. No fixture overlay is published into the signed chain.
+    }
+    // Isolated journal/index preimages and cursor bookkeeping only: this helper supplies no
+    // quorum certificate, executor-origin custody, or authenticated native proof.
     fn transact_test(
         state: &mut State,
         height: u64,
@@ -2827,8 +3037,7 @@ mod tests {
             .canonical_digest()
             .expect("recorder policy digest");
         transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
-            SetSorafsReputationJournalAuthorityPolicy::new(recorder_policy)
-                .execute(&authority, transaction)
+            seed_policy_preimage(transaction, &authority, recorder_policy)
         })
         .expect("activate reputation recorder policy");
         let mut entries = Vec::with_capacity(unique_values.len());
@@ -2891,8 +3100,7 @@ mod tests {
             vec![0xB4],
         );
         transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
-            SetSorafsReputationJournalAuthorityPolicy::new(recorder_policy)
-                .execute(&authority, transaction)?;
+            seed_policy_preimage(transaction, &authority, recorder_policy)?;
             append_capacity_dispute_opened(transaction, &authority, &record)?;
             transaction
                 .world
@@ -2955,8 +3163,7 @@ mod tests {
             vec![0xC4],
         );
         transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
-            SetSorafsReputationJournalAuthorityPolicy::new(recorder_policy)
-                .execute(&authority, transaction)?;
+            seed_policy_preimage(transaction, &authority, recorder_policy)?;
             append_capacity_dispute_opened(transaction, &authority, &record)?;
             transaction
                 .world
@@ -3033,6 +3240,38 @@ mod tests {
                 .expect("encode forged resolved dispute event"),
         );
         terminal
+    }
+    #[test]
+    fn synthetic_policy_preimage_never_authorizes_setter_execution() {
+        let (state, authority, _other, _provider) = state_with_reputation_accounts();
+        let header = BlockHeader::new(1_u64.try_into().unwrap(), None, None, TEST_NOW_MS, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let policy = policy(&authority);
+        seed_policy_preimage(&mut transaction, &authority, policy.clone()).unwrap();
+        let before: Vec<_> = transaction
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let events = transaction.world.internal_event_buf.len();
+        let error = SetSorafsReputationJournalAuthorityPolicy::new(policy)
+            .execute(&authority, &mut transaction)
+            .expect_err("a synthetic retained row cannot create direct signed source custody");
+        assert!(
+            matches!(&error, InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(message))
+            if message == "recorder policy requires exact direct signed source custody")
+        );
+        let after: Vec<_> = transaction
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        assert_eq!(after, before);
+        assert_eq!(transaction.world.internal_event_buf.len(), events);
     }
     #[test]
     fn event_keys_preserve_global_sequence_order() {
@@ -3585,36 +3824,35 @@ mod tests {
     }
     #[test]
     fn recorder_policy_rejects_history_beyond_the_v1_revision_bound() {
-        let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
-        let header = BlockHeader::new(
-            1_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            TEST_NOW_MS,
-            0,
-        );
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
+        let (mut chain, authority, _other, _provider_id) = certified_reputation_chain();
         let maximum_revision = u64::try_from(REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1)
             .expect("V1 policy-history bound fits u64");
         let mut over_limit = policy(&authority);
         over_limit.revision = maximum_revision + 1;
         over_limit.predecessor_policy_digest = Some([0xA5; 32]);
-        let error = SetSorafsReputationJournalAuthorityPolicy::new(over_limit)
-            .execute(&authority, &mut transaction)
-            .expect_err("policy revision beyond the hard history bound must fail");
+        let error = commit_reputation_instruction(
+            &mut chain,
+            TEST_NOW_MS,
+            1,
+            SetSorafsReputationJournalAuthorityPolicy::new(over_limit),
+        )
+        .expect_err("policy revision beyond the hard history bound must fail");
+        assert_instruction_message(&error, "exceeds the V1 history bound");
         assert!(
-            matches!(&error, InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("exceeds the V1 history bound"))
+            read_active_policy(chain.state().view().world())
+                .unwrap()
+                .is_none()
         );
         assert!(
             read_reputation_authority_policy_history(
-                transaction.world(),
-                REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1 + 1,
+                chain.state().view().world(),
+                REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1 + 1
             )
             .is_err(),
             "finalized history capture must reject a traversal bound above the same ceiling"
         );
     }
+
     #[test]
     fn source_time_policy_lookup_accepts_the_exact_v1_revision_bound() {
         let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
@@ -3632,16 +3870,20 @@ mod tests {
         let mut predecessor_policy_digest = None;
         let mut first = None;
         let mut active = None;
+        // Pure bounded-history reader preimages, never executor or finalized-proof authority.
         for revision in 1..=REPUTATION_JOURNAL_MAX_AUTHORITY_POLICY_REVISIONS_V1 {
             let revision = u64::try_from(revision).expect("policy revision fits u64");
             let mut candidate = policy(&authority);
             candidate.revision = revision;
             candidate.predecessor_policy_digest = predecessor_policy_digest;
-            let record = ReputationJournalAuthorityPolicyRecordV1::try_new(
-                candidate,
-                authority.clone(),
-                TEST_NOW_MS + revision,
-            )
+            let record = ReputationJournalAuthorityPolicyRecordV1::try_new(candidate,
+(authority.clone()).clone(),
+TEST_NOW_MS + revision,
+iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1::Network(
+    iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayExecutionV1 {
+        height: 2, transaction_hash: [0x61; 32], entry_index: 0, instruction_index: 0,
+        recorded_at_unix_ms: TEST_NOW_MS + revision, authority: (authority.clone()).clone(),
+    }))
             .expect("construct bounded authority-policy record");
             transaction.world.smart_contract_state.insert(
                 policy_history_key(&record.policy_digest),
@@ -3672,23 +3914,18 @@ mod tests {
     }
     #[test]
     fn recorder_policy_rotation_is_strict_and_historical_replay_is_idempotent() {
-        let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
-        let header = BlockHeader::new(
-            1_u64.try_into().expect("nonzero height"),
-            None,
-            None,
-            TEST_NOW_MS,
-            0,
-        );
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
+        let (mut chain, authority, _other, _provider_id) = certified_reputation_chain();
         let first = policy(&authority);
         let first_digest = first.canonical_digest().expect("first policy digest");
-        SetSorafsReputationJournalAuthorityPolicy::new(first.clone())
-            .execute(&authority, &mut transaction)
-            .expect("activate first recorder policy");
+        commit_reputation_instruction(
+            &mut chain,
+            TEST_NOW_MS,
+            1,
+            SetSorafsReputationJournalAuthorityPolicy::new(first.clone()),
+        )
+        .expect("activate first recorder policy through signed execution");
         let first_record = FindSorafsReputationJournalAuthorityPolicy
-            .execute(&transaction)
+            .execute(&chain.state().view())
             .expect("query first active recorder policy");
         assert_eq!(first_record.policy, first);
         assert_eq!(first_record.policy_digest, first_digest);
@@ -3698,11 +3935,15 @@ mod tests {
         second.revision = 2;
         second.predecessor_policy_digest = Some(first_digest);
         let second_digest = second.canonical_digest().expect("second policy digest");
-        SetSorafsReputationJournalAuthorityPolicy::new(second)
-            .execute(&authority, &mut transaction)
-            .expect("activate exact successor policy");
+        commit_reputation_instruction(
+            &mut chain,
+            TEST_NOW_MS + 1_000,
+            1,
+            SetSorafsReputationJournalAuthorityPolicy::new(second),
+        )
+        .expect("activate exact successor policy");
         let second_record = FindSorafsReputationJournalAuthorityPolicy
-            .execute(&transaction)
+            .execute(&chain.state().view())
             .expect("query rotated active recorder policy");
         assert_eq!(second_record.policy.revision, 2);
         assert_eq!(second_record.policy_digest, second_digest);
@@ -3711,47 +3952,58 @@ mod tests {
             Some(first_digest)
         );
         assert_eq!(
-            read_reputation_authority_policy_history(transaction.world(), 2)
+            read_reputation_authority_policy_history(chain.state().view().world(), 2)
                 .expect("read exact bounded policy history"),
             vec![first_record.clone(), second_record.clone()]
         );
         assert!(
-            read_reputation_authority_policy_history(transaction.world(), 1).is_err(),
+            read_reputation_authority_policy_history(chain.state().view().world(), 1).is_err(),
             "an undersized immutable-history bound must fail closed"
         );
-        SetSorafsReputationJournalAuthorityPolicy::new(first)
-            .execute(&authority, &mut transaction)
-            .expect("historical exact replay is idempotent");
+        commit_reputation_instruction(
+            &mut chain,
+            TEST_NOW_MS + 2_000,
+            1,
+            SetSorafsReputationJournalAuthorityPolicy::new(first),
+        )
+        .expect("historical exact replay is idempotent");
         let mut fork = policy(&authority);
         fork.revision = 3;
         fork.predecessor_policy_digest = Some([0x99; 32]);
-        SetSorafsReputationJournalAuthorityPolicy::new(fork)
-            .execute(&authority, &mut transaction)
-            .expect_err("policy fork must fail closed");
+        commit_reputation_instruction(
+            &mut chain,
+            TEST_NOW_MS + 3_000,
+            1,
+            SetSorafsReputationJournalAuthorityPolicy::new(fork),
+        )
+        .expect_err("policy fork must fail closed");
         assert_eq!(
-            read_active_policy(transaction.world())
-                .expect("read active policy after rejected fork")
+            read_active_policy(chain.state().view().world())
+                .expect("active policy after rejected fork")
                 .expect("active policy")
                 .policy_digest,
             second_digest
         );
     }
+
     #[test]
     fn por_append_uses_source_time_policy_across_rotation_and_replay() {
-        let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
+        let (mut chain, authority, _other, provider_id) = certified_reputation_chain();
         let first = policy(&authority);
         let first_digest = first.canonical_digest().expect("first policy digest");
-        transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
-            SetSorafsReputationJournalAuthorityPolicy::new(first.clone())
-                .execute(&authority, transaction)
-        })
+        commit_reputation_instruction(
+            &mut chain,
+            TEST_NOW_MS,
+            1,
+            SetSorafsReputationJournalAuthorityPolicy::new(first.clone()),
+        )
         .expect("activate first recorder policy");
         let queued_before_rotation = por_entry_at(
             &authority,
             provider_id,
             first_digest,
             0x61,
-            TEST_NOW_MS + 100,
+            TEST_NOW_MS + 1_000,
         );
         let mut successor = first;
         successor.revision = 2;
@@ -3759,66 +4011,88 @@ mod tests {
         let successor_digest = successor
             .canonical_digest()
             .expect("successor policy digest");
-        transact_test(&mut state, 2, TEST_NOW_MS + 200, |transaction| {
-            SetSorafsReputationJournalAuthorityPolicy::new(successor.clone())
-                .execute(&authority, transaction)
-        })
+        commit_reputation_instruction(
+            &mut chain,
+            TEST_NOW_MS + 2_000,
+            1,
+            SetSorafsReputationJournalAuthorityPolicy::new(successor),
+        )
         .expect("rotate recorder policy");
-        transact_test(&mut state, 3, TEST_NOW_MS + 300, |transaction| {
-            AppendSorafsPorReputationJournalEntry::new(queued_before_rotation.clone())
-                .execute(&authority, transaction)?;
-            AppendSorafsPorReputationJournalEntry::new(queued_before_rotation.clone())
-                .execute(&authority, transaction)?;
+        let results = commit_reputation_instructions(
+            &mut chain,
+            TEST_NOW_MS + 3_000,
+            vec![
+                (
+                    1,
+                    AppendSorafsPorReputationJournalEntry::new(queued_before_rotation.clone())
+                        .into(),
+                ),
+                (
+                    1,
+                    AppendSorafsPorReputationJournalEntry::new(queued_before_rotation).into(),
+                ),
+            ],
+        );
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        {
+            let view = chain.state().view();
             assert_eq!(
-                read_journal_head(transaction.world())?
-                    .ok_or_else(|| corrupt_state("missing PoR reputation journal head"))?
+                read_journal_head(view.world())
+                    .unwrap()
+                    .unwrap()
                     .last_sequence,
                 1,
                 "an exact crash replay must remain idempotent after policy rotation"
             );
-            let retained = read_event(transaction.world(), 1)?
-                .ok_or_else(|| corrupt_state("missing retained historical PoR entry"))?;
-            validate_event_indexes(transaction.world(), &retained)?;
-            Ok(())
-        })
-        .expect("commit source-time-valid queued PoR terminal");
-        let superseded_at_boundary = por_entry_at(
+            let retained = read_event(view.world(), 1)
+                .unwrap()
+                .expect("retained historical PoR entry");
+            validate_event_indexes(view.world(), &retained).unwrap();
+        }
+        let superseded = por_entry_at(
             &authority,
             provider_id,
             first_digest,
             0x62,
-            TEST_NOW_MS + 200,
+            TEST_NOW_MS + 2_000,
         );
         let current = por_entry_at(
             &authority,
             provider_id,
             successor_digest,
             0x63,
-            TEST_NOW_MS + 250,
+            TEST_NOW_MS + 2_500,
         );
-        transact_test(&mut state, 4, TEST_NOW_MS + 400, |transaction| {
-            let error = AppendSorafsPorReputationJournalEntry::new(superseded_at_boundary)
-                .execute(&authority, transaction)
-                .expect_err("the successor activation boundary belongs to the successor");
-            assert!(
-                matches!(&error,
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(message)
-                    ) if message.contains("outside its recorder-policy activation interval")
+        let results = commit_reputation_instructions(
+            &mut chain,
+            TEST_NOW_MS + 4_000,
+            vec![
+                (
+                    1,
+                    AppendSorafsPorReputationJournalEntry::new(superseded).into(),
                 ),
-                "{error:?}"
-            );
-            AppendSorafsPorReputationJournalEntry::new(current).execute(&authority, transaction)?;
-            assert_eq!(
-                read_journal_head(transaction.world())?
-                    .ok_or_else(|| corrupt_state("missing PoR reputation journal head"))?
-                    .last_sequence,
-                2
-            );
-            Ok(())
-        })
-        .expect("reject stale policy material and commit successor material atomically");
+                (
+                    1,
+                    AppendSorafsPorReputationJournalEntry::new(current).into(),
+                ),
+            ],
+        );
+        assert_instruction_message(
+            results[0]
+                .as_ref()
+                .expect_err("cutover belongs to successor"),
+            "outside its recorder-policy activation interval",
+        );
+        assert!(results[1].is_ok(), "{:?}", results[1]);
+        assert_eq!(
+            read_journal_head(chain.state().view().world())
+                .unwrap()
+                .unwrap()
+                .last_sequence,
+            2
+        );
     }
+
     #[test]
     fn query_limit_rejects_zero_and_resource_bombs() {
         assert!(checked_query_limit(0).is_err());
@@ -3847,6 +4121,7 @@ mod tests {
             por_recorder_authority: account.clone(),
             dispute_recorder_authority: account.clone(),
             token_recorder_authority: account.clone(),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         };
         let digest = policy.canonical_digest().expect("policy digest");
@@ -3905,13 +4180,12 @@ mod tests {
             .canonical_digest()
             .expect("canonical recorder policy");
         transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
-            SetSorafsReputationJournalAuthorityPolicy::new(journal_policy)
-                .execute(&authority, transaction)
+            seed_policy_preimage(transaction, &authority, journal_policy)
         })
         .expect("activate recorder policy");
         let source_time_unix_ms = TEST_NOW_MS + 250;
         let recorded_at_unix_ms = TEST_NOW_MS + 1_000;
-        let entry = token_entry_at(
+        let entry = por_entry_at(
             &authority,
             provider_id,
             policy_digest,
@@ -3919,7 +4193,7 @@ mod tests {
             source_time_unix_ms,
         );
         transact_test(&mut state, 2, recorded_at_unix_ms, |transaction| {
-            AppendSorafsStreamTokenReputationJournalEntry::new(entry.clone())
+            AppendSorafsPorReputationJournalEntry::new(entry.clone())
                 .execute(&authority, transaction)?;
             let record = read_event(transaction.world(), 1)?
                 .ok_or_else(|| corrupt_state("missing asynchronous reputation event"))?;
@@ -3941,7 +4215,7 @@ mod tests {
             Ok(())
         })
         .expect("commit delayed but fresh source observation");
-        let future = token_entry_at(
+        let future = por_entry_at(
             &authority,
             provider_id,
             policy_digest,
@@ -3949,7 +4223,7 @@ mod tests {
             TEST_NOW_MS + 2_001,
         );
         transact_test(&mut state, 3, TEST_NOW_MS + 2_000, |transaction| {
-            let error = AppendSorafsStreamTokenReputationJournalEntry::new(future)
+            let error = AppendSorafsPorReputationJournalEntry::new(future)
                 .execute(&authority, transaction)
                 .expect_err("future source observation must fail closed");
             assert!(
@@ -3963,9 +4237,9 @@ mod tests {
             Ok(())
         })
         .expect("commit block after rejecting future source observation");
-        let stale = token_entry_at(&authority, provider_id, policy_digest, 0x83, TEST_NOW_MS);
+        let stale = por_entry_at(&authority, provider_id, policy_digest, 0x83, TEST_NOW_MS);
         transact_test(&mut state, 4, TEST_NOW_MS + 3_000, |transaction| {
-            let error = AppendSorafsStreamTokenReputationJournalEntry::new(stale)
+            let error = AppendSorafsPorReputationJournalEntry::new(stale)
                 .execute(&authority, transaction)
                 .expect_err("stale source observation must fail closed");
             assert!(
@@ -4014,8 +4288,7 @@ mod tests {
             vec![0x74],
         );
         transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
-            SetSorafsReputationJournalAuthorityPolicy::new(policy)
-                .execute(&authority, transaction)?;
+            seed_policy_preimage(transaction, &authority, policy)?;
             validate_capacity_dispute_opened_replay(transaction, &authority, &record)
                 .expect_err("an existing dispute without its opened journal must fail closed");
             assert!(
@@ -4089,10 +4362,10 @@ mod tests {
             por_recorder_authority: authority.clone(),
             dispute_recorder_authority: authority.clone(),
             token_recorder_authority: authority.clone(),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         };
-        SetSorafsReputationJournalAuthorityPolicy::new(rotated_policy)
-            .execute(&authority, &mut transaction)
+        seed_policy_preimage(&mut transaction, &authority, rotated_policy)
             .expect("rotate dispute recorder policy before delayed replay");
         let stored = transaction
             .world

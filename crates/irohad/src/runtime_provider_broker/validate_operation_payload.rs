@@ -26,8 +26,6 @@ fn validate_operation_payload(
     let head_auth_slot = IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator.wire_id();
     let checkpoint_slot = IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id();
     let stream_token_slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
-    let stream_token_gateway_admission_slot =
-        IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id();
     let appeal_signer_slot = IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id();
     let appeal_checkpoint_slot = IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint.wire_id();
     let potr_gateway_slot = IrohaRuntimeProviderSlotV1::PotrGatewaySigner.wire_id();
@@ -102,7 +100,6 @@ fn validate_operation_payload(
                 || slot == head_auth_slot
                 || slot == checkpoint_slot
                 || slot == stream_token_slot
-                || slot == stream_token_gateway_admission_slot
                 || slot == appeal_signer_slot
                 || slot == appeal_checkpoint_slot
                 || slot == potr_gateway_slot
@@ -631,54 +628,6 @@ fn validate_operation_payload(
         }
         (slot, OPERATION_STREAM_TOKEN_CHECK_V1) if slot == stream_token_slot => {
             decode_stream_token_check_request(&request.binding, &request.payload)?;
-        }
-        (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
-            if slot == stream_token_gateway_admission_slot =>
-        {
-            let admission = decode_canonical::<
-                iroha_torii::sorafs::StreamTokenGatewayAdmissionRequestV1,
-            >(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-            admission.validate().map_err(|error| match error {
-                iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::InvalidRequest => {
-                    BrokerError::Rejected
-                }
-                _ => BrokerError::BindingMismatch,
-            })?;
-        }
-        (slot, OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1)
-            if slot == stream_token_gateway_admission_slot =>
-        {
-            let max_items =
-                decode_canonical::<u32>(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-            let configured = request
-                .binding
-                .stream_token_gateway_admission_reconcile_max_items
-                .ok_or(BrokerError::BindingMismatch)?;
-            if max_items == 0 || max_items > configured {
-                return Err(BrokerError::Rejected);
-            }
-        }
-        (
-            slot,
-            OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
-            | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1,
-        ) if slot == stream_token_gateway_admission_slot => {
-            let record = decode_canonical::<
-                iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
-            >(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-            let qualification = request
-                .binding
-                .stream_token_gateway_admission_qualification
-                .ok_or(BrokerError::BindingMismatch)?;
-            record
-                .validate_shape(qualification)
-                .map_err(|_| BrokerError::Rejected)?;
-            if request.operation == OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1
-                && record.outcome.status
-                    != iroha_data_model::sorafs::reputation::StreamTokenValidationStatusV1::Accepted
-            {
-                return Err(BrokerError::Rejected);
-            }
         }
         (slot, OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1) if slot == appeal_signer_slot => {
             let exact = request

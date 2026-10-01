@@ -206,11 +206,12 @@ implementation and testing.
 
 ## Open Questions (Resolved May 2027)
 
-1. **Metal resource cleanup:** `warm_up_metal()` reuses the thread-local
-   `OnceCell` and now has idempotence/regression tests
-   (`crates/ivm/src/vector.rs::warm_up_metal_reuses_cached_state` /
-   `warm_up_metal_is_noop_on_non_metal_targets`), so app lifecycle transitions
-   can safely call the warm-up path without leaking or double-initialising.
+1. **Metal resource lifetime:** the process-owned device registry retains exact
+   physical-device qualification and health. Applying policy and constructing an
+   idle VM defer discovery; explicit availability queries and actual dispatch
+   still require qualification. Selection owns calibration on first use.
+   `crates/ivm/src/vector.rs::with_metal_state_reuses_cached_state` checks reuse,
+   while the required hardware suite verifies every production pipeline.
 2. **Benchmark baselines:** Metal lanes must remain within 20 % of the CPU
    baseline for FFT/IFFT/LDE and within 15 % for Poseidon CRC/Merkle helpers;
    alerting should fire when `acceleration.*_perf_delta_pct > 0.20` (or missing)

@@ -154,6 +154,7 @@ fn missing_genesis_authority_is_created_by_its_original_signed_registration() {
         Vec::new(),
         Vec::new(),
         SumeragiConsensusMode::Permissioned,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
         1000,
         std::num::NonZeroU64::MIN,
     )

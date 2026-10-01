@@ -161,6 +161,8 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sorafs_final_promotion_authority_v1",
     "sorafs_final_promotion_account_custody_v1",
     "sorafs_stream_token_custody_v1",
+    "sorafs_stream_token_operation_v1",
+    crate::query::stream_token_gateway::storage::STATE_ROOT,
     "sorafs/provider_admission",
     "sc/",
     "da_ingest_quota_v1/",
@@ -15171,7 +15173,7 @@ seiyaku StaleRuntimeBinding {
         account_id: AccountId,
         permission_name: &str,
     ) {
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
@@ -15215,7 +15217,7 @@ seiyaku StaleRuntimeBinding {
     }
     fn grant_test_asset_transfer(state: &State, account_id: AccountId, asset: AssetId) {
         let owner = asset.account().clone();
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next permission grant height");
@@ -18204,7 +18206,7 @@ seiyaku OpaqueInstructionSubmission {
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
                 .expect("resolved account id");
         assert_eq!(resolved, merchant_account_id);
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
@@ -18460,7 +18462,7 @@ seiyaku OpaqueInstructionSubmission {
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
                 .expect("resolved account id");
         assert_eq!(resolved, merchant_account_id);
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
@@ -19953,7 +19955,7 @@ seiyaku EffectfulView {
         descriptor.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
         malicious_manifest.provenance = None;
         malicious_manifest = malicious_manifest.signed(&fixture_signing_keypair(&authority));
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
@@ -20884,9 +20886,11 @@ seiyaku Callee {
             vec![caller_contract.subject_id(), callee_contract.subject_id()],
             "root and nested effects retain their respective contract subjects"
         );
-        // Apply these component artifacts in ordinary execution, with no
-        // claim to an authenticated genesis source capability.
-        let next_height = core::num::NonZeroU64::new(2).unwrap();
+        // Apply component artifacts after bootstrap with ordinary signed-root authority.
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let source = artifact_test_signed_root(*block.network_id(), &authority);
         let source_call = Hash::from(source.hash_as_entrypoint());
@@ -21771,7 +21775,7 @@ seiyaku Callee {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
         };
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
@@ -21832,15 +21836,12 @@ seiyaku Callee {
                 .into_execution_artifacts(None)
                 .expect("export actual artifact");
             assert_eq!(artifacts.queued_instructions().len(), 1);
-            // This is an ordinary component artifact test, not authenticated
-            // genesis execution. Keep both signed-budget cases at height two.
-            let mut block = state.block(BlockHeader::new(
-                core::num::NonZeroU64::new(2).unwrap(),
-                None,
-                None,
-                0,
-                0,
-            ));
+            // Apply component artifacts after bootstrap with ordinary signed-root authority.
+            let next_height = core::num::NonZeroU64::new(
+                u64::try_from((state.view().height() + 1).max(2)).unwrap(),
+            )
+            .unwrap();
+            let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
             let fragments = block.committed_fragment_count();
             let mut tx = block.transaction();
             if bind_root {
@@ -21935,7 +21936,7 @@ seiyaku DurableOwner {
                 Some(authorization),
             )]),
         };
-        let next_height = u64::try_from(state.view().height() + 1)
+        let next_height = u64::try_from((state.view().height() + 1).max(2))
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");

@@ -10,6 +10,30 @@ Musubi package without discovering a client configuration or wallet. Source and 
 inputs require no project manifest. Cold registry dependencies additionally require an
 explicit prepared archive transport.
 
+The native SDK's `get_provider_discovery` verifies current provider authority and its exact
+signed advert against an independently selected finality decision and qualified native World
+schema. The bounded projection includes the complete current World hash preimages and exact
+admission heads/owner, so a historical admission cannot conceal a later revocation.
+
+`with_build_registry_resolver` supplies an explicitly selected registry only after local-only
+resolution fails. A private child uses its retained parent registry identity and parent account;
+absence never selects the child's registry. An unchanged locked graph whose sources authenticate
+in the immutable cache requires no registry or provider HTTP once that explicit binding is resolved.
+
+Account-mode archive fetching uses the existing storage transport and stream-token issuer.
+The provider must explicitly admit the `registered_account_read` capability: an exact HTTPS
+DNS origin on port 443 and finite token limits for registered-account reads of its immutable objects.
+The same finalized projection authenticates the current StreamToken custody record and original
+signed enrollment, including expiry and revocation. Every token mint and replacement reobserves
+the same authority; a retired key cannot refresh an earlier session. Provider requests carry fresh canonical account
+signatures; parent listener tokens and unrelated HTTP credentials are never forwarded. Providers
+without this policy remain unavailable to account-mode downloads.
+
+TODO: Qualify the composed cold-cache workflow against an admitted provider, including revocation
+during issuance, expiry, cancellation, and adversarial DNS rebinding. Component tests do not establish
+whole-service readiness. Existing archive commitments, strict token signatures, bounded CAR
+verification, pinned public DNS and immutable cache checks remain authoritative.
+
 `ContractInput::from_path` checks input names and existing regular files before a frontend
 provisions a network. The build then validates the source graph, bytecode or package contents.
 

@@ -65,6 +65,10 @@ fn signed_private_anchors_extend_and_replay_without_exporting_body() {
     assert_eq!(state.registration(), &registration);
     assert_eq!(state.cursor(), registration.genesis_cursor);
     let anchor = next(&mut fixture, &registration);
+    assert_eq!(anchor.height().unwrap(), 2);
+    let mut malformed_height = anchor.clone();
+    malformed_height.certificate.consensus_header.clear();
+    assert!(malformed_height.height().is_err());
     let encoded = norito::encode_canonical(&anchor).unwrap();
     assert_eq!(PrivateDataspaceAnchor::decode(&encoded).unwrap(), anchor);
     assert!(

@@ -1,0 +1,179 @@
+name: Native Kagami and Mochi developer bundle
+
+# Manual: native runners need at least 13 GiB RAM, 50 GiB free build storage and OpenSSL.
+# Select existing runner labels with those resources; no paid runner is implicitly selected.
+# Hosted runner references:
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+# https://docs.github.com/en/actions/reference/runners/larger-runners
+# This gate exercises local native behavior. Official Taira publication and the
+# twenty-run reference-host latency campaign are separate acceptance requirements.
+on:
+  workflow_dispatch:
+    inputs:
+      linux_x86_runner:
+        description: Native Ubuntu x86-64 runner label with sufficient RAM and disk
+        required: true
+        type: string
+      linux_arm_runner:
+        description: Native Ubuntu ARM64 runner label with sufficient RAM and disk
+        required: true
+        type: string
+      macos_x86_runner:
+        description: Native macOS Intel runner label with sufficient RAM and disk
+        required: true
+        type: string
+      macos_arm_runner:
+        description: Native macOS ARM64 runner label with sufficient RAM and disk
+        required: true
+        type: string
+      windows_x86_runner:
+        description: Native Windows x86-64 MSVC runner label with sufficient RAM and disk
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devex-native-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: "1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.93.1
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+
+jobs:
+  native:
+    name: Native ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ${{ inputs.linux_x86_runner }}
+            target: x86_64-unknown-linux-gnu
+            bundle_host: linux-x86_64
+          - runner: ${{ inputs.linux_arm_runner }}
+            target: aarch64-unknown-linux-gnu
+            bundle_host: linux-aarch64
+          - runner: ${{ inputs.macos_x86_runner }}
+            target: x86_64-apple-darwin
+            bundle_host: macos-x86_64
+          - runner: ${{ inputs.macos_arm_runner }}
+            target: aarch64-apple-darwin
+            bundle_host: macos-aarch64
+          - runner: ${{ inputs.windows_x86_runner }}
+            target: x86_64-pc-windows-msvc
+            bundle_host: windows-x86_64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+          test -z "$(git status --porcelain)"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Check native host and resource floor
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+          BUNDLE_HOST: ${{ matrix.bundle_host }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import ctypes
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import shutil
+          import subprocess
+
+          version = subprocess.check_output(["rustc", "-vV"], text=True)
+          host = next(line.removeprefix("host: ") for line in version.splitlines() if line.startswith("host: "))
+          expected_machine = "aarch64" if os.environ["EXPECTED_TARGET"].startswith("aarch64-") else "x86_64"
+          machine = {"arm64": "aarch64", "amd64": "x86_64"}.get(platform.machine().lower(), platform.machine().lower())
+          if platform.system() == "Windows":
+              kib = ctypes.c_ulonglong()
+              if not ctypes.windll.kernel32.GetPhysicallyInstalledSystemMemory(ctypes.byref(kib)):
+                  raise SystemExit("cannot measure installed Windows memory")
+              memory = kib.value * 1024
+          elif platform.system() == "Darwin":
+              memory = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True))
+          else:
+              memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+          free = shutil.disk_usage(".").free
+          report = Path("target/devex-native/host.json")
+          report.parent.mkdir(parents=True, exist_ok=True)
+          report.write_text(json.dumps({
+              "source_sha": os.environ["SOURCE_SHA"], "rustc": version,
+              "host": host, "expected_target": os.environ["EXPECTED_TARGET"],
+              "ram_bytes": memory, "free_build_bytes": free,
+              "profile": "release", "reference_latency_qualified": False,
+          }, indent=2) + "\n", encoding="utf-8")
+          if host != os.environ["EXPECTED_TARGET"] or machine != expected_machine:
+              raise SystemExit("runner host differs from required native target; cross-build is not qualification")
+          if memory < 13 * 1024**3 or free < 50 * 1024**3:
+              raise SystemExit("select a native runner with at least 13 GiB RAM and 50 GiB free storage")
+          bundle_root = report.parent / ("mochi-" + os.environ["BUNDLE_HOST"] + "-release")
+          runtime_relative = "Mochi.app/Contents/MacOS" if platform.system() == "Darwin" else "bin"
+          binary_directory = (bundle_root / runtime_relative).resolve()
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write("IROHA_DEVEX_BUNDLE_BIN=" + str(binary_directory) + "\n")
+              output.write("IROHA_TEST_RUNTIME_DIRECTORY=" + str(binary_directory) + "\n")
+          PY
+      - name: Install Linux desktop build libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev
+      - name: Check disposable TLS fixture controller tools
+        run: |
+          python -c 'import ssl, sys; assert sys.version_info >= (3, 10)'
+          openssl version
+      - name: Test native filesystem, wallet and environment owners
+        run: cargo test --locked --release -p iroha_fs -p iroha_wallet -p iroha_deploy --lib -- --test-threads=1
+      - name: Test shared desktop services and GUI actions
+        run: cargo test --locked --release -p mochi-core -p mochi-ui --features mochi-ui/gui --lib --bins -- --test-threads=1
+      - name: Build complete release bundle and exercise all deployment inputs
+        run: cargo run --locked --release -p xtask --features dev-tools --bin xtask -- mochi-bundle --profile release --out target/devex-native --matrix target/devex-native/matrix.json --smoke
+      - name: Exercise native private validators, persistence and listener isolation
+        run: cargo test --locked --release -p iroha_deploy --lib managed::tests::installed::installed_private_root_lifecycle_and_listener_isolation -- --exact --ignored --test-threads=1 --nocapture
+      - name: Exercise disposable parent attachment and private payload isolation
+        run: cargo test --locked --release -p iroha_deploy --lib managed::tests::attachment_installed::installed_parent_attachment_private_contracts_and_payload_isolation -- --exact --ignored --test-threads=1 --nocapture
+      - name: Retain public bundle inventory and host report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: devex-native-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            target/devex-native/host.json
+            target/devex-native/matrix.json
+            target/devex-native/mochi-*/manifest.json
+            target/devex-native/*.tar.gz
+            target/devex-native/*.zip
+          if-no-files-found: warn

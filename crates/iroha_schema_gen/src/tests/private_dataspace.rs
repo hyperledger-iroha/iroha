@@ -11,6 +11,7 @@ use iroha_data_model::{
 #[test]
 fn private_dataspace_export_contains_complete_registered_schema_closure() {
     let mut expected = PrivateDataspaceAnchorState::schema();
+    iroha_data_model::block::consensus::PrivateRootFeePolicy::update_schema_map(&mut expected);
     PrivateDataspaceAnchor::update_schema_map(&mut expected);
     iroha_data_model::private_dataspace::PrivateDataspaceRegistry::update_schema_map(&mut expected);
     iroha_data_model::private_dataspace::PrivateDataspaceAdmissionPolicy::update_schema_map(
@@ -20,6 +21,9 @@ fn private_dataspace_export_contains_complete_registered_schema_closure() {
         &mut expected,
     );
     iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace::update_schema_map(
+        &mut expected,
+    );
+    iroha_data_model::private_dataspace::PrivateDataspaceRecordProof::update_schema_map(
         &mut expected,
     );
     iroha_data_model::smart_contract::ContractArtifactId::update_schema_map(&mut expected);
@@ -36,5 +40,27 @@ fn private_dataspace_export_contains_complete_registered_schema_closure() {
     assert!(expected.contains_key::<SumeragiRootScope>());
     assert!(expected.contains_key::<PrivateDataspaceRegistration>());
     assert!(expected.contains_key::<PrivateDataspaceCursor>());
+    assert!(find_missing_schema_references(&expected).is_empty());
+}
+
+#[test]
+fn provider_discovery_export_contains_the_exact_current_state_schema_closure() {
+    use iroha_data_model::sorafs::provider_admission::{
+        discovery::ProviderDiscoveryProofV1, history::AdmissionHistoryRecordV1,
+    };
+    let mut expected = ProviderDiscoveryProofV1::schema();
+    AdmissionHistoryRecordV1::update_schema_map(&mut expected);
+    iroha_data_model::sorafs::provider_admission::discovery::account_read::RegisteredAccountReadV1::update_schema_map(&mut expected);
+    iroha_data_model::sorafs::stream_token_custody::history::StreamTokenCustodyControlIndexV1::update_schema_map(&mut expected);
+    let exported = crate::build_schemas();
+    let exported: std::collections::BTreeMap<_, _> = exported.iter().collect();
+    for (id, descriptor) in expected.iter() {
+        assert_eq!(
+            exported.get(id).copied(),
+            Some(descriptor),
+            "missing or substituted provider discovery descriptor: {}",
+            descriptor.type_name
+        );
+    }
     assert!(find_missing_schema_references(&expected).is_empty());
 }

@@ -6,6 +6,7 @@ fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(4).expect("non-zero");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: peer_count,
@@ -233,6 +234,7 @@ fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
 fn invalid_chain_requests_do_not_create_partial_output_directories() {
     fn options(out_dir: PathBuf) -> LocalnetOptions {
         LocalnetOptions {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -283,6 +285,7 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
 fn invalid_asset_requests_do_not_create_partial_output_directories() {
     fn options(out_dir: PathBuf, assets: Vec<AssetSpec>) -> LocalnetOptions {
         LocalnetOptions {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -665,6 +668,7 @@ fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(4).expect("non-zero");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Dataspace),
         perf_profile: None,
         peers: peer_count,
@@ -890,6 +894,7 @@ fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
 fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -932,6 +937,7 @@ fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
 fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -974,6 +980,7 @@ fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
 fn block_cadence_override_is_signed_into_genesis() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1025,6 +1032,7 @@ fn block_cadence_override_is_signed_into_genesis() {
 fn npos_localnet_keeps_payload_for_fast_block_cadence() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1055,6 +1063,7 @@ fn npos_localnet_keeps_payload_for_fast_block_cadence() {
 fn npos_localnet_keeps_genesis_under_transaction_cap() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1163,6 +1172,7 @@ fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir()
         .expect("temporary Taira directory");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(TAIRA_TESTNET_PEERS).expect("four peers"),
@@ -1257,6 +1267,7 @@ fn generated_permissioned_localnet_cannot_mint_additional_xor() {
     use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1288,6 +1299,18 @@ fn generated_permissioned_localnet_cannot_mint_additional_xor() {
         })
         .collect::<Vec<_>>();
     assert!(operator_mint_permissions.is_empty());
+    let signed = read_signed_genesis(&temp.path().join("genesis.signed.nrt"))
+        .expect("read executed permissioned genesis");
+    assert!(signed.network_entrypoint_count() > 0);
+    signed
+        .validate_output_merkle_cache()
+        .expect("generated genesis retains its complete execution outputs");
+    assert!(
+        signed
+            .output_results()
+            .all(|result| result.as_ref().is_ok()),
+        "faucet funding must execute successfully in the real generated genesis"
+    );
     for peer_index in 0..opts.peers.get() {
         let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
             .expect("read generated permissioned peer config");
@@ -1323,12 +1346,39 @@ fn generated_permissioned_localnet_cannot_mint_additional_xor() {
             .expect("native faucet admission");
         assert_eq!(faucet.authority, operator.account_id);
         assert_eq!(faucet.signer.public_key(), &operator.public_key);
+        let fee_definition = faucet
+            .asset_definition_id
+            .parse::<AssetDefinitionId>()
+            .expect("configured canonical faucet asset definition");
+        assert_eq!(fee_definition, localnet_xor_asset_definition_id());
+        let faucet_asset = AssetId::new(fee_definition, faucet.authority.clone());
+        let minted = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
+                    Some(MintBox::Asset(mint)) if mint.destination() == &faucet_asset => {
+                        Some(mint.object().clone())
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(
+            minted,
+            vec![
+                Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+                Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE),
+            ],
+            "Permissioned faucet must receive its explicit Global allocation once"
+        );
+        assert!(Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE) > faucet.amount);
     }
 }
 #[test]
 fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1390,6 +1440,7 @@ fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
 #[test]
 fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1473,6 +1524,7 @@ fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
 fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1571,6 +1623,7 @@ fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
 fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -1864,6 +1917,7 @@ fn localnet_refuses_to_mix_with_existing_output() {
     let sentinel = output.path().join("keep.txt");
     fs::write(&sentinel, b"do not overwrite").expect("write sentinel");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("nonzero peers"),
@@ -1981,6 +2035,7 @@ fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
 }
 fn mandatory_da_localnet_options(out_dir: PathBuf) -> LocalnetOptions {
     LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),
@@ -2026,6 +2081,7 @@ fn localnet_omits_retired_da_configuration() {
 #[test]
 fn rejects_overflowing_port_ranges() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2050,6 +2106,7 @@ fn rejects_overflowing_port_ranges() {
 #[test]
 fn rejects_overlapping_port_ranges() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2074,6 +2131,7 @@ fn rejects_overlapping_port_ranges() {
 #[test]
 fn rejects_zero_ports() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2098,6 +2156,7 @@ fn rejects_zero_ports() {
 #[test]
 fn validate_localnet_options_rejects_zero_block_cadence() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2123,6 +2182,7 @@ fn validate_localnet_options_rejects_roster_above_protocol_maximum() {
     let oversized =
         u16::try_from(MAX_VALIDATORS_PER_HEIGHT + 1).expect("protocol test boundary fits u16");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(oversized).expect("non-zero"),
@@ -2150,6 +2210,7 @@ fn validate_localnet_options_rejects_roster_above_protocol_maximum() {
 #[test]
 fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(5).expect("non-zero"),
@@ -2174,6 +2235,7 @@ fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
 #[test]
 fn validate_localnet_options_rejects_every_profile_with_too_few_peers() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(3).unwrap(),
@@ -2198,6 +2260,7 @@ fn validate_localnet_options_rejects_every_profile_with_too_few_peers() {
 #[test]
 fn validate_localnet_options_rejects_permissioned_on_sora_nexus() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Nexus),
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2221,6 +2284,7 @@ fn validate_localnet_options_rejects_permissioned_on_sora_nexus() {
 #[test]
 fn validate_localnet_options_rejects_permissioned_on_sora_dataspace() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: Some(SoraProfile::Dataspace),
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2245,6 +2309,7 @@ fn validate_localnet_options_rejects_permissioned_on_sora_dataspace() {
 #[test]
 fn validate_localnet_options_allows_permissioned_localnet() {
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2265,6 +2330,7 @@ fn validate_localnet_options_allows_permissioned_localnet() {
 fn permissioned_localnet_uses_mandatory_nexus_default() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2304,6 +2370,7 @@ fn permissioned_localnet_uses_mandatory_nexus_default() {
 fn npos_without_sora_profile_uses_mandatory_nexus() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).unwrap(),
@@ -2516,6 +2583,7 @@ fn default_sorafs_telemetry_submitters_match_self_service_policy() {
 fn localnet_npos_bootstrap_does_not_re_register_genesis_account() {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = LocalnetOptions {
+        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         sora_profile: None,
         perf_profile: None,
         peers: NonZeroU16::new(4).expect("non-zero"),

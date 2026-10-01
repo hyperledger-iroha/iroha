@@ -98,6 +98,9 @@ pub(super) enum ExecutionOutputPlanState {
     Reserved(ReservedExecutionOutputPlan),
     Running,
     Retained(producer::RetainedExecutionOutputs),
+    /// Source-only fixture custody cannot authorize witness capture or publication.
+    #[cfg(test)]
+    Inspecting,
     Sealing,
     Sealed(producer::SealedExecutionOutputs),
     Authorized(producer::AuthorizedExecutionOutputs),

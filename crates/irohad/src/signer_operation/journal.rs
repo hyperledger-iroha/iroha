@@ -1,9 +1,9 @@
 //! Immutable private receipt staging pinned through every filesystem ancestor.
 
-use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+use iroha_fs::{FileIdentity, PrivateDirectory, SealedPrivateFile};
 mod inventory_pool;
 pub use inventory_pool::SignerJournalInventoryPoolV1;
-use inventory_pool::{CounterPermit, OpenLease};
+use inventory_pool::{FileLease, OpenLease};
 use sorafs_manifest::signer::{
     final_promotion::SIGNER_FINAL_PROMOTION_RECEIPT_MAX_BYTES_V1,
     receipt::SIGNER_RELEASE_MANIFEST_RECEIPT_MAX_BYTES_V1,
@@ -11,12 +11,8 @@ use sorafs_manifest::signer::{
 };
 use std::{
     ffi::OsString,
-    fs::{File, Metadata, Permissions},
-    io::Write as _,
-    os::unix::{
-        ffi::OsStrExt as _,
-        fs::{FileExt as _, MetadataExt as _, PermissionsExt as _},
-    },
+    fs::File,
+    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -25,6 +21,7 @@ use zeroize::Zeroizing;
 const MAX_RECORDS: usize = 65_536;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 const SUFFIX: &str = ".receipt.norito";
+const LOCK_NAME: &str = ".signer-journal.lock";
 // TODO: Compile the pending-Reserve journal outside tests with its final-promotion producer.
 #[cfg(test)]
 const PENDING_RESERVE_SUFFIX: &str = ".pending-reserve.norito";
@@ -124,57 +121,56 @@ impl std::fmt::Display for SignerReceiptJournalErrorV1 {
 }
 impl std::error::Error for SignerReceiptJournalErrorV1 {}
 
-struct Directory {
-    name: OsString,
-    file: File,
-    identity: Metadata,
-}
-
 fn preflight_journal_path(
     path: &Path,
     profile: JournalProfile,
 ) -> Result<Vec<OsString>, SignerReceiptJournalErrorV1> {
     let fail = || SignerReceiptJournalErrorV1::Unavailable;
+    let encoded = path.as_os_str().as_encoded_bytes();
     if !path.is_absolute()
         || profile
             .required_leaf
             .is_some_and(|leaf| path.file_name() != Some(std::ffi::OsStr::new(leaf)))
-        || path.as_os_str().as_bytes().len() > MAX_JOURNAL_PATH_BYTES
+        || encoded.len() > MAX_JOURNAL_PATH_BYTES
     {
         return Err(fail());
     }
-    let component_count = path
+    let count = path
         .components()
-        .filter(|component| matches!(component, Component::Normal(_)))
+        .filter(|part| matches!(part, Component::Normal(_)))
         .count();
-    if component_count == 0 || component_count > MAX_JOURNAL_PATH_COMPONENTS {
+    if count == 0 || count > MAX_JOURNAL_PATH_COMPONENTS {
         return Err(fail());
     }
     let mut reconstructed = PathBuf::new();
     reconstructed
-        .try_reserve(path.as_os_str().as_bytes().len())
+        .try_reserve(encoded.len())
         .map_err(|_| fail())?;
-    reconstructed.push(Component::RootDir);
     let mut names = Vec::new();
-    names
-        .try_reserve_exact(component_count)
-        .map_err(|_| fail())?;
-    for component in path.components() {
-        let Component::Normal(name) = component else {
-            if component == Component::RootDir {
-                continue;
+    names.try_reserve_exact(count).map_err(|_| fail())?;
+    let mut rooted = false;
+    for part in path.components() {
+        match part {
+            Component::Prefix(prefix) if reconstructed.as_os_str().is_empty() => {
+                reconstructed.push(prefix.as_os_str());
             }
-            return Err(fail());
-        };
-        let mut retained_name = OsString::new();
-        retained_name
-            .try_reserve(name.as_bytes().len())
-            .map_err(|_| fail())?;
-        retained_name.push(name);
-        reconstructed.push(&retained_name);
-        names.push(retained_name);
+            Component::RootDir if !rooted && names.is_empty() => {
+                reconstructed.push(part.as_os_str());
+                rooted = true;
+            }
+            Component::Normal(name) if rooted => {
+                let mut retained = OsString::new();
+                retained
+                    .try_reserve(name.as_encoded_bytes().len())
+                    .map_err(|_| fail())?;
+                retained.push(name);
+                reconstructed.push(&retained);
+                names.push(retained);
+            }
+            _ => return Err(fail()),
+        }
     }
-    if reconstructed.as_os_str().as_bytes() != path.as_os_str().as_bytes() {
+    if !rooted || reconstructed.as_os_str().as_encoded_bytes() != encoded {
         return Err(fail());
     }
     Ok(names)
@@ -182,20 +178,21 @@ fn preflight_journal_path(
 
 /// Mandatory durable receipt staging with no key material and no path-following fallback.
 ///
-/// The directory must already exist, be owned by the current UID and have mode 0700. Every
-/// ancestor is opened without symlink following and retained by the writer, its read-only
-/// capabilities and every pinned receipt. A nonblocking exclusive directory lease lasts until
-/// their final shared owner drops, preventing independent instances/processes from racing the
-/// aggregate retention ceiling. Unsupported locking fails closed. Records are immutable,
-/// single-link mode-0400 files. Failed partial writes remain fail-closed tombstones;
-/// automatic cleanup never removes a substituted path.
+/// The directory must already exist with private current-owner custody. Its native ancestors
+/// remain retained by the writer, read-only capabilities and every pinned receipt. A persistent
+/// empty control-file lock excludes independent owners until the final shared capability drops.
+/// Records have exact native read-only custody (Unix mode 0400; protected owner-read Windows DACL),
+/// one link, and retained identity. Failed partial writes remain fail-closed tombstones. Neither
+/// local receipt absence nor this lock replaces finalized operation ownership or rollback checks.
 pub struct SignerReceiptJournalV1 {
     reader: SignerReceiptJournalReaderV1,
 }
 
 struct JournalInner {
-    lineage: Vec<Directory>,
-    owner: u32,
+    directory: PrivateDirectory,
+    lock: File,
+    lock_identity: FileIdentity,
+    lineage_len: usize,
     mutation: Mutex<()>,
     profile: JournalProfile,
     pool: SignerJournalInventoryPoolV1,
@@ -309,58 +306,33 @@ impl JournalInner {
             .filter(|part| matches!(part, Component::Normal(_)))
             .count();
         let (open_lease, _path_probes) =
-            pool.admit_open(path.as_os_str().as_bytes().len(), depth)?;
+            pool.admit_open(path.as_os_str().as_encoded_bytes().len(), depth)?;
         let names = preflight_journal_path(path, profile)?;
-        let mut lineage = Vec::new();
-        lineage
-            .try_reserve_exact(names.len() + 1)
-            .map_err(|_| fail())?;
-        let owner = rustix::process::geteuid().as_raw();
-        let root = File::from(
-            rustix::fs::open("/", directory_flags(), Mode::empty()).map_err(|_| fail())?,
-        );
-        let identity = root.metadata().map_err(|_| fail())?;
-        lineage.push(Directory {
-            name: OsString::new(),
-            file: root,
-            identity,
-        });
-        for name in names {
-            let parent = &lineage.last().ok_or_else(fail)?.file;
-            let before = rustix::fs::statat(parent, name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(|_| fail())?;
-            let file = File::from(
-                rustix::fs::openat(parent, name.as_os_str(), directory_flags(), Mode::empty())
-                    .map_err(|_| fail())?,
-            );
-            let identity = file.metadata().map_err(|_| fail())?;
-            if !directory_safe(&identity, owner) || !stat_matches(&before, &identity) {
-                return Err(fail());
-            }
-            lineage.push(Directory {
-                name,
-                file,
-                identity,
-            });
-        }
-        let leaf = &lineage.last().ok_or_else(fail)?.identity;
-        if leaf.uid() != owner || leaf.mode() & 0o7777 != 0o700 {
+        let lineage_len = names.len() + 1;
+        drop(names);
+        let directory = PrivateDirectory::open_exact(path).map_err(|_| fail())?;
+        // The journal admits an exact canonical native path, including its original root. The
+        // shared reader's independently permitted operating-system redirects do not relabel it.
+        if directory.path() != path {
             return Err(fail());
         }
-        rustix::fs::flock(
-            &lineage.last().ok_or_else(fail)?.file,
-            rustix::fs::FlockOperation::NonBlockingLockExclusive,
-        )
-        .map_err(|_| fail())?;
-        let inner = Arc::new(JournalInner {
-            lineage,
-            owner,
+        let lock = directory
+            .open_ownership_lock(LOCK_NAME)
+            .map_err(|_| fail())?;
+        lock.try_lock().map_err(|_| fail())?;
+        let lock_identity = FileIdentity::of(&lock).map_err(|_| fail())?;
+        let inner = Arc::new(Self {
+            directory,
+            lock,
+            lock_identity,
+            lineage_len,
             mutation: Mutex::new(()),
             profile,
             pool: pool.clone(),
             _open_lease: open_lease,
         });
         inner.verify_lineage()?;
+        drop(_path_probes);
         inner.inventory()?;
         Ok(inner)
     }
@@ -394,194 +366,179 @@ impl JournalInner {
             .mutation
             .lock()
             .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        if operation_id == [0; 32] {
+        if operation_id == [0; 32] || self.inventory_for(Some(operation_id))?.2 {
             return Err(SignerReceiptJournalErrorV1::Unavailable);
-        }
-        // Validate the entire pinned journal before deciding that a missing name is safe.
-        // An existing partial, substituted or corrupt receipt must fail before key I/O.
-        self.inventory()?;
-        let name = format!("{}{}", hex::encode(operation_id), self.profile.suffix);
-        let result = rustix::fs::statat(self.directory(), name.as_str(), AtFlags::SYMLINK_NOFOLLOW);
-        self.verify_lineage()?;
-        match result {
-            Err(rustix::io::Errno::NOENT) => Ok(()),
-            _ => Err(SignerReceiptJournalErrorV1::Unavailable),
-        }
-    }
-    fn directory(&self) -> &File {
-        &self
-            .lineage
-            .last()
-            .expect("validated nonempty lineage")
-            .file
-    }
-    fn verify_lineage(&self) -> Result<(), SignerReceiptJournalErrorV1> {
-        for (index, directory) in self.lineage.iter().enumerate() {
-            let current = directory
-                .file
-                .metadata()
-                .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-            if !directory_safe(&current, self.owner)
-                || !same_directory(&current, &directory.identity)
-            {
-                return Err(SignerReceiptJournalErrorV1::Unavailable);
-            }
-            if index > 0 {
-                let stat = rustix::fs::statat(
-                    &self.lineage[index - 1].file,
-                    &directory.name,
-                    AtFlags::SYMLINK_NOFOLLOW,
-                )
-                .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-                if !stat_matches(&stat, &directory.identity) {
-                    return Err(SignerReceiptJournalErrorV1::Unavailable);
-                }
-            }
         }
         Ok(())
     }
+
+    fn verify_lineage(&self) -> Result<(), SignerReceiptJournalErrorV1> {
+        let fail = || SignerReceiptJournalErrorV1::Unavailable;
+        self.directory.revalidate().map_err(|_| fail())?;
+        if FileIdentity::of(&self.lock).map_err(|_| fail())? != self.lock_identity
+            || self.lock.metadata().map_err(|_| fail())?.len() != 0
+        {
+            return Err(fail());
+        }
+        let named = self.directory.open_read(LOCK_NAME).map_err(|_| fail())?;
+        if FileIdentity::of(&named).map_err(|_| fail())? != self.lock_identity
+            || named.metadata().map_err(|_| fail())?.len() != 0
+        {
+            return Err(fail());
+        }
+        self.directory.revalidate().map_err(|_| fail())
+    }
+
     fn inventory(&self) -> Result<(usize, u64), SignerReceiptJournalErrorV1> {
-        // Local refusal happens before opening the scan descriptor or touching any entry.
+        let (count, size, _) = self.inventory_for(None)?;
+        Ok((count, size))
+    }
+
+    fn inventory_for(
+        &self,
+        sought: Option<[u8; 32]>,
+    ) -> Result<(usize, u64, bool), SignerReceiptJournalErrorV1> {
+        // Admit the entire bounded scan before opening a scan/probe handle or inspecting entries.
         let _scan = self.pool.admit_scan(
             self.profile.max_records,
             self.profile.in_progress_suffix.is_some(),
-            self.lineage.len(),
+            self.lineage_len,
         )?;
         self.verify_lineage()?;
-        let entries = rustix::fs::Dir::read_from(self.directory())
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        let mut count = 0_usize;
-        let mut size = 0_u64;
-        let mut seen_pending_ids = Vec::new();
+        let mut count = 0usize;
+        let mut size = 0u64;
+        let mut found = false;
+        let mut lock_seen = false;
+        let mut pending_ids = Vec::new();
         if self.profile.in_progress_suffix.is_some() {
-            seen_pending_ids
+            pending_ids
                 .try_reserve_exact(self.profile.max_records)
                 .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
         }
-        for entry in entries {
-            let entry = entry.map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-            let name = entry.file_name();
-            if matches!(name.to_bytes(), b"." | b"..") {
-                continue;
-            }
-            let name_text = std::str::from_utf8(name.to_bytes())
-                .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-            let (id, in_progress) = if let Some(id) = name_text.strip_suffix(self.profile.suffix) {
-                (id, false)
-            } else if let Some(id) = self
-                .profile
-                .in_progress_suffix
-                .and_then(|suffix| name_text.strip_suffix(suffix))
-            {
-                (id, true)
-            } else {
-                return Err(SignerReceiptJournalErrorV1::Unavailable);
-            };
-            if id.len() != 64
-                || !id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-            {
-                return Err(SignerReceiptJournalErrorV1::Unavailable);
-            }
-            if self.profile.in_progress_suffix.is_some() {
-                let mut operation_id = [0; 32];
-                hex::decode_to_slice(id, &mut operation_id)
-                    .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-                if seen_pending_ids.len() >= self.profile.max_records {
-                    return Err(SignerReceiptJournalErrorV1::Unavailable);
+        self.directory
+            .visit_private_files(self.profile.max_records + 1, |name, metadata| {
+                let fail = || io::Error::other("invalid signer journal inventory");
+                let text = name.to_str().ok_or_else(fail)?;
+                if text == LOCK_NAME {
+                    if lock_seen || metadata.len() != 0 || metadata.is_read_only() {
+                        return Err(fail());
+                    }
+                    lock_seen = true;
+                    return Ok(());
                 }
-                seen_pending_ids.push(operation_id);
-            }
-            let stat = rustix::fs::statat(self.directory(), name, AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-            let mode = stat.st_mode & 0o7777;
-            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
-                || stat.st_nlink != 1
-                || stat.st_uid != self.owner
-                || if in_progress {
-                    // Creation is masked by the process umask until the file is chmodded.
-                    mode & !0o600 != 0
+                let (id, in_progress) = if let Some(id) = text.strip_suffix(self.profile.suffix) {
+                    (id, false)
+                } else if let Some(id) = self
+                    .profile
+                    .in_progress_suffix
+                    .and_then(|suffix| text.strip_suffix(suffix))
+                {
+                    (id, true)
                 } else {
-                    mode != 0o400 || stat.st_size <= 0
+                    return Err(fail());
+                };
+                if id.len() != 64
+                    || !id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                {
+                    return Err(fail());
                 }
-                || stat.st_size < 0
-                || stat.st_size as u64 > self.profile.max_record_bytes as u64
-            {
-                return Err(SignerReceiptJournalErrorV1::Unavailable);
-            }
-            count = count
-                .checked_add(1)
-                .ok_or(SignerReceiptJournalErrorV1::Unavailable)?;
-            size = size
-                .checked_add(stat.st_size as u64)
-                .ok_or(SignerReceiptJournalErrorV1::Unavailable)?;
-            if count > self.profile.max_records || size > self.profile.max_total_bytes {
-                return Err(SignerReceiptJournalErrorV1::Unavailable);
-            }
-        }
-        seen_pending_ids.sort_unstable();
-        if seen_pending_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+                let mut operation = [0; 32];
+                hex::decode_to_slice(id, &mut operation).map_err(|_| fail())?;
+                if operation == [0; 32]
+                    || (!in_progress && (!metadata.is_read_only() || metadata.len() == 0))
+                    || metadata.len() > self.profile.max_record_bytes as u64
+                {
+                    return Err(fail());
+                }
+                found |= sought == Some(operation);
+                if self.profile.in_progress_suffix.is_some() {
+                    if pending_ids.len() >= self.profile.max_records {
+                        return Err(fail());
+                    }
+                    pending_ids.push(operation);
+                }
+                count = count.checked_add(1).ok_or_else(fail)?;
+                size = size.checked_add(metadata.len()).ok_or_else(fail)?;
+                if count > self.profile.max_records || size > self.profile.max_total_bytes {
+                    return Err(fail());
+                }
+                Ok(())
+            })
+            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
+        pending_ids.sort_unstable();
+        if !lock_seen || pending_ids.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(SignerReceiptJournalErrorV1::Unavailable);
         }
         self.verify_lineage()?;
-        Ok((count, size))
+        Ok((count, size, found))
     }
+
     fn stage(
         self: &Arc<Self>,
         operation_id: [u8; 32],
         bytes: &[u8],
     ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
-        let _guard = self
-            .mutation
-            .lock()
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
+        let fail = || SignerReceiptJournalErrorV1::Unavailable;
+        let _guard = self.mutation.lock().map_err(|_| fail())?;
+        self.admit_stage(operation_id, bytes)?;
+        let lease = self
+            .pool
+            .admit_file(self.profile.max_record_bytes, self.lineage_len)?;
+        let _probes = self.pool.admit_inspection(self.lineage_len, 0)?;
+        let name = format!("{}{SUFFIX}", hex::encode(operation_id));
+        let mut file = self
+            .directory
+            .create_retained_private(&name, self.profile.max_record_bytes)
+            .map_err(|_| fail())?;
+        // Creation durably claims the exact final name before any byte write. Failure leaves that
+        // name closed; immutable native operation history independently prevents signing retries.
+        file.write_all(bytes).map_err(|_| fail())?;
+        let file = file.seal_read_only().map_err(|_| fail())?;
+        drop(_probes);
+        self.pin(file, bytes, lease)
+    }
+
+    fn admit_stage(
+        &self,
+        operation_id: [u8; 32],
+        bytes: &[u8],
+    ) -> Result<(), SignerReceiptJournalErrorV1> {
         if operation_id == [0; 32]
             || bytes.is_empty()
             || bytes.len() > self.profile.max_record_bytes
         {
             return Err(SignerReceiptJournalErrorV1::Unavailable);
         }
-        let (count, size) = self.inventory()?;
-        if count >= self.profile.max_records
-            || size + bytes.len() as u64 > self.profile.max_total_bytes
+        let (count, size, found) = self.inventory_for(Some(operation_id))?;
+        if found
+            || count >= self.profile.max_records
+            || size
+                .checked_add(bytes.len() as u64)
+                .is_none_or(|total| total > self.profile.max_total_bytes)
         {
             return Err(SignerReceiptJournalErrorV1::Unavailable);
         }
-        let name = format!("{}{}", hex::encode(operation_id), self.profile.suffix);
-        let file_handle = self.pool.admit_file()?;
-        let fd = rustix::fs::openat(
-            self.directory(),
-            name.as_str(),
-            OFlags::RDWR
-                | OFlags::CREATE
-                | OFlags::EXCL
-                | OFlags::NOFOLLOW
-                | OFlags::NONBLOCK
-                | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o600),
-        )
-        .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        let mut file = File::from(fd);
-        file.write_all(bytes)
+        Ok(())
+    }
+
+    fn pin(
+        self: &Arc<Self>,
+        file: SealedPrivateFile,
+        bytes: &[u8],
+        lease: FileLease,
+    ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
+        let mut retained = Zeroizing::new(Vec::new());
+        retained
+            .try_reserve_exact(bytes.len())
             .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        file.set_permissions(Permissions::from_mode(0o400))
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        file.sync_all()
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        self.directory()
-            .sync_all()
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        let identity = file
-            .metadata()
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
+        retained.extend_from_slice(bytes);
         let pinned = PinnedReceipt {
             journal: Arc::clone(self),
-            name,
-            file,
-            identity,
-            bytes: Zeroizing::new(bytes.to_vec()),
-            _file_handle: file_handle,
+            file: Mutex::new(file),
+            bytes: retained,
+            _file_lease: lease,
         };
         pinned.recheck()?;
         Ok(pinned)
@@ -601,274 +558,123 @@ impl JournalInner {
         self: &Arc<Self>,
         operation_id: [u8; 32],
         bytes: &[u8],
-        mut checkpoint: impl FnMut(PendingReserveCheckpoint) -> rustix::io::Result<()>,
+        mut checkpoint: impl FnMut(PendingReserveCheckpoint) -> io::Result<()>,
     ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
         let fail = || SignerReceiptJournalErrorV1::Unavailable;
-        if self.profile.in_progress_suffix != Some(PENDING_RESERVE_IN_PROGRESS_SUFFIX)
-            || !cfg!(any(
-                target_os = "linux",
-                target_os = "android",
-                target_vendor = "apple",
-                target_os = "redox"
-            ))
-        {
+        if self.profile.in_progress_suffix != Some(PENDING_RESERVE_IN_PROGRESS_SUFFIX) {
             return Err(fail());
         }
         let _guard = self.mutation.lock().map_err(|_| fail())?;
-        if operation_id == [0; 32]
-            || bytes.is_empty()
-            || bytes.len() > self.profile.max_record_bytes
-        {
-            return Err(fail());
-        }
-        let (count, size) = self.inventory()?;
-        if count >= self.profile.max_records
-            || size + bytes.len() as u64 > self.profile.max_total_bytes
-        {
-            return Err(fail());
-        }
+        self.admit_stage(operation_id, bytes)?;
+        let lease = self
+            .pool
+            .admit_file(self.profile.max_record_bytes, self.lineage_len)?;
+        let _probes = self
+            .pool
+            .admit_inspection(self.lineage_len, self.profile.max_record_bytes)?;
         let id = hex::encode(operation_id);
-        let file_handle = self.pool.admit_file()?;
-        let final_name = format!("{}{PENDING_RESERVE_SUFFIX}", id);
-        let in_progress_name = format!("{}{PENDING_RESERVE_IN_PROGRESS_SUFFIX}", id);
-        match rustix::fs::statat(
-            self.directory(),
-            final_name.as_str(),
-            AtFlags::SYMLINK_NOFOLLOW,
-        ) {
-            Err(rustix::io::Errno::NOENT) => {}
-            _ => return Err(fail()),
-        }
-        let fd = rustix::fs::openat(
-            self.directory(),
-            in_progress_name.as_str(),
-            OFlags::RDWR
-                | OFlags::CREATE
-                | OFlags::EXCL
-                | OFlags::NOFOLLOW
-                | OFlags::NONBLOCK
-                | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o600),
-        )
-        .map_err(|_| fail())?;
-        let mut file = File::from(fd);
-        // This name is a durable one-use tombstone even if writing the signed bytes fails.
-        self.directory().sync_all().map_err(|_| fail())?;
+        let final_name = format!("{id}{PENDING_RESERVE_SUFFIX}");
+        let in_progress = format!("{id}{PENDING_RESERVE_IN_PROGRESS_SUFFIX}");
+        let mut file = self
+            .directory
+            .create_retained_private(&in_progress, self.profile.max_record_bytes)
+            .map_err(|_| fail())?;
         checkpoint(PendingReserveCheckpoint::TombstoneDurable).map_err(|_| fail())?;
         file.write_all(bytes).map_err(|_| fail())?;
-        file.set_permissions(Permissions::from_mode(0o400))
-            .map_err(|_| fail())?;
-        file.sync_all().map_err(|_| fail())?;
-        let identity = file.metadata().map_err(|_| fail())?;
-        let mut pinned = PinnedReceipt {
-            journal: Arc::clone(self),
-            name: in_progress_name,
-            file,
-            identity,
-            bytes: Zeroizing::new(bytes.to_vec()),
-            _file_handle: file_handle,
-        };
-        pinned.recheck()?;
-        checkpoint(PendingReserveCheckpoint::SignedBytesDurable).map_err(|_| fail())?;
-        publish_pending_reserve_no_replace(self.directory(), &pinned.name, &final_name)?;
-        pinned.name = final_name;
-        self.directory().sync_all().map_err(|_| fail())?;
-        // Rename may change ctime. Retain the pre-rename inode/shape check, then pin its
-        // post-publication metadata before the final path and byte readback.
-        let published_identity = pinned.file.metadata().map_err(|_| fail())?;
-        if !same_directory(&pinned.identity, &published_identity)
-            || pinned.identity.len() != published_identity.len()
-            || pinned.identity.nlink() != published_identity.nlink()
-        {
+        let mut file = file.seal_read_only().map_err(|_| fail())?;
+        if read_stable(&mut file, self.profile)?.as_slice() != bytes {
             return Err(fail());
         }
-        pinned.identity = published_identity;
-        pinned.recheck()?;
-        Ok(pinned)
+        checkpoint(PendingReserveCheckpoint::SignedBytesDurable).map_err(|_| fail())?;
+        let file = file.publish_new_name(&final_name).map_err(|_| fail())?;
+        drop(_probes);
+        self.pin(file, bytes, lease)
     }
 
     fn recover(
         self: &Arc<Self>,
         operation_id: [u8; 32],
     ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
-        self.verify_lineage()?;
+        let fail = || SignerReceiptJournalErrorV1::Unavailable;
         if operation_id == [0; 32] {
-            return Err(SignerReceiptJournalErrorV1::Unavailable);
+            return Err(fail());
         }
+        let lease = self
+            .pool
+            .admit_file(self.profile.max_record_bytes, self.lineage_len)?;
+        let _probes = self.pool.admit_inspection(self.lineage_len, 0)?;
+        self.verify_lineage()?;
         let name = format!("{}{}", hex::encode(operation_id), self.profile.suffix);
-        let file_handle = self.pool.admit_file()?;
-        let file = File::from(
-            rustix::fs::openat(
-                self.directory(),
-                name.as_str(),
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?,
-        );
-        let identity = file
-            .metadata()
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        let bytes = read_stable(&file, &identity, self.owner, self.profile)?;
+        let mut file = self
+            .directory
+            .open_retained_read_only(&name, self.profile.max_record_bytes)
+            .map_err(|_| fail())?;
+        let bytes = read_stable(&mut file, self.profile)?;
+        drop(_probes);
         let pinned = PinnedReceipt {
             journal: Arc::clone(self),
-            name,
-            file,
-            identity,
+            file: Mutex::new(file),
             bytes,
-            _file_handle: file_handle,
+            _file_lease: lease,
         };
         pinned.recheck()?;
         Ok(pinned)
     }
 }
 
-#[cfg(all(
-    test,
-    any(
-        target_os = "linux",
-        target_os = "android",
-        target_vendor = "apple",
-        target_os = "redox"
-    )
-))]
-fn publish_pending_reserve_no_replace(
-    directory: &File,
-    in_progress_name: &str,
-    final_name: &str,
-) -> Result<(), SignerReceiptJournalErrorV1> {
-    rustix::fs::renameat_with(
-        directory,
-        in_progress_name,
-        directory,
-        final_name,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)
-}
-
-#[cfg(all(
-    test,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_vendor = "apple",
-        target_os = "redox"
-    ))
-))]
-fn publish_pending_reserve_no_replace(
-    _directory: &File,
-    _in_progress_name: &str,
-    _final_name: &str,
-) -> Result<(), SignerReceiptJournalErrorV1> {
-    Err(SignerReceiptJournalErrorV1::Unavailable)
-}
-
 /// Exact immutable byte snapshot retaining the original journal lease until drop.
 pub(super) struct PinnedReceipt {
     journal: Arc<JournalInner>,
-    name: String,
-    file: File,
-    identity: Metadata,
+    file: Mutex<SealedPrivateFile>,
     bytes: Zeroizing<Vec<u8>>,
-    _file_handle: CounterPermit,
+    _file_lease: FileLease,
 }
 impl PinnedReceipt {
     pub(super) fn bytes(&self) -> &[u8] {
         self.bytes.as_slice()
     }
     pub(super) fn recheck(&self) -> Result<(), SignerReceiptJournalErrorV1> {
+        let _probes = self.journal.pool.admit_inspection(
+            self.journal.lineage_len,
+            self.journal.profile.max_record_bytes,
+        )?;
         self.journal.verify_lineage()?;
-        let stat = rustix::fs::statat(
-            self.journal.directory(),
-            self.name.as_str(),
-            AtFlags::SYMLINK_NOFOLLOW,
-        )
-        .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        if !stat_matches(&stat, &self.identity)
-            || read_stable(
-                &self.file,
-                &self.identity,
-                self.journal.owner,
-                self.journal.profile,
-            )?
-            .as_slice()
-                != self.bytes.as_slice()
-        {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
+        if read_stable(&mut file, self.journal.profile)?.as_slice() != self.bytes.as_slice() {
             return Err(SignerReceiptJournalErrorV1::Unavailable);
         }
         self.journal.verify_lineage()
     }
 }
-fn directory_flags() -> OFlags {
-    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC
-}
-fn directory_safe(metadata: &Metadata, owner: u32) -> bool {
-    metadata.is_dir()
-        && (metadata.uid() == 0 || metadata.uid() == owner)
-        && (metadata.mode() & 0o022 == 0 || (metadata.uid() == 0 && metadata.mode() & 0o1000 != 0))
-}
-fn same_directory(left: &Metadata, right: &Metadata) -> bool {
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-}
-fn stat_matches(stat: &rustix::fs::Stat, metadata: &Metadata) -> bool {
-    stat.st_dev as u64 == metadata.dev()
-        && stat.st_ino as u64 == metadata.ino()
-        && stat.st_mode as u32 == metadata.mode()
-        && stat.st_uid == metadata.uid()
-}
+
 fn read_stable(
-    file: &File,
-    expected: &Metadata,
-    owner: u32,
+    file: &mut SealedPrivateFile,
     profile: JournalProfile,
 ) -> Result<Zeroizing<Vec<u8>>, SignerReceiptJournalErrorV1> {
-    let before = file
-        .metadata()
-        .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-    if !before.is_file()
-        || before.nlink() != 1
-        || before.uid() != owner
-        || before.mode() & 0o7777 != 0o400
-        || before.len() == 0
-        || before.len() > profile.max_record_bytes as u64
-        || !same_file(&before, expected)
-    {
-        return Err(SignerReceiptJournalErrorV1::Unavailable);
+    let fail = || SignerReceiptJournalErrorV1::Unavailable;
+    let before = file.snapshot().map_err(|_| fail())?;
+    let length = file.len().map_err(|_| fail())?;
+    if length == 0 || length > profile.max_record_bytes as u64 {
+        return Err(fail());
     }
-    let mut bytes = Zeroizing::new(vec![0; before.len() as usize]);
-    let mut offset = 0;
-    while offset < bytes.len() {
-        let count = file
-            .read_at(&mut bytes[offset..], offset as u64)
-            .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-        if count == 0 {
-            return Err(SignerReceiptJournalErrorV1::Unavailable);
-        }
-        offset += count;
-    }
-    let after = file
-        .metadata()
-        .map_err(|_| SignerReceiptJournalErrorV1::Unavailable)?;
-    if !same_file(&before, &after) {
-        return Err(SignerReceiptJournalErrorV1::Unavailable);
+    let length = usize::try_from(length).map_err(|_| fail())?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    bytes.try_reserve_exact(length).map_err(|_| fail())?;
+    bytes.resize(length, 0);
+    file.seek(SeekFrom::Start(0)).map_err(|_| fail())?;
+    file.read_exact(&mut bytes).map_err(|_| fail())?;
+    if file.snapshot().map_err(|_| fail())? != before {
+        return Err(fail());
     }
     Ok(bytes)
 }
-fn same_file(left: &Metadata, right: &Metadata) -> bool {
-    same_directory(left, right)
-        && left.len() == right.len()
-        && left.nlink() == right.nlink()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
 
 #[cfg(test)]
+mod portable_tests;
+#[cfg(all(test, unix))]
 mod tests;
 
 #[cfg(test)]
@@ -910,4 +716,21 @@ impl JournalInner {
     ) -> Result<Arc<Self>, SignerReceiptJournalErrorV1> {
         Self::open(path, profile, test_inventory_pool())
     }
+}
+
+/// Count every data artifact while independently validating any native lease control file.
+#[cfg(test)]
+pub(crate) fn test_record_count(path: impl AsRef<Path>) -> usize {
+    std::fs::read_dir(path)
+        .unwrap()
+        .filter(|entry| {
+            let entry = entry.as_ref().unwrap();
+            if entry.file_name() == LOCK_NAME {
+                assert!(iroha_fs::read_private(entry.path(), 1).unwrap().is_empty());
+                false
+            } else {
+                true
+            }
+        })
+        .count()
 }

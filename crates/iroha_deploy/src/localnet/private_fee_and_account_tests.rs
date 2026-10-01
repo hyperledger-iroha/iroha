@@ -8,6 +8,7 @@ fn private_dataspace_peer_configs_use_direct_fee_settlement() {
     ] {
         let out_dir = temp.path().join(label);
         let opts = LocalnetOptions {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             sora_profile: Some(profile),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),

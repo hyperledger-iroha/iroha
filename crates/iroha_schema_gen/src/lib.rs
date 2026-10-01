@@ -52,15 +52,26 @@ macro_rules! schema_types {
             iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
             // Independent private roots and body-free parent anchoring.
             iroha_data_model::block::consensus::SumeragiRootScope,
+            iroha_data_model::block::consensus::PrivateRootFeePolicy,
             iroha_data_model::private_dataspace::PrivateDataspaceRegistration,
             iroha_data_model::private_dataspace::PrivateDataspaceAnchor,
             iroha_data_model::private_dataspace::PrivateDataspaceAnchorState,
             iroha_data_model::private_dataspace::PrivateDataspaceAdmissionPolicy,
             iroha_data_model::private_dataspace::PrivateDataspaceRecord,
             iroha_data_model::private_dataspace::PrivateDataspaceRegistry,
+            iroha_data_model::private_dataspace::PrivateDataspaceRecordProof,
             iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace,
             iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace,
             iroha_data_model::smart_contract::ContractArtifactId,
+            // Current finalized provider authority and signed discovery material.
+            iroha_data_model::sorafs::provider_admission::discovery::ProviderDiscoveryProofV1,
+            iroha_data_model::sorafs::provider_admission::discovery::account_read::RegisteredAccountReadV1,
+            iroha_data_model::sorafs::stream_token_custody::history::StreamTokenCustodyControlIndexV1,
+            iroha_data_model::sns::lease::SnsLeaseProofV1,
+            iroha_data_model::sorafs::provider_admission::history::AdmissionHistoryRecordV1,
+            // Native delivery recipes are public model values; no detached value grants authority.
+            iroha_data_model::sorafs::reputation::stream_token_delivery::StreamTokenReputationDeliveryIntentV1,
+            iroha_data_model::sorafs::reputation::stream_token_delivery::StreamTokenReputationDeliveryDispositionV1,
             // Durable cross-service DA spool envelope.
             iroha_data_model::da::ingest::StoredDaReceipt,
             iroha_data_model::fastpq::TransferTranscript,
@@ -132,6 +143,12 @@ macro_rules! schema_types {
             iroha_data_model::sorafs::stream_token_authority::StreamTokenNativeOperationV1,
             iroha_executor_data_model::permission::sorafs::CanOperateSorafsStreamToken,
             iroha_executor_data_model::permission::sorafs::CanCheckSorafsStreamToken,
+            // Native gateway quota, lease and callback claims; serving proof remains runtime-owned.
+            iroha_data_model::isi::sorafs::MutateSorafsStreamTokenGateway,
+            iroha_data_model::sorafs::stream_token_gateway::StreamTokenGatewayAdmissionReadbackV1,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenGateway,
+            iroha_executor_data_model::permission::sorafs::CanOperateSorafsStreamTokenGateway,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsStreamTokenGateway,
             // Signed-genesis admission, canonical capacity input and publisher state assertions.
             iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1,
             iroha_data_model::isi::sorafs::RegisterCapacityDeclaration,
@@ -249,6 +266,7 @@ mod tests {
     mod sorafs_publication;
     mod stream_token_authority;
     mod stream_token_custody;
+    mod stream_token_gateway;
     mod topology_authority;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
@@ -307,6 +325,22 @@ mod tests {
             }
         }
         missing
+    }
+    #[test]
+    fn native_reputation_delivery_schema_includes_exact_payload_and_signed_policy_origin() {
+        use iroha_data_model::sorafs::reputation::{
+            ReputationJournalPolicyOriginV1,
+            stream_token_delivery::{
+                StreamTokenReputationDeliveryDispositionV1, StreamTokenReputationDeliveryIntentV1,
+                StreamTokenReputationDeliveryTemplateV1,
+            },
+        };
+        let schemas = super::build_schemas();
+        assert!(schemas.contains_key::<StreamTokenReputationDeliveryIntentV1>());
+        assert!(schemas.contains_key::<StreamTokenReputationDeliveryDispositionV1>());
+        assert!(schemas.contains_key::<StreamTokenReputationDeliveryTemplateV1>());
+        assert!(schemas.contains_key::<ReputationJournalPolicyOriginV1>());
+        assert!(schemas.contains_key::<iroha_data_model::transaction::TransactionPayload>());
     }
     #[test]
     fn stored_da_receipt_schema_includes_its_receipt_payload() {

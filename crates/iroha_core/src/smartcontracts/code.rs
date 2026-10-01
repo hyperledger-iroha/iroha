@@ -902,6 +902,8 @@ pub fn borrow_bound_contract_subject_from_world<'a>(
     contract_address: &ContractAddress,
 ) -> Option<&'a AccountId> {
     let code_hash = world.contract_instances().get(contract_address)?;
+    let artifact_id = ContractArtifactId::for_address(contract_address, *code_hash).ok()?;
+    crate::executor::root_scope::ensure_committed_artifact_scope(world, &artifact_id).ok()?;
     let binding = world.contract_subject_bindings().get(contract_address)?;
     binding.validate_for(contract_address).ok()?;
     if binding.lifecycle.active_code_hash.as_ref() != Some(code_hash) {
@@ -2086,7 +2088,9 @@ seiyaku LifecycleAba {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let mut world = World::default();
+        let mut world = crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        );
         world.accounts.insert(
             authority.clone(),
             iroha_data_model::account::AccountValue::new(

@@ -779,7 +779,7 @@ fn install_contract_with_interface_and_lifecycle(
     let mut manifest = ivm::verify_contract_artifact(&code)
         .expect("test contract artifact must verify after wildcard sanitization")
         .manifest;
-    let next_height = u64::try_from(state.view().height() + 1)
+    let next_height = u64::try_from((state.view().height() + 1).max(2))
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next block height must fit in u64 and be non-zero");
@@ -971,7 +971,7 @@ seiyaku ProtectedPages {
     grant_named_permission_to_account(&state, &authority, other.subject_id(), "ReadState");
     assert_can_resume(&other);
 
-    let next_height = u64::try_from(state.view().height() + 1)
+    let next_height = u64::try_from((state.view().height() + 1).max(2))
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next permission block height");

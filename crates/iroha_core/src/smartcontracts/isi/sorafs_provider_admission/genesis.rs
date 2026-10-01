@@ -102,7 +102,7 @@ impl Execute for InitializeSorafsProviderAdmissionV1 {
         if !apply_inner(
             Action::ConfigureCouncil(native::encode(&policy).map_err(rejected)?),
             tx,
-            Some(origin.clone()),
+            Some(origin),
         )
         .map_err(rejected)?
         {
@@ -120,9 +120,7 @@ impl Execute for InitializeSorafsProviderAdmissionV1 {
             {
                 return Err(rejected("genesis provider owner was not established"));
             }
-            if !apply_inner(Action::Admit(projection), tx, Some(origin.clone()))
-                .map_err(rejected)?
-            {
+            if !apply_inner(Action::Admit(projection), tx, Some(origin)).map_err(rejected)? {
                 return Err(rejected("genesis provider was not initialized"));
             }
         }

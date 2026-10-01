@@ -26,6 +26,28 @@ pub use user::{
     Root as UserConfig,
 };
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
+/// Resolve exactly one explicit public network identity source without loading a signer.
+///
+/// Callers resolve file paths relative to their configuration source before calling this
+/// function. Identity files use the same bounded, canonical LF-terminated record as
+/// [`Config::load_file`]. No process environment is consulted.
+///
+/// # Errors
+/// Rejects missing or competing sources and malformed or unreadable identity files.
+pub fn resolve_network_identity(
+    inline: Option<NetworkId>,
+    file: Option<&Path>,
+) -> ReportResult<NetworkId, ParseError> {
+    let mut emitter = iroha_config_base::util::Emitter::new();
+    let identity = user::resolve_network_id_source(
+        inline,
+        file.map(|path| iroha_config_base::WithOrigin::inline(path.to_path_buf())),
+        &mut emitter,
+    );
+    emitter.into_result()?;
+    identity.ok_or_else(|| Report::new(ParseError::InvalidNetworkIdentity).expand())
+}
+
 /// Default time-to-live for transactions submitted via the client API.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
 /// Mandatory lifetime of one signed query request.
@@ -338,6 +360,28 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn signer_free_network_identity_uses_exactly_one_canonical_source() {
+        let expected: NetworkId =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), format!("{expected}\n")).unwrap();
+        assert_eq!(
+            resolve_network_identity(None, Some(file.path())).unwrap(),
+            expected
+        );
+        assert_eq!(
+            resolve_network_identity(Some(expected), None).unwrap(),
+            expected
+        );
+        assert!(resolve_network_identity(None, None).is_err());
+        assert!(resolve_network_identity(Some(expected), Some(file.path())).is_err());
+        std::fs::write(file.path(), expected.to_string()).unwrap();
+        assert!(resolve_network_identity(None, Some(file.path())).is_err());
+    }
+
     use assertables::assert_contains;
     use iroha_config_base::env::MockEnv;
     use iroha_crypto::ExposedPrivateKey;

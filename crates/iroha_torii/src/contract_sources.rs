@@ -3763,10 +3763,10 @@ mod tests {
         let _guard = TestDataDirGuard::new();
         let program = kotodama_lang::session::CompilerSession::default()
             .build(kotodama_lang::session::CompileRequest {
-                source: "seiyaku Demo { view fn main() {} }",
-                source_name: Some("instruction-view.ko"),
+                source: "seiyaku Demo { view fn main() -> int { return 1; } }",
+                source_name: Some("instruction_view.ko"),
             })
-            .expect("compile an artifact with an authenticated view entrypoint")
+            .expect("compile callable source fixture")
             .artifact;
         let code_hash = canonical_code_hash(&program).expect("canonical hash");
         let instruction = dm::InstructionBox::from(RegisterSmartContractBytes {
@@ -3945,7 +3945,11 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
     fn verified_source_job_rejects_language_aliases() {
         let _guard = TestDataDirGuard::new();
         let code_hash = "11".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
-        let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
+        let node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .data_dir(_guard.path().join("sorafs"))
+                .build(),
+        );
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             source_network(),
             source_artifact(&code_hash),
@@ -4015,7 +4019,11 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         let _guard = TestDataDirGuard::new();
         let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
         let wrong_hash = "11".repeat(32);
-        let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
+        let node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .data_dir(_guard.path().join("sorafs"))
+                .build(),
+        );
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             source_network(),
             source_artifact(&wrong_hash),

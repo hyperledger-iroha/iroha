@@ -86,13 +86,7 @@ pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
     block_header_at_epoch(5)
 }
 fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        1_700_000_128_000,
-        0,
-    )
+    iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 1_700_000_128_000, 0)
 }
 fn activate_reputation_policy(
     stx: &mut StateTransaction<'_, '_>,
@@ -105,12 +99,15 @@ fn activate_reputation_policy(
         por_recorder_authority: authority.clone(),
         dispute_recorder_authority: authority.clone(),
         token_recorder_authority: authority.clone(),
+        stream_token_delivery: Default::default(),
         max_source_age_ms: 24 * 60 * 60 * 1_000,
     };
     let digest = policy.canonical_digest().expect("reputation policy digest");
-    SetSorafsReputationJournalAuthorityPolicy::new(policy)
-        .execute(authority, stx)
-        .expect("activate reputation recorder policy");
+    // This dispute/repair fixture is an isolated World overlay, not signed policy execution.
+    crate::smartcontracts::isi::sorafs_reputation::tests::seed_policy_preimage(
+        stx, authority, policy,
+    )
+    .expect("seed private dispute policy preimage");
     digest
 }
 fn repair_block_header(height: u64, creation_time_ms: u64) -> iroha_data_model::block::BlockHeader {

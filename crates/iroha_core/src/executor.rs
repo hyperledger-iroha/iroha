@@ -93,6 +93,7 @@ use std::{
 };
 #[path = "executor_execution_fee.rs"]
 mod execution_fee;
+pub(crate) mod private_fees;
 /// Authenticated root scope for native and contract-generated instruction effects.
 pub(crate) mod root_scope;
 pub(crate) use execution_fee::{ExecutionFeeMeter, ExecutionFeeSettlementError};
@@ -1369,9 +1370,10 @@ fn fee_exempt_payload(
     payload: &TransactionPayload,
     observation_time_ms: u64,
 ) -> bool {
-    nexus_fee_exempt_payload(payload)
-        || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)
-        || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload)
+    private_fees::permits_public_exemption(world)
+        && (nexus_fee_exempt_payload(payload)
+            || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)
+            || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, payload))
 }
 fn fee_exempt_transaction(
     world: &impl WorldReadOnly,
@@ -1381,9 +1383,18 @@ fn fee_exempt_transaction(
 ) -> bool {
     // SCCP exemptions hold on success only (`specs/sccp.md` §4.19).
     // TODO(ws31): charge the ordinary Nexus fee when an SCCP-exempt transaction fails.
-    nexus_fee_exempt_transaction(transaction)
-        || successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms)
-        || crate::smartcontracts::isi::sccp::fees::exempt_on_success(world, transaction.payload())
+    private_fees::permits_public_exemption(world)
+        && (nexus_fee_exempt_transaction(transaction)
+            || successful_claim_fee_exempt_transaction(
+                world,
+                nexus,
+                transaction,
+                observation_time_ms,
+            )
+            || crate::smartcontracts::isi::sccp::fees::exempt_on_success(
+                world,
+                transaction.payload(),
+            ))
 }
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
@@ -4009,9 +4020,12 @@ fn authority_fee_asset_id(
     charge: &FeeChargeBound,
 ) -> Result<AssetId, NexusFeeAdmissionError> {
     if charge.kind == FeeChargeKind::Nexus {
-        return Ok(AssetId::new(
+        let scope = private_fees::private_scope(world, route_dataspace_id)?
+            .map_or(AssetBalanceScope::Global, AssetBalanceScope::Dataspace);
+        return Ok(AssetId::with_scope(
             charge.asset_definition_id.clone(),
             authority.clone(),
+            scope,
         ));
     }
     let definition = world
@@ -4058,20 +4072,21 @@ fn evaluate_nexus_fee_admission_payload(
     validate_charge_limits: bool,
 ) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
     require_direct_fee_settlement(nexus)?;
+    let fees = private_fees::effective(world, &nexus.fees)?;
+    // TODO: Private sponsorship needs vaults with exact dataspace custody. Public
+    // sponsor-program identifiers alone cannot authorize a private monetary debit.
+    if private_fees::private_scope(world, route_dataspace_id)?.is_some()
+        && payload.fee_payment.sponsor_program().is_some()
+    {
+        return Err(NexusFeeAdmissionError::ConfigInvalid(
+            "private-root fee sponsors require a scoped vault owner".into(),
+        ));
+    }
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission_payload(payload)?;
     let mut charges = Vec::with_capacity(2);
-    let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
+    let fee = compute_nexus_fee_amount(&fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
-    let asset_definition_id = crate::block::resolve_network_xor_asset_definition(
-        world,
-        &nexus.fees.fee_asset_id,
-        observation_time_ms,
-    )
-    .ok_or_else(|| {
-        NexusFeeAdmissionError::ConfigInvalid(
-            "invalid Nexus fee asset; expected a registered canonical asset definition".to_owned(),
-        )
-    })?;
+    let asset_definition_id = private_fees::currency(world, &fees, observation_time_ms)?;
     if !fee.is_zero() {
         charges.push(FeeChargeBound {
             kind: FeeChargeKind::Nexus,
@@ -4079,7 +4094,7 @@ fn evaluate_nexus_fee_admission_payload(
             max_bound: fee,
         });
     }
-    if pipeline_gas_component_enabled(nexus, pipeline) && gas_used > 0 {
+    if !pipeline.gas.accepted_assets.is_empty() && fees.per_gas_unit_fee.is_zero() && gas_used > 0 {
         let (asset_definition_id, _definition, units_per_gas) =
             resolve_pipeline_gas_quote_asset(world, pipeline, payload, validate_charge_limits)?;
         let max_bound = Quantity::from(u128::from(gas_used) * u128::from(units_per_gas));
@@ -4966,7 +4981,18 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         require_direct_fee_settlement(&state_transaction.nexus)
             .map_err(nexus_fee_admission_error_to_validation_fail)?;
-        let cfg = state_transaction.nexus.fees.clone();
+        let cfg = private_fees::effective(&state_transaction.world, &state_transaction.nexus.fees)
+            .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        let private_scope = private_fees::private_scope(
+            &state_transaction.world,
+            state_transaction.current_dataspace_id,
+        )
+        .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        if private_scope.is_some() && sponsor.is_some() {
+            return Err(ValidationFail::NotPermitted(
+                "private-root fee sponsors require a scoped vault owner".into(),
+            ));
+        }
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
             return Ok(());
@@ -4976,21 +5002,12 @@ impl Executor {
         } else {
             NexusFeePayer::Payer
         };
-        let asset_def = crate::block::resolve_network_xor_asset_definition(
+        let asset_def = private_fees::currency(
             &state_transaction.world,
-            &cfg.fee_asset_id,
+            &cfg,
             state_transaction.block_unix_timestamp_ms(),
         )
-        .ok_or_else(|| {
-            let reason =
-                "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
-                    .to_owned();
-            status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
-                reason: reason.clone(),
-            });
-            warn!(target: "economics", "nexus fee rejected: {reason}");
-            ValidationFail::NotPermitted(reason)
-        })?;
+        .map_err(nexus_fee_admission_error_to_validation_fail)?;
         let actual_charge = FeeChargeBound {
             kind: FeeChargeKind::Nexus,
             asset_definition_id: asset_def.clone(),
@@ -5047,12 +5064,18 @@ impl Executor {
             NexusFeePayer::Payer => "payer",
             NexusFeePayer::Sponsor => "sponsor",
         };
-        let payer_asset = AssetId::new(asset_def, payer.clone());
+        let payer_asset = AssetId::with_scope(
+            asset_def,
+            payer.clone(),
+            private_scope.map_or(AssetBalanceScope::Global, AssetBalanceScope::Dataspace),
+        );
         let asset_label = payer_asset.definition().to_string();
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
         let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
-        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.current_dataspace_id =
+            Some(private_scope.unwrap_or(DataSpaceId::UNIVERSAL));
+        state_transaction.world.current_dataspace_id =
+            Some(private_scope.unwrap_or(DataSpaceId::UNIVERSAL));
         let fee_burn_result = if matches!(payer_kind, NexusFeePayer::Sponsor) {
             let program_id = sponsor.clone().ok_or_else(|| {
                 ValidationFail::InternalError(
@@ -5211,6 +5234,11 @@ impl Executor {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
         }
+        if !is_initial_genesis_context(state_transaction) {
+            state_transaction.nexus.fees =
+                private_fees::effective(&state_transaction.world, &state_transaction.nexus.fees)
+                    .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        }
         state_transaction.pipeline.gas.tech_account_id = tech_account_id;
         state_transaction.pipeline.gas.accepted_assets = accepted_assets;
         state_transaction.pipeline.gas.units_per_gas = units_per_gas;
@@ -5263,6 +5291,161 @@ impl Executor {
         u32::try_from(index).map(Some).map_err(|_| {
             ValidationFail::NotPermitted("signed stream-token instruction index exceeds u32".into())
         })
+    }
+    /// Identify a gateway instruction in the exact outer signed Network entry.
+    ///
+    /// Sealed reveals use an inner execution call hash, while their output proof names the
+    /// distinct outer entry. Contract-emitted instructions have no direct signed ordinal.
+    pub(crate) fn direct_stream_token_gateway_instruction_index(
+        state_transaction: &StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+        instruction: &InstructionBox,
+        index: usize,
+        direct_body: bool,
+    ) -> Result<Option<u32>, ValidationFail> {
+        use iroha_data_model::isi::sorafs::MutateSorafsStreamTokenGateway;
+        if !direct_body || transaction.network_id() != Some(state_transaction.network_id()) {
+            return Ok(None);
+        }
+        let submitted = match transaction.instructions() {
+            Executable::Instructions(instructions) => instructions.get(index),
+            Executable::Batch(items) => items.get(index).and_then(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => Some(instruction),
+                ExecutableBatchItem::ContractCall(_) => None,
+            }),
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => None,
+        };
+        let expected = submitted.and_then(|item| {
+            item.as_any()
+                .downcast_ref::<MutateSorafsStreamTokenGateway>()
+        });
+        let actual = instruction
+            .as_any()
+            .downcast_ref::<MutateSorafsStreamTokenGateway>();
+        if expected.is_none() || expected != actual {
+            return Ok(None);
+        }
+        // Governance cancellation is one complete signed operation; it cannot borrow a
+        // manager's authority from an enclosing batch or accompanying instruction.
+        if actual.is_some_and(|instruction| matches!(instruction.request.action,
+            iroha_data_model::sorafs::stream_token_gateway::native::StreamTokenGatewayActionV1::CancelReputationDelivery { .. }))
+            && !matches!(transaction.instructions(), Executable::Instructions(items)
+                if items.len() == 1 && index == 0)
+        {
+            return Ok(None);
+        }
+        let signed_entry_hash = transaction.hash_as_entrypoint();
+        if state_transaction.current_network_entrypoint_hash != Some(signed_entry_hash)
+            || state_transaction.tx_call_hash != Some(iroha_crypto::Hash::from(signed_entry_hash))
+            || state_transaction.current_tx_hash != Some(transaction.hash())
+            || state_transaction
+                .current_entrypoint_index
+                .and_then(|value| u32::try_from(value).ok())
+                .is_none()
+        {
+            return Ok(None);
+        }
+        u32::try_from(index).map(Some).map_err(|_| {
+            ValidationFail::NotPermitted(
+                "signed stream-token gateway instruction index exceeds u32".into(),
+            )
+        })
+    }
+    /// Capture the exact original signed SetPolicy; genesis requires its opaque source owner.
+    pub(crate) fn direct_reputation_policy_origin(
+        state: &StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+        instruction: &InstructionBox,
+        index: usize,
+        direct_body: bool,
+    ) -> Option<iroha_data_model::sorafs::reputation::ReputationJournalPolicyOriginV1> {
+        use iroha_data_model::{
+            isi::sorafs::SetSorafsReputationJournalAuthorityPolicy,
+            sorafs::{
+                reputation::ReputationJournalPolicyOriginV1 as Origin,
+                stream_token_gateway::native::StreamTokenGatewayExecutionV1 as Execution,
+            },
+        };
+        if !direct_body
+            || !instruction
+                .as_any()
+                .is::<SetSorafsReputationJournalAuthorityPolicy>()
+        {
+            return None;
+        }
+        let Executable::Instructions(items) = transaction.instructions() else {
+            return None;
+        };
+        if items.get(index) != Some(instruction)
+            || state.current_network_entrypoint_hash != Some(transaction.hash_as_entrypoint())
+            || state.tx_call_hash
+                != Some(iroha_crypto::Hash::from(transaction.hash_as_entrypoint()))
+            || state.current_tx_hash != Some(transaction.hash())
+        {
+            return None;
+        }
+        let execution = Execution {
+            height: state._curr_block.height().get(),
+            transaction_hash: *transaction.hash_as_entrypoint().as_ref(),
+            entry_index: u32::try_from(state.current_entrypoint_index?).ok()?,
+            instruction_index: u32::try_from(index).ok()?,
+            recorded_at_unix_ms: state.block_unix_timestamp_ms(),
+            authority: transaction.authority().clone(),
+        };
+        let origin = if is_initial_genesis_context(state)
+            && transaction.network_id().is_none()
+            && state
+                .genesis_execution_scope
+                .as_ref()
+                .and_then(|scope| scope.for_transaction(state))
+                .is_some()
+        {
+            Origin::Genesis(execution)
+        } else if !is_initial_genesis_context(state)
+            && transaction.network_id() == Some(state.network_id())
+            && items.len() == 1
+            && index == 0
+        {
+            Origin::Network(execution)
+        } else {
+            return None;
+        };
+        origin.validate().ok()?;
+        Some(origin)
+    }
+    /// Bind only the sole exact external stream-token reputation append, including all signed fields.
+    pub(crate) fn direct_stream_token_reputation_payload(
+        state_transaction: &StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+        instruction: &InstructionBox,
+        direct_body: bool,
+    ) -> Option<iroha_data_model::transaction::TransactionPayload> {
+        use iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry;
+        let Executable::Instructions(items) = transaction.instructions() else {
+            return None;
+        };
+        if !direct_body
+            || items.len() != 1
+            || items.first() != Some(instruction)
+            || !instruction
+                .as_any()
+                .is::<AppendSorafsStreamTokenReputationJournalEntry>()
+            || transaction.network_id() != Some(state_transaction.network_id())
+            || transaction.multisig_signatures().is_some()
+            || transaction
+                .authority()
+                .try_signatory()
+                .is_none_or(|key| key.algorithm() != iroha_crypto::Algorithm::Ed25519)
+            || state_transaction.current_network_entrypoint_hash
+                != Some(transaction.hash_as_entrypoint())
+            || state_transaction.tx_call_hash
+                != Some(iroha_crypto::Hash::from(transaction.hash_as_entrypoint()))
+            || state_transaction.current_tx_hash != Some(transaction.hash())
+            || state_transaction.current_entrypoint_index.is_none()
+        {
+            return None;
+        }
+        Some(transaction.payload().clone())
     }
     /// Recognize only the exact direct instruction in the original signed genesis transaction.
     pub(crate) fn direct_sorafs_admission_initialization(
@@ -5596,6 +5779,32 @@ impl Executor {
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     )?;
                     state_transaction.current_direct_stream_token_instruction_index = direct_index;
+                    state_transaction.current_direct_reputation_policy_origin =
+                        Self::direct_reputation_policy_origin(
+                            state_transaction,
+                            transaction,
+                            &isi,
+                            index,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        );
+                    state_transaction.current_direct_stream_token_reputation_payload =
+                        Self::direct_stream_token_reputation_payload(
+                            state_transaction,
+                            transaction,
+                            &isi,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        );
+                    state_transaction.current_direct_stream_token_gateway_instruction_index =
+                        Self::direct_stream_token_gateway_instruction_index(
+                            state_transaction,
+                            transaction,
+                            &isi,
+                            index,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        )?;
                     state_transaction.current_direct_sorafs_admission_initialization =
                         Self::direct_sorafs_admission_initialization(
                             state_transaction,
@@ -5620,6 +5829,9 @@ impl Executor {
                         contract_runtime_context,
                     );
                     state_transaction.current_direct_stream_token_instruction_index = None;
+                    state_transaction.current_direct_stream_token_gateway_instruction_index = None;
+                    state_transaction.current_direct_stream_token_reputation_payload = None;
+                    state_transaction.current_direct_reputation_policy_origin = None;
                     state_transaction.current_direct_sorafs_admission_initialization = false;
                     state_transaction.current_direct_final_promotion_operation_origin = None;
                     result?;
@@ -5751,6 +5963,10 @@ impl Executor {
         logical_time_ms: u64,
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        // A contract frame cannot inherit a native gateway instruction's signed ordinal.
+        state_transaction.current_direct_stream_token_gateway_instruction_index = None;
+        state_transaction.current_direct_stream_token_reputation_payload = None;
+        state_transaction.current_direct_reputation_policy_origin = None;
         let resolved = self.resolve_contract_invocation(state_transaction, call, ivm_cache)?;
         self.execute_resolved_contract_invocation(
             state_transaction,
@@ -5774,6 +5990,10 @@ impl Executor {
         logical_time_ms: u64,
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        // A contract frame cannot inherit a native gateway instruction's signed ordinal.
+        state_transaction.current_direct_stream_token_gateway_instruction_index = None;
+        state_transaction.current_direct_stream_token_reputation_payload = None;
+        state_transaction.current_direct_reputation_policy_origin = None;
         root_scope::ensure_contract_scope(state_transaction, &call.contract_address)?;
         use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         let ResolvedContractInvocation {
@@ -6637,17 +6857,36 @@ impl Executor {
                             )?;
                             state_transaction.current_direct_stream_token_instruction_index =
                                 direct_index;
+                            state_transaction.current_direct_stream_token_reputation_payload = None;
+                            state_transaction.current_direct_reputation_policy_origin = None;
+                            state_transaction
+                                .current_direct_stream_token_gateway_instruction_index =
+                                Self::direct_stream_token_gateway_instruction_index(
+                                    state_transaction,
+                                    &transaction_for_fee,
+                                    &instruction,
+                                    index,
+                                    true,
+                                )?;
                             state_transaction.current_direct_final_promotion_operation_origin =
                                 None;
                             let result =
                                 self.execute_instruction(state_transaction, authority, instruction);
                             state_transaction.current_direct_stream_token_instruction_index = None;
+                            state_transaction.current_direct_stream_token_reputation_payload = None;
+                            state_transaction.current_direct_reputation_policy_origin = None;
+                            state_transaction
+                                .current_direct_stream_token_gateway_instruction_index = None;
                             state_transaction.current_direct_final_promotion_operation_origin =
                                 None;
                             result?;
                         }
                         ExecutableBatchItem::ContractCall(call) => {
                             state_transaction.current_direct_stream_token_instruction_index = None;
+                            state_transaction.current_direct_stream_token_reputation_payload = None;
+                            state_transaction.current_direct_reputation_policy_origin = None;
+                            state_transaction
+                                .current_direct_stream_token_gateway_instruction_index = None;
                             state_transaction.current_direct_final_promotion_operation_origin =
                                 None;
                             let remaining = live_batch_contract_execution_limit(
@@ -9058,6 +9297,12 @@ mod tests {
         )))
     }
     fn state_for_testing(world: World) -> State {
+        // These component fixtures execute on an explicitly committed global root.
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
         State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -9864,6 +10109,8 @@ mod tests {
     include!("executor_stream_token_custody_permission_tests.rs");
     include!("executor_cross_scope_permission_tests.rs");
     include!("executor_stream_token_direct_source_tests.rs");
+    include!("executor_stream_token_gateway_direct_source_tests.rs");
+    include!("executor_stream_token_gateway_permission_tests.rs");
     include!("executor_sorafs_market_tests.rs");
     include!("executor_sorafs_provider_governance_tests.rs");
     include!("executor_sorafs_pop_registry_tests.rs");
@@ -15449,6 +15696,9 @@ mod tests {
         let mut params = iroha_data_model::parameter::system::SumeragiNposParameters::default();
         params.xor_asset_definition_id = nexus_asset.clone();
         let mut parameter_block = world.parameters.block();
+        parameter_block.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
         parameter_block.set_parameter(iroha_data_model::parameter::Parameter::Custom(
             params.into_custom_parameter(),
         ));

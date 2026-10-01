@@ -1,5 +1,7 @@
 //! Atomic provider admission effects from signed genesis or certified Parliament enactment.
 
+use iroha_data_model::sorafs::provider_admission::history::AdmissionHistoryPathV1;
+
 mod genesis;
 
 use crate::{
@@ -130,7 +132,7 @@ fn apply_inner(
                     .verify_envelope_policy_claim(&envelope, now / 1000)
                     .map_err(|_| invalid)?;
             }
-            let count_path = native::path(None, "provider_count");
+            let count_path = native::path(None, AdmissionHistoryPathV1::ProviderCount);
             let count: u64 = tx
                 .world
                 .smart_contract_state
@@ -231,9 +233,9 @@ fn apply_inner(
     let retained_bytes_path = native::path(
         None,
         if emergency {
-            "revocation_bytes"
+            AdmissionHistoryPathV1::RevocationBytes
         } else {
-            "history_bytes"
+            AdmissionHistoryPathV1::HistoryBytes
         },
     );
     let retained_bytes: u64 = tx
@@ -257,7 +259,7 @@ fn apply_inner(
         .filter(|bytes| *bytes <= maximum)
         .ok_or(invalid)?;
     let retained_bytes_frame = native::encode(&next_bytes)?;
-    let record_path = native::path(subject, &format!("history/{revision}"));
+    let record_path = native::path(subject, AdmissionHistoryPathV1::Revision(revision));
     if tx.world.smart_contract_state.get(&record_path).is_some() {
         return Err(invalid);
     }
@@ -267,7 +269,7 @@ fn apply_inner(
         .insert(record_path, frame.clone());
     tx.world
         .smart_contract_state
-        .insert(native::path(subject, "head"), frame);
+        .insert(native::path(subject, AdmissionHistoryPathV1::Head), frame);
     tx.world
         .smart_contract_state
         .insert(retained_bytes_path, retained_bytes_frame);

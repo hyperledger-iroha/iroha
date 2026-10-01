@@ -1124,16 +1124,23 @@ fn routing_policy_dataspace_resolution() {
                 ..LaneDescriptor::default()
             },
         ],
-        dataspace_catalog: vec![DataSpaceDescriptor {
-            alias: Some("alpha".into()),
-            id: Some(1),
-            manifest_hash: Some(
-                "0100000000000000000000000000000000000000000000000000000000000000".into(),
-            ),
-            description: None,
-            fault_tolerance: None,
-            fee_sponsor_program_id: None,
-        }],
+        dataspace_catalog: vec![
+            DataSpaceDescriptor {
+                alias: Some("universal".into()),
+                id: Some(0),
+                ..DataSpaceDescriptor::default()
+            },
+            DataSpaceDescriptor {
+                alias: Some("alpha".into()),
+                id: Some(1),
+                manifest_hash: Some(
+                    "0100000000000000000000000000000000000000000000000000000000000000".into(),
+                ),
+                description: None,
+                fault_tolerance: None,
+                fee_sponsor_program_id: None,
+            },
+        ],
         routing_policy: RoutingPolicy {
             default_lane: Some(1),
             default_dataspace: Some("alpha".into()),
@@ -1172,16 +1179,23 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
             description: None,
             ..LaneDescriptor::default()
         }],
-        dataspace_catalog: vec![DataSpaceDescriptor {
-            alias: Some("alpha".into()),
-            id: Some(1),
-            manifest_hash: Some(
-                "0100000000000000000000000000000000000000000000000000000000000000".into(),
-            ),
-            description: None,
-            fault_tolerance: None,
-            fee_sponsor_program_id: None,
-        }],
+        dataspace_catalog: vec![
+            DataSpaceDescriptor {
+                alias: Some("universal".into()),
+                id: Some(0),
+                ..DataSpaceDescriptor::default()
+            },
+            DataSpaceDescriptor {
+                alias: Some("alpha".into()),
+                id: Some(1),
+                manifest_hash: Some(
+                    "0100000000000000000000000000000000000000000000000000000000000000".into(),
+                ),
+                description: None,
+                fault_tolerance: None,
+                fee_sponsor_program_id: None,
+            },
+        ],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
             default_dataspace: Some("alpha".into()),

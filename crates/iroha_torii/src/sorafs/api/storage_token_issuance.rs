@@ -74,15 +74,81 @@ pub(crate) async fn handle_post_sorafs_storage_token_authenticated(
     headers: HeaderMap,
     JsonOnly(req): JsonOnly<StreamTokenRequestDto>,
 ) -> Response {
+    let quota_subject = match authenticated_stream_token_quota_subject(authenticated_operator) {
+        Ok(subject) => subject,
+        Err(response) => return response,
+    };
+    issue_storage_token(state, headers, req, quota_subject, None).await
+}
+
+/// Canonical account route; middleware verifies the exact network/body and consumes its nonce once.
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_storage_account_token(
+    authenticated_account: Option<Extension<crate::app_auth::VerifiedCanonicalRequest>>,
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    JsonOnly(req): JsonOnly<StreamTokenRequestDto>,
+) -> Response {
+    let Some(Extension(authenticated)) = authenticated_account else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "account stream token issuance requires a canonical network signature",
+        );
+    };
+    let subject = StreamTokenQuotaSubject::from_authenticated_account(
+        state.signed_query_admission.network_id(),
+        &authenticated.account,
+    );
+    issue_storage_token(state, headers, req, subject, Some(authenticated.account)).await
+}
+
+#[cfg(feature = "app_api")]
+fn current_account_read_policy(
+    state: &iroha_core::state::State,
+    account: &AccountId,
+    provider: ProviderId,
+) -> Result<sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1, Response> {
+    use sorafs_manifest::provider_advert::account_read::RegisteredAccountReadV1;
+    let denied = || {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "this provider has no active admitted account-read policy for this account",
+        )
+    };
+    let view = state.view();
+    if iroha_core::sumeragi::lanes::routing::committed_root_scope(view.world())
+        != Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+        || view.world().accounts().get(account).is_none()
+    {
+        return Err(denied());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| denied())?
+        .as_secs();
+    let admitted = iroha_core::query::provider_admission::read_finalized_provider_admission_v1(
+        &view, provider, now,
+    )
+    .map_err(|_| denied())?
+    .ok_or_else(denied)?;
+    RegisteredAccountReadV1::from_capabilities(&admitted.envelope().proposal.capabilities)
+        .map_err(|_| denied())?
+        .ok_or_else(denied)
+}
+
+#[cfg(feature = "app_api")]
+async fn issue_storage_token(
+    state: SharedAppState,
+    headers: HeaderMap,
+    req: StreamTokenRequestDto,
+    quota_subject: StreamTokenQuotaSubject,
+    account: Option<AccountId>,
+) -> Response {
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
     }
     let Some(issuer) = state.stream_token_issuer() else {
         return feature_disabled("stream token issuance is not enabled on this node");
-    };
-    let quota_subject = match authenticated_stream_token_quota_subject(authenticated_operator) {
-        Ok(subject) => subject,
-        Err(response) => return response,
     };
     let client_id = match required_canonical_stream_header(
         &headers,
@@ -156,16 +222,40 @@ pub(crate) async fn handle_post_sorafs_storage_token_authenticated(
     let manifest_cid = manifest.manifest_cid().to_vec();
     let profile_handle = manifest.chunk_profile_handle().to_string();
     let worker_issuer = Arc::clone(&issuer);
+    let worker_state = state.state.clone();
     // The physical worker owns query and heavy-query admission until issuance finishes, even
     // if the HTTP request is cancelled. Custody checks and broker I/O must not run on an executor.
     let issued = match sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move || {
-        Ok(worker_issuer.issue_token(
+        let policy = account
+            .as_ref()
+            .map(|account| {
+                current_account_read_policy(&worker_state, account, ProviderId::new(provider_id))
+            })
+            .transpose()?;
+        let issued = worker_issuer.issue_token(
             quota_subject,
             manifest_cid,
             provider_id,
             profile_handle,
             overrides,
-        ))
+            policy.as_ref(),
+        );
+        // Issuance can await external custody. Do not release a token after an intervening
+        // finalized policy withdrawal, account deletion, expiry, or replacement.
+        if let Some(account) = &account {
+            if Some(current_account_read_policy(
+                &worker_state,
+                account,
+                ProviderId::new(provider_id),
+            )?) != policy
+            {
+                return Err(json_error(
+                    StatusCode::FORBIDDEN,
+                    "account-read policy changed during token issuance",
+                ));
+            }
+        }
+        Ok(issued)
     })
     .await
     {

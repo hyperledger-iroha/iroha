@@ -301,10 +301,6 @@ const fn operation_is_known(operation: u16) -> bool {
             | OPERATION_STREAM_TOKEN_RECOVER_V1
             | OPERATION_STREAM_TOKEN_OBSERVE_V1
             | OPERATION_STREAM_TOKEN_CHECK_V1
-            | OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1
-            | OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1
-            | OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
-            | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1
             | OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1
             | OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1
             | OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
@@ -2254,44 +2250,6 @@ fn validate_operation_result(
             }
             OPERATION_STREAM_TOKEN_CHECK_V1 => {
                 decode_stream_token_check_result(&request.binding, &request.payload, result)?;
-            }
-            OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1 => {
-                let admission = decode_canonical::<
-                    iroha_torii::sorafs::StreamTokenGatewayAdmissionRequestV1,
-                >(
-                    &request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1
-                )?;
-                let result = decode_canonical::<
-                    iroha_torii::sorafs::StreamTokenGatewayAdmissionResultV1,
-                >(result, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-                let qualification = required_binding_value!(
-                    &request.binding,
-                    stream_token_gateway_admission_qualification
-                );
-                result
-                    .validate_for_request(&admission, qualification)
-                    .map_err(|_| BrokerError::Protocol)?;
-            }
-            OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1 => {
-                let max_items =
-                    decode_canonical::<u32>(&request.payload, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-                let pending = decode_canonical::<
-                    iroha_torii::sorafs::StreamTokenGatewayAdmissionReadbackV1,
-                >(result, MAX_BROKER_UNARY_FRAME_BYTES_V1)?;
-                let qualification = required_binding_value!(
-                    &request.binding,
-                    stream_token_gateway_admission_qualification
-                );
-                pending
-                    .validate(max_items, qualification)
-                    .map_err(|_| BrokerError::Protocol)?;
-            }
-            OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
-            | OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1 => {
-                decode_canonical::<iroha_torii::sorafs::StreamTokenGatewayAdmissionAckV1>(
-                    result,
-                    MAX_BROKER_UNARY_FRAME_BYTES_V1,
-                )?;
             }
             OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1 => {
                 let signed = decode_canonical::<iroha_data_model::transaction::SignedTransaction>(

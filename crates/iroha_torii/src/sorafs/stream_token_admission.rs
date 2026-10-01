@@ -1,518 +1,51 @@
-//! Deployment-owned stream-token quota, sequencing, and reputation-callback admission.
+//! Native stream-token quota, sequencing, and reputation-callback admission.
 //!
-//! Production gateways must inject an implementation of [`StreamTokenGatewayAdmissionProviderV1`].
+//! Production gateways use the daemon-owned native [`StreamTokenGatewayAdmissionProviderV1`].
 //! The provider owns the atomic quota decision, sealed monotonic gateway sequence, and durable
 //! ordered callback outbox. Torii never reconstructs or rewrites the returned typed outcome;
-//! [`StreamTokenAdmissionCaptureV1`] passes it unchanged to the committed reputation runtime and
-//! acknowledges the external row only after that callback succeeds.
+//! [`StreamTokenAdmissionCaptureV1`] passes it unchanged with the original deadline to native
+//! reputation delivery, and acknowledges the durable row only after that callback succeeds.
+//! Accepted requests then require
+//! a fresh current Serving observation under the same original operation deadline.
 use iroha_config::parameters::is_production_runtime_handle;
-use iroha_data_model::sorafs::{
-    capacity::ProviderId,
-    reputation::{
-        StreamTokenExcludedKindV1, StreamTokenRequestRouteV1, StreamTokenValidationOutcomeV1,
-        StreamTokenValidationRequestContextV1, StreamTokenValidationStatusV1,
-        StreamTokenViolationKindV1,
-    },
+use iroha_data_model::sorafs::reputation::StreamTokenValidationStatusV1;
+use iroha_data_model::sorafs::stream_token_gateway::{
+    STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1, StreamTokenGatewayAdmissionAckV1,
+    StreamTokenGatewayAdmissionDeliveryStateV1, StreamTokenGatewayAdmissionErrorV1,
+    StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionReadbackV1,
+    StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
+    StreamTokenGatewayAdmissionResultV1,
 };
-use norito::codec::{Decode, Encode};
-use sorafs_node::reputation::runtime::{
-    ReputationNativeOutcomeAdmissionApiV1, ReputationNativeOutcomeAdmissionStateV1,
-    StreamTokenReputationAdmissionOutcomeV1,
+use std::{
+    fmt,
+    sync::Arc,
+    time::{Duration, Instant},
 };
-use std::{fmt, sync::Arc};
-use thiserror::Error;
-/// Hard V1 ceiling for one reconciliation call.
-pub const STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1: u32 = 1_024;
-/// Exact public identity of a deployment-owned admission provider.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionQualificationV1"
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct StreamTokenGatewayAdmissionQualificationV1 {
-    /// Stable identity derived from the chain and governed compliance gateway.
-    pub gateway_id: [u8; 32],
-    /// Non-zero adapter and public-policy revision.
-    pub revision: u64,
-    /// Non-zero digest of the provider's public policy.
-    pub policy_digest: [u8; 32],
-    /// Exact durable pending-row capacity enforced by the provider.
-    pub max_pending: u32,
-    /// Exact active token-window capacity enforced by the provider.
-    pub max_tracked_tokens: u32,
-    /// Exact maximum lifetime for one cross-replica concurrency lease.
-    pub lease_ttl_ms: u64,
-}
-impl StreamTokenGatewayAdmissionQualificationV1 {
-    /// Validate non-inert public qualification material.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StreamTokenGatewayAdmissionErrorV1::BindingMismatch`] for an
-    /// inert gateway identity, revision, or policy digest.
-    pub fn validate(self) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        if self.gateway_id == [0; 32]
-            || self.revision == 0
-            || self.policy_digest == [0; 32]
-            || self.max_pending == 0
-            || self.max_pending > 1_000_000
-            || self.max_tracked_tokens == 0
-            || self.max_tracked_tokens > 1_000_000
-            || self.lease_ttl_ms == 0
-            || self.lease_ttl_ms > 300_000
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::BindingMismatch);
-        }
-        Ok(())
-    }
-}
-/// Signed token quota inputs admitted atomically with one callback row.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayQuotaRequestV1"
-)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct StreamTokenGatewayQuotaRequestV1 {
-    /// Canonical 16-byte token identifier rendered as lowercase hexadecimal.
-    pub token_id: String,
-    /// Signed cross-replica concurrent-stream ceiling.
-    pub max_streams: u16,
-    /// Signed request budget per minute.
-    pub requests_per_minute: u32,
-    /// Signed byte budget per second.
-    pub rate_limit_bytes: u64,
-    /// Exact bytes selected by the canonical route.
-    pub requested_bytes: u64,
-    /// Signed token expiry in seconds since Unix epoch.
-    pub expires_at_epoch: u64,
-    /// Authenticated observation time in seconds since Unix epoch.
-    pub observed_at_epoch: u64,
-}
-impl StreamTokenGatewayQuotaRequestV1 {
-    fn validate(&self) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        if self.token_id.len() != 32
-            || !self
-                .token_id
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            || self.requests_per_minute == 0
-            || self.max_streams == 0
-            || self.rate_limit_bytes == 0
-            || self.requested_bytes == 0
-            || self.expires_at_epoch == 0
-            || self.observed_at_epoch == 0
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest);
-        }
-        Ok(())
-    }
-}
-/// Complete payload-free input to one external gateway admission transaction.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRequestV1"
-)]
-pub struct StreamTokenGatewayAdmissionRequestV1 {
-    /// Exact canonical serving context.
-    pub context: StreamTokenValidationRequestContextV1,
-    /// Canonical signed token-body digest, present exactly after successful decode.
-    pub token_body_digest: Option<[u8; 32]>,
-    /// Signing-key version from the decoded token body.
-    pub token_key_version: Option<u32>,
-    /// Authenticated observation time in milliseconds since Unix epoch.
-    pub validated_at_unix_ms: u64,
-    /// Torii's terminal validation before deployment-owned quota admission.
-    pub status: StreamTokenValidationStatusV1,
-    /// Exact signed quota material, present when a canonical token body exists.
-    pub quota: Option<StreamTokenGatewayQuotaRequestV1>,
-}
-impl StreamTokenGatewayAdmissionRequestV1 {
-    /// Validate canonical request material before it crosses the provider boundary.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed context, timestamp, token material, or quota bindings.
-    pub fn validate(&self) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        self.context
-            .validate()
-            .map_err(|_| StreamTokenGatewayAdmissionErrorV1::InvalidRequest)?;
-        if self.validated_at_unix_ms == 0
-            || self.token_body_digest == Some([0; 32])
-            || self.token_key_version == Some(0)
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest);
-        }
-        let carries_body = matches!(
-            self.status,
-            StreamTokenValidationStatusV1::Accepted
-                | StreamTokenValidationStatusV1::ProviderViolation(_)
-                | StreamTokenValidationStatusV1::Excluded(
-                    StreamTokenExcludedKindV1::InvalidSignature
-                        | StreamTokenExcludedKindV1::UnsupportedKeyVersion
-                        | StreamTokenExcludedKindV1::SignerAuthorityUnavailable
-                )
-        );
-        if carries_body != self.token_body_digest.is_some()
-            || carries_body != self.token_key_version.is_some()
-            || carries_body != self.quota.is_some()
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest);
-        }
-        if let Some(quota) = &self.quota {
-            quota.validate()?;
-            let requested_bytes = match self.context.route() {
-                StreamTokenRequestRouteV1::CarRange(range) => range
-                    .byte_length()
-                    .map_err(|_| StreamTokenGatewayAdmissionErrorV1::InvalidRequest)?,
-                StreamTokenRequestRouteV1::Chunk(chunk) => chunk.stored_length,
-            };
-            if quota.observed_at_epoch != self.validated_at_unix_ms / 1_000
-                || quota.expires_at_epoch.checked_mul(1_000).is_none()
-                || quota.requested_bytes != requested_bytes
-                || self.token_body_digest.is_none()
-            {
-                return Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest);
-            }
-        }
-        Ok(())
-    }
-}
-/// One externally committed, ordered callback row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRecordV1"
-)]
-pub struct StreamTokenGatewayAdmissionRecordV1 {
-    /// Authoritative local serving provider.
-    pub provider_id: ProviderId,
-    /// Complete externally authenticated outcome.
-    pub outcome: StreamTokenValidationOutcomeV1,
-    /// Retry delay for quota violations, absent for every other terminal.
-    pub retry_after_secs: Option<u32>,
-    /// Opaque deployment-owned concurrency lease, present only when admitted.
-    pub lease_id: Option<[u8; 32]>,
-    /// Lease expiry in milliseconds since Unix epoch, present with `lease_id`.
-    pub lease_expires_at_unix_ms: Option<u64>,
-    /// Signed token expiry used to derive the lease deadline, present only with an accepted lease.
-    pub lease_token_expires_at_epoch: Option<u64>,
-}
-impl StreamTokenGatewayAdmissionRecordV1 {
-    /// Validate one retained pending/lease record against the live provider.
-    ///
-    /// # Errors
-    ///
-    /// Rejects inert, substituted, or internally inconsistent material.
-    pub fn validate_shape(
-        self,
-        qualification: StreamTokenGatewayAdmissionQualificationV1,
-    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        qualification.validate()?;
-        if self.provider_id.as_bytes() == &[0; 32]
-            || self.outcome.binding.gateway_id != qualification.gateway_id
-            || self.outcome.binding.gateway_sequence == 0
-            || self.outcome.binding.request_context_digest == [0; 32]
-            || self.outcome.token_body_digest == Some([0; 32])
-            || self.outcome.token_key_version == Some(0)
-            || self.outcome.validated_at_unix_ms == 0
-            || self.lease_id == Some([0; 32])
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        let carries_body = matches!(
-            self.outcome.status,
-            StreamTokenValidationStatusV1::Accepted
-                | StreamTokenValidationStatusV1::ProviderViolation(_)
-                | StreamTokenValidationStatusV1::Excluded(
-                    StreamTokenExcludedKindV1::InvalidSignature
-                        | StreamTokenExcludedKindV1::UnsupportedKeyVersion
-                        | StreamTokenExcludedKindV1::SignerAuthorityUnavailable
-                )
-        );
-        if carries_body != self.outcome.token_body_digest.is_some()
-            || carries_body != self.outcome.token_key_version.is_some()
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        let needs_retry = matches!(
-            self.outcome.status,
-            StreamTokenValidationStatusV1::ProviderViolation(
-                StreamTokenViolationKindV1::RequestQuotaExceeded
-                    | StreamTokenViolationKindV1::ByteRateLimitExceeded
-            )
-        );
-        if needs_retry != self.retry_after_secs.is_some() || self.retry_after_secs == Some(0) {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        let admitted = self.outcome.status == StreamTokenValidationStatusV1::Accepted;
-        if admitted != self.lease_id.is_some()
-            || admitted != self.lease_expires_at_unix_ms.is_some()
-            || admitted != self.lease_token_expires_at_epoch.is_some()
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        if admitted {
-            let expected = exact_lease_expiry_unix_ms(
-                self.outcome.validated_at_unix_ms,
-                self.lease_token_expires_at_epoch
-                    .ok_or(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)?,
-                qualification.lease_ttl_ms,
-            )
-            .map_err(|_| StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)?;
-            if self.lease_expires_at_unix_ms != Some(expected) {
-                return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-            }
-        }
-        Ok(())
-    }
-    /// Verify that an external record is the exact result of `request` under `qualification`.
-    ///
-    /// # Errors
-    ///
-    /// Rejects substituted provider, context, gateway, token material,
-    /// timestamp, status, or retry metadata.
-    pub fn validate_for_request(
-        self,
-        request: &StreamTokenGatewayAdmissionRequestV1,
-        qualification: StreamTokenGatewayAdmissionQualificationV1,
-    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        request.validate()?;
-        qualification.validate()?;
-        self.validate_shape(qualification)?;
-        let request_context_digest = request
-            .context
-            .digest()
-            .map_err(|_| StreamTokenGatewayAdmissionErrorV1::InvalidRequest)?;
-        if self.provider_id != request.context.provider_id()
-            || self.outcome.binding.gateway_id != qualification.gateway_id
-            || self.outcome.binding.gateway_sequence == 0
-            || self.outcome.binding.request_context_digest != request_context_digest
-            || self.outcome.token_body_digest != request.token_body_digest
-            || self.outcome.token_key_version != request.token_key_version
-            || self.outcome.validated_at_unix_ms != request.validated_at_unix_ms
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        let status_is_valid = self.outcome.status == request.status
-            || matches!(
-                (request.status, self.outcome.status),
-                (
-                    StreamTokenValidationStatusV1::Accepted,
-                    StreamTokenValidationStatusV1::ProviderViolation(
-                        StreamTokenViolationKindV1::Expired
-                            | StreamTokenViolationKindV1::ConcurrencyLimitExceeded
-                            | StreamTokenViolationKindV1::RequestQuotaExceeded
-                            | StreamTokenViolationKindV1::ByteRateLimitExceeded
-                            | StreamTokenViolationKindV1::IdentifierPolicyConflict
-                    )
-                )
-            );
-        if !status_is_valid {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        if self.outcome.status == StreamTokenValidationStatusV1::Accepted {
-            let token_expiry = request
-                .quota
-                .as_ref()
-                .ok_or(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)?
-                .expires_at_epoch;
-            if self.lease_token_expires_at_epoch != Some(token_expiry)
-                || self.lease_expires_at_unix_ms
-                    != Some(exact_lease_expiry_unix_ms(
-                        request.validated_at_unix_ms,
-                        token_expiry,
-                        qualification.lease_ttl_ms,
-                    )?)
-            {
-                return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-            }
-        }
-        Ok(())
-    }
-}
-fn exact_lease_expiry_unix_ms(
-    validated_at_unix_ms: u64,
-    token_expires_at_epoch: u64,
-    lease_ttl_ms: u64,
-) -> Result<u64, StreamTokenGatewayAdmissionErrorV1> {
-    let token_expires_at_unix_ms = token_expires_at_epoch
-        .checked_mul(1_000)
-        .ok_or(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)?;
-    let ttl_expires_at_unix_ms = validated_at_unix_ms
-        .checked_add(lease_ttl_ms)
-        .ok_or(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)?;
-    let expires_at_unix_ms = token_expires_at_unix_ms.min(ttl_expires_at_unix_ms);
-    if expires_at_unix_ms <= validated_at_unix_ms {
-        return Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest);
-    }
-    Ok(expires_at_unix_ms)
-}
-/// Provider-authenticated state of the exact row returned by `admit`.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionDeliveryStateV1"
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
-    /// The row is pending after the exact immediately preceding sequence.
-    Pending {
-        /// Sealed high-water value before this row was allocated; zero means
-        /// the row is the first gateway sequence.
-        predecessor_sequence: u64,
-    },
-    /// This exact request was already acknowledged by another replica.
-    AcknowledgedExactReplay {
-        /// Authenticated contiguous acknowledgement high-water covering the returned row.
-        acknowledged_through_sequence: u64,
-    },
-}
-/// Exact atomic result of one deployment-owned admission transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionResultV1"
-)]
-pub struct StreamTokenGatewayAdmissionResultV1 {
-    /// Byte-identical retained callback and optional lease record.
-    pub record: StreamTokenGatewayAdmissionRecordV1,
-    /// Provider-authenticated delivery state at the linearization point.
-    pub delivery_state: StreamTokenGatewayAdmissionDeliveryStateV1,
-}
-impl StreamTokenGatewayAdmissionResultV1 {
-    /// Validate the exact retained row and its authenticated delivery state.
-    ///
-    /// # Errors
-    ///
-    /// Rejects request substitution, sequence gaps, and false replay claims.
-    pub fn validate_for_request(
-        self,
-        request: &StreamTokenGatewayAdmissionRequestV1,
-        qualification: StreamTokenGatewayAdmissionQualificationV1,
-    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        self.record.validate_for_request(request, qualification)?;
-        let sequence = self.record.outcome.binding.gateway_sequence;
-        match self.delivery_state {
-            StreamTokenGatewayAdmissionDeliveryStateV1::Pending {
-                predecessor_sequence,
-            } if predecessor_sequence.checked_add(1) == Some(sequence) => Ok(()),
-            StreamTokenGatewayAdmissionDeliveryStateV1::AcknowledgedExactReplay {
-                acknowledged_through_sequence,
-            } if acknowledged_through_sequence >= sequence => Ok(()),
-            _ => Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome),
-        }
-    }
-}
-/// Authenticated oldest-pending readback with contiguous sequence proofs.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionReadbackV1"
-)]
-pub struct StreamTokenGatewayAdmissionReadbackV1 {
-    /// Highest gateway sequence durably acknowledged without a gap.
-    pub acknowledged_through_sequence: u64,
-    /// Highest gateway sequence durably allocated without a gap.
-    pub high_water_sequence: u64,
-    /// Oldest pending contiguous prefix after `acknowledged_through_sequence`.
-    pub records: Vec<StreamTokenGatewayAdmissionRecordV1>,
-}
-impl StreamTokenGatewayAdmissionReadbackV1 {
-    /// Validate an authenticated contiguous pending-prefix readback.
-    ///
-    /// # Errors
-    ///
-    /// Rejects oversized, gapped, reordered, omitted, or substituted rows.
-    pub fn validate(
-        &self,
-        max_items: u32,
-        qualification: StreamTokenGatewayAdmissionQualificationV1,
-    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        if max_items == 0
-            || self.records.len() > max_items as usize
-            || self.acknowledged_through_sequence > self.high_water_sequence
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        if self.records.is_empty() {
-            return if self.acknowledged_through_sequence == self.high_water_sequence {
-                Ok(())
-            } else {
-                Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
-            };
-        }
-        let mut expected = self
-            .acknowledged_through_sequence
-            .checked_add(1)
-            .ok_or(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)?;
-        for record in &self.records {
-            record.validate_shape(qualification)?;
-            if record.outcome.binding.gateway_sequence != expected {
-                return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-            }
-            expected = expected
-                .checked_add(1)
-                .ok_or(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)?;
-        }
-        let last_returned = expected - 1;
-        if last_returned > self.high_water_sequence
-            || (self.records.len() < max_items as usize
-                && last_returned != self.high_water_sequence)
-        {
-            return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
-        }
-        Ok(())
-    }
-}
-/// Durable acknowledgement result for one external callback row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionAckV1"
-)]
-pub enum StreamTokenGatewayAdmissionAckV1 {
-    /// The pending row was durably acknowledged now.
-    Acknowledged,
-    /// The exact row was already acknowledged.
-    ExactReplay,
-}
-/// Payload-free production provider failure.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub enum StreamTokenGatewayAdmissionErrorV1 {
-    /// Configured and live public bindings differ or are test-marked.
-    #[error("stream-token gateway admission provider binding mismatch")]
-    BindingMismatch,
-    /// Request material is malformed or exceeds the provider contract.
-    #[error("stream-token gateway admission request is invalid")]
-    InvalidRequest,
-    /// The provider returned substituted or malformed outcome material.
-    #[error("stream-token gateway admission outcome is substituted")]
-    SubstitutedOutcome,
-    /// Sealed state or the ordered outbox is temporarily unavailable.
-    #[error("stream-token gateway admission provider is unavailable")]
-    Unavailable,
-    /// The provider rejected the requested state transition.
-    #[error("stream-token gateway admission provider rejected the request")]
-    Rejected,
-    /// A compare-and-swap or replay identity conflicts with durable state.
-    #[error("stream-token gateway admission provider reported a conflict")]
-    Conflict,
-    /// The provider qualification is stale or revoked.
-    #[error("stream-token gateway admission provider is stale or revoked")]
-    StaleOrRevoked,
-    /// A mutating operation may have committed and must be reconciled.
-    #[error("stream-token gateway admission outcome is ambiguous")]
-    Ambiguous,
-    /// The committed reputation callback is unavailable or rejected.
-    #[error("stream-token reputation callback failed")]
-    ReputationCallback,
-}
-/// Deployment-owned quota, sealed sequence, and ordered-outbox boundary.
+/// Pinned native quota, sealed sequence, and ordered-outbox boundary.
+///
+/// The local handle and configured qualification identify the selected owner; neither grants
+/// authority. Every stateful operation must independently authenticate its exact purpose against
+/// the configured qualification and current policy/account permissions. The daemon constructs the
+/// native implementation from local Core; arbitrary external providers are rejected at startup.
 pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
     /// Return the stable credential-free provider handle.
     fn handle(&self) -> &str;
-    /// Return the live public qualification.
+    /// Return the immutable configured identity without I/O or live-authority claims.
+    ///
+    /// This value must remain fixed for the lifetime of the provider. It only detects a substituted
+    /// owner; every operation still authenticates its own current purpose and exact policy pins.
+    fn configured_qualification(&self) -> StreamTokenGatewayAdmissionQualificationV1;
+    /// Read the current authenticated public binding for startup qualification.
+    ///
+    /// This read grants no serving permission. `admit` independently checks eligibility for new
+    /// requests; retained pending rows, acknowledgements, and lease release remain recoverable.
     ///
     /// # Errors
     ///
-    /// Fails when the provider is unavailable, stale, revoked, or malformed.
+    /// Fails when the authoritative binding is unavailable, stale, or malformed.
     fn qualification(
         &self,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionErrorV1>;
     /// Atomically apply quota, allocate a sealed monotonic sequence, and append
     /// one ordered pending callback row.
@@ -522,16 +55,19 @@ pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
     fn admit(
         &self,
         request: &StreamTokenGatewayAdmissionRequestV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayAdmissionErrorV1>;
     /// Return the oldest pending callback rows in gateway-sequence order.
     fn pending(
         &self,
         max_items: u32,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionErrorV1>;
     /// Durably acknowledge one callback only after reputation admission succeeds.
     fn acknowledge(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1>;
     /// Idempotently release one accepted cross-replica concurrency lease.
     ///
@@ -540,17 +76,56 @@ pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
     fn release_lease(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1>;
+    /// Authorize this same Accepted physical attempt after its reputation callback is acknowledged.
+    ///
+    /// The implementation must consume a fresh authenticated current Serving observation at its
+    /// final synchronous handoff, checking the original lease, policy and account permissions.
+    /// Historical admission or acknowledgement DTOs alone cannot authorize this operation.
+    /// Reuse the caller's original absolute deadline for every proof and any retry.
+    fn confirm_serving(
+        &self,
+        request: &StreamTokenGatewayAdmissionRequestV1,
+        record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
+    ) -> Result<StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionErrorV1>;
 }
-/// Qualified Torii capture boundary combining external admission with the
-/// committed reputation callback.
+/// Native reputation delivery for an exact consensus-owned admission record.
+///
+/// The daemon constructs this owner directly from native Core proof and software custody.
+/// The configured binding identifies its gateway; it is never authority to sign or acknowledge.
+/// Each call independently authenticates the original record, governed recorder intent and
+/// current disposition using the caller's original deadline. Local queues and journals alone
+/// cannot establish successful delivery.
+pub trait StreamTokenReputationDeliveryV1: Send + Sync + fmt::Debug {
+    /// Return the immutable configured gateway identity without I/O or an authority claim.
+    fn configured_qualification(&self) -> StreamTokenGatewayAdmissionQualificationV1;
+    /// Finish or recover the exact native delivery and authenticate its closed disposition.
+    ///
+    /// Counted outcomes must retain their original governed transaction payload across retries.
+    /// A still-pending or merely expiry-eligible intent is not success: expiry must be committed
+    /// and independently proven first. Native acknowledgement rechecks the disposition, and a
+    /// subsequent Serving proof requires Delivered for an Accepted physical attempt.
+    ///
+    /// # Errors
+    /// Rejects substituted records, unavailable or stale authority, unresolved delivery and
+    /// expired deadlines. Recovery never extends the deadline or creates a replacement intent.
+    fn deliver(
+        &self,
+        record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
+    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1>;
+}
+/// Qualified Torii capture boundary combining native admission with finalized reputation delivery.
 #[derive(Clone)]
 pub struct StreamTokenAdmissionCaptureV1 {
     provider: Arc<dyn StreamTokenGatewayAdmissionProviderV1>,
-    reputation: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+    reputation: Arc<dyn StreamTokenReputationDeliveryV1>,
     expected_handle: Arc<str>,
     expected_qualification: StreamTokenGatewayAdmissionQualificationV1,
     reconcile_max_items: u32,
+    operation_timeout: Duration,
 }
 impl fmt::Debug for StreamTokenAdmissionCaptureV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -559,6 +134,7 @@ impl fmt::Debug for StreamTokenAdmissionCaptureV1 {
             .field("expected_handle", &self.expected_handle)
             .field("expected_qualification", &self.expected_qualification)
             .field("reconcile_max_items", &self.reconcile_max_items)
+            .field("operation_timeout", &self.operation_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -567,33 +143,31 @@ impl StreamTokenAdmissionCaptureV1 {
     ///
     /// # Errors
     ///
-    /// Rejects missing, substituted, stale, revoked, inert, or test-marked
-    /// public bindings and an inactive reputation admission runtime.
+    /// Rejects unavailable, substituted, stale, inert, or test-marked public bindings and a
+    /// substituted native delivery binding. A current recovery-only binding is allowed;
+    /// the provider independently authorizes new admissions.
     pub fn try_new(
         expected_handle: impl Into<String>,
         expected_qualification: StreamTokenGatewayAdmissionQualificationV1,
         reconcile_max_items: u32,
+        operation_timeout: Duration,
         provider: Arc<dyn StreamTokenGatewayAdmissionProviderV1>,
-        reputation: Arc<dyn ReputationNativeOutcomeAdmissionApiV1>,
+        reputation: Arc<dyn StreamTokenReputationDeliveryV1>,
     ) -> Result<Self, StreamTokenGatewayAdmissionErrorV1> {
+        let deadline = operation_deadline(operation_timeout)?;
         let expected_handle = expected_handle.into();
         expected_qualification.validate()?;
         if !is_production_runtime_handle(&expected_handle)
             || provider.handle() != expected_handle
-            || provider.qualification()? != expected_qualification
+            || provider.configured_qualification() != expected_qualification
+            || reputation.configured_qualification() != expected_qualification
             || reconcile_max_items == 0
             || reconcile_max_items > STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1
         {
             return Err(StreamTokenGatewayAdmissionErrorV1::BindingMismatch);
         }
-        match reputation
-            .activation_state()
-            .map_err(|_| StreamTokenGatewayAdmissionErrorV1::ReputationCallback)?
-        {
-            ReputationNativeOutcomeAdmissionStateV1::Active => {}
-            ReputationNativeOutcomeAdmissionStateV1::Deferred => {
-                return Err(StreamTokenGatewayAdmissionErrorV1::ReputationCallback);
-            }
+        if provider.qualification(deadline)? != expected_qualification {
+            return Err(StreamTokenGatewayAdmissionErrorV1::BindingMismatch);
         }
         let capture = Self {
             provider,
@@ -601,8 +175,9 @@ impl StreamTokenAdmissionCaptureV1 {
             expected_handle: Arc::from(expected_handle),
             expected_qualification,
             reconcile_max_items,
+            operation_timeout,
         };
-        capture.ensure_binding()?;
+        capture.ensure_configured_binding(deadline)?;
         Ok(capture)
     }
     /// Revalidate this capture against an independently derived launch binding.
@@ -615,16 +190,30 @@ impl StreamTokenAdmissionCaptureV1 {
         expected_handle: &str,
         expected_qualification: StreamTokenGatewayAdmissionQualificationV1,
         expected_reconcile_max_items: u32,
+        expected_operation_timeout: Duration,
     ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
         expected_qualification.validate()?;
         if !is_production_runtime_handle(expected_handle)
             || self.expected_handle.as_ref() != expected_handle
             || self.expected_qualification != expected_qualification
             || self.reconcile_max_items != expected_reconcile_max_items
+            || self.operation_timeout != expected_operation_timeout
         {
             return Err(StreamTokenGatewayAdmissionErrorV1::BindingMismatch);
         }
-        self.ensure_binding()
+        let deadline = self.begin_operation()?;
+        self.ensure_configured_binding(deadline)?;
+        if self.provider.qualification(deadline)? != self.expected_qualification {
+            return Err(StreamTokenGatewayAdmissionErrorV1::StaleOrRevoked);
+        }
+        self.ensure_configured_binding(deadline)
+    }
+    /// Establish the original deadline before admission work or blocking-worker queuing.
+    ///
+    /// # Errors
+    /// Rejects an invalid configured duration or monotonic-clock overflow.
+    pub fn begin_operation(&self) -> Result<Instant, StreamTokenGatewayAdmissionErrorV1> {
+        operation_deadline(self.operation_timeout)
     }
     /// Commit one admission and synchronously deliver its exact typed outcome.
     ///
@@ -633,21 +222,33 @@ impl StreamTokenAdmissionCaptureV1 {
     pub fn admit(
         &self,
         request: &StreamTokenGatewayAdmissionRequestV1,
+        deadline: Instant,
     ) -> Result<StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionErrorV1> {
+        ensure_live(deadline)?;
         request.validate()?;
-        self.reconcile_until(None)?;
-        self.ensure_binding()?;
-        let admission = self.provider.admit(request)?;
+        self.reconcile_until(None, deadline)?;
+        self.ensure_configured_binding(deadline)?;
+        let admission = self.provider.admit(request, deadline)?;
         admission.validate_for_request(request, self.expected_qualification)?;
-        self.ensure_binding()?;
+        self.ensure_configured_binding(deadline)?;
         match admission.delivery_state {
             StreamTokenGatewayAdmissionDeliveryStateV1::Pending { .. } => {
-                self.reconcile_until(Some(admission.record))?;
+                self.reconcile_until(Some(admission.record), deadline)?;
             }
             StreamTokenGatewayAdmissionDeliveryStateV1::AcknowledgedExactReplay { .. } => {
-                self.deliver_acknowledged_replay(admission.record)?;
+                self.deliver_acknowledged_replay(admission.record, deadline)?;
             }
         }
+        ensure_live(deadline)?;
+        if admission.record.outcome.status == StreamTokenValidationStatusV1::Accepted {
+            let serving = self
+                .provider
+                .confirm_serving(request, admission.record, deadline)?;
+            if serving != admission.record {
+                return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
+            }
+        }
+        ensure_live(deadline)?;
         Ok(admission.record)
     }
     /// Replay the oldest durable callback suffix after a crash or outage.
@@ -657,7 +258,7 @@ impl StreamTokenAdmissionCaptureV1 {
     /// Fails closed on provider drift, unordered/substituted pending rows,
     /// reputation rejection, or acknowledgement failure.
     pub fn reconcile_pending(&self) -> Result<u32, StreamTokenGatewayAdmissionErrorV1> {
-        self.reconcile_one_batch(None)
+        self.reconcile_one_batch(None, self.begin_operation()?)
             .map(|outcome| outcome.delivered)
     }
     /// Release an accepted external concurrency lease idempotently.
@@ -670,22 +271,24 @@ impl StreamTokenAdmissionCaptureV1 {
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
+        let deadline = self.begin_operation()?;
         record.validate_shape(self.expected_qualification)?;
         if record.outcome.status != StreamTokenValidationStatusV1::Accepted {
             return Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest);
         }
-        self.ensure_binding()?;
-        let released = self.provider.release_lease(record)?;
-        self.ensure_binding()?;
+        self.ensure_configured_binding(deadline)?;
+        let released = self.provider.release_lease(record, deadline)?;
+        self.ensure_configured_binding(deadline)?;
         Ok(released)
     }
     fn reconcile_until(
         &self,
         required_record: Option<StreamTokenGatewayAdmissionRecordV1>,
+        deadline: Instant,
     ) -> Result<u32, StreamTokenGatewayAdmissionErrorV1> {
         let mut delivered = 0_u32;
         loop {
-            let batch = self.reconcile_one_batch(required_record)?;
+            let batch = self.reconcile_one_batch(required_record, deadline)?;
             delivered = delivered
                 .checked_add(batch.delivered)
                 .ok_or(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)?;
@@ -703,17 +306,18 @@ impl StreamTokenAdmissionCaptureV1 {
     fn reconcile_one_batch(
         &self,
         required_record: Option<StreamTokenGatewayAdmissionRecordV1>,
+        deadline: Instant,
     ) -> Result<StreamTokenReconcileBatchV1, StreamTokenGatewayAdmissionErrorV1> {
-        self.ensure_binding()?;
-        let pending = self.provider.pending(self.reconcile_max_items)?;
+        self.ensure_configured_binding(deadline)?;
+        let pending = self.provider.pending(self.reconcile_max_items, deadline)?;
         pending.validate(self.reconcile_max_items, self.expected_qualification)?;
-        self.ensure_binding()?;
+        self.ensure_configured_binding(deadline)?;
         let mut delivery_count = pending.records.len();
         let mut required_record_delivered = false;
         if let Some(required) = required_record {
             let required_sequence = required.outcome.binding.gateway_sequence;
             if pending.acknowledged_through_sequence >= required_sequence {
-                self.deliver_acknowledged_replay(required)?;
+                self.deliver_acknowledged_replay(required, deadline)?;
                 return Ok(StreamTokenReconcileBatchV1 {
                     delivered: 0,
                     required_record_delivered: true,
@@ -739,9 +343,9 @@ impl StreamTokenAdmissionCaptureV1 {
             }
         }
         for record in pending.records.iter().take(delivery_count) {
-            self.deliver_record(*record)?;
+            self.deliver_record(*record, deadline)?;
         }
-        self.ensure_binding()?;
+        self.ensure_configured_binding(deadline)?;
         Ok(StreamTokenReconcileBatchV1 {
             delivered: u32::try_from(delivery_count)
                 .map_err(|_| StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)?,
@@ -751,36 +355,57 @@ impl StreamTokenAdmissionCaptureV1 {
     fn deliver_acknowledged_replay(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
+        deadline: Instant,
     ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
-        self.reputation
-            .record_authenticated_stream_token_validation(record.provider_id, record.outcome)
-            .map_err(|_| StreamTokenGatewayAdmissionErrorV1::ReputationCallback)?;
-        if self.provider.acknowledge(record)? != StreamTokenGatewayAdmissionAckV1::ExactReplay {
+        ensure_live(deadline)?;
+        self.reputation.deliver(record, deadline)?;
+        ensure_live(deadline)?;
+        if self.provider.acknowledge(record, deadline)?
+            != StreamTokenGatewayAdmissionAckV1::ExactReplay
+        {
             return Err(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome);
         }
-        self.ensure_binding()
+        self.ensure_configured_binding(deadline)
     }
     fn deliver_record(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,
-    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, StreamTokenGatewayAdmissionErrorV1> {
-        let outcome = record.outcome;
-        let admitted = self
-            .reputation
-            .record_authenticated_stream_token_validation(record.provider_id, outcome)
-            .map_err(|_| StreamTokenGatewayAdmissionErrorV1::ReputationCallback)?;
-        self.provider.acknowledge(record)?;
-        self.ensure_binding()?;
-        Ok(admitted)
+        deadline: Instant,
+    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
+        ensure_live(deadline)?;
+        self.reputation.deliver(record, deadline)?;
+        ensure_live(deadline)?;
+        self.provider.acknowledge(record, deadline)?;
+        self.ensure_configured_binding(deadline)?;
+        Ok(())
     }
-    fn ensure_binding(&self) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
+    fn ensure_configured_binding(
+        &self,
+        deadline: Instant,
+    ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
+        ensure_live(deadline)?;
         if self.provider.handle() != self.expected_handle.as_ref()
-            || self.provider.qualification()? != self.expected_qualification
+            || self.provider.configured_qualification() != self.expected_qualification
+            || self.reputation.configured_qualification() != self.expected_qualification
         {
             return Err(StreamTokenGatewayAdmissionErrorV1::StaleOrRevoked);
         }
-        Ok(())
+        ensure_live(deadline)
     }
+}
+fn operation_deadline(timeout: Duration) -> Result<Instant, StreamTokenGatewayAdmissionErrorV1> {
+    if timeout.is_zero() || timeout > Duration::from_secs(60) {
+        return Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest);
+    }
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+}
+fn ensure_live(deadline: Instant) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
+    if Instant::now() >= deadline {
+        return Err(StreamTokenGatewayAdmissionErrorV1::Unavailable);
+    }
+    Ok(())
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StreamTokenReconcileBatchV1 {

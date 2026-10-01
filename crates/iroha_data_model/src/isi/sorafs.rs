@@ -995,6 +995,9 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsProofOutcome {}
 isi! {
     /// Activate the next governed recorder-policy revision for the reputation journal.
+    ///
+    /// Native execution requires original signed genesis custody or one sole direct ordinary
+    /// instruction. The permanent record retains that exact successful activation source.
     #[norito_schema(name = "iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy")]
     pub struct SetSorafsReputationJournalAuthorityPolicy {
         /// Strict predecessor-linked recorder policy.
@@ -1014,7 +1017,10 @@ isi! {
 }
 impl crate::seal::Instruction for AppendSorafsPorReputationJournalEntry {}
 isi! {
-    /// Commit one regional-gateway stream-token result to the global reputation journal.
+    /// Deliver the exact immutable append intent created by a committed native gateway source.
+    ///
+    /// This must be the sole direct instruction in its original source-pinned signed envelope.
+    /// The native owner assigns the global journal index at execution; callers never reserve one.
     #[norito_schema(name = "iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry")]
     pub struct AppendSorafsStreamTokenReputationJournalEntry {
         /// Canonical policy-bound, content-addressed token entry carrying authenticated source time.
@@ -2406,9 +2412,27 @@ mod tests {
             por_recorder_authority: owner(),
             dispute_recorder_authority: owner(),
             token_recorder_authority: owner(),
+            stream_token_delivery: Default::default(),
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
+    #[test]
+    #[ignore = "explicit maintenance command prints the current reputation policy instruction frames"]
+    fn print_reputation_policy_record_fixture_row() {
+        // This is the current structural codec fixture, not a governed policy publication.
+        let policy = reputation_policy();
+        policy
+            .validate()
+            .expect("current reputation policy fixture");
+        let row = crate::isi::generated_record_identity_tests::capture(
+            SetSorafsReputationJournalAuthorityPolicy::new(policy),
+        );
+        println!(
+            "REPUTATION_POLICY_FIXTURE_ROW={}",
+            norito::json::to_json(&row).expect("current reputation policy instruction capture")
+        );
+    }
+
     fn por_reputation_entry() -> ReputationJournalEntryV1 {
         let policy = reputation_policy();
         ReputationJournalEntryV1::try_new(
@@ -3349,6 +3373,7 @@ mod tests {
 
 include!("sorafs/stream_token_custody.rs");
 include!("sorafs/stream_token_authority.rs");
+include!("sorafs/stream_token_gateway.rs");
 include!("sorafs/final_promotion_authority.rs");
 include!("sorafs/final_promotion_account_custody.rs");
 include!("sorafs/release_manifest_authority.rs");
