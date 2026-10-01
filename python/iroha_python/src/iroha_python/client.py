@@ -8704,7 +8704,6 @@ class VerifiedCommittedTransaction:
             if not isinstance(raw_outcome, Mapping):
                 raise TypeError(f"verified batch outcome {index} must be an object")
             required_fields = {
-            "proof_kind",
                 "leg_index",
                 "leg_id",
                 "asset",
