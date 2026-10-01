@@ -281,7 +281,7 @@ fn permission_cache_rebuilds_after_restart_impl() {
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     let mut config = TestChainConfig::new(World::new(), 1000);
     config.genesis_instructions = genesis_instructions;
-    let mut fixture = CertifiedTestChain::start(config).unwrap();
+    let mut fixture = CertifiedTestChain::start(config.clone()).unwrap();
     let permission_register = CanRegisterTrigger {
         authority: owner.clone(),
     };
@@ -359,10 +359,12 @@ fn permission_cache_rebuilds_after_restart_impl() {
             &trigger_id,
             expected,
         );
-        // Decode the exact native snapshot into a fresh State with no warmed summaries.
+        // A projection cannot install authenticated native history. Restart from
+        // the original signed genesis and replay the exact certified carriers
+        // into a fresh State whose permission summaries were never warmed.
         let live = fixture.state();
         let captured = crate::snapshot::CapturedStateSnapshot::capture(live).unwrap();
-        let restarted = super::deserialize::KuraSeed {
+        let projected = super::deserialize::KuraSeed {
             execution_budget: live.ivm_execution_budget(),
             operation_index_budget: live.world.operation_index_budget().clone(),
             kura: Arc::clone(fixture.kura()),
@@ -371,8 +373,17 @@ fn permission_cache_rebuilds_after_restart_impl() {
             #[cfg(feature = "telemetry")]
             telemetry: Default::default(),
         }
-        .into_state_from_json_str_with_configured_nexus(captured.as_json(), live.nexus_snapshot())
-        .unwrap_or_else(|error| panic!("native snapshot after {label}: {error}"));
+        .into_state_from_json_str_with_configured_nexus(captured.as_json(), live.nexus_snapshot());
+        assert!(matches!(
+            projected,
+            Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
+        let mut replayed =
+            CertifiedTestChain::start(config.clone()).expect("restart original permission genesis");
+        replayed
+            .replay_from(&fixture)
+            .expect("replay every original certified permission carrier");
+        let restarted = replayed.state().as_ref();
         assert_eq!(restarted.committed_height(), fixture.height() as usize);
         assert_eq!(
             restarted.latest_block_hash_fast(),

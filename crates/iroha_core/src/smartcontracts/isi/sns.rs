@@ -721,6 +721,7 @@ mod tests {
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
+    use iroha_test_samples::ALICE_KEYPAIR;
     use mv::storage::StorageReadOnly;
     use std::num::NonZeroU64;
     fn owner() -> AccountId {
@@ -1354,8 +1355,10 @@ mod tests {
         let header = next_header_at(state, now_ms);
         // Maintenance consumes the original authenticated genesis policy and
         // actual retained parent, with no synthetic Network transaction.
-        let mut block = state.block(header);
-        let outputs = crate::state::run_empty_network_owner_fixture(&mut block, None);
+        let source = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let (mut block, _recording, outputs, _) =
+            crate::state::run_empty_network_owner_fixture(state, &source);
         assert!(
             outputs.is_empty(),
             "native maintenance must not invent trigger outputs"
@@ -3596,9 +3599,9 @@ mod tests {
         );
         let target = AliasTargetV1::AccountAlias(alias.clone());
         let selector = crate::alias_setup::selector_for_resolved_alias_target(&target).unwrap();
-        assert!(crate::sns::get_name_record_by_selector(&world, &selector, 2_000).is_err());
+        assert!(crate::sns::get_name_record_by_selector(&world.view(), &selector, 2_000).is_err());
         let quote = crate::sns::quote_resolved_name_registration(
-            &world,
+            &world.view(),
             selector.clone(),
             &wallet,
             1,
@@ -3606,7 +3609,7 @@ mod tests {
             2_000,
         )
         .unwrap();
-        let policy = policy_by_id(&world, ACCOUNT_ALIAS_SUFFIX_ID)
+        let policy = policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID)
             .unwrap()
             .unwrap();
         let uaid = UniversalAccountId::from_hash(Hash::new(

@@ -1,3 +1,80 @@
+// Initial-dispatch fixtures retain the component World and its explicit Nexus,
+// then authenticate an original signed genesis before ordinary H2 execution.
+// This grants no authority to a synthetic header or unretained source hash.
+fn original_staking_state(
+    component: State,
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> State {
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let mut config = TestChainConfig::new(component.world, 0);
+    config.chain_id = component.chain_id;
+    config.nexus = Some(nexus);
+    config.governance = Some(component.gov);
+    let account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("original signed staking genesis");
+    let state = std::sync::Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished staking State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &account,
+        mode.into(),
+        None,
+    )
+    .expect("apply original authenticated staking genesis");
+    state
+}
+
+fn original_staking_header(state: &State) -> iroha_data_model::block::BlockHeader {
+    use crate::state::StateReadOnly as _;
+    iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    )
+}
+
+#[test]
+fn staking_initial_fixture_owns_original_root_and_retains_epoch_policy() {
+    use crate::state::StateReadOnly as _;
+    let mut component = setup_state();
+    set_epoch_length(&mut component, 6);
+    let nexus = component.nexus_snapshot();
+    let original_lanes = nexus.lane_catalog.clone();
+    let state = original_staking_state(component, nexus);
+    let parent = state
+        .view()
+        .latest_block_hash()
+        .expect("committed original genesis");
+    assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+    let header = original_staking_header(&state);
+    assert_eq!(header.prev_block_hash(), Some(parent));
+    let mut block = state.block(header);
+    let stx = block.transaction_for_callback_testing();
+    assert!(crate::executor::root_scope::execution_root_scope(&stx).is_ok());
+    assert_eq!(
+        stx.world
+            .sumeragi_npos_parameters()
+            .expect("retained epoch policy")
+            .epoch_length_blocks
+            .get(),
+        6
+    );
+    assert_eq!(stx.nexus.lane_catalog, original_lanes);
+    drop(stx);
+    drop(block);
+    let component = setup_state();
+    let mut block = component.block(original_staking_header(&component));
+    let stx = block.transaction_for_callback_testing();
+    assert!(crate::executor::root_scope::execution_root_scope(&stx).is_err());
+}
+
 // Exact candidate-consent, account-authority, and transaction rollback controls.
 fn signed_candidate(
     stx: &StateTransaction<'_, '_>,
@@ -63,7 +140,9 @@ fn signed_candidate(
 fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topology() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
-    let mut block = state.block(block_header_with_height(2));
+    let nexus = state.nexus_snapshot();
+    let state = original_staking_state(state, nexus);
+    let mut block = state.block(original_staking_header(&state));
     let mut stx = block.transaction_for_callback_testing();
     let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
     stx.world
@@ -144,8 +223,10 @@ fn candidate_rejects_other_authority_tampered_consent_and_invalid_pop() {
 
 #[test]
 fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
-    let state = setup_state();
-    let mut block = state.block(block_header_with_height(2));
+    let component = setup_state();
+    let nexus = component.nexus_snapshot();
+    let state = original_staking_state(component, nexus);
+    let mut block = state.block(original_staking_header(&state));
     let (validator, delegator, escrow, definition, nexus) = {
         let mut stx = block.transaction_for_callback_testing();
         let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);

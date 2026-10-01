@@ -204,23 +204,22 @@ fn parliament_kagemusha_initial_policy_installs_only_at_exact_due_height() {
         .expect("enacted policy attempt");
     let predecessor = KagemushaGovernedVerifierRegistryV1::default();
     let successor = execution.world.kagemusha_verifier_registry.get();
-    let verify = |
-        network_id: iroha_data_model::NetworkId,
-        height: u64,
-        predecessor: &KagemushaGovernedVerifierRegistryV1,
-        successor: &KagemushaGovernedVerifierRegistryV1,
-        proposal: Option<&crate::state::GovernanceProposalRecord>,
-        attempt: Option<&crate::governance::parliament::ParliamentAttemptStateV1>,
-    | {
-        authorization.validate_for_state_commit(
-            network_id,
-            height,
-            predecessor,
-            successor,
-            proposal,
-            attempt,
-        )
-    };
+    let verify =
+        |network_id: iroha_data_model::NetworkId,
+         height: u64,
+         predecessor: &KagemushaGovernedVerifierRegistryV1,
+         successor: &KagemushaGovernedVerifierRegistryV1,
+         proposal: Option<&crate::state::GovernanceProposalRecord>,
+         attempt: Option<&crate::governance::parliament::ParliamentAttemptStateV1>| {
+            authorization.validate_for_state_commit(
+                network_id,
+                height,
+                predecessor,
+                successor,
+                proposal,
+                attempt,
+            )
+        };
     verify(
         execution.network_id,
         execution.block_height(),
@@ -263,11 +262,11 @@ fn parliament_kagemusha_initial_policy_installs_only_at_exact_due_height() {
         )
         .is_err()
     );
-    let wrong_network = iroha_data_model::NetworkId::from_genesis_hash(
-        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0xEE; 32]),
-        ),
-    );
+    let wrong_network = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed([0xEE; 32]),
+    ));
     assert_ne!(wrong_network, execution.network_id);
     assert!(
         verify(
@@ -330,7 +329,15 @@ fn parliament_kagemusha_initial_policy_installs_only_at_exact_due_height() {
     state_block
         .commit_empty_block_for_testing()
         .expect("certified exact-due policy transition publishes to State");
-    assert!(state.world.kagemusha_verifier_registry.view().get().authority_policy.is_some());
+    assert!(
+        state
+            .world
+            .kagemusha_verifier_registry
+            .view()
+            .get()
+            .authority_policy
+            .is_some()
+    );
 }
 
 #[test]
@@ -341,13 +348,12 @@ fn parliament_kagemusha_release_installs_standby_only_at_exact_due_height() {
         kagemusha::KAGEMUSHA_RELEASE_STANDBY_V1,
     };
 
-    let instruction: ProposeKagemushaVerifierReleaseInstallV1 = norito::decode_canonical(
-        include_bytes!(concat!(
+    let instruction: ProposeKagemushaVerifierReleaseInstallV1 =
+        norito::decode_canonical(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
-        )),
-    )
-    .expect("canonical authenticated release fixture");
+        )))
+        .expect("canonical authenticated release fixture");
     let KagemushaVerifierReleaseInstallProposalV1 {
         expected_predecessor,
         ..
@@ -359,10 +365,12 @@ fn parliament_kagemusha_release_installs_standby_only_at_exact_due_height() {
         *initial.kagemusha_verifier_registry.get_mut() = predecessor.clone();
         initial.commit();
     }
-    let state = State::new_for_testing(
+    let state = State::new_with_chain_and_network_id_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
+        "generic-testnet".parse().expect("fixture chain"),
+        instruction.proposal.network_id,
     );
     for height in 1..PARLIAMENT_DUE_CERTIFICATE_HEIGHT {
         let header = iroha_data_model::block::BlockHeader::new(
@@ -385,9 +393,10 @@ fn parliament_kagemusha_release_installs_standby_only_at_exact_due_height() {
         let mut seed = state_block.transaction();
         let mut proposal = instruction.proposal;
         proposal.proposal_operator = ALICE_ID.clone();
-        proposal.network_id = seed.network_id;
         assert_eq!(proposal.expected_predecessor, predecessor);
-        proposal.validate().expect("exact authenticated release proposal");
+        proposal
+            .validate()
+            .expect("exact authenticated release proposal");
         let fixture = seed_due_parliament_certificate(
             &mut seed,
             ProposalKind::KagemushaVerifierReleaseInstall(proposal),
@@ -473,7 +482,13 @@ fn parliament_kagemusha_release_installs_standby_only_at_exact_due_height() {
         .commit_empty_block_for_testing()
         .expect("certified inactive release publishes to State");
     assert_eq!(
-        state.world.kagemusha_verifier_registry.view().get().releases.len(),
+        state
+            .world
+            .kagemusha_verifier_registry
+            .view()
+            .get()
+            .releases
+            .len(),
         1
     );
     state
@@ -488,13 +503,12 @@ fn parliament_kagemusha_activation_publishes_only_the_exact_due_successor() {
         kagemusha::KAGEMUSHA_RELEASE_ACTIVE_V1,
     };
 
-    let instruction: ProposeKagemushaVerifierReleaseActivateV1 = norito::decode_canonical(
-        include_bytes!(concat!(
+    let instruction: ProposeKagemushaVerifierReleaseActivateV1 =
+        norito::decode_canonical(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../fixtures/governance/kagemusha_verifier_release_activate_v1.bin"
-        )),
-    )
-    .expect("canonical verifier activation fixture");
+        )))
+        .expect("canonical verifier activation fixture");
     let predecessor = instruction.proposal.expected_predecessor.clone();
     let world = World::default();
     {
@@ -529,7 +543,9 @@ fn parliament_kagemusha_activation_publishes_only_the_exact_due_successor() {
         let mut proposal = instruction.proposal;
         proposal.proposal_operator = ALICE_ID.clone();
         proposal.network_id = seed.network_id;
-        proposal.validate().expect("exact standby activation proposal");
+        proposal
+            .validate()
+            .expect("exact standby activation proposal");
         let fixture = seed_due_parliament_certificate(
             &mut seed,
             ProposalKind::KagemushaVerifierReleaseActivate(proposal),
@@ -571,7 +587,10 @@ fn parliament_kagemusha_activation_publishes_only_the_exact_due_successor() {
     let successor = execution.world.kagemusha_verifier_registry.get();
     assert_eq!(successor.releases.len(), 1);
     assert_eq!(successor.releases[0].status, KAGEMUSHA_RELEASE_ACTIVE_V1);
-    assert_eq!(successor.active_release_id, Some(successor.releases[0].release_id));
+    assert_eq!(
+        successor.active_release_id,
+        Some(successor.releases[0].release_id)
+    );
     let successor_active = successor.active_release_id;
     assert_exact_due_parliament_effect_enacted(&execution, &fixture);
     let committed_proposal = execution
@@ -596,22 +615,29 @@ fn parliament_kagemusha_activation_publishes_only_the_exact_due_successor() {
         .expect("exact active successor accepted by State");
     let mut forged = successor.clone();
     forged.releases[0].receipt_digest[0] ^= 1;
-    assert!(authorization
-        .validate_for_state_commit(
-            execution.network_id,
-            execution.block_height(),
-            &predecessor,
-            &forged,
-            Some(committed_proposal),
-            Some(committed_attempt),
-        )
-        .is_err());
+    assert!(
+        authorization
+            .validate_for_state_commit(
+                execution.network_id,
+                execution.block_height(),
+                &predecessor,
+                &forged,
+                Some(committed_proposal),
+                Some(committed_attempt),
+            )
+            .is_err()
+    );
     execution.apply();
     state_block
         .commit_empty_block_for_testing()
         .expect("certified activation publishes with the fail-closed local runtime");
     assert_eq!(
-        state.world.kagemusha_verifier_registry.view().get().active_release_id,
+        state
+            .world
+            .kagemusha_verifier_registry
+            .view()
+            .get()
+            .active_release_id,
         successor_active,
     );
     state
@@ -914,8 +940,9 @@ fn parliament_validation_fee_payout_lifecycle_enacts_at_the_exact_due_height() {
         DomainId::try_new("fees", "paynet").expect("payout fixture asset domain"),
         "fee_token".parse().expect("payout fixture asset name"),
     );
-    crate::validation_fee::tests::with_validation_fee_payout_state_at_height(
+    crate::validation_fee::tests::with_original_validation_fee_payout_state_at_height(
         PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
+        original_world_state,
         |execution, deployer, code, code_hash| {
             let mut wrapper = crate::validation_fee::tests::activate_bound_payout_runtime(
                 execution,
@@ -1009,30 +1036,50 @@ fn parliament_validation_fee_payout_lifecycle_enacts_at_the_exact_due_height() {
 fn parliament_sorafs_admission_council_enacts_only_the_exact_certified_effect() {
     use iroha_data_model::{
         isi::sorafs::SorafsProviderGovernanceActionV1,
-        sorafs::provider_admission::{ProviderAdmissionCouncilPolicyV1,
-            governance::ProviderAdmissionGovernanceActionV1},
+        sorafs::provider_admission::{
+            ProviderAdmissionCouncilPolicyV1, governance::ProviderAdmissionGovernanceActionV1,
+        },
     };
     let state = blank_test_state();
-    let block = new_dummy_block_at_height(
-        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).unwrap());
-    let mut state_block = state.block(block.as_ref().header());
+    // Provider admission records require a real nonzero observation timestamp.
+    let header = BlockHeader::new(
+        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).unwrap(),
+        None,
+        None,
+        1,
+        0,
+    );
+    let mut state_block = state.block(header);
     let mut seed = state_block.transaction();
     bootstrap_alice_account(&mut seed);
     let policy = ProviderAdmissionCouncilPolicyV1 {
-        version: 1, network_id: *seed.network_id().as_bytes(), policy_id: [0xe1; 32],
-        revision: 1, predecessor_policy_digest: None,
+        version: 1,
+        network_id: *seed.network_id().as_bytes(),
+        policy_id: [0xe1; 32],
+        revision: 1,
+        predecessor_policy_digest: None,
         trusted_signers: vec![ALICE_KEYPAIR.public_key().to_bytes().1.try_into().unwrap()],
-        signature_threshold: 1, paused: false,
+        signature_threshold: 1,
+        paused: false,
     };
     let kind = ProposalKind::SorafsProviderGovernance(SorafsProviderGovernanceProposal {
         action: Box::new(SorafsProviderGovernanceActionV1::Admission(
-            ProviderAdmissionGovernanceActionV1::ConfigureCouncil(norito::encode_canonical(&policy).unwrap()))),
+            ProviderAdmissionGovernanceActionV1::ConfigureCouncil(
+                norito::encode_canonical(&policy).unwrap(),
+            ),
+        )),
     });
     let fixture = seed_due_parliament_certificate(&mut seed, kind);
     seed.apply();
     let mut execution = state_block.transaction();
-    assert_eq!(execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution).unwrap(),
-        DueParliamentCertificateExecutionV1::Applied);
-    assert_eq!(crate::query::provider_admission::read_policy(execution.world()).unwrap(), Some(policy));
+    assert_eq!(
+        execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution)
+            .unwrap(),
+        DueParliamentCertificateExecutionV1::Applied
+    );
+    assert_eq!(
+        crate::query::provider_admission::read_policy(execution.world()).unwrap(),
+        Some(policy)
+    );
     assert_exact_due_parliament_effect_enacted(&execution, &fixture);
 }

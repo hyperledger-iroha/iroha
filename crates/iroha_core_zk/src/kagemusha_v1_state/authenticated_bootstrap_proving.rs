@@ -220,7 +220,7 @@ fn derive_preview(
         state_nonce_commitment,
         enrollment.authenticated_at_ms(),
     )?;
-    KagemushaAcceptedCredentialFloorV1 {
+    KagemushaAcceptedCredentialFloorV1::Oem {
         credential,
         release_id: release.release_id(),
     }

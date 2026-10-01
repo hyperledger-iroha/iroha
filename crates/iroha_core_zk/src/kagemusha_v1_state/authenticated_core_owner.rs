@@ -16,6 +16,14 @@ use crate::kagemusha_v1_recursion::{
 mod bootstrap_proving;
 pub use bootstrap_proving::KagemushaAuthenticatedBootstrapProvingSelectionV1;
 
+#[path = "authenticated_ordinary_enrollment.rs"]
+mod ordinary_enrollment;
+pub use ordinary_enrollment::{
+    KagemushaAuthenticatedOrdinaryApprovalV1,
+    KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    KagemushaAuthenticatedOrdinaryCredentialFloorV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+};
+
 #[path = "authenticated_core_dispatch.rs"]
 mod dispatch;
 pub use dispatch::KagemushaAuthenticatedCommittedOutgoingProvingSelectionV1;
@@ -228,7 +236,7 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             state_nonce_commitment,
             enrollment.authenticated_at_ms(),
         )?;
-        KagemushaAcceptedCredentialFloorV1 {
+        KagemushaAcceptedCredentialFloorV1::Oem {
             credential,
             release_id: release.release_id(),
         }
@@ -264,7 +272,10 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
         KagemushaBootstrapJournalStageV1::new(
             preview.state,
             proof_release,
-            credential,
+            KagemushaAcceptedCredentialFloorV1::Oem {
+                credential,
+                release_id: release.release_id(),
+            },
             KagemushaRecoveryEnrollmentBindingV1 {
                 enrollment_id: subject.enrollment_id,
                 owner: subject.owner.clone(),
@@ -451,7 +462,7 @@ mod tests {
             release_id: machine.proof_release.release_id(),
             hardware_policy_digest: [0x91; 32],
             core_authorization_key_reference: [0x92; 32],
-            credential: machine.accepted_credential_floor().credential.clone(),
+            credential: *machine.accepted_credential_floor().oem_original().unwrap(),
         };
         let subject = KagemushaRetailEnrollmentSubjectV1 {
             version: 1,

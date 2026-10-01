@@ -144,6 +144,22 @@ public protocol KagemushaAppAttestAssertionIntentStoringV1: Sendable {
   func complete(keyID: String, counter: UInt32, selectionDigest: Data, rawAssertion: Data) throws
   func advanceAfterCommitted(keyID: String, counter: UInt32, selectionDigest: Data,
     rawAssertion: Data, acknowledgment: KagemushaAppAttestCoreCommitAcknowledgmentV1) throws
+  func advanceAfterNativeAppApproval(keyID: String, counter: UInt32, signingDigest: Data,
+    rawAssertion: Data, receipt: KagemushaNativeAppApprovalReceiptV1) throws
+  func advanceAfterNativeEnrollmentPossession(keyID: String, counter: UInt32, signingDigest: Data,
+    rawAssertion: Data, receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1) throws
+}
+
+/// A store without the native ordinary-approval consumer cannot release a W lane.
+public extension KagemushaAppAttestAssertionIntentStoringV1 {
+  func advanceAfterNativeAppApproval(keyID: String, counter: UInt32, signingDigest: Data,
+    rawAssertion: Data, receipt: KagemushaNativeAppApprovalReceiptV1) throws {
+    throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+  }
+  func advanceAfterNativeEnrollmentPossession(keyID: String, counter: UInt32, signingDigest: Data,
+    rawAssertion: Data, receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1) throws {
+    throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+  }
 }
 
 public enum KagemushaAppAttestEvidenceErrorV1: Error, Equatable, Sendable {

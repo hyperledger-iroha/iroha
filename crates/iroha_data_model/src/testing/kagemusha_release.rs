@@ -166,7 +166,7 @@ pub fn evidence(seed: u8) -> KagemushaEvidenceFileV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn artifacts() -> Vec<KagemushaArtifactBindingV1> {
     KagemushaArtifactRoleV1::ALL
         .iter()

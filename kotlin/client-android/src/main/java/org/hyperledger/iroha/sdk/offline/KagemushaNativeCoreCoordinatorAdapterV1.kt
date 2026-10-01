@@ -43,12 +43,16 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
 ) : KagemushaNativeCoreCoordinatorV1, AutoCloseable {
     private val enrollmentPhases = KagemushaNativeEnrollmentPhasesV1(bridge)
     private val recoveredEnrollment = KagemushaNativeRecoveredEnrollmentV1(bridge)
+    private val appIdentity = KagemushaNativeAppApprovalCoordinatorV1(bridge)
 
     /** Reuse this coordinator's sole native owner for bounded initial-enrollment phases. */
     fun initialEnrollment(): KagemushaNativeEnrollmentPhasesV1 = enrollmentPhases
 
     /** Authenticate the original enrolled native owner after process restart. */
     fun recoveredEnrollment(): KagemushaNativeRecoveredEnrollmentV1 = recoveredEnrollment
+
+    /** Use the same actual native owner for non-monetary app approval and enrollment possession. */
+    fun appIdentityOperations(): KagemushaNativeAppApprovalCoordinatorV1 = appIdentity
 
     /** Revoke this native owner during logout or account switch. A new open needs a new process. */
     override fun close() {

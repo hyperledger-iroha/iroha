@@ -121,6 +121,7 @@ class GoogleKeyMintPolicy:
     attestation_root_der: bytes
     attestation_root_sha256: bytes
     allowed_security_levels: frozenset[int]
+    additional_attestation_roots_der: tuple[bytes, ...] = ()
 
     def validate(self) -> None:
         """Reject incomplete Android app or root configuration."""
@@ -133,6 +134,24 @@ class GoogleKeyMintPolicy:
         _pinned_root(self.attestation_root_der, self.attestation_root_sha256)
         require(self.attestation_root_sha256 in GOOGLE_ATTESTATION_ROOT_SHA256,
                 "Android root is not a published Google attestation root")
+        require(type(self.additional_attestation_roots_der) is tuple
+                and len(self.additional_attestation_roots_der) <= 2,
+                "Google root selection outside bound")
+        digests = {self.attestation_root_sha256}
+        for root in self.additional_attestation_roots_der:
+            digest = hashlib.sha256(root).digest() if type(root) is bytes else bytes(32)
+            _pinned_root(root, digest)
+            require(digest in GOOGLE_ATTESTATION_ROOT_SHA256 and digest not in digests,
+                    "Google root selection differs from published originals")
+            digests.add(digest)
+
+    def root_for_chain(self, offered_root: bytes) -> bytes:
+        """Select only an independently admitted, published complete root original."""
+        self.validate()
+        roots = (self.attestation_root_der, *self.additional_attestation_roots_der)
+        require(type(offered_root) is bytes and offered_root in roots,
+                "Android chain root is absent from admitted Google originals")
+        return offered_root
 
 
 @dataclass(frozen=True)

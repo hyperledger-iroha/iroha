@@ -13,11 +13,14 @@ pub(crate) mod archive_boundary;
 mod archives;
 mod core_authorization_signer;
 pub use core_authorization_signer::KagemushaNativeCoreAuthorizationSignerV1;
+mod app_owned_identity_frames;
 mod enrollment_attempt_journal;
 mod enrollment_phase_one_backend;
 mod exclusive_backend;
 mod native_core_work;
 mod native_installation;
+#[cfg(unix)]
+mod ordinary_app_identity;
 pub use native_core_work::{
     KagemushaNativeCompletedOutboxReleaseLocatorV1, KagemushaNativeCorePublicationDestinationV1,
     KagemushaNativeCoreWorkSourceV1, KagemushaNativeIncomingEvidenceSourceV1,
@@ -27,6 +30,12 @@ pub use native_core_work::{
     register_kagemusha_native_core_work_source_v1,
     register_kagemusha_native_incoming_evidence_source_v1,
     register_kagemusha_native_redemption_finality_source_v1,
+};
+#[cfg(unix)]
+pub use ordinary_app_identity::{
+    KagemushaNativeOrdinaryAppIdentitySourceV1, KagemushaNativeOrdinaryPreKeySelectionV1,
+    KagemushaOrdinaryAppIdentityInstallErrorV1, KagemushaOrdinaryEnrollmentDispositionV1,
+    register_kagemusha_native_ordinary_app_identity_source_v1,
 };
 mod recovered_backend;
 #[cfg(test)]
@@ -214,11 +223,17 @@ pub enum KagemushaCoreCoordinatorMethodV1 {
     StageIncomingOriginal = 17,
     /// Read the authenticated installed release and distinct provider policy root.
     AuthenticatedHardwarePolicy = 18,
+    /// Prepare or consume an ordinary app operation approval, independently of monetary proof.
+    PreparedAppOperationApproval = 19,
+    /// Prove initial ordinary app-key possession after genuine pending raw admission.
+    PreparedAppEnrollmentPossession = 20,
+    /// Prepare and retain ordinary app identity with separate generation/attestation fences.
+    PreparedOrdinaryAppIdentity = 21,
 }
 
 impl KagemushaCoreCoordinatorMethodV1 {
     /// All coordinator methods in canonical code order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 21] = [
         Self::ReserveOperationId,
         Self::AcceptQualification,
         Self::AcceptAuthenticatedReply,
@@ -237,6 +252,9 @@ impl KagemushaCoreCoordinatorMethodV1 {
         Self::CompleteIncomingFold,
         Self::StageIncomingOriginal,
         Self::AuthenticatedHardwarePolicy,
+        Self::PreparedAppOperationApproval,
+        Self::PreparedAppEnrollmentPossession,
+        Self::PreparedOrdinaryAppIdentity,
     ];
 
     /// Parse one closed coordinator method code.
@@ -261,6 +279,9 @@ impl KagemushaCoreCoordinatorMethodV1 {
             16 => Some(Self::CompleteIncomingFold),
             17 => Some(Self::StageIncomingOriginal),
             18 => Some(Self::AuthenticatedHardwarePolicy),
+            19 => Some(Self::PreparedAppOperationApproval),
+            20 => Some(Self::PreparedAppEnrollmentPossession),
+            21 => Some(Self::PreparedOrdinaryAppIdentity),
             _ => None,
         }
     }
@@ -516,6 +537,11 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
 ) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
     let fields = kagemusha_core_coordinator_decode_request_v1(frame)?;
     match method {
+        KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval
+        | KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession
+        | KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity => {
+            app_owned_identity_frames::validate_request(method, &fields)
+        }
         KagemushaCoreCoordinatorMethodV1::AuthenticatedHardwarePolicy => {
             require_field_count(&fields, 0)
         }
@@ -740,7 +766,13 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
             if previous == u32::MAX {
                 return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
             }
-            require_app_attest_selection_subject_v1(selection, previous)?;
+            require_app_attest_selection_subject_v1(selection)?;
+            let actual =
+                iroha_data_model::kagemusha::kagemusha_app_attest_original_counter_v1(&fields[3])
+                    .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+            if actual <= previous {
+                return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+            }
             require_nonzero_digest_field(fields.get(5))?;
             require_nonzero_digest_field(fields.get(6))
         }
@@ -749,13 +781,8 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
 
 fn require_app_attest_selection_subject_v1(
     selection: &[u8],
-    previous: u32,
 ) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
     use KagemushaHardwareSelectionSigningLayoutV1 as S;
-
-    let next = previous
-        .checked_add(1)
-        .ok_or(KagemushaCoreCoordinatorFrameErrorV1::Field)?;
 
     if selection.len() != S::TOTAL_BYTES
         || selection.len() != APP_ATTEST_SELECTION_SIGNING_BYTES_V1
@@ -786,11 +813,25 @@ fn require_app_attest_selection_subject_v1(
     }
     let operation = selection[S::OPERATION_TAG.start];
     let outgoing = matches!(operation, 2 | 4);
-    if !(1..=5).contains(&operation)
+    let before = u128::from_le_bytes(
+        selection[S::SECURE_INDEX_BEFORE]
+            .try_into()
+            .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?,
+    );
+    let after = u128::from_le_bytes(
+        selection[S::SECURE_INDEX_AFTER]
+            .try_into()
+            .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?,
+    );
+    let logical_indexes_valid = if operation == 0 {
+        before == 0 && after == 0
+    } else {
+        before.checked_add(1) == Some(after)
+    };
+    if operation > 5
         || nonzero(S::CANDIDATE_ENVELOPE_DIGEST) != outgoing
         || nonzero(S::TERMINAL_BODY_COMMITMENT) != outgoing
-        || selection[S::SECURE_INDEX_BEFORE] != u128::from(previous).to_le_bytes()
-        || selection[S::SECURE_INDEX_AFTER] != u128::from(next).to_le_bytes()
+        || !logical_indexes_valid
     {
         return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
     }
@@ -1032,6 +1073,11 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
     let request = kagemusha_core_coordinator_decode_request_v1(request_frame)?;
     let response = kagemusha_core_coordinator_decode_response_v1(response_frame)?;
     match method {
+        KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval
+        | KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession
+        | KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity => {
+            app_owned_identity_frames::validate_response(method, &request, &response)
+        }
         KagemushaCoreCoordinatorMethodV1::AuthenticatedHardwarePolicy => {
             require_field_count(&response, 3)?;
             for field in &response {
@@ -1207,8 +1253,10 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
                     return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
                 }
             }
-            let previous = require_u32_field(request.get(4))?;
-            require_exact_u32_field(response.get(4), previous + 1)?;
+            let actual =
+                iroha_data_model::kagemusha::kagemusha_app_attest_original_counter_v1(&request[3])
+                    .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+            require_exact_u32_field(response.get(4), actual)?;
             require_equal_fields(response.get(5), request.get(5))?;
             require_equal_fields(response.get(6), request.get(6))
         }
@@ -1425,6 +1473,21 @@ mod tests {
             qualification_fields(),
         );
         vec![
+            (
+                KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval,
+                "app-approval-recheck",
+                vec![u32_field(6), 1u64.to_le_bytes().to_vec()],
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession,
+                "app-possession-recheck",
+                vec![u32_field(6), 1u64.to_le_bytes().to_vec()],
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity,
+                "ordinary-identity-recheck",
+                vec![u32_field(8), 1u64.to_le_bytes().to_vec()],
+            ),
             (
                 KagemushaCoreCoordinatorMethodV1::ReserveOperationId,
                 "reserve",
@@ -1833,7 +1896,7 @@ mod tests {
             digest(0x11),
             b"app-attest-key".to_vec(),
             app_attest_selection_for_tests(),
-            vec![0xa2, 0x01, 0x02],
+            app_attest_assertion_for_tests(11),
             u32_field(4),
             digest(0x33),
             digest(0x44),
@@ -1850,9 +1913,24 @@ mod tests {
         selection[S::POLICY_EPOCH].copy_from_slice(&1_u64.to_le_bytes());
         selection[S::HARDWARE_EPOCH_GENERATION].copy_from_slice(&1_u64.to_le_bytes());
         selection[S::OPERATION_TAG.start] = 2;
-        selection[S::SECURE_INDEX_BEFORE].copy_from_slice(&4_u128.to_le_bytes());
-        selection[S::SECURE_INDEX_AFTER].copy_from_slice(&5_u128.to_le_bytes());
+        selection[S::SECURE_INDEX_BEFORE].copy_from_slice(&70_u128.to_le_bytes());
+        selection[S::SECURE_INDEX_AFTER].copy_from_slice(&71_u128.to_le_bytes());
         selection
+    }
+
+    fn app_attest_assertion_for_tests(counter: u32) -> Vec<u8> {
+        // Canonical original shape only: this inert DER is never authenticated.
+        let mut raw = vec![0xa2, 0x71];
+        raw.extend_from_slice(b"authenticatorData");
+        raw.extend_from_slice(&[0x58, 37]);
+        raw.extend_from_slice(&[0x42; 32]);
+        raw.push(0x40);
+        raw.extend_from_slice(&counter.to_be_bytes());
+        raw.push(0x69);
+        raw.extend_from_slice(b"signature");
+        raw.push(0x48);
+        raw.extend_from_slice(&[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
+        raw
     }
 
     fn observation_request_fields(operation: u8) -> Vec<Vec<u8>> {
@@ -1871,6 +1949,11 @@ mod tests {
         request: &[Vec<u8>],
     ) -> Vec<Vec<u8>> {
         match method {
+            KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval
+            | KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession
+            | KagemushaCoreCoordinatorMethodV1::PreparedOrdinaryAppIdentity => {
+                vec![digest(0x7A), digest(0x7B)]
+            }
             KagemushaCoreCoordinatorMethodV1::AuthenticatedHardwarePolicy => {
                 vec![vec![1; 32], vec![2; 32], vec![3; 32]]
             }
@@ -1942,7 +2025,7 @@ mod tests {
                 Sha256::digest(&request[1]).to_vec(),
                 Sha256::digest(&request[2]).to_vec(),
                 Sha256::digest(&request[3]).to_vec(),
-                u32_field(5),
+                u32_field(11),
                 request[5].clone(),
                 request[6].clone(),
             ],
@@ -2171,12 +2254,12 @@ mod tests {
     fn coordinator_contract_and_methods_are_exact() {
         assert_eq!(
             KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-            [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18]
+            [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21]
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),
             [
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21
             ]
         );
         for method in KagemushaCoreCoordinatorMethodV1::ALL {
@@ -2185,13 +2268,13 @@ mod tests {
                 Some(method)
             );
         }
-        for unknown in [0, 19, u8::MAX] {
+        for unknown in [0, 22, u8::MAX] {
             assert_eq!(KagemushaCoreCoordinatorMethodV1::from_code(unknown), None);
         }
     }
 
     #[test]
-    fn app_attest_commit_ack_correlates_all_original_bytes_and_exact_next_counter() {
+    fn app_attest_commit_ack_correlates_original_counter_separate_from_financial_indexes() {
         let method = KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest;
         let request = app_attest_ack_request_fields();
         let request_frame = kagemusha_core_coordinator_encode_request_v1(&request).unwrap();
@@ -2204,7 +2287,7 @@ mod tests {
             Sha256::digest(&request[1]).to_vec(),
             Sha256::digest(&request[2]).to_vec(),
             Sha256::digest(&request[3]).to_vec(),
-            5_u32.to_le_bytes().to_vec(),
+            11_u32.to_le_bytes().to_vec(),
             request[5].clone(),
             request[6].clone(),
         ];
@@ -2252,13 +2335,19 @@ mod tests {
                 "signed Core S byte {index} was not bound"
             );
         }
-        let mut other_counter = request.clone();
-        other_counter[4] = 3_u32.to_le_bytes().to_vec();
-        let frame = kagemusha_core_coordinator_encode_request_v1(&other_counter).unwrap();
+        let mut lower_floor = request.clone();
+        lower_floor[4] = 3_u32.to_le_bytes().to_vec();
+        let frame = kagemusha_core_coordinator_encode_request_v1(&lower_floor).unwrap();
         assert_eq!(
             kagemusha_core_coordinator_validate_method_request_v1(method, &frame),
-            Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+            Ok(())
         );
+        for floor in [11_u32, 12] {
+            let mut nonadvancing = request.clone();
+            nonadvancing[4] = floor.to_le_bytes().to_vec();
+            let frame = kagemusha_core_coordinator_encode_request_v1(&nonadvancing).unwrap();
+            assert!(kagemusha_core_coordinator_validate_method_request_v1(method, &frame).is_err());
+        }
         let mut skipped = request;
         skipped[4] = u32::MAX.to_le_bytes().to_vec();
         let frame = kagemusha_core_coordinator_encode_request_v1(&skipped).unwrap();
@@ -3354,7 +3443,7 @@ mod tests {
             digest(0x11),
             b"app-attest-key".to_vec(),
             app_attest_selection_for_tests(),
-            vec![0xa2, 0x01, 0x02],
+            app_attest_assertion_for_tests(11),
             4_u32.to_le_bytes().to_vec(),
             digest(0x33),
             digest(0x44),

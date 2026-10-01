@@ -84,8 +84,8 @@ fn seal_fixture() -> (Box<State>, SignedBlock) {
             .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
         parameters.commit();
     }
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut tx = setup.transaction();
+    let (mut setup, _setup_recording) = output_fixture_setup(&state);
+    let mut tx = setup.transaction_for_callback_testing();
     let write = |key: &str| {
         vec![InstructionBox::from(SetKeyValue::account(
             ALICE_ID.clone(),
@@ -121,12 +121,16 @@ fn seal_fixture() -> (Box<State>, SignedBlock) {
     }
     tx.apply();
     setup.commit_world_overlay_for_testing().unwrap();
-    let source = carrier(vec![input(
+    drop(setup);
+    let source = carrier(
         &state,
-        write("network"),
-        FeePaymentIntent::authority(vec![], None),
-        false,
-    )]);
+        vec![input(
+            &state,
+            write("network"),
+            FeePaymentIntent::authority(vec![], None),
+            false,
+        )],
+    );
     (state, source)
 }
 
@@ -224,12 +228,15 @@ fn foreign_proposal_and_partial_mock_sources_cannot_enter_the_finalizer() {
                 .unwrap();
         } else {
             block.execute_ordinary_output_plan(&source, None).unwrap();
-            source = carrier(vec![input(
+            source = carrier(
                 &state,
-                vec![Log::new(Level::INFO, "foreign".to_owned()).into()],
-                FeePaymentIntent::authority(vec![], None),
-                false,
-            )]);
+                vec![input(
+                    &state,
+                    vec![Log::new(Level::INFO, "foreign".to_owned()).into()],
+                    FeePaymentIntent::authority(vec![], None),
+                    false,
+                )],
+            );
         }
         let result = block.seal_execution_outputs::<String>(&mut source, |_, _, _| {
             panic!("foreign/partial source entered finalizer")

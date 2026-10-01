@@ -44,22 +44,25 @@ fn preparation_refusal_is_fee_free_but_admitted_business_failure_charges_actual_
             let mut state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
             state.pipeline.overlay_max_instructions = maximum;
             state.pipeline.overlay_max_bytes = 0;
-            let source = carrier(vec![input(
+            let source = carrier(
                 &state,
-                vec![
-                    write(),
-                    Unregister::trigger("missing_effect_trigger".parse().unwrap()).into(),
-                ],
-                FeePaymentIntent::authority(
-                    vec![FeeChargeLimit::new(
-                        FeeChargeKind::Nexus,
-                        asset.clone(),
-                        Quantity::from(1_u32),
-                    )],
-                    None,
-                ),
-                batch,
-            )]);
+                vec![input(
+                    &state,
+                    vec![
+                        write(),
+                        Unregister::trigger("missing_effect_trigger".parse().unwrap()).into(),
+                    ],
+                    FeePaymentIntent::authority(
+                        vec![FeeChargeLimit::new(
+                            FeeChargeKind::Nexus,
+                            asset.clone(),
+                            Quantity::from(1_u32),
+                        )],
+                        None,
+                    ),
+                    batch,
+                )],
+            );
             let (mut block, _recording) = recorded_network_block(&state, &source);
             let fragments = block.committed_fragment_count();
             execute(&mut block, &source).unwrap();
@@ -128,12 +131,15 @@ fn actual_by_call_callback_keeps_its_separate_instruction_scope() {
     let direct_gas = crate::gas::meter_instructions(std::slice::from_ref(&root));
     state.pipeline.overlay_max_instructions = 1;
     state.pipeline.overlay_max_bytes = u64::try_from(root.encode().len()).unwrap();
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![root],
-        FeePaymentIntent::authority(vec![], None),
-        false,
-    )]);
+        vec![input(
+            &state,
+            vec![root],
+            FeePaymentIntent::authority(vec![], None),
+            false,
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     assert!(
@@ -226,8 +232,8 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
         crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
     ));
     let id: TriggerId = "generic_effect_callback".parse().unwrap();
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut transaction = setup.transaction();
+    let (mut setup, _setup_recording) = output_fixture_setup(&state);
+    let mut transaction = setup.transaction_for_callback_testing();
     Grant::account_permission(
         iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
             authority: ALICE_ID.clone(),
@@ -252,6 +258,7 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
     .unwrap();
     transaction.apply();
     setup.commit_world_overlay_for_testing().unwrap();
+    drop(setup);
     let instruction: InstructionBox = ExecuteTrigger::new(id).into();
     let direct_gas = crate::gas::meter_instructions(std::slice::from_ref(&instruction));
     state.pipeline.overlay_max_instructions = 1;
@@ -264,7 +271,7 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
             ALICE_ID.clone(),
             FeePaymentIntent::authority(vec![], None),
         );
-        builder.set_creation_time(Duration::from_millis(1));
+        builder.set_creation_time(output_fixture_input_time(&state));
         let signed = builder
             .with_metadata(metadata)
             .with_instructions(vec![instruction])
@@ -279,7 +286,7 @@ fn actual_generic_ivm_callback_output(quarantine: bool) -> (NetworkExecutionOutp
             false,
         )
     };
-    let source = carrier(vec![entrypoint]);
+    let source = carrier(&state, vec![entrypoint]);
     let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     assert!(
@@ -348,7 +355,7 @@ fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() 
         let TransactionEntrypoint::External(signed) = &entry else {
             unreachable!()
         };
-        let source = carrier(vec![entry.clone()]);
+        let source = carrier(&state, vec![entry.clone()]);
         let mut block = state.block(source.header());
         let fragments = block.committed_fragment_count();
         let mut transaction =
@@ -439,7 +446,7 @@ fn unwinding_before_root_close_cannot_publish_already_staged_effects() {
     let TransactionEntrypoint::External(signed) = &entry else {
         unreachable!()
     };
-    let source = carrier(vec![entry.clone()]);
+    let source = carrier(&state, vec![entry.clone()]);
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     let mut transaction = block.transaction();

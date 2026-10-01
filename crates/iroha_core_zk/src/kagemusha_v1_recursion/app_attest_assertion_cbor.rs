@@ -33,12 +33,12 @@ fn constants<F: KagemushaPoseidonFieldV1>(bytes: &[u8]) -> Vec<PastaSha256ByteV1
 /// every byte are equality-constrained to the original raw witness. The caller must pass
 /// `der` built from the very same assigned `r,s` used in the P-256 verifier.
 #[allow(clippy::too_many_lines)]
-pub(super) fn constrain_original_apple_assertion_37_v1<F: KagemushaPoseidonFieldV1>(
+pub(super) fn constrain_original_apple_assertion_stream_37_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     raw_assertion: &[u8],
     authenticator_data: &[AssignedValue<F>; 37],
     der: &P256CanonicalDerV1<F>,
-) -> Result<(), String> {
+) -> Result<KagemushaBoundedByteStreamV1<F>, String> {
     if raw_assertion.is_empty() || raw_assertion.len() > RAW_CAP {
         return Err("original Apple assertion exceeds fixed CBOR profile".to_owned());
     }
@@ -119,7 +119,17 @@ pub(super) fn constrain_original_apple_assertion_37_v1<F: KagemushaPoseidonField
             &original.assigned().expect("original CBOR byte assigned"),
         );
     }
-    Ok(())
+    Ok(original)
+}
+
+pub(super) fn constrain_original_apple_assertion_37_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    raw_assertion: &[u8],
+    authenticator_data: &[AssignedValue<F>; 37],
+    der: &P256CanonicalDerV1<F>,
+) -> Result<(), String> {
+    constrain_original_apple_assertion_stream_37_v1(builder, raw_assertion, authenticator_data, der)
+        .map(|_| ())
 }
 
 #[cfg(test)]

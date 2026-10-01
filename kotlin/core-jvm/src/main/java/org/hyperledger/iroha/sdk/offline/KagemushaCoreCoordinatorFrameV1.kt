@@ -19,6 +19,8 @@ enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
     EXPORT_OUTGOING_STATE_PROOF(14),
     PREPARE_INCOMING_FOLD(15), COMPLETE_INCOMING_FOLD(16), STAGE_INCOMING_ORIGINAL(17),
     AUTHENTICATED_HARDWARE_POLICY(18),
+    PREPARED_APP_OPERATION_APPROVAL(19), PREPARED_APP_ENROLLMENT_POSSESSION(20),
+    PREPARED_ORDINARY_APP_IDENTITY(21),
 }
 
 /**
@@ -117,6 +119,11 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun validateRequestFields(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>) {
         when (method) {
+            KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY ->
+                KagemushaOrdinaryAppIdentityFrameV1.requireRequest(fields)
+            KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL,
+            KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION ->
+                KagemushaAppOwnedHardwareFrameV1.requireRequest(fields)
             KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY -> count(fields, 0)
             KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD -> {
                 count(fields, 2); kind(fields, 0); digest(fields, 1)
@@ -232,6 +239,11 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun validateResponseFields(method: KagemushaCoreCoordinatorMethodV1, request: List<ByteArray>, response: List<ByteArray>) {
         when (method) {
+            KagemushaCoreCoordinatorMethodV1.PREPARED_ORDINARY_APP_IDENTITY ->
+                KagemushaOrdinaryAppIdentityFrameV1.requireResponse(request, response)
+            KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL,
+            KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION ->
+                KagemushaAppOwnedHardwareFrameV1.requireResponse(method, request, response)
             KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY -> {
                 count(response, 3); (0..2).forEach { digest(response, it) }
             }

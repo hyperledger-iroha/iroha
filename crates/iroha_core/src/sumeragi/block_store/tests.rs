@@ -5,7 +5,7 @@ use iroha_data_model::{
     block::decode_versioned_signed_block,
     sumeragi_finality::{ScheduledSlot, test_fixtures::NativeFinalityFixture},
 };
-use iroha_sumeragi::{crypto::NoAttestation, types::HeightConfig};
+use iroha_sumeragi::{availability::AvailabilityFrame, crypto::NoAttestation, types::HeightConfig};
 struct Schedule {
     instance: Hash32,
     config: Mutex<Option<HeightConfig>>,
@@ -253,6 +253,107 @@ fn independent_read_transfers_untrusted_restoration_and_rejects_foreign_pool() {
         .unwrap_or_else(|_| panic!("full original availability"));
     assert_eq!(body, f.body);
 }
+
+#[test]
+fn kura_body_reader_competing_hash_at_committed_height_is_verified_absence() {
+    let f = fixture();
+    stage(&f, f.executed.clone());
+    f.store.append(&f.body, &f.qc).unwrap();
+    let source = f
+        .store
+        .availability_source(2, Hash32([0x91; 32]))
+        .unwrap()
+        .unwrap();
+    assert_ne!(source.block_hash(), f.body.source().block_hash());
+    let mut job = f.store.begin_read(source.clone()).unwrap();
+    assert_eq!(job.source(), &source);
+    assert!(matches!(
+        job.poll(&AllocationBudget::new(1 << 27)),
+        Err(BodyReadError::ForeignBudget)
+    ));
+    let reserved = f.store.execution_budget.reserved_bytes();
+    let table_len = f.body.availability().as_slice().len();
+    f.store
+        .execution_budget
+        .set_limit_bytes(reserved + table_len);
+    assert!(matches!(
+        job.poll(&f.store.execution_budget),
+        Ok(BodyReadPoll::Pending(_))
+    ));
+    let held = f.store.execution_budget.reserved_bytes();
+    assert_eq!(held, reserved + table_len);
+    assert!(matches!(
+        job.poll(&f.store.execution_budget),
+        Ok(BodyReadPoll::Pending(_))
+    ));
+    assert_eq!(f.store.execution_budget.reserved_bytes(), held);
+    assert_eq!(job.source(), &source);
+    f.store.execution_budget.set_limit_bytes(1 << 27);
+    assert!(matches!(
+        job.poll(&f.store.execution_budget),
+        Ok(BodyReadPoll::Absent)
+    ));
+    assert!(matches!(
+        job.poll(&f.store.execution_budget),
+        Err(BodyReadError::Completed)
+    ));
+    assert_eq!(f.store.execution_budget.reserved_bytes(), reserved);
+
+    let mut exact = f.store.begin_read(f.body.source().clone()).unwrap();
+    let BodyReadPoll::Ready(restoration) = exact.poll(&f.store.execution_budget).unwrap() else {
+        panic!("canonical hash still transfers its exact restoration")
+    };
+    let body = restoration
+        .complete(&f.store.execution_budget, &*f.store.hasher)
+        .unwrap_or_else(|_| panic!("original signed availability"));
+    assert_eq!(body, f.body);
+}
+
+#[test]
+fn kura_body_reader_competing_hash_never_hides_corrupt_stored_certificates() {
+    for mutation in 0..3 {
+        let f = fixture();
+        let old = f.executed.commit_certificate().unwrap();
+        let mut qc = f.qc.clone();
+        let mut result = old.result_preimage().to_vec();
+        let original: AvailabilityFrame = norito::decode_canonical(old.availability()).unwrap();
+        let mut table = original.as_slice().to_vec();
+        match mutation {
+            0 => qc.agg_sig.0[0] ^= 1,
+            1 => result[0] ^= 1,
+            2 => *table.last_mut().unwrap() ^= 1,
+            _ => unreachable!(),
+        }
+        let table = AvailabilityFrame::from_untrusted(table).unwrap();
+        let certificate = commit_certificate(
+            f.body.header(),
+            &qc,
+            result,
+            norito::encode_canonical(&table).unwrap(),
+        )
+        .unwrap();
+        f.store
+            .kura
+            .store_block(
+                f.executed
+                    .as_ref()
+                    .clone()
+                    .with_commit_certificate(Some(certificate)),
+            )
+            .unwrap();
+        let source = f
+            .store
+            .availability_source(2, Hash32([0x91; 32]))
+            .unwrap()
+            .unwrap();
+        let mut job = f.store.begin_read(source.clone()).unwrap();
+        for _ in 0..2 {
+            assert!(job.poll(&f.store.execution_budget).is_err());
+            assert_eq!(job.source(), &source);
+        }
+    }
+}
+
 #[test]
 fn invalid_full_qc_or_staged_certificate_never_reaches_kura() {
     let f = fixture();

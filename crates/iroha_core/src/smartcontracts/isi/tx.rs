@@ -2109,13 +2109,11 @@ pub(crate) mod tests {
     fn indexed_and_unindexed_transaction_history_report_the_same_hash_only_gap() {
         let fixture = canonical_query_fixture();
         let target_height = fixture
-            .sandbox
             .state
             .view()
             .block_height_by_hash(fixture.target_block_hash)
             .expect("target transaction carrier must be indexed");
         fixture
-            .sandbox
             .state
             .kura()
             .corrupt_canonical_body_for_testing(target_height)

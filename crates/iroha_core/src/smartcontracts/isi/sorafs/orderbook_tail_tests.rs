@@ -17,8 +17,8 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
         TEST_TRADE_LOCK_MICRO,
     );
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA6);
+    block.admit_fastpq_source_for_testing(Hash::prehashed([0xA7; Hash::LENGTH]));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA6; Hash::LENGTH]));
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 16, 17, 0, 10);
     open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &candidate);
@@ -162,7 +162,7 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
             .is_none()
     );
     assert_no_receipt_status_mutation(&stx);
-    seed_test_call_hash(&mut stx, 0xA7);
+    stx.tx_call_hash = Some(Hash::prehashed([0xA7; Hash::LENGTH]));
     RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
         .execute(&authority, &mut stx)
         .expect("restored valid lock settles");
@@ -192,8 +192,7 @@ fn receipt_without_funded_lock_fails_closed() {
         TEST_TRADE_LOCK_MICRO,
     );
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA3);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA3; Hash::LENGTH]));
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 10, 11, 0, 10);
     seed_settlement_channel(&mut stx, &buyer_id, &provider_id, &authority, &candidate);
@@ -232,8 +231,7 @@ fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
         TEST_TRADE_LOCK_MICRO,
     );
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA4);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA4; Hash::LENGTH]));
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 12, 13, 0, 10);
     open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &candidate);
@@ -307,8 +305,7 @@ fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation(
         TEST_TRADE_LOCK_MICRO,
     );
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA5);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA5; Hash::LENGTH]));
     let policy_digest = activate_policy(&mut stx, &authority);
     let candidate = receipt(&provider, 1, 14, 15, 0, 10);
     open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &candidate);

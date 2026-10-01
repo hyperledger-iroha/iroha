@@ -120,11 +120,14 @@ pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, ver
 pub(crate) mod frame_test_support;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
-/// P-256-specific nonnative curve primitives for hardware-selection circuit construction.
+/// P-256-specific nonnative curve primitives for original platform approval equations.
 ///
-/// Only the closed App-Attest staged monetary fold consumes these gadgets, and that fold is
-/// exercised by unit tests alone.
-#[cfg(all(test, feature = "zk-halo2-ipa"))]
+/// Production proving consumes only the signature-verification algorithms. Key generation
+/// and synthetic circuit fixtures remain confined to the module's test-only helpers.
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-production-prover")
+))]
 pub(crate) mod kagemusha_p256_curve_gadget;
 /// Core-owned confidential polynomial storage foundation for the consuming prover.
 #[cfg(feature = "zk-halo2-ipa")]

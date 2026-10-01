@@ -1,13 +1,16 @@
 //! Time-trigger transcript identities must survive block execution and FASTPQ context capture.
 
 use super::*;
-use crate::{kura::Kura, query::store::LiveQueryStore};
+use crate::{
+    smartcontracts::Execute,
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+};
 use iroha_data_model::{
     account::Account,
     asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetId},
     domain::Domain,
     events::time::{ExecutionTime, TimeEventFilter},
-    isi::Transfer,
+    isi::{Register, Transfer},
     prelude::{Action, Repeats},
     trigger::Trigger,
 };
@@ -36,28 +39,38 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
         [Asset::new(asset_id.clone(), Quantity::from(100u32))],
         [],
     );
-    let state = State::new(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
+    // Establish this same prepopulated World through its original signed genesis.
+    // Time callbacks are registered afterwards and belong only to its successor.
+    let mut config = TestChainConfig::new(world, 0);
+    config.genesis_key = keypair.clone();
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("prepare original Time genesis");
+    let state = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished Time State is unique"));
+    crate::sumeragi::startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        mode.into(),
+        None,
+    )
+    .expect("apply original Time signed genesis");
+    assert_eq!(state.committed_height(), 1);
+    assert!(crate::sumeragi::lanes::routing::committed_root_scope(&state.view().world).is_some());
     let trigger_ids = [
         "a_fastpq_success".parse::<TriggerId>().unwrap(),
         "z_fastpq_failure".parse().unwrap(),
     ];
     {
-        let mut trigger_block = state.world.triggers.block();
-        let mut transaction = trigger_block.transaction();
+        let setup_header = state
+            .view()
+            .latest_block()
+            .expect("original Time parent")
+            .header();
+        let mut setup = state.block(setup_header);
+        let mut transaction = setup.transaction_for_callback_testing();
         for (id, amount) in trigger_ids.iter().zip([10u32, 1000]) {
-            let mut metadata = iroha_model_base::metadata::Metadata::default();
-            metadata.insert(
-                "__registered_block_height".parse::<Name>().unwrap(),
-                Json::new(0u64),
-            );
-            metadata.insert(
-                "__registered_at_ms".parse::<Name>().unwrap(),
-                Json::new(0u64),
-            );
             let trigger = Trigger::new(
                 id.clone(),
                 Action::new(
@@ -70,37 +83,25 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
                     authority.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
                 )
-                .unwrap()
-                .with_metadata(metadata),
+                .unwrap(),
             );
-            transaction
-                .add_time_trigger(trigger.try_into().unwrap())
-                .unwrap();
+            Register::trigger(trigger)
+                .execute(&authority, &mut transaction)
+                .expect("register original Time action before its successor");
         }
         transaction.apply();
-        trigger_block.commit();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    // This fixture starts from a prebuilt World. Publish its explicit empty
-    // predecessor to seed asset incarnations and the Time interval; the tested
-    // transfers below still execute through the complete ordinary block owner.
-    // This setup does not claim an executed or finality-certified genesis.
-    let predecessor = iroha_data_model::block::builder::BlockBuilder::new(
-        iroha_data_model::block::BlockHeader::new(std::num::NonZeroU64::MIN, None, None, 0, 0),
-    )
-    .build_with_signature(0, keypair.private_key());
-    state
-        .block(predecessor.header())
-        .commit_empty_block_for_testing()
-        .unwrap();
-    let predecessor_hash = predecessor.hash();
-    state.kura_handle().store_block(predecessor).unwrap();
+    let view = state.view();
+    let predecessor = view.latest_block().expect("original Time genesis");
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(2).unwrap(),
-        Some(predecessor_hash),
+        Some(predecessor.hash()),
         None,
-        2,
+        u64::try_from(predecessor.header().creation_time().as_millis()).unwrap() + 2,
         0,
     );
+    drop(view);
     let source = iroha_data_model::block::builder::BlockBuilder::new(header)
         .build_with_signature(0, keypair.private_key());
     let expected_calls = {

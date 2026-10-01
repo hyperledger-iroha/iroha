@@ -238,7 +238,7 @@ fn resign(mut credential: KagemushaHardwareCredentialV1) -> KagemushaHardwareCre
 }
 
 fn renewal(machine: &Machine, issued_at_ms: u64) -> KagemushaHardwareCredentialV1 {
-    let mut credential = machine.accepted_credential_floor().credential.clone();
+    let mut credential = *machine.accepted_credential_floor().oem_original().unwrap();
     credential.issued_at_ms = issued_at_ms;
     resign(credential)
 }
@@ -356,7 +356,10 @@ fn credential_is_not_installed_before_signed_cas_and_fresh_material_selection() 
     let anchor = machine
         .install_recovery_checkpoint(&candidate, certificate.clone())
         .unwrap();
-    assert_eq!(machine.accepted_credential_floor().credential, next);
+    assert_eq!(
+        *machine.accepted_credential_floor().oem_original().unwrap(),
+        next
+    );
     assert_eq!(machine.recovery_metadata.revision, 2);
     assert_eq!(
         machine
@@ -407,7 +410,7 @@ fn signed_same_epoch_issuance_rollback_and_equal_time_changes_are_rejected() {
         ),
         Err(KagemushaStateErrorV1::SnapshotRollback)
     ));
-    let mut changed = machine.accepted_credential_floor().credential.clone();
+    let mut changed = *machine.accepted_credential_floor().oem_original().unwrap();
     changed.expires_at_ms -= 1;
     let changed = resign(changed);
     assert!(matches!(
@@ -422,7 +425,7 @@ fn signed_same_epoch_issuance_rollback_and_equal_time_changes_are_rejected() {
         .prepare_credential_checkpoint(
             [36; 32],
             machine.recovery_metadata.journals.clone(),
-            machine.accepted_credential_floor().credential.clone(),
+            *machine.accepted_credential_floor().oem_original().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -723,7 +726,7 @@ type BootstrapStage = KagemushaBootstrapJournalStageV1<
 fn bootstrap_stage(hardware: SimulatedHardware, change: usize) -> BootstrapStage {
     let original = coordinator_operation_store_tests::machine().0;
     let mut enrollment = original.enrollment_binding().clone();
-    let mut credential = original.accepted_credential_floor().credential.clone();
+    let mut credential = *original.accepted_credential_floor().oem_original().unwrap();
     if change == 1 {
         enrollment.owner.account_id = AccountId::new(
             iroha_crypto::KeyPair::from_seed(vec![212; 32], iroha_crypto::Algorithm::Ed25519)
@@ -1221,7 +1224,11 @@ fn checkpointed_pre_index_operations_require_the_selected_wal_and_allow_valid_su
             context: KagemushaOutgoingOperationContextV1 {
                 lane: machine.state.lane.clone(),
                 release: machine.state.context(),
-                credential_id: machine.accepted_credential_floor().credential.credential_id,
+                credential_id: machine
+                    .accepted_credential_floor()
+                    .oem_original()
+                    .unwrap()
+                    .credential_id,
                 hardware_epoch: machine.state.hardware_epoch,
                 device_policy_binding: machine.state.device_policy_binding,
                 core_authorization_key_reference: [192; 32],

@@ -48,7 +48,7 @@ fn success_and_business_rejection_publish_only_their_actual_charge_once() {
         } else {
             vec![Log::new(Level::INFO, "actual paid receipt".to_owned()).into()]
         };
-        let source = carrier(vec![input(&state, body, payment(&asset), false)]);
+        let source = carrier(&state, vec![input(&state, body, payment(&asset), false)]);
         let original = source.network_entrypoint_at(0).unwrap();
         let (mut block, _recording) = recorded_network_block(&state, &source);
         execute(&mut block, &source).unwrap();
@@ -88,12 +88,15 @@ fn success_and_business_rejection_publish_only_their_actual_charge_once() {
 fn healthy_output_overflow_discards_the_unpaid_receipt_and_actual_burn() {
     let _guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced(16_384, Some(32_768));
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
-        payment(&asset),
-        false,
-    )]);
+        vec![input(
+            &state,
+            vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
+            payment(&asset),
+            false,
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     assert!(retained(&block).rows[0].is_output_limit_rejection());
@@ -113,19 +116,22 @@ fn healthy_output_overflow_discards_the_unpaid_receipt_and_actual_burn() {
 fn failed_charge_has_no_fee_receipt_or_balance_supply_effect() {
     let _guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced(65_536, None);
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![Log::new(Level::INFO, "unfunded signed limit".to_owned()).into()],
-        FeePaymentIntent::authority(
-            vec![FeeChargeLimit::new(
-                FeeChargeKind::Nexus,
-                asset.clone(),
-                Quantity::zero(),
-            )],
-            None,
-        ),
-        false,
-    )]);
+        vec![input(
+            &state,
+            vec![Log::new(Level::INFO, "unfunded signed limit".to_owned()).into()],
+            FeePaymentIntent::authority(
+                vec![FeeChargeLimit::new(
+                    FeeChargeKind::Nexus,
+                    asset.clone(),
+                    Quantity::zero(),
+                )],
+                None,
+            ),
+            false,
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     assert!(network_row(&block, 0).result.is_err());

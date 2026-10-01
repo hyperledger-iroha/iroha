@@ -3,8 +3,8 @@ use crate::kura::tests::CommittedNetworkProofFixture;
 use iroha_crypto::MerkleTree as CanonMerkleTree;
 use iroha_data_model::{
     block::{
-        BlockPayload, BlockResult, BlockSignature,
-        execution_output::*, proofs::TrustedBlockProofAnchor,
+        BlockPayload, BlockResult, BlockSignature, execution_output::*,
+        proofs::TrustedBlockProofAnchor,
     },
     events::time::Schedule,
     transaction::signed::TransactionEntrypoint,
@@ -40,7 +40,9 @@ fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain 
             action::{Action, Repeats},
         },
     };
-    let mut config = TestChainConfig::new(World::new(), 1000);
+    // Genesis timestamps span its instruction batches; keep the one-shot
+    // schedule ahead of the actual parent rather than inside that span.
+    let mut config = TestChainConfig::new(World::new(), 0);
     let signer = config.genesis_key.clone();
     let authority = AccountId::new(signer.public_key().clone());
     config.genesis_instructions = vec![
@@ -77,6 +79,7 @@ fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain 
         .into(),
     ];
     let mut chain = CertifiedTestChain::start(config).unwrap();
+    assert!(chain.state().view().genesis_timestamp().unwrap() < Duration::from_millis(1001));
     let successful = chain.sign(
         &signer,
         [Log::new(Level::INFO, "network proof".into()).into()],
@@ -131,6 +134,34 @@ fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain 
 
 fn proof_fixture() -> CommittedNetworkProofFixture {
     CommittedNetworkProofFixture::from_chain(proof_chain(false))
+}
+
+#[test]
+fn proof_fixture_runs_both_internal_phases_after_original_genesis_time() {
+    let fixture = proof_fixture();
+    let block = fixture.target();
+    let parent = fixture
+        .state
+        .view()
+        .block_by_height(nonzero!(1_usize))
+        .unwrap();
+    assert!(parent.header().creation_time() < Duration::from_millis(1001));
+    assert!(block.header().creation_time() > Duration::from_millis(1001));
+    assert_eq!(block.network_entrypoints().len(), 2);
+    assert_eq!(block.execution_outputs().len(), 4);
+    assert!(matches!(
+        block.execution_outputs()[2],
+        ExecutionOutputV1::Pipeline(_)
+    ));
+    assert!(matches!(
+        block.execution_outputs()[3],
+        ExecutionOutputV1::Time(_)
+    ));
+    assert_eq!(block.header().prev_block_hash(), Some(parent.hash()));
+    assert_eq!(
+        fixture.state.network_id_ref().into_genesis_hash(),
+        parent.hash()
+    );
 }
 
 fn proof_state(fixture: &CommittedNetworkProofFixture) -> Arc<State> {

@@ -40,7 +40,7 @@ fn signed_quarantine_input(
     builder.set_creation_time(if future {
         Duration::from_secs(1_000_000)
     } else {
-        Duration::from_millis(1)
+        output_fixture_input_time(state)
     });
     let executable = if batch {
         Executable::Batch(
@@ -134,7 +134,7 @@ fn actual_quarantine_zero_exact_and_overflow_quota_own_complete_rows_and_effects
             .take(quota)
             .map(|(_, index)| index)
             .collect();
-        let source = carrier(inputs);
+        let source = carrier(&state, inputs);
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -212,7 +212,10 @@ fn hash_ranked_selection_is_mode_independent_and_does_not_reorder_actual_effects
             assert_eq!(state.network_id, seed.network_id);
             state.pipeline.parallel_apply = parallel;
             state.pipeline.quarantine_max_txs_per_block = 2;
-            let source = carrier(order.iter().map(|index| inputs[*index].clone()).collect());
+            let source = carrier(
+                &state,
+                order.iter().map(|index| inputs[*index].clone()).collect(),
+            );
             let (mut block, _recording) = recorded_network_block(&state, &source);
             execute(&mut block, &source).unwrap();
             let mut actual = Vec::new();
@@ -274,6 +277,7 @@ fn only_exact_signed_boolean_true_uses_the_disabled_quarantine_quota() {
         None,
     ];
     let source = carrier(
+        &state,
         classifications
             .into_iter()
             .enumerate()
@@ -332,12 +336,12 @@ fn stateless_invalid_lower_hash_does_not_consume_a_quarantine_slot() {
         true,
     );
     assert!(invalid.hash() < healthy.hash());
-    let source = carrier(vec![invalid, healthy]);
+    let source = carrier(&state, vec![invalid, healthy]);
     let (mut block, _recording) = recorded_network_block(&state, &source);
     execute(&mut block, &source).unwrap();
     let row = network_row(&block, 0);
     assert!(
-        matches!(row.result.as_ref(), Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) if reason == "transaction creation time 1000000000 is not earlier than block creation time 2")
+        matches!(row.result.as_ref(), Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) if reason == &format!("transaction creation time 1000000000 is not earlier than block creation time {}", source.header().creation_time().as_millis()))
     );
     assert!(row.result.batch_transfer_outcomes().is_empty());
     assert!(row.completions.is_empty());
@@ -384,7 +388,7 @@ fn actual_business_failure_does_not_refill_the_frozen_quarantine_selection() {
         &later,
         false,
     );
-    let source = carrier(vec![rejected, later]);
+    let source = carrier(&state, vec![rejected, later]);
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -430,7 +434,7 @@ fn healthy_callback_output_overflow_does_not_refill_quarantine_or_apply_effects(
         &later,
         false,
     );
-    let source = carrier(vec![oversized, later]);
+    let source = carrier(&state, vec![oversized, later]);
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -489,17 +493,20 @@ fn signed_batch_and_ballot_cannot_bypass_a_zero_quarantine_quota() {
     .into();
     // The ballot is a real signed executable shape. Quota refusal must precede
     // permission/referendum/business validation; this does not claim a valid vote.
-    let source = carrier(vec![
-        signed_quarantine_input(
-            &state,
-            vec![write_quarantine("batch_bypass", 1)],
-            Some(Json::new(true)),
-            true,
-            1,
-            false,
-        ),
-        signed_quarantine_input(&state, vec![ballot], Some(Json::new(true)), false, 2, false),
-    ]);
+    let source = carrier(
+        &state,
+        vec![
+            signed_quarantine_input(
+                &state,
+                vec![write_quarantine("batch_bypass", 1)],
+                Some(Json::new(true)),
+                true,
+                1,
+                false,
+            ),
+            signed_quarantine_input(&state, vec![ballot], Some(Json::new(true)), false, 2, false),
+        ],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -571,7 +578,7 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
                 SealedTransactionReveal::new(commitment, signed, salt),
             ));
         }
-        let source = carrier(commits);
+        let source = carrier(&state, commits);
         let (mut committing, committing_recording) = recorded_network_block(&state, &source);
         let prior_pending_count = committing.world.smart_contract_state().iter().count();
         execute(&mut committing, &source).unwrap();
@@ -597,9 +604,9 @@ fn sealed_reveal_quota_uses_actual_pending_commitments_and_outer_source_hashes()
             .0;
         let mut builder = BlockBuilder::new(BlockHeader::new(
             NonZeroU64::new(3).unwrap(),
+            Some(source.hash()),
             None,
-            None,
-            3,
+            u64::try_from(source.header().creation_time().as_millis()).unwrap() + 1,
             0,
         ));
         for reveal in &reveals {
@@ -686,13 +693,16 @@ fn real_nexus_fee_is_not_charged_for_quota_refusal_before_business_execution() {
                 None,
             ),
         );
-        builder.set_creation_time(Duration::from_millis(1));
-        let source = carrier(vec![TransactionEntrypoint::External(
-            builder
-                .with_metadata(metadata)
-                .with_instructions([write_quarantine("paid_quarantine_effect", 1)])
-                .sign(ALICE_KEYPAIR.private_key()),
-        )]);
+        builder.set_creation_time(output_fixture_input_time(&state));
+        let source = carrier(
+            &state,
+            vec![TransactionEntrypoint::External(
+                builder
+                    .with_metadata(metadata)
+                    .with_instructions([write_quarantine("paid_quarantine_effect", 1)])
+                    .sign(ALICE_KEYPAIR.private_key()),
+            )],
+        );
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();

@@ -188,7 +188,7 @@ class KagemushaCoreCoordinatorBridgeV1Test {
     }
 
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
-        val contractWords = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+        val contractWords = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
         var openCalls = 0
         var installCalls = 0
         var installStatus = 0

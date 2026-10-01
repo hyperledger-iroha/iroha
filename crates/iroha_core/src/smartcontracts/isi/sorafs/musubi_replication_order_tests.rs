@@ -3,8 +3,7 @@
 fn issue_replication_order_atomically_installs_musubi_archive_binding() {
     let state = make_state();
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     let pin = registry_grade_musubi_pin();
     let archive = musubi_archive_for_pin(&pin, 0x61);
     let archive_id = archive.archive_id;
@@ -26,9 +25,9 @@ fn issue_replication_order_atomically_installs_musubi_archive_binding() {
         12,
         32,
     )
-        .for_musubi_archive(archive_id)
-        .execute(&alice(), &mut stx)
-        .expect("issue archive-bound replication order");
+    .for_musubi_archive(archive_id)
+    .execute(&alice(), &mut stx)
+    .expect("issue archive-bound replication order");
     assert!(stx.world.replication_orders.get(&order_id).is_some());
     let reference = stx
         .world

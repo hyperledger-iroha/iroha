@@ -46,6 +46,20 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
     try KagemushaNativeCoreCoordinatorAdapterV1(bridge: .open(storagePath: storagePath))
   }
 
+  /// Obtain the genuine native owner's opaque ordinary app-approval ticket.
+  /// The application selects an existing operation ID and never supplies S or W fields.
+  public func prepareAppApproval(originalOperationID: Data) throws
+    -> KagemushaNativePreparedAppApprovalV1 {
+    try bridge.prepareAppApproval(originalOperationID: originalOperationID)
+  }
+
+  /// Obtain the original pending native enrollment's opaque E possession ticket.
+  /// Final credential issuance and financial state protection remain independent.
+  public func prepareAppEnrollmentPossession(originalEnrollmentID: Data) throws
+    -> KagemushaNativePreparedAppEnrollmentPossessionV1 {
+    try bridge.prepareAppEnrollmentPossession(originalEnrollmentID: originalEnrollmentID)
+  }
+
   /// Revoke this wallet's native handle on logout or account switch.
   public func close() throws { try bridge.close() }
 

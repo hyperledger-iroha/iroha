@@ -137,6 +137,11 @@ name = "kagemusha_app_certificate_encoder_v1"
 path = "src/bin/kagemusha_app_certificate_encoder_v1.rs"
 required-features = ["dev-tools"]
 
+[[bin]]
+name = "kagemusha_raw_app_attestation_encoder_v1"
+path = "src/bin/kagemusha_raw_app_attestation_encoder_v1.rs"
+required-features = ["dev-tools"]
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

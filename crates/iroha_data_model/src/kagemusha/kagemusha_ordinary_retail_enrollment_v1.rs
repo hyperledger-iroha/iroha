@@ -319,6 +319,23 @@ impl KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1 {
         }
         self.app_credential.recheck_at_trusted_time(now)
     }
+    /// Recheck the same FI certificate with a separately admitted Integrity refresh lease.
+    /// The original enrollment, financial epoch and app credential remain unchanged.
+    /// # Errors
+    /// Rejects time regression, FI expiry, another credential or an expired lease.
+    pub fn recheck_with_integrity_lease(
+        &self,
+        lease: &super::KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+        now: u64,
+    ) -> Result<(), String> {
+        if now < self.authenticated_at_ms
+            || now < self.certificate.subject.issued_at_ms
+            || now >= self.certificate.subject.expires_at_ms
+        {
+            return Err("ordinary retail certificate interval expired".into());
+        }
+        self.app_credential.recheck_with_integrity_lease(lease, now)
+    }
 }
 
 /// Digest of the exact independently governed FI policy selected before issuance.
@@ -470,6 +487,7 @@ impl KagemushaOrdinaryRetailEnrollmentPossessionProofV1 {
         let message = kagemusha_ordinary_app_enrollment_possession_message_v1(
             &expected.preparation.challenge,
             &subject.app_public_key,
+            Sha256::digest(&self.raw_attestation).into(),
         )?;
         let counter = self.app_possession.authenticate_signature(
             subject.platform_class,
@@ -648,4 +666,311 @@ fn digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     hash.update((bytes.len() as u64).to_le_bytes());
     hash.update(bytes);
     hash.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Actual public model admission under known-public synthetic release/attestation fixtures.
+    use super::*;
+    use crate::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture;
+    use iroha_crypto::{KeyPair, SignatureOf};
+
+    #[test]
+    fn ordinary_retail_both_platforms_admit_actual_dual_possession_and_original_roundtrips() {
+        for apple in [false, true] {
+            let f = Fixture::new(apple);
+            let verified = f.verify(300).unwrap();
+            assert_eq!(verified.certificate(), &f.certificate);
+            assert_eq!(
+                verified.app_credential().original(),
+                norito::encode_canonical(&f.selection.issuance.credential).unwrap()
+            );
+            assert_eq!(
+                verified.possession().original(),
+                f.proof.canonical_bytes().unwrap()
+            );
+            assert_eq!(
+                verified.possession().app_attest_counter(),
+                if apple { Some(11) } else { None }
+            );
+            assert_eq!(
+                verified
+                    .app_credential()
+                    .subject()
+                    .financial_authority_commitment,
+                [19; 32]
+            );
+            assert_ne!(
+                verified
+                    .app_credential()
+                    .subject()
+                    .financial_authority_commitment,
+                verified.app_credential().subject().attested_key_id
+            );
+            for bytes in [
+                f.certificate.canonical_bytes().unwrap(),
+                f.proof.canonical_bytes().unwrap(),
+            ] {
+                assert!(!bytes.is_empty());
+            }
+            let bytes = f.certificate.canonical_bytes().unwrap();
+            let decoded: KagemushaOrdinaryRetailEnrollmentCertificateV1 =
+                norito::decode_canonical_with_limits(
+                    &bytes,
+                    norito::canonical_decode_limits(bytes.len()),
+                )
+                .unwrap();
+            assert_eq!(decoded, f.certificate);
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(
+                norito::decode_canonical::<KagemushaOrdinaryRetailEnrollmentCertificateV1>(
+                    &trailing
+                )
+                .is_err()
+            );
+            let bytes = f.proof.canonical_bytes().unwrap();
+            let decoded: KagemushaOrdinaryRetailEnrollmentPossessionProofV1 =
+                norito::decode_canonical_with_limits(
+                    &bytes,
+                    norito::canonical_decode_limits(bytes.len()),
+                )
+                .unwrap();
+            assert_eq!(decoded, f.proof);
+        }
+    }
+
+    #[test]
+    fn ordinary_retail_re_signed_fi_cannot_substitute_owner_core_key_asset_or_credential() {
+        let mut f = Fixture::new(false);
+        let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let original = f.certificate.clone();
+        for selector in 0..5 {
+            f.certificate = original.clone();
+            match selector {
+                0 => {
+                    f.certificate
+                        .subject
+                        .issuance
+                        .core_authorization_key_reference = [31; 32]
+                }
+                1 => {
+                    f.certificate.subject.owner.runtime.ledger_dataspace_id =
+                        iroha_model_base::topology::DataSpaceId::new(11)
+                }
+                2 => {
+                    f.certificate
+                        .subject
+                        .issuance
+                        .credential
+                        .subject
+                        .financial_authority_commitment = [22; 32]
+                }
+                3 => f.certificate.subject.ordinary_app_credential_digest = [23; 32],
+                _ => f.certificate.subject.challenge_evidence_digest = [24; 32],
+            }
+            f.certificate.subject.enrollment_id =
+                f.certificate.subject.owner.enrollment_id().unwrap();
+            f.certificate.signature = SignatureOf::try_new(
+                issuer.private_key(),
+                &f.certificate.subject.approval_payload().unwrap(),
+            )
+            .unwrap();
+            assert!(f.verify(300).is_err(), "re-signed substitution {selector}");
+        }
+    }
+
+    #[test]
+    fn ordinary_retail_possession_cannot_relabel_platform_original_or_wallet() {
+        for apple in [false, true] {
+            let mut f = Fixture::new(apple);
+            let original = f.proof.clone();
+            f.proof.raw_attestation.push(0);
+            assert!(f.verify(300).is_err());
+            f.proof = original.clone();
+            let foreign = KeyPair::from_seed(vec![63; 32], Algorithm::Ed25519);
+            f.proof.account_signature = SignatureOf::try_new(
+                foreign.private_key(),
+                &f.challenge.account_signing_payload().unwrap(),
+            )
+            .unwrap();
+            assert!(f.verify(300).is_err());
+            f.proof = original;
+            f.proof.app_possession = match f.proof.app_possession {
+                KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der } => {
+                    KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest {
+                        raw_assertion: signature_der,
+                    }
+                }
+                KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion } => {
+                    KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore {
+                        signature_der: raw_assertion,
+                    }
+                }
+            };
+            assert!(f.verify(300).is_err());
+        }
+    }
+
+    #[test]
+    fn ordinary_retail_expired_challenge_cannot_create_new_possession_or_renew_certificate() {
+        let f = Fixture::new(true);
+        let admitted = f.verify(300).unwrap();
+        assert!(f.verify(299).is_err());
+        assert!(f.verify(2000).is_err());
+        assert!(admitted.possession().recheck_at_trusted_time(2000).is_err());
+        // A retained issuer certificate interval is separate from current device possession.
+        admitted.recheck_at_trusted_time(5000).unwrap();
+        assert!(admitted.recheck_at_trusted_time(9000).is_err());
+        assert!(admitted.recheck_at_trusted_time(299).is_err());
+    }
+
+    #[test]
+    fn ordinary_original_encoder_layout_and_signed_financial_epoch_bind_exact_originals() {
+        for f in [
+            Fixture::new(false),
+            Fixture::new(true),
+            Fixture::android_with_integrity(),
+        ] {
+            let credential = &f.selection.issuance.credential;
+            let layout = credential.original_preimage_layout().unwrap();
+            let original = credential.canonical_bytes().unwrap();
+            assert_eq!(layout.original.end - layout.original.start, original.len());
+            assert!(layout.signature.end - layout.signature.start >= 64);
+            for (position, byte) in layout
+                .signature_bytes
+                .iter()
+                .zip(credential.signature.payload())
+            {
+                assert_eq!(layout.bytes[*position], None);
+                let original_offset = *position - layout.original.start;
+                assert_eq!(original[original_offset], *byte);
+            }
+            assert_eq!(layout.subject_fields.len(), 28);
+            assert_eq!(
+                layout.play_integrity_fields.is_some(),
+                credential.subject.play_integrity.is_some()
+            );
+            let mut preimage = b"iroha:kagemusha:v1:ordinary-app-credential-original\0".to_vec();
+            preimage.extend_from_slice(&(original.len() as u64).to_le_bytes());
+            preimage.extend_from_slice(&original);
+            let flags = original[39];
+            let encoded_selectors = {
+                let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+                [
+                    credential.subject.platform_class.encode(),
+                    credential.subject.security_level.encode(),
+                ]
+            };
+            for (positions, raw) in [&layout.platform_class_bytes, &layout.security_level_bytes]
+                .into_iter()
+                .zip(encoded_selectors)
+            {
+                assert_eq!(positions.len(), raw.len());
+                for (position, byte) in positions.iter().zip(raw) {
+                    assert_eq!(preimage[*position], byte);
+                    assert_eq!(layout.bytes[*position], None);
+                }
+            }
+            for (position, byte) in layout
+                .version_bytes
+                .iter()
+                .zip(credential.subject.version.to_le_bytes())
+            {
+                assert_eq!(preimage[*position], byte);
+                assert_eq!(layout.bytes[*position], None);
+            }
+            let signing = credential.subject.canonical_signing_bytes().unwrap();
+            let signing_body =
+                &signing[super::super::KAGEMUSHA_ORDINARY_APP_CREDENTIAL_DOMAIN_V1.len() + 8..];
+            for (index, positions) in layout.fixed_digest_bytes.iter().enumerate() {
+                let expected = &signing_body[4 + index * 32..4 + (index + 1) * 32];
+                for (position, byte) in positions.iter().zip(expected) {
+                    assert_eq!(preimage[*position], *byte);
+                    assert_eq!(layout.bytes[*position], None);
+                }
+            }
+            for (position, byte) in layout
+                .app_public_key_bytes
+                .iter()
+                .zip(credential.subject.app_public_key.as_sec1_bytes())
+            {
+                assert_eq!(preimage[*position], *byte);
+                assert_eq!(layout.bytes[*position], None);
+            }
+            let scalars = [
+                credential.subject.policy_epoch.to_le_bytes().to_vec(),
+                credential.subject.hardware_epoch.to_le_bytes().to_vec(),
+                credential.subject.issued_at_ms.to_le_bytes().to_vec(),
+                credential.subject.expires_at_ms.to_le_bytes().to_vec(),
+                credential
+                    .subject
+                    .app_attest_counter_floor
+                    .to_le_bytes()
+                    .to_vec(),
+            ];
+            for (positions, raw) in layout.scalar_bytes.iter().zip(scalars) {
+                for (position, byte) in positions.iter().zip(raw) {
+                    assert_eq!(preimage[*position], byte);
+                    assert_eq!(layout.bytes[*position], None);
+                }
+            }
+            if let Some(pi) = credential.subject.play_integrity {
+                let raw = [
+                    pi.request_hash.to_vec(),
+                    pi.evidence_digest.to_vec(),
+                    pi.policy_digest.to_vec(),
+                    pi.verified_at_ms.to_le_bytes().to_vec(),
+                    pi.refresh_before_ms.to_le_bytes().to_vec(),
+                ];
+                for (positions, raw) in layout
+                    .play_integrity_bytes
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .zip(raw)
+                {
+                    assert_eq!(positions.len(), raw.len());
+                    for (position, byte) in positions.iter().zip(raw) {
+                        assert_eq!(preimage[*position], byte);
+                        assert_eq!(layout.bytes[*position], None);
+                    }
+                }
+            }
+            for (expected, actual) in layout.bytes.iter().zip(&preimage) {
+                if let Some(expected) = expected {
+                    assert_eq!(expected, actual)
+                }
+            }
+            assert_eq!(
+                <[u8; 32]>::from(Sha256::digest(&preimage)),
+                f.verify(300).unwrap().app_credential().digest()
+            );
+            assert_eq!(
+                credential.canonical_digest().unwrap(),
+                f.verify(300).unwrap().app_credential().digest()
+            );
+            let epoch = super::super::kagemusha_ordinary_financial_epoch_id_v1(&credential.subject)
+                .unwrap();
+            let mut changed = credential.subject;
+            changed.hardware_epoch += 1;
+            assert_ne!(
+                epoch,
+                super::super::kagemusha_ordinary_financial_epoch_id_v1(&changed).unwrap()
+            );
+            changed = credential.subject;
+            changed.financial_authority_commitment = [25; 32];
+            assert_ne!(
+                epoch,
+                super::super::kagemusha_ordinary_financial_epoch_id_v1(&changed).unwrap()
+            );
+        }
+    }
+    #[test]
+    fn ordinary_public_codec_golden_producer_retains_real_known_public_originals() {
+        let bytes=crate::testing::ordinary_app_enrollment::kagemusha_ordinary_enrollment_public_codec_golden_v1();
+        if let Some(path) = std::env::var_os("KAGEMUSHA_ORDINARY_TEST_GOLDEN_OUTPUT") {
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
 }

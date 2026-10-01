@@ -32,12 +32,21 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedCommittedOutgoingProvingSelectionV1, KagemushaAuthenticatedCoreOwnerV1,
     KagemushaAuthenticatedCorePublicationV1, KagemushaAuthenticatedCoreRecoveryInputsV1,
     KagemushaAuthenticatedCoreRecoveryV1, KagemushaAuthenticatedIncomingFoldV1,
-    KagemushaAuthenticatedIncomingProvingSelectionV1, KagemushaAuthenticatedOutboxReleaseV1,
+    KagemushaAuthenticatedIncomingProvingSelectionV1, KagemushaAuthenticatedOrdinaryApprovalV1,
+    KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    KagemushaAuthenticatedOrdinaryCredentialFloorV1, KagemushaAuthenticatedOutboxReleaseV1,
     KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,
     KagemushaAuthenticatedOutgoingProvingSelectionV1,
     KagemushaAuthenticatedPaymentReleaseSelectionV1,
     KagemushaAuthenticatedRedemptionFinalitySelectionV1, KagemushaAuthenticatedWalletObservationV1,
-    KagemushaOriginalOutgoingHardwareCommitV1,
+    KagemushaOrdinaryLogicalApprovalJournalV1, KagemushaOriginalOutgoingHardwareCommitV1,
+};
+#[cfg(unix)]
+mod ordinary_app_identity;
+#[cfg(unix)]
+pub use ordinary_app_identity::{
+    KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
 };
 mod candidate_lifecycle;
 mod commitments;
@@ -729,7 +738,7 @@ pub struct KagemushaStateContextV1 {
     pub release_id: DigestV1,
     /// Exact asset incarnation.
     pub asset_incarnation: AxtAssetIncarnationV1,
-    /// Qualified non-forking hardware profile.
+    /// Release-qualified credential profile; ordinary app keys do not imply hardware non-forking.
     pub hardware_profile_id: DigestV1,
     /// Governed hardware-policy epoch.
     pub policy_epoch: u64,
@@ -771,7 +780,7 @@ pub struct KagemushaStateV1 {
     pub asset_incarnation: AxtAssetIncarnationV1,
     /// Deterministic reserve liability pool for this network and asset.
     pub liability_pool_id: DigestV1,
-    /// Qualified non-forking hardware profile controlling the current state.
+    /// Release-qualified credential profile controlling the current state.
     pub hardware_profile_id: DigestV1,
     /// Governed hardware-policy epoch controlling the current state.
     pub policy_epoch: u64,
@@ -782,14 +791,16 @@ pub struct KagemushaStateV1 {
     /// Exact-next logical monetary transition sequence within the current hardware epoch.
     /// Authenticated rotation resets it to zero while carrying the full balance and replay root.
     pub logical_sequence: u128,
-    /// Global exact-next hardware-use index; unlike `logical_sequence`, rotation never resets it.
+    /// Global exact-next financial approval index; unlike `logical_sequence`, rotation never resets it.
+    /// An ordinary app's assertion counter is separate, and this index claims no hardware enforcement.
     pub secure_index: u128,
-    /// Current attested hardware epoch.
+    /// Current signed financial credential epoch; ordinary profiles use native logical metadata.
     pub hardware_epoch: HardwareEpochV1,
     /// Current hardware-key and policy binding.
     pub device_policy_binding: DevicePolicyBindingV1,
     /// Reference to the prepared KeyMint one-use key authorized for the next hop.
-    /// Zero selects a qualified counter profile instead of the one-use-key ratchet.
+    /// Zero disables this separately qualified one-use-key protocol. Ordinary app approval
+    /// profiles use zero without claiming a hardware counter or limited-use key.
     pub next_one_use_key_reference: DigestV1,
     /// Hiding commitment to fresh private nonce material unique to this state successor.
     pub state_nonce_commitment: DigestV1,
@@ -2385,8 +2396,11 @@ where
         )?;
         KagemushaBootstrapJournalStageV1::new(
             preview.state,
-            proof_release,
-            initial_credential,
+            proof_release.clone(),
+            KagemushaAcceptedCredentialFloorV1::Oem {
+                credential: initial_credential,
+                release_id: proof_release.release_id(),
+            },
             enrollment,
             durable_capacity,
             authenticated_history,

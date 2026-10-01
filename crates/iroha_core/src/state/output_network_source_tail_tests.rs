@@ -42,8 +42,8 @@ fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_
         let tech = AssetId::of(asset.clone(), CARPENTER_ID.clone());
         let initial = Quantity::from(1_000_000_010_u64);
         {
-            let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-            let mut tx = setup.transaction();
+            let (mut setup, _setup_recording) = output_fixture_setup(&state);
+            let mut tx = setup.transaction_for_callback_testing();
             Register::account(Account::new(CARPENTER_ID.clone()))
                 .execute(&ALICE_ID, &mut tx)
                 .unwrap();
@@ -94,7 +94,7 @@ fn intrinsic_body_rejection_keeps_only_pipeline_gas_transfer_under_the_original_
             batch,
         );
         let hash = Hash::from(entry.execution_call_hash());
-        let source = carrier(vec![entry]);
+        let source = carrier(&state, vec![entry]);
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -289,7 +289,7 @@ fn transfer_mint_transfer_keeps_one_accounted_entry_before_d7_relation_activatio
             batch,
         );
         let hash = Hash::from(entry.execution_call_hash());
-        let mut source = carrier(vec![entry]);
+        let mut source = carrier(&state, vec![entry]);
         let (mut block, _recording) = recorded_network_block(&state, &source);
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         block.execute_ordinary_output_plan(&source, None).unwrap();

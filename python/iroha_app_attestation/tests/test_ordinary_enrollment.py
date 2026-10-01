@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from iroha_app_attestation.attestation import AttestationRejected, RawPlatformProof, device_key_reference, encode_android_chain, verify_android_raw
 from iroha_app_attestation.ordinary_enrollment import (
-    CHALLENGE_BODY_BYTES, CHALLENGE_TRANSPORT_BYTES, EVIDENCE_DOMAIN,
+    CHALLENGE_BODY_BYTES, CHALLENGE_TRANSPORT_BYTES, EVIDENCE_DOMAIN, POSSESSION_DOMAIN, POSSESSION_BODY_BYTES,
     OrdinaryEnrollmentChallenge, OrdinaryPlatformEvidenceChallenge,
     authenticate_challenge_transport, credential_signing_request,
     decode_challenge_transport, verify_enrollment_possession,
@@ -48,16 +48,61 @@ class OrdinaryEnrollmentTests(unittest.TestCase):
         raw=encode_android_chain([leaf,root])
         import time
         proof=verify_android_raw([leaf,root],selected,'org.example.wallet',28,b'\x22'*32,root,hashlib.sha256(root).digest(),int(time.time()*1000),self.openssl,allowed_security_levels=frozenset({1,2}))
-        message=challenge().possession_message(hashlib.sha256(proof.attested_public_key_sec1).digest())
+        message=challenge().possession_message(hashlib.sha256(proof.attested_public_key_sec1).digest(), proof.evidence_sha256, 1000, 121000)
         (self.directory/'possession-message').write_bytes(message)
         self.openssl_run('dgst','-sha256','-sign','leaf.key','-out','possession-signature','possession-message')
         pop=(self.directory/'possession-signature').read_bytes()
-        possession=verify_enrollment_possession(challenge(),proof,raw,pop,self.openssl,apple_app_id=None)
+        possession=verify_enrollment_possession(challenge(),proof,raw,pop,self.openssl,apple_app_id=None, possession_issued_at_ms=1000, possession_expires_at_ms=121000)
         return proof,possession,raw,pop
 
     def request(self,proof,possession,subject=None,policy=None,integrity=None):
         return credential_signing_request(subject or challenge(),proof,possession,b'\x22'*32,b'\x23'*32,self.public,
                 1500,61500,60000,121000,frozenset({1,2}) if proof.platform=='android_keymint' else frozenset(),policy,integrity)
+
+    def test_e371_exact_purpose_fields_and_native_interval_are_mandatory(self):
+        selected=challenge(); key=b'\x77'*32; raw_digest=b'\x88'*32
+        message=selected.possession_message(key,raw_digest,1000,121000)
+        fields=(selected.enrollment_id,selected.client_nonce,selected.server_nonce,
+                selected.account_binding,selected.network_id,selected.app_authority_policy_digest,
+                selected.release_id,selected.hardware_profile_id,selected.lane_id,key,raw_digest)
+        body=b'\x01\x00\x01'+b''.join(fields)+(1000).to_bytes(8,'little')+(121000).to_bytes(8,'little')
+        self.assertEqual(len(body),371);self.assertEqual(POSSESSION_BODY_BYTES,371)
+        self.assertEqual(message,POSSESSION_DOMAIN+(371).to_bytes(8,'little')+body)
+        self.assertEqual(len(message),424)
+        self.assertNotEqual(message,selected.signing_bytes())
+        self.assertEqual(fields[0],selected.enrollment_id)
+        for change in ({'hardware_epoch':23},
+                       {'financial_authority_commitment':b'\x91'*32},
+                       {'suite_id':b'\x92'*32},
+                       {'trust_policy_digest':b'\x93'*32}):
+            altered=replace(selected,**change)
+            # Holding raw digest fixed is only a codec comparison. The issuer's
+            # complete-C/raw platform join independently rejects that substitution.
+            self.assertNotEqual(altered.attestation_challenge(),selected.attestation_challenge())
+            self.assertEqual(altered.possession_message(key,raw_digest,1000,121000),message)
+        for supplied_key,supplied_raw,issue,expiry in ((bytes(32),raw_digest,1000,121000),
+                (key,bytes(32),1000,121000),(key,raw_digest,True,121000),
+                (key,raw_digest,1000,1000),(key,raw_digest,1000,121001),
+                (key,raw_digest,1000,1<<64),(key,raw_digest,1001,121000)):
+            with self.subTest(issue=issue,expiry=expiry),self.assertRaises(AttestationRejected):
+                selected.possession_message(supplied_key,supplied_raw,issue,expiry)
+        with self.assertRaises(TypeError):selected.possession_message(key)
+
+    def test_actual_android_e_signature_rejects_old_domain_and_double_hash(self):
+        proof,_,raw,_=self.android()
+        key=hashlib.sha256(proof.attested_public_key_sec1).digest()
+        e=challenge().possession_message(key,proof.evidence_sha256,1000,121000)
+        old_body=challenge().signing_bytes()+key
+        old=b'iroha:kagemusha:v1:ordinary-app-enrollment-possession\0'+len(old_body).to_bytes(8,'little')+old_body
+        foreign_attempt_e=e[:len(POSSESSION_DOMAIN)+8+3]+challenge().attestation_challenge()+e[len(POSSESSION_DOMAIN)+8+35:]
+        self.assertEqual(len(foreign_attempt_e),len(e))
+        for wrong_message in (old,hashlib.sha256(e).digest(),foreign_attempt_e):
+            (self.directory/'wrong-possession-message').write_bytes(wrong_message)
+            self.openssl_run('dgst','-sha256','-sign','leaf.key','-out','wrong-possession-signature','wrong-possession-message')
+            pop=(self.directory/'wrong-possession-signature').read_bytes()
+            with self.assertRaisesRegex(AttestationRejected,'signature rejected'):
+                verify_enrollment_possession(challenge(),proof,raw,pop,self.openssl,
+                    apple_app_id=None,possession_issued_at_ms=1000,possession_expires_at_ms=121000)
 
     def test_actual_core_signature_binds_every_original_selector_and_signed_epoch(self):
         selected=challenge(); original=self.signed(selected)
@@ -80,8 +125,8 @@ class OrdinaryEnrollmentTests(unittest.TestCase):
         self.assertEqual(possession.platform_evidence_digest,expected)
         self.assertEqual(possession.app_attest_counter_floor,0)
         self.assertNotEqual(expected,proof.evidence_sha256)
-        for subject,attestation,signature in ((replace(challenge(),hardware_epoch=23),raw,pop),(challenge(),raw+b'\0',pop),(challenge(),raw,pop[:-1]+bytes([pop[-1]^1]))):
-            with self.assertRaises(AttestationRejected):verify_enrollment_possession(subject,proof,attestation,signature,self.openssl,apple_app_id=None)
+        for subject,attestation,signature in ((replace(challenge(),account_binding=b'\x31'*32),raw,pop),(challenge(),raw+b'\0',pop),(challenge(),raw,pop[:-1]+bytes([pop[-1]^1]))):
+            with self.assertRaises(AttestationRejected):verify_enrollment_possession(subject,proof,attestation,signature,self.openssl,apple_app_id=None, possession_issued_at_ms=1000, possession_expires_at_ms=121000)
 
     def test_exact_koac_unsigned_input_preserves_distinct_key_and_financial_roles(self):
         proof,possession,_,_=self.android()
@@ -120,17 +165,17 @@ class OrdinaryEnrollmentTests(unittest.TestCase):
         fixture=SignedEnvelope(self.directory,self.openssl); selected=challenge(platform=2)
         raw=b'isolated attestation original'; point=fixture.point; app_id='TEAMID.example.wallet'
         proof=RawPlatformProof(hashlib.sha256(raw).digest(),point,device_key_reference(point),'apple_app_attest')
-        message=selected.possession_message(hashlib.sha256(point).digest())
+        message=selected.possession_message(hashlib.sha256(point).digest(), proof.evidence_sha256, 1000, 121000)
         auth=hashlib.sha256(app_id.encode()).digest()+b'\x40'+(9).to_bytes(4,'big')
         nonce=hashlib.sha256(auth+hashlib.sha256(message).digest()).digest()
         (self.directory/'apple-nonce').write_bytes(nonce)
         self.openssl_run('dgst','-sha256','-sign','leaf.key','-out','apple-signature','apple-nonce')
         pop=cbor({'signature':(self.directory/'apple-signature').read_bytes(),'authenticatorData':auth})
-        possession=verify_enrollment_possession(selected,proof,raw,pop,self.openssl,apple_app_id=app_id)
+        possession=verify_enrollment_possession(selected,proof,raw,pop,self.openssl,apple_app_id=app_id, possession_issued_at_ms=1000, possession_expires_at_ms=121000)
         self.assertEqual(possession.app_attest_counter_floor,9)
         request=self.request(proof,possession,subject=selected);body=request[5:-32]
         self.assertEqual(body[:4],b'\x01\x00\x02\x03');self.assertEqual(int.from_bytes(body[-117:-113],'little'),9)
         with self.assertRaises(AttestationRejected):self.request(proof,replace(possession,app_attest_counter_floor=0),subject=selected)
-        with self.assertRaises(AttestationRejected):verify_enrollment_possession(selected,proof,raw,pop,self.openssl,apple_app_id='TEAMID.other.wallet')
+        with self.assertRaises(AttestationRejected):verify_enrollment_possession(selected,proof,raw,pop,self.openssl,apple_app_id='TEAMID.other.wallet', possession_issued_at_ms=1000, possession_expires_at_ms=121000)
 
 if __name__=='__main__':unittest.main()

@@ -9,6 +9,12 @@ import java.security.spec.ECParameterSpec
 import org.bouncycastle.asn1.ASN1OctetString
 import org.bouncycastle.asn1.ASN1Primitive
 import org.bouncycastle.asn1.ASN1Sequence
+import org.bouncycastle.asn1.ASN1Integer
+import org.bouncycastle.asn1.ASN1Enumerated
+import org.bouncycastle.asn1.ASN1Set
+import org.bouncycastle.asn1.ASN1TaggedObject
+import org.bouncycastle.asn1.BERTags
+import java.math.BigInteger
 
 /** Original-evidence parsing only. PKIX, governed roots/revocation and issuer policy are separate. */
 object AndroidKeyAttestationOriginalV1 {
@@ -28,6 +34,68 @@ object AndroidKeyAttestationOriginalV1 {
             ASN1OctetString.getInstance(ASN1Primitive.fromByteArray(extension)).octets))
         require(description.size() == 8) { "Unsupported original KeyDescription layout" }
         return ASN1OctetString.getInstance(description.getObjectAt(4)).octets.copyOf()
+    }
+    /**
+     * Parse the original signed extension's persistent P-256 app-key metadata. This does not
+     * authenticate roots, revocation, package/Play policy or issuer admission. Legacy API28–30
+     * combines this exact leaf/challenge correlation with actual KeyInfo hardware custody.
+     */
+    @JvmStatic fun persistentAppHardwareSecurityLevel(chain: List<X509Certificate>, expectedChallenge: ByteArray): AttestationResult.SecurityLevel {
+        require(expectedChallenge.size == 32 && expectedChallenge.any { it != 0.toByte() })
+        require(chain.size in 2..8 && chain.all { it.encoded.size in 1..16_384 })
+        val extension = certificate(chain).getExtensionValue(KEY_DESCRIPTION_OID)
+        val payload = ASN1OctetString.getInstance(ASN1Primitive.fromByteArray(extension)).octets
+        val description = ASN1Sequence.getInstance(ASN1Primitive.fromByteArray(payload))
+        require(payload.contentEquals(description.getEncoded("DER")) && description.size() == 8) {
+            "Original KeyDescription is not the exact canonical layout"
+        }
+        fun integer(index: Int) = (description.getObjectAt(index) as? ASN1Integer)?.value
+            ?: throw AttestationVerificationException("Malformed original KeyDescription version")
+        require(integer(0) in setOf(1L, 2L, 3L, 4L, 100L, 200L, 300L, 400L, 500L).map(BigInteger::valueOf))
+        require(integer(2) in setOf(2L, 3L, 4L, 41L, 100L, 200L, 300L, 400L, 500L).map(BigInteger::valueOf))
+        val attestation = (description.getObjectAt(1) as? ASN1Enumerated)?.value
+        val key = (description.getObjectAt(3) as? ASN1Enumerated)?.value
+        require(attestation == key && key in setOf(BigInteger.ONE, BigInteger.valueOf(2))) {
+            "Original app key lacks matching TEE or StrongBox levels"
+        }
+        require(MessageDigest.isEqual(ASN1OctetString.getInstance(description.getObjectAt(4)).octets, expectedChallenge)) {
+            "Original persistent app-key challenge differs"
+        }
+        ASN1OctetString.getInstance(description.getObjectAt(5))
+        fun tags(index: Int): Map<Int, ASN1TaggedObject> {
+            val sequence = description.getObjectAt(index) as? ASN1Sequence
+                ?: throw AttestationVerificationException("Malformed original app-key authorizations")
+            require(sequence.size() <= 128)
+            val parsed = linkedMapOf<Int, ASN1TaggedObject>(); var prior = 0
+            for (item in sequence) {
+                val tagged = item as? ASN1TaggedObject
+                    ?: throw AttestationVerificationException("App-key authorization is not context-tagged")
+                require(tagged.hasContextTag(tagged.tagNo) && tagged.tagNo > prior) {
+                    "Duplicate or unsorted original app-key authorization"
+                }
+                prior = tagged.tagNo; parsed[tagged.tagNo] = tagged
+            }
+            return parsed
+        }
+        val software = tags(6); val hardware = tags(7)
+        require(405 !in software && 405 !in hardware) { "Finite-use key cannot be a persistent app identity" }
+        require(software.keys.intersect(setOf(1, 2, 3, 5, 10, 303, 702, 704)).isEmpty()) {
+            "Original app-key hardware authorization is software-enforced"
+        }
+        fun exactInteger(tag: Int, expected: Long) {
+            val value = hardware[tag]?.getBaseUniversal(true, BERTags.INTEGER) as? ASN1Integer
+            require(value?.value == BigInteger.valueOf(expected)) { "Original app-key hardware integer differs" }
+        }
+        fun exactSet(tag: Int, expected: Long) {
+            val value = hardware[tag]?.getBaseUniversal(true, BERTags.SET) as? ASN1Set
+            require(value?.size() == 1 && (value.getObjectAt(0) as? ASN1Integer)?.value == BigInteger.valueOf(expected)) {
+                "Original app-key hardware purpose or digest differs"
+            }
+        }
+        exactSet(1, 2); exactInteger(2, 3); exactInteger(3, 256); exactSet(5, 4)
+        exactInteger(10, 1); exactInteger(702, 0)
+        publicKeySec1(chain) // Enforce actual leaf-key equality and exact P-256 parameters.
+        return if (key == BigInteger.ONE) AttestationResult.SecurityLevel.TRUSTED_ENVIRONMENT else AttestationResult.SecurityLevel.STRONG_BOX
     }
     @JvmStatic fun publicKeySec1(chain: List<X509Certificate>): ByteArray {
         val key = certificate(chain).publicKey as? ECPublicKey

@@ -94,7 +94,7 @@ class KagemushaNativeRecoveredEnrollmentV1Test {
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
         val phases = mutableListOf<Int>(); var closed = 0; var changed = false; var corrupt = -1
         var loseProof = false; var wrongAttempt = false
-        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
         override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 31L
         override fun close(handle: Long): Int { closed++; return 0 }

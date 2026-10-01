@@ -277,8 +277,7 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
                 .machine
                 .recovery_metadata
                 .accepted_credential
-                .credential
-                .credential_id,
+                .original_digest()?,
             hardware_epoch: state.hardware_epoch,
             device_policy_binding: state.device_policy_binding,
             core_authorization_key_reference: self
@@ -342,8 +341,7 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
                     .machine
                     .recovery_metadata()
                     .accepted_credential
-                    .credential
-                    .credential_id
+                    .original_digest()?
                 || intent.context.core_authorization_key_reference
                     != self
                         .machine

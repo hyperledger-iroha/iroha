@@ -6,6 +6,8 @@ import copy
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
@@ -30,9 +32,149 @@ def test_musubi_fixture_owner_is_declared_but_never_default() -> None:
     metadata = TARGET_INVENTORY.load_metadata(ROOT)
     target = ("iroha_data_model", "musubi_fixtures")
 
-    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 96
+    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 98
     assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert target not in TARGET_INVENTORY.resolved_default_bins(metadata)
+
+
+def test_app_certificate_encoder_requires_explicit_dev_tools_opt_in() -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    owner = ("iroha_data_model", "kagemusha_app_certificate_encoder_v1")
+    package = next(row for row in metadata["packages"] if row["name"] == owner[0])
+    target = next(row for row in package["targets"] if row["name"] == owner[1])
+    manifest = tomllib.loads(
+        (ROOT / "crates/iroha_data_model/Cargo.toml").read_text(encoding="utf-8")
+    )
+    declared = next(row for row in manifest["bin"] if row["name"] == owner[1])
+
+    assert declared["path"] == "src/bin/kagemusha_app_certificate_encoder_v1.rs"
+    assert declared["required-features"] == ["dev-tools"]
+    assert target["required-features"] == ["dev-tools"]
+    assert "dev-tools" not in manifest["features"]["default"]
+    assert owner in TARGET_INVENTORY.all_workspace_bins(metadata)
+    assert owner not in TARGET_INVENTORY.resolved_default_bins(metadata)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "replaced", "ungated", "default-feature"))
+def test_rejects_app_certificate_encoder_inventory_changes(mutation: str) -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    modified = copy.deepcopy(metadata)
+    owner = ("iroha_data_model", "kagemusha_app_certificate_encoder_v1")
+    package = next(row for row in modified["packages"] if row["name"] == owner[0])
+    target = next(row for row in package["targets"] if row["name"] == owner[1])
+    if mutation == "missing":
+        package["targets"].remove(target)
+    elif mutation == "replaced":
+        target["name"] = "unreviewed_app_certificate_encoder"
+    elif mutation == "ungated":
+        target["required-features"] = []
+    else:
+        node = next(
+            row for row in modified["resolve"]["nodes"] if row["id"] == package["id"]
+        )
+        node["features"].append("dev-tools")
+
+    errors = TARGET_INVENTORY.check_metadata(modified)
+
+    if mutation in ("missing", "replaced"):
+        assert any(
+            "reviewed binary owners are no longer declared" in error and repr(owner) in error
+            for error in errors
+        )
+        assert TARGET_INVENTORY.resolved_default_bins(modified) == (
+            TARGET_INVENTORY.resolved_default_bins(metadata)
+        )
+        if mutation == "missing":
+            assert any(
+                "declared binary count 97 differs from the expected 98" in error
+                for error in errors
+            )
+        else:
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 98
+            assert any("unreviewed binary owners are declared" in error for error in errors)
+            assert not any("declared binary count" in error for error in errors)
+    else:
+        assert TARGET_INVENTORY.all_workspace_bins(modified) == (
+            TARGET_INVENTORY.all_workspace_bins(metadata)
+        )
+        assert any(
+            "non-shipping binaries enabled by default" in error and repr(owner) in error
+            for error in errors
+        )
+        assert not any("declared binary count" in error for error in errors)
+        if mutation == "ungated":
+            assert len(TARGET_INVENTORY.resolved_default_bins(modified)) == 24
+            assert not any("exceeds" in error for error in errors)
+
+
+def test_raw_app_attestation_encoder_requires_explicit_dev_tools_opt_in() -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    owner = ("iroha_data_model", "kagemusha_raw_app_attestation_encoder_v1")
+    package = next(row for row in metadata["packages"] if row["name"] == owner[0])
+    target = next(row for row in package["targets"] if row["name"] == owner[1])
+    manifest = tomllib.loads(
+        (ROOT / "crates/iroha_data_model/Cargo.toml").read_text(encoding="utf-8")
+    )
+    declared = next(row for row in manifest["bin"] if row["name"] == owner[1])
+
+    assert declared["path"] == "src/bin/kagemusha_raw_app_attestation_encoder_v1.rs"
+    assert declared["required-features"] == ["dev-tools"]
+    assert target["required-features"] == ["dev-tools"]
+    assert "dev-tools" not in manifest["features"]["default"]
+    assert owner in TARGET_INVENTORY.all_workspace_bins(metadata)
+    assert owner not in TARGET_INVENTORY.resolved_default_bins(metadata)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "replaced", "ungated", "default-feature"))
+def test_rejects_raw_app_attestation_encoder_inventory_changes(mutation: str) -> None:
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    modified = copy.deepcopy(metadata)
+    owner = ("iroha_data_model", "kagemusha_raw_app_attestation_encoder_v1")
+    package = next(row for row in modified["packages"] if row["name"] == owner[0])
+    target = next(row for row in package["targets"] if row["name"] == owner[1])
+    if mutation == "missing":
+        package["targets"].remove(target)
+    elif mutation == "replaced":
+        target["name"] = "unreviewed_raw_app_attestation_encoder"
+    elif mutation == "ungated":
+        target["required-features"] = []
+    else:
+        node = next(
+            row for row in modified["resolve"]["nodes"] if row["id"] == package["id"]
+        )
+        node["features"].append("dev-tools")
+
+    errors = TARGET_INVENTORY.check_metadata(modified)
+
+    if mutation in ("missing", "replaced"):
+        assert any(
+            "reviewed binary owners are no longer declared" in error and repr(owner) in error
+            for error in errors
+        )
+        assert TARGET_INVENTORY.resolved_default_bins(modified) == (
+            TARGET_INVENTORY.resolved_default_bins(metadata)
+        )
+        if mutation == "missing":
+            assert any(
+                "declared binary count 97 differs from the expected 98" in error
+                for error in errors
+            )
+        else:
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 98
+            assert any("unreviewed binary owners are declared" in error for error in errors)
+            assert not any("declared binary count" in error for error in errors)
+    else:
+        assert TARGET_INVENTORY.all_workspace_bins(modified) == (
+            TARGET_INVENTORY.all_workspace_bins(metadata)
+        )
+        assert any(
+            "non-shipping binaries enabled by default" in error and repr(owner) in error
+            for error in errors
+        )
+        assert not any("declared binary count" in error for error in errors)
+        if mutation == "ungated":
+            assert len(TARGET_INVENTORY.resolved_default_bins(modified)) == 24
+            assert not any("exceeds" in error for error in errors)
 
 
 def test_external_software_signer_is_declared_but_never_default() -> None:
@@ -169,7 +311,7 @@ def test_reviewed_inventory_preserves_the_existing_default_ceiling() -> None:
     assert TARGET_INVENTORY.BASELINE_DECLARED_BIN_COUNT == 116
     assert TARGET_INVENTORY.MAX_DEFAULT_BIN_COUNT == 24
     assert len(TARGET_INVENTORY.EXPECTED_DEFAULT_BINS) == 23
-    assert len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS) == 96
+    assert len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS) == 98
     assert TARGET_INVENTORY.EXPECTED_DEFAULT_BINS <= TARGET_INVENTORY.EXPECTED_DECLARED_BINS
 
 
@@ -202,7 +344,7 @@ def test_rejects_developer_owner_replacement_at_unchanged_count() -> None:
     package = next(row for row in modified["packages"] if row["name"] == "ivm")
     target = next(row for row in package["targets"] if row["name"] == "ivm_fixture_export")
     target["name"] = "unreviewed_fixture_export"
-    assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 96
+    assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 98
     assert TARGET_INVENTORY.resolved_default_bins(modified) == (
         TARGET_INVENTORY.resolved_default_bins(metadata)
     )

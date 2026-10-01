@@ -28,7 +28,7 @@ struct NestedCallbackFixture {
 }
 
 fn nested_callback_fixture(row_bytes: u64, depth: u8) -> NestedCallbackFixture {
-    let state = state(row_bytes);
+    let state = authenticated_state(row_bytes);
     {
         let mut parameters = state.world.parameters.block();
         parameters.smart_contract.execution_depth = depth;
@@ -58,9 +58,9 @@ fn nested_callback_fixture(row_bytes: u64, depth: u8) -> NestedCallbackFixture {
             instructions: ExecutionStep(child_instructions.clone().into()),
         },
     ];
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
+    let (mut setup, _setup_recording) = output_fixture_setup(&state);
     {
-        let mut transaction = setup.transaction();
+        let mut transaction = setup.transaction_for_callback_testing();
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut transaction)
             .expect("register actual universal account");
@@ -87,7 +87,8 @@ fn nested_callback_fixture(row_bytes: u64, depth: u8) -> NestedCallbackFixture {
     setup
         .commit_world_overlay_for_testing()
         .expect("commit fixture registry");
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    drop(setup);
+    let header = output_fixture_header(&state);
     let mut transaction = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),

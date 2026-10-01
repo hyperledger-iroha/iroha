@@ -51,6 +51,45 @@ state_test! { sync startup_sumeragi_key_policy_rejects_each_mismatch_without_mut
     }
 }
 
+// This validates an unauthenticated typed component and never creates State
+// history. Native ownership must come from original signed/certified replay.
+fn snapshot_runtime_component(
+    snapshot: &norito::json::Value,
+    state: &State,
+    configured: Option<&iroha_config::parameters::actual::Nexus>,
+) -> Result<
+    (
+        Cell<SnapshotNexusRuntime>,
+        iroha_config::parameters::actual::Nexus,
+    ),
+    super::deserialize::StateRestoreError,
+> {
+    let value = snapshot
+        .as_object()
+        .and_then(|value| value.get("nexus_runtime"))
+        .ok_or_else(|| norito::json::Error::missing_field("nexus_runtime"))?
+        .clone();
+    let hashes = state
+        .block_hashes
+        .view()
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    super::deserialize::decode_nexus_runtime_component_for_testing(
+        value,
+        &hashes,
+        &state.world,
+        &state.ivm_execution_budget(),
+        Hash::prehashed(
+            state
+                .lane_manifests
+                .read()
+                .baseline_consensus_policy_digest(),
+        ),
+        configured,
+    )
+}
+
 fn snapshot_owner_policy_fixture() -> (
     tempfile::TempDir,
     Box<State>,
@@ -245,18 +284,25 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .get("nexus_runtime")
         .expect("snapshot runtime")
         .clone();
-    let restored = deserialize_state_snapshot_value_with_kura(value, Arc::clone(&kura))
-        .expect("restore actual prior owner policy before startup reconciliation");
-    let roundtrip = norito::json::to_value(&restored).expect("reserialize restored State");
+    assert!(matches!(
+        deserialize_state_snapshot_value_with_kura(value.clone(), Arc::clone(&kura)),
+        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+    ));
+    let (component, projected_nexus) =
+        snapshot_runtime_component(&value, &state, Some(&configured))
+            .expect("validate original structural owner and both runtime cuts");
     assert_eq!(
-        roundtrip
-            .as_object()
-            .expect("State object")
-            .get("nexus_runtime"),
-        Some(&expected_runtime),
-        "snapshot decoding must not normalize the committed owner policy"
+        norito::json::to_value(&component).expect("reserialize typed runtime component"),
+        expected_runtime,
+        "component decoding must not normalize the retained owner policy"
     );
-    (directory, restored, configured)
+    assert_eq!(
+        SnapshotNexusOwnerPolicy::from_nexus(&projected_nexus),
+        SnapshotNexusOwnerPolicy::from_nexus(&configured)
+    );
+    // Retain the original structural State; decoded component bytes do not
+    // establish execution/finality or set the restored-native authority bit.
+    (directory, Box::new(state), configured)
 }
 
 state_test! { sync snapshot_owner_policy_survives_startup_with_live_nondefault_staking
@@ -270,9 +316,12 @@ state_test! { sync snapshot_owner_policy_survives_startup_with_live_nondefault_s
         "the loaded snapshot already identifies the nondefault dataspace owner"
     );
     let before = norito::json::to_json(&restored).expect("capture restored custody");
-    restored
-        .prepare_restored_configured_primary_geometry_anchor(&configured.configured_lane_catalog)
-        .expect("authenticate unchanged configured primary baseline");
+    assert!(!restored.nexus_runtime_restored_from_snapshot());
+    assert!(matches!(
+        restored.prepare_restored_configured_primary_geometry_anchor(&configured.configured_lane_catalog),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(message))
+            if message.contains("requires a decoded Nexus runtime snapshot")
+    ), "a structural component cannot manufacture trusted restored geometry");
     restored
         .restore_kura_lane_segments_from_nexus()
         .expect("restore snapshot-authenticated lane geometry");
@@ -333,23 +382,15 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
         world.commit();
     }
     let snapshot = norito::json::to_json(&state).expect("serialize committed catalog snapshot");
-    let seed = || deserialize::KuraSeed {
-        execution_budget: state.ivm_execution_budget(),
-        operation_index_budget: state.world.operation_index_budget().clone(),
-        kura: Arc::clone(&state.kura),
-        lane_manifests: state.lane_manifests.read().clone(),
-        query_handle: LiveQueryStore::start_test(),
-        #[cfg(feature = "telemetry")]
-        telemetry: crate::telemetry::StateTelemetry::default(),
-    };
-    let restored = seed()
-        .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
-            &snapshot,
-            configured.clone(),
-        )
-        .expect("full startup baseline restores the committed runtime catalog");
-    assert_eq!(restored.nexus_snapshot().configured_dataspace_catalog, baseline);
-    assert_eq!(restored.nexus_snapshot().dataspace_catalog, effective);
+    let value: norito::json::Value = norito::json::from_json(&snapshot).unwrap();
+    assert!(matches!(
+        deserialize_state_snapshot_value_with_kura(value.clone(), Arc::clone(&state.kura)),
+        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+    ));
+    let (_, restored_nexus) = snapshot_runtime_component(&value, &state, Some(&configured))
+        .expect("full configured baseline validates the retained runtime catalog component");
+    assert_eq!(restored_nexus.configured_dataspace_catalog, baseline);
+    assert_eq!(restored_nexus.dataspace_catalog, effective);
 
     let mut changed_config = configured;
     let mut entries = baseline.entries().to_vec();
@@ -357,16 +398,11 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
         Some("different configured description".to_owned());
     changed_config.configured_dataspace_catalog =
         DataSpaceCatalog::new(entries).expect("same physical geometry, changed baseline bytes");
-    let error = seed()
-        .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
-            &snapshot,
-            changed_config,
-        )
+    let error = snapshot_runtime_component(&value, &state, Some(&changed_config))
         .err()
         .expect("changed full baseline must fail catalog authentication");
     assert!(error.to_string().contains("configured dataspace baseline differs"), "{error}");
-    let error = seed()
-        .into_state_from_json_str_without_durable_recovery(&snapshot)
+    let error = snapshot_runtime_component(&value, &state, None)
         .err()
         .expect("catalog restore without full configured baseline must fail closed");
     assert!(error.to_string().contains("requires the complete configured dataspace baseline"), "{error}");
@@ -421,7 +457,7 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
             .get_mut("blocks").expect("current runtime").as_object_mut().expect("runtime record")
             .get_mut("owner_policy").expect("policy").as_object_mut().expect("policy object")
             .remove(&field);
-        assert!(deserialize_state_snapshot_value_with_kura(missing, Arc::clone(&state.kura)).is_err(),
+        assert!(snapshot_runtime_component(&missing, &state, None).is_err(),
             "missing owner policy field {field} must not select a default");
     }
     let mut absent = snapshot.clone();
@@ -429,7 +465,7 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
         .get_mut("nexus_runtime").expect("runtime").as_object_mut().expect("runtime object")
             .get_mut("blocks").expect("current runtime").as_object_mut().expect("runtime record")
         .remove("owner_policy");
-    assert!(deserialize_state_snapshot_value_with_kura(absent, Arc::clone(&state.kura)).is_err());
+    assert!(snapshot_runtime_component(&absent, &state, None).is_err());
     for (field, invalid) in [
         ("max_validators", norito::json::Value::from(0_u64)),
         ("autoscale_min_lane_id", norito::json::Value::from(0_u64)),
@@ -448,7 +484,7 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
             .get_mut("blocks").expect("current runtime").as_object_mut().expect("runtime record")
             .get_mut("owner_policy").expect("policy").as_object_mut().expect("policy object")
             .insert(field.to_owned(), invalid);
-        assert!(deserialize_state_snapshot_value_with_kura(changed, Arc::clone(&state.kura)).is_err(),
+        assert!(snapshot_runtime_component(&changed, &state, None).is_err(),
             "malformed owner policy field {field} must fail");
     }
     let mut noncanonical = snapshot;
@@ -459,7 +495,7 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
         .get_mut("dataspaces").expect("dataspaces");
     let norito::json::Value::Array(entries) = dataspaces else { panic!("dataspace array"); };
     entries.reverse();
-    assert!(deserialize_state_snapshot_value_with_kura(noncanonical, Arc::clone(&state.kura)).is_err());
+    assert!(snapshot_runtime_component(&noncanonical, &state, None).is_err());
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     let mut descriptions = state.nexus_snapshot().dataspace_catalog.entries().to_vec();
     for entry in &mut descriptions {
@@ -486,22 +522,26 @@ state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roun
     assert_eq!(current.autoscale_sample_history.last().unwrap().block_height, 5);
     assert_eq!(predecessor.autoscale_sample_history.last().unwrap().block_height, 4);
     let snapshot = norito::json::to_value(&state).expect("complete State snapshot");
-    let restored = deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura))
-        .expect("restore complete State with both runtime cuts");
-    assert_eq!(restored.canonical_runtime.view().get(), &current);
-    assert_eq!(restored.canonical_runtime.predecessor_view().get(), &Some(predecessor.clone()));
-    assert_eq!(crate::snapshot::canonical_state_snapshot_bytes_for_tests(&restored),
-        crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state),
-        "complete canonical State projection survives restore");
+    assert!(matches!(
+        deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura)),
+        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+    ));
+    let (restored, _) = snapshot_runtime_component(&snapshot, &state, None)
+        .expect("decode complete typed runtime component with both cuts");
+    assert_eq!(restored.view().get(), &current);
+    assert_eq!(restored.predecessor_view().get(), &Some(predecessor.clone()));
+    assert_eq!(norito::json::to_json(&restored).unwrap(),
+        norito::json::to_json(&state.canonical_runtime).unwrap(),
+        "complete canonical Nexus runtime component survives decode without native authority");
     {
-        let replacement = restored.block_and_revert(BlockHeader::new(nonzero!(5_u64), None, None, 500, 0));
-        assert_eq!(replacement.canonical_runtime.get(), &predecessor);
-        assert_eq!(replacement.autoscale_sample_history.back().unwrap().block_height, 4);
-        assert_eq!(replacement.lane_incarnation_lineage, predecessor.lineage_projection());
+        let replacement = restored.block_and_revert();
+        assert_eq!(replacement.get(), &predecessor);
+        assert_eq!(replacement.get().autoscale_sample_history.last().unwrap().block_height, 4);
+        assert_eq!(replacement.get().lineage_projection(), predecessor.lineage_projection());
     }
-    assert_eq!(restored.canonical_runtime.view().get(), &current,
+    assert_eq!(restored.view().get(), &current,
         "abandoned replacement cannot alter either retained cut");
-    assert_eq!(restored.canonical_runtime.predecessor_view().get(), &Some(predecessor.clone()));
+    assert_eq!(restored.predecessor_view().get(), &Some(predecessor.clone()));
 
     let mut wrong_sample = predecessor.clone();
     wrong_sample.autoscale_sample_history.last_mut().unwrap().block_hash =
@@ -520,7 +560,7 @@ state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roun
         let mut corrupt = snapshot.clone();
         let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap()
             .as_object_mut().unwrap().insert("revert".to_owned(), invalid);
-        let error = deserialize_state_snapshot_value_with_kura(corrupt, Arc::clone(&state.kura))
+        let error = snapshot_runtime_component(&corrupt, &state, None)
             .err().expect(label);
         assert!(error.to_string().contains("nexus_runtime"), "{label}: {error}");
     }
@@ -532,7 +572,7 @@ state_test! { sync snapshot_runtime_requires_exact_retained_predecessor_and_roun
         let _ = corrupt.as_object_mut().unwrap().get_mut("nexus_runtime").unwrap().as_object_mut().unwrap()
             .get_mut("revert").unwrap().as_object_mut().unwrap().get_mut("owner_policy").unwrap()
             .as_object_mut().unwrap().remove(&field);
-        assert!(deserialize_state_snapshot_value_with_kura(corrupt, Arc::clone(&state.kura)).is_err(),
+        assert!(snapshot_runtime_component(&corrupt, &state, None).is_err(),
             "predecessor owner policy field {field} is mandatory");
     }
 }
@@ -550,4 +590,32 @@ state_test! { sync snapshot_runtime_height_zero_requires_absent_predecessor
     let error = deserialize_state_snapshot_value_with_kura(corrupt, Arc::clone(&state.kura))
         .err().expect("height zero cannot advertise an earlier runtime cut");
     assert!(error.to_string().contains("height-zero runtime cannot retain predecessor undo"));
+}
+
+state_test! { sync snapshot_owner_policy_native_replay_retains_original_configured_baseline
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    let (_directory, _component, configured) = snapshot_owner_policy_fixture();
+    let config = || {
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.nexus = Some(configured.clone());
+        config
+    };
+    let mut source = CertifiedTestChain::start(config()).expect("original configured signed genesis");
+    source.commit(Vec::new());
+    let mut replay = CertifiedTestChain::start(config()).expect("same configured signed genesis");
+    replay.replay_from(&source).expect("replay exact original certified owner history");
+    assert_eq!(replay.state().network_id_ref(), source.state().network_id_ref());
+    assert_eq!(replay.state().view().latest_block_hash(), source.state().view().latest_block_hash());
+    assert_eq!(SnapshotNexusOwnerPolicy::from_nexus(&replay.state().nexus_snapshot()),
+        SnapshotNexusOwnerPolicy::from_nexus(&configured));
+    assert_eq!(replay.state().nexus_snapshot().configured_lane_catalog, configured.configured_lane_catalog);
+    assert_eq!(replay.state().nexus_snapshot().configured_dataspace_catalog, configured.configured_dataspace_catalog);
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(replay.state()).unwrap(),
+        crate::snapshot::canonical_state_snapshot_hash(source.state()).unwrap());
+    assert!(matches!(
+        deserialize_state_snapshot_value_with_kura(norito::json::to_value(replay.state().as_ref()).unwrap(),
+            Arc::clone(replay.kura())),
+        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+    ));
+    assert!(!replay.state().nexus_runtime_restored_from_snapshot());
 }

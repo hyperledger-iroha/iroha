@@ -803,10 +803,34 @@ fn qualification_records() -> (Candidate, Vec<Value>) {
 fn dispatcher_transition_requires_complete_qualified_transfer_producer_join() {
     let (c, records) = qualification_records();
     admission::qualification::validate_records(&c, &records).unwrap();
+    for scope in ["full", "build-only"] {
+        let mut r = records.clone();
+        for row in &mut r[..2] {
+            set(row, "native_check_scope", Value::String(scope.into()));
+        }
+        let request = r[1].clone();
+        set(&mut r[2], "request", request);
+        let passed = scope != "build-only";
+        set(&mut r[2], "passed", Value::Bool(passed));
+        admission::qualification::validate_records(&c, &r).unwrap();
+        set(&mut r[2], "passed", Value::Bool(!passed));
+        admission::qualification::validate_records(&c, &r).unwrap();
+        for invalid in [norito::json!((0)), norito::json!((1))] {
+            set(&mut r[2], "passed", invalid);
+            assert!(admission::qualification::validate_records(&c, &r).is_err());
+        }
+        set(&mut r[2], "passed", Value::Bool(passed));
+        set(
+            &mut r[1],
+            "native_check_scope",
+            Value::String("basic".into()),
+        );
+        assert!(admission::qualification::validate_records(&c, &r).is_err());
+    }
     for case in 0..12 {
         let mut r = records.clone();
         match case {
-            0 => set(&mut r[2], "passed", Value::Bool(false)),
+            0 => set(&mut r[2], "passed", norito::json!((0))),
             1 => set(&mut r[6], "request_sha256", Value::String("0".repeat(64))),
             2 => set(&mut r[4], "result_sha256", Value::String("0".repeat(64))),
             3 => set(&mut r[4], "signature_verified", Value::Bool(false)),

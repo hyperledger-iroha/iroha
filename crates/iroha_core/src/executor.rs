@@ -8945,7 +8945,6 @@ mod tests {
             transfer::{TransferAssetBatch, TransferAssetBatchEntry},
         },
         parameter::{CustomParameter, CustomParameterId},
-        peer::PeerId,
         prelude::*,
         query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
         smart_contract::{ContractAddress, ContractEmergencyHoldV1},
@@ -8954,8 +8953,8 @@ mod tests {
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigCancel, MultisigPropose, MultisigRegister, MultisigSpec,
     };
-    use iroha_model_base::chain::ChainId;
     use iroha_model_base::name::Name;
+    use iroha_model_base::{chain::ChainId, peer::PeerId};
     use iroha_primitives::json::Json;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,

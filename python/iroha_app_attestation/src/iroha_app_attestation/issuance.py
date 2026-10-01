@@ -187,18 +187,76 @@ def encode_ordinary_with_iroha(request: bytes, encoder: Path, encoder_sha256: by
                                   maximum_certificate_bytes=16 * 1024)
 
 
-def _encode_with_iroha_raw(request: bytes, encoder: Path, encoder_sha256: bytes,
-                           authority_key_fd: int, *, maximum_certificate_bytes: int) -> bytes:
+def encode_ordinary_with_iroha_fd(request: bytes, encoder_fd: int, encoder_sha256: bytes,
+                                 authority_key_fd: int) -> bytes:
+    """Execute the exact retained encoder descriptor selected by Native startup."""
+    from .ordinary_enrollment import SIGNING_REQUEST_BYTES as width, SIGNING_REQUEST_MAGIC as magic
+    require(type(request) is bytes and len(request) == width and request.startswith(magic),
+            "invalid ordinary signing request")
+    return _encode_with_iroha_raw(request, None, encoder_sha256, authority_key_fd,
+        maximum_certificate_bytes=16*1024, encoder_fd=encoder_fd)
+
+
+def encode_refresh_with_iroha_fd(request: bytes, encoder_fd: int, encoder_sha256: bytes,
+                                authority_key_fd: int) -> bytes:
+    """Canonical Native KRPI encoder only; no Python Norito lease encoding."""
+    require(type(request) is bytes and 449 <= len(request) <= 513 and request[:5] == b"KRPI\x01"
+            and len(request) == 409+int.from_bytes(request[407:409],"little")+32,
+            "invalid Integrity lease signing request")
+    return _encode_with_iroha_raw(request,None,encoder_sha256,authority_key_fd,
+        maximum_certificate_bytes=4096,encoder_fd=encoder_fd)
+
+
+def encode_refresh_with_iroha(request: bytes, encoder: Path, encoder_sha256: bytes,
+                            authority_key_fd: int) -> bytes:
+    """Same canonical KRPI purpose through an original-content-pinned encoder."""
+    require(type(request) is bytes and 449 <= len(request) <= 513 and request[:5] == b"KRPI\x01"
+            and len(request) == 409+int.from_bytes(request[407:409],"little")+32,
+            "invalid Integrity lease signing request")
+    return _encode_with_iroha_raw(request,encoder,encoder_sha256,authority_key_fd,
+        maximum_certificate_bytes=4096)
+
+
+def encode_raw_admission_with_iroha(request: bytes, encoder: Path, encoder_sha256: bytes,
+                                   authority_key_fd: int) -> bytes:
+    """Invoke only the sole KRAC01 model encoder using held signer custody."""
+    from .ordinary_raw_admission import REQUEST_BYTES, REQUEST_MAGIC, TRANSPORT_BYTES
+    require(type(request) is bytes and len(request) == REQUEST_BYTES
+            and request.startswith(REQUEST_MAGIC), "invalid raw admission signing request")
+    original = _encode_with_iroha_raw(request, encoder, encoder_sha256, authority_key_fd,
+                                    maximum_certificate_bytes=TRANSPORT_BYTES)
+    require(len(original) == TRANSPORT_BYTES, "raw admission encoder transport width differs")
+    return original
+
+
+
+def encode_raw_admission_with_iroha_fd(request: bytes, encoder_fd: int, encoder_sha256: bytes,
+                                       authority_key_fd: int) -> bytes:
+    """Execute the dedicated retained raw-admission child for sole KRAC01 input."""
+    from .ordinary_raw_admission import REQUEST_BYTES, REQUEST_MAGIC
+    require(type(request) is bytes and len(request) == REQUEST_BYTES
+            and request.startswith(REQUEST_MAGIC), "invalid raw-admission signing request")
+    result = _encode_with_iroha_raw(request, None, encoder_sha256, authority_key_fd,
+        maximum_certificate_bytes=314, encoder_fd=encoder_fd)
+    require(len(result) == 314, "invalid raw-admission signed transport")
+    return result
+
+
+def _encode_with_iroha_raw(request: bytes, encoder: Path | None, encoder_sha256: bytes,
+                           authority_key_fd: int, *, maximum_certificate_bytes: int,
+                           encoder_fd: int | None = None) -> bytes:
     require(isinstance(authority_key_fd, int) and authority_key_fd >= 3,
             "invalid signer key descriptor")
-    require(encoder.is_absolute() and not encoder.is_symlink() and encoder.is_file(),
-            "invalid Iroha certificate encoder")
+    require((encoder_fd is None and isinstance(encoder,Path) and encoder.is_absolute()
+             and not encoder.is_symlink() and encoder.is_file())
+            or (encoder is None and type(encoder_fd) is int and encoder_fd >= 3),
+            "invalid Iroha certificate encoder custody")
     expected_digest = fixed32(encoder_sha256, "encoder executable pin")
     # Execute the exact bytes checked below. Hashing the configured path and later
     # executing that path would let a replacement binary inherit the signing key fd.
     with tempfile.TemporaryDirectory(prefix="kagemusha-encoder-") as temporary:
         private_copy = Path(temporary) / "verified-encoder"
-        source_fd = os.open(encoder, os.O_RDONLY | os.O_NOFOLLOW)
+        source_fd = os.open(encoder, os.O_RDONLY | os.O_NOFOLLOW) if encoder_fd is None else os.dup(encoder_fd)
         try:
             source = os.fstat(source_fd)
             require(stat.S_ISREG(source.st_mode)
@@ -210,7 +268,7 @@ def _encode_with_iroha_raw(request: bytes, encoder: Path, encoder_sha256: bytes,
                 digest = hashlib.sha256()
                 copied = 0
                 while True:
-                    chunk = os.read(source_fd, 1024 * 1024)
+                    chunk = os.pread(source_fd, 1024 * 1024, copied)
                     if not chunk:
                         break
                     copied += len(chunk)
@@ -222,6 +280,12 @@ def _encode_with_iroha_raw(request: bytes, encoder: Path, encoder_sha256: bytes,
                         offset += os.write(output_fd, chunk[offset:])
                 require(copied == source.st_size and digest.digest() == expected_digest,
                         "Iroha certificate encoder differs from pinned binary")
+                after = os.fstat(source_fd)
+                require((source.st_dev,source.st_ino,source.st_size,source.st_mode,source.st_uid,
+                         source.st_mtime_ns,source.st_ctime_ns)
+                        == (after.st_dev,after.st_ino,after.st_size,after.st_mode,after.st_uid,
+                            after.st_mtime_ns,after.st_ctime_ns),
+                        "Iroha certificate encoder original changed")
                 os.fsync(output_fd)
                 os.fchmod(output_fd, 0o700)
             finally:

@@ -331,48 +331,29 @@ impl Default for Sandbox {
                 .into(),
             ]),
         );
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            std::sync::Arc::clone(&kura),
-            query_handle,
-            CHAIN_ID.clone(),
-            test_network_id(),
-        );
-        // This World is explicitly prepopulated fixture state, not an executed
-        // or finalized genesis. Give it an empty predecessor and seed its AXT
-        // asset incarnations before testing real ordinary economics at height 2.
-        let predecessor = iroha_data_model::block::builder::BlockBuilder::new(
-            iroha_data_model::block::BlockHeader::new(std::num::NonZeroU64::MIN, None, None, 0, 0),
-        )
-        .build_with_signature(0, &GENESIS_ACCOUNT.key);
-        let mut baseline = state.block(predecessor.header());
-        // Empty-block fixture publication intentionally omits signed-block
-        // metadata. Supply this prebuilt World's exact initial resolver cut so
-        // actual height-2 metadata application has its required predecessor.
-        let revision = *baseline.world.musubi_resolver_index_revision.get();
-        let checkpoint = iroha_data_model::musubi::MusubiRegistrySnapshotV1 {
-            finalized_height: 1,
-            finalized_block_hash: *predecessor.hash().as_ref(),
-            index_revision: revision.get(),
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
         };
-        checkpoint
-            .validate()
-            .expect("Sandbox baseline resolver checkpoint is canonical");
-        assert!(
-            baseline
-                .world
-                .musubi_resolver_index_checkpoints
-                .insert(revision, checkpoint)
-                .is_none(),
-            "the prebuilt Sandbox World has no earlier resolver checkpoint"
-        );
-        baseline
-            .commit_empty_block_for_testing()
-            .expect("commit the explicit Sandbox fixture baseline");
-        kura.store_block(predecessor)
-            .expect("retain the Sandbox predecessor header and time");
+        // The prepopulated accounts, permissions and balances belong to this
+        // original State. Apply its signed genesis before ordinary Network
+        // execution; the real producer also supplies its resolver checkpoint.
+        let mut config = TestChainConfig::new(world, 0);
+        config.chain_id = CHAIN_ID.clone();
+        config.genesis_key = iroha_crypto::KeyPair::from_private_key(GENESIS_ACCOUNT.key.clone())
+            .expect("original Sandbox genesis key");
+        let consensus_mode = config.consensus_mode;
+        let prepared = CertifiedTestChain::prepare(config).expect("prepare Sandbox signed genesis");
+        let state = std::sync::Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished Sandbox State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &GENESIS_ACCOUNT.id,
+            consensus_mode.into(),
+            None,
+        )
+        .expect("apply the original Sandbox signed genesis");
         let mut sandbox = Self {
             state,
             transactions: vec![],
@@ -385,6 +366,50 @@ impl Default for Sandbox {
         sandbox.state.pipeline.workers = 1;
         sandbox.with_max_execution_depth(INIT_EXECUTION_DEPTH)
     }
+}
+#[test]
+fn sandbox_genesis_and_queued_input_share_original_native_network() {
+    let mut sandbox = Sandbox::default();
+    let view = sandbox.state.view();
+    assert_eq!(view.height(), 1);
+    assert_eq!(view.kura().blocks_count(), 1);
+    let genesis = view.latest_block().expect("original Sandbox genesis");
+    assert_eq!(
+        sandbox.state.network_id_ref().into_genesis_hash(),
+        genesis.hash()
+    );
+    assert_eq!(
+        view.native_execution_tip()
+            .expect("applied original genesis")
+            .height(),
+        1
+    );
+    let revision = *view.world().musubi_resolver_index_revision.get();
+    let checkpoint = view
+        .world()
+        .musubi_resolver_index_checkpoints
+        .get(&revision)
+        .expect("resolver checkpoint from the original genesis producer");
+    assert_eq!(checkpoint.finalized_height, 1);
+    assert_eq!(checkpoint.finalized_block_hash, *genesis.hash().as_ref());
+    drop(view);
+    sandbox.request_transfer("alice", 1, "bob");
+    assert_eq!(sandbox.transactions.len(), 1);
+    assert_eq!(
+        sandbox.transactions[0].network_id(),
+        Some(sandbox.state.network_id_ref())
+    );
+    let block = sandbox.block();
+    block.assert_balances(INIT_BALANCE.clone());
+    assert_eq!(
+        block
+            .block
+            .as_ref()
+            .expect("original queued carrier")
+            .header()
+            .prev_block_hash(),
+        Some(genesis.hash())
+    );
 }
 impl Sandbox {
     fn trigger_registration_metadata(&self, data_scope: bool) -> Metadata {
@@ -591,7 +616,7 @@ impl Sandbox {
             let instructions =
                 transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
             TransactionBuilder::new(
-                test_network_id(),
+                self.state.network_id_ref().clone(),
                 GENESIS_ACCOUNT.id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

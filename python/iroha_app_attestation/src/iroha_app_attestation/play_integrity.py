@@ -75,6 +75,17 @@ class PlayIntegrityProof:
     device_integrity: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class DecodedPlayIntegrityEvidence:
+    """Original server TLS response retained with its checked projection.
+
+    The durable issuer retains these bytes before publishing a certificate.
+    They are never an accepted mobile request field or a caller verdict grant.
+    """
+    google_response: bytes
+    proof: PlayIntegrityProof
+
+
 def request_hash_text(digest: bytes) -> str:
     """Use one unpadded base64url representation in SDK and Google requestHash."""
     return base64.urlsafe_b64encode(fixed32(digest, "Play enrollment request hash")).rstrip(b"=").decode("ascii")
@@ -176,6 +187,10 @@ class GooglePlayIntegrityVerifier:
 
     def verify(self, opaque_token: str, policy: PlayIntegrityPolicy,
                expected_request_hash: bytes, trusted_time_ms: int) -> PlayIntegrityProof:
+        return self.decode(opaque_token, policy, expected_request_hash, trusted_time_ms).proof
+
+    def decode(self, opaque_token: str, policy: PlayIntegrityPolicy,
+               expected_request_hash: bytes, trusted_time_ms: int) -> DecodedPlayIntegrityEvidence:
         policy.validate()
         request_hash_text(expected_request_hash)
         require(type(opaque_token) is str and 0 < len(opaque_token) <= MAX_TOKEN_BYTES
@@ -204,5 +219,6 @@ class GooglePlayIntegrityVerifier:
             raise
         except Exception as error:
             raise AttestationRejected("Play Integrity decoder unavailable") from error
-        return _verify_google_payload(body, policy, expected_request_hash, trusted_time_ms,
+        proof = _verify_google_payload(body, policy, expected_request_hash, trusted_time_ms,
                                       hashlib.sha256(opaque_token.encode("ascii")).digest())
+        return DecodedPlayIntegrityEvidence(body, proof)

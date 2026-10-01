@@ -335,10 +335,7 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
     ) -> Result<(), KagemushaStateErrorV1> {
         self.machine.prepare_indexed_outgoing_candidate(
             operation_id,
-            self.machine
-                .accepted_credential_floor()
-                .credential
-                .credential_id,
+            self.machine.accepted_credential_floor().original_digest()?,
             self.machine
                 .enrollment_binding()
                 .core_authorization_key_reference,

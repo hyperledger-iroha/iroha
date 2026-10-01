@@ -6,6 +6,8 @@ mod fixture_json;
 mod game_v1_codec;
 #[path = "../governance_generated_schema_identity.rs"]
 mod governance_generated_schema_identity;
+#[path = "../kagemusha_app_platform_signing_vectors_v1.rs"]
+mod kagemusha_app_platform_signing_vectors_v1;
 #[path = "../model_parser.rs"]
 mod model_parser;
 #[path = "../../src/bin/musubi_fixture_values.rs"]

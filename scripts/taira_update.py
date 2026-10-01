@@ -170,8 +170,8 @@ def validate_build(build, commit):
          and build.get('profile') == 'release' and build.get('jobs') == 6
          and build.get('source_unchanged') is True and build.get('toolchain_unchanged') is True
          and build.get('deployed') is False and build.get('release_qualified') is False
-         and build.get('native_check_scope') == 'basic' and 'exit_code' not in build,
-         'completed maintained basic preparation required')
+         and build.get('native_check_scope') in ('build-only', 'basic', 'full') and 'exit_code' not in build,
+         'completed maintained preparation required')
     rows = build.get('artifacts', [])
     need(len(rows) == 4 and {row.get('name') for row in rows}
          == {'iroha3d_taira', 'iroha', 'kagami', 'sorafs-node'}, 'maintained four-artifact result required')

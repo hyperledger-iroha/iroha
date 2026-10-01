@@ -5,8 +5,8 @@ actual native preparation and platform originals; they do not implement another
 challenge, crypto codec or trust policy. The first release has no old-format
 fallback and requires no custom applet or OMAPI provisioning.
 
-The current ordinary enrollment transport is exactly451 unsigned body bytes plus
-the real Core Ed25519 signature64, total515. It binds the account's native model
+The current ordinary enrollment transport is exactly 451 unsigned body bytes plus
+the real Core Ed25519 signature of 64 bytes, totaling 515. It binds the account's native model
 commitment, network, lane, actual release/profile/suite, policy and financial
 enrollment epochs, nonces/attempt and separate financial authority commitment.
 Android attests a persistent generated P256 SIGN/SHA256 key under the explicit
@@ -14,17 +14,22 @@ TEE/StrongBox policy, preferring StrongBox; imported, software and usage-limited
 keys are rejected. Its actual possession signature signs Iroha's prepared message.
 Apple uses genuine App Attest enrollment and a possession assertion; that
 assertion's observed counter becomes the separate retained floor. The financial
-logical index is independent and may exceedUInt32.
+logical index is independent and may exceed UInt32.
 
-`ordinary_enrollment.py` implements the fixed515 transport, exact platform
+`ordinary_enrollment.py` implements the fixed 515 transport, exact platform
 challenge/possession subjects and original evidence digest. The local unsigned
-encoder request is `KOAC` + byte01 +794-byte issuer body + admitted app-authority
-Ed public key32, total831. The native encoder consumes the model-owned parser,
+encoder request is `KOAC` + byte 01 + 794-byte issuer body + admitted app-authority
+Ed public key of 32 bytes, totaling 831. The native encoder consumes the model-owned parser,
 signs the actual model message and emits canonical Norito for the new ordinary
 credential. The platform P256 key and native financial secret are separate.
 These formatters and crypto checks do not admit a release, connect issuer keys
-or grant spending authority. The production ordinary provider/store/Native policy
-projection adapter is still being integrated.
+or grant spending authority. `ordinary_provider.py` composes real preparation,
+platform, possession and current-policy checks. `ordinary_issuance.py` retains
+the actual Google response and exact signing input in separate durable commits
+before certificate publication. An identical recovery obtains the same original
+without another Google decode or signer call. `ordinary_service.py` owns the
+strict Core request DTO. The production Native startup/custody adapter is still
+being integrated, and the E371 possession model change needs a current source gate.
 
 `play_integrity.py` independently sends the opaque standard token to Google's
 fixed HTTPS/OAuth decoder. It checks the original preparation and generated-key
@@ -35,9 +40,22 @@ counter. Production enrollment and refresh must use the Native-authenticated
 Google policy original and server-account custody. No genuine Google response or
 physical qualification is claimed by synthetic tests.
 
-Run the current package tests with `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3
--m unittest discover -s tests -v`. The sections below retain the earlier
-component APIs and evidence for migration; their273 preparation/KAEA signing
+`google_oauth.py` admits the exact public decoder-policy original against the
+independently authenticated Native Play policy digest before duplicating the
+owner-only credential FD. It checks the service-account project, principal,
+client ID and fixed Google token URI, signs an actual RS256 assertion through
+an inherited pipe, and requests only the `playintegrity` scope. Private JSON,
+keys and access tokens are absent from argv, environment and repository outputs.
+Synthetic RSA tests do not constitute a production credential invocation.
+
+Run the current package tests:
+
+```sh
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+```
+
+The sections below retain earlier component APIs and evidence for migration;
+their 273-byte preparation/KAEA signing
 contract is not the new shipping ordinary enrollment contract. The old default
 WSGI route remains closed and cannot issue with the new native encoder.
 

@@ -40,6 +40,47 @@ fn actual_lane_snapshot_chain() -> (crate::sumeragi::test_chain::CertifiedTestCh
     )
 }
 
+// A component projection can validate both real lane cuts without installing a
+// native State tip. Certified replay independently establishes that authority.
+fn validated_lane_snapshot_projection(
+    snapshot: &norito::json::Value,
+    state: &State,
+) -> Result<Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState>, norito::json::Error> {
+    let invalid = |cut: &str, message: String| norito::json::Error::InvalidField {
+        field: format!("world.sumeragi_lanes.{cut}"),
+        message,
+    };
+    let encoded = snapshot
+        .as_object()
+        .and_then(|value| value.get("world"))
+        .and_then(norito::json::Value::as_object)
+        .and_then(|value| value.get("sumeragi_lanes"))
+        .ok_or_else(|| invalid("blocks", "missing complete lane component".to_owned()))?;
+    let lanes: Cell<iroha_data_model::sumeragi_lanes::SumeragiLaneState> =
+        norito::json::from_value(encoded.clone())?;
+    let height = u64::try_from(state.committed_height()).expect("lane fixture height fits");
+    validate_sumeragi_lane_state(state.network_id, height, lanes.view().get())
+        .map_err(|message| invalid("blocks", message))?;
+    let undo = lanes.predecessor_view();
+    if height > 0 {
+        let previous = undo.get().as_ref().ok_or_else(|| {
+            invalid(
+                "revert",
+                "committed lane cut requires its predecessor".to_owned(),
+            )
+        })?;
+        validate_sumeragi_lane_state(state.network_id, height - 1, previous)
+            .map_err(|message| invalid("revert", message))?;
+    } else if undo.get().is_some() {
+        return Err(invalid(
+            "revert",
+            "height-zero lane state cannot retain predecessor undo".to_owned(),
+        ));
+    }
+    drop(undo);
+    Ok(lanes)
+}
+
 state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_predecessors
     let (mut chain, authority) = actual_lane_snapshot_chain();
     for closed in [false, true] {
@@ -62,8 +103,17 @@ state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_pred
         if closed { assert!(previous.lanes[0].closing.is_none()); }
         let snapshot = norito::json::to_value(&**state).unwrap();
         assert!(!snapshot.as_object().unwrap().contains_key("lane_consensus_contexts"));
-        let restored = deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(chain.kura()))
-            .expect("restore actual complete lane state cuts");
+        assert!(matches!(
+            deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(chain.kura())),
+            Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
+        let decoded = validated_lane_snapshot_projection(&snapshot, state)
+            .expect("decode both complete actual lane component cuts");
+        assert_eq!(decoded.view().get(), &current);
+        assert_eq!(decoded.predecessor_view().get(), &Some(previous.clone()));
+        let (mut replay, _) = actual_lane_snapshot_chain();
+        replay.replay_from(&chain).expect("replay exact original certified lane history");
+        let restored = Arc::clone(replay.state());
         assert_eq!(restored.world.sumeragi_lanes.view().get(), &current);
         assert_eq!(restored.world.sumeragi_lanes.predecessor_view().get(), &Some(previous.clone()));
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),
@@ -81,7 +131,7 @@ state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_pred
             let mut changed = snapshot.clone();
             changed.as_object_mut().unwrap().get_mut("world").unwrap().as_object_mut().unwrap()
                 .get_mut("sumeragi_lanes").unwrap().as_object_mut().unwrap().insert("revert".into(), bad);
-            let error = deserialize_state_snapshot_value_with_kura(changed, Arc::clone(chain.kura()))
+            let error = validated_lane_snapshot_projection(&changed, state)
                 .err().expect("a current lifecycle cut cannot replace its predecessor");
             assert!(error.to_string().contains("world.sumeragi_lanes.revert"), "{error}");
         }
@@ -116,7 +166,7 @@ state_test! { sync snapshot_global_lane_state_rejects_invalid_current_and_predec
             changed.as_object_mut().unwrap().get_mut("world").unwrap().as_object_mut().unwrap()
                 .get_mut("sumeragi_lanes").unwrap().as_object_mut().unwrap()
                 .insert(cut.into(), norito::json::to_value(&value).unwrap());
-            let error = deserialize_state_snapshot_value_with_kura(changed, Arc::clone(chain.kura()))
+            let error = validated_lane_snapshot_projection(&changed, chain.state())
                 .err().expect("each actual lane cut must validate its own source credentials");
             assert!(error.to_string().contains(&format!("world.sumeragi_lanes.{cut}")), "{error}");
         }

@@ -1,5 +1,5 @@
 // Current metadata topology publication and rollback invariants.
-state_test! { sync apply_without_execution_updates_commit_topology_from_world_peers
+state_test! { sync apply_without_execution_preserves_supplied_committee_without_world_peer_append
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
@@ -27,13 +27,13 @@ state_test! { sync apply_without_execution_updates_commit_topology_from_world_pe
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");
     let mut expected_topology = Topology::new(base_topology.clone());
-    let mut world_peers = base_topology.clone();
-    world_peers.push(new_peer);
-    expected_topology.block_committed(world_peers, prev_hash);
+    expected_topology.block_committed(base_topology.clone(), prev_hash);
     let expected = expected_topology.as_ref().to_vec();
     let view = state.view();
     let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
     assert_eq!(actual, expected);
+    assert!(!actual.contains(&new_peer), "a World peer cannot join the supplied native committee");
+    assert!(view.world.peers().iter().any(|peer| peer == &new_peer));
     let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
     assert_eq!(prev, base_topology);
 }
@@ -55,7 +55,7 @@ state_test! { sync height_mismatch_does_not_publish_staged_commit_topology
             let mut peers = world_block.peers_mut_for_testing().transaction();
             peers.clear();
             peers.extend(base_topology.clone());
-            peers.push(new_peer);
+            peers.push(new_peer.clone());
             peers.apply();
         }
         world_block.commit();
@@ -71,8 +71,8 @@ state_test! { sync height_mismatch_does_not_publish_staged_commit_topology
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     assert_eq!(state_block.prev_commit_topology.iter().cloned().collect::<Vec<_>>(), base_topology,
         "metadata preparation must stage the old topology before publication fails");
-    assert_eq!(state_block.commit_topology.len(), base_topology.len() + 1,
-        "the rejected overlay must contain the appended peer");
+    assert_eq!(state_block.commit_topology.iter().cloned().collect::<Vec<_>>(), base_topology,
+        "the rejected overlay must retain the exact supplied native committee");
     let_row! { err = state_block .commit() .expect_err("height mismatch must abort staged topology updates") };
     assert!(matches!(
         err,
@@ -106,8 +106,8 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
         nexus.staking.min_validator_stake = 100_u64.into();
     }
     let state = State::new_with_nexus_for_testing(World::default(), nexus, query);
-    let_row! { public_keypairs: Vec<_> = (0..2) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
-    let_row! { restricted_keypairs: Vec<_> = (0..2) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
+    let_row! { public_keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
+    let_row! { restricted_keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let_row! { base_topology: Vec<_> = public_keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
     {
         let mut topo = state.commit_topology.block();
@@ -237,7 +237,7 @@ state_test! { sync apply_without_execution_keeps_npos_commit_topology_without_wo
     let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
     assert_eq!(prev, base_topology);
 }
-state_test! { sync apply_without_execution_widens_npos_commit_topology_with_active_public_validator
+state_test! { sync apply_without_execution_keeps_active_candidate_outside_supplied_npos_committee
     use iroha_config::parameters::actual::LaneValidatorMode;
     use iroha_data_model::parameter::system::{Parameter, SumeragiNposParameters};
     let query = LiveQueryStore::start_test();
@@ -252,7 +252,7 @@ state_test! { sync apply_without_execution_widens_npos_commit_topology_with_acti
         ));
         params.commit();
     }
-    let keypairs = configure_commit_topology(&state, 3);
+    let keypairs = configure_commit_topology(&state, 4);
     let missing_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let_row! { base_topology: Vec<_> = keypairs .iter() .map(|kp| PeerId::new(kp.public_key().clone())) .collect() };
     let missing_peer = PeerId::new(missing_keypair.public_key().clone());
@@ -305,14 +305,14 @@ state_test! { sync apply_without_execution_widens_npos_commit_topology_with_acti
     let _ = state_block.apply_without_execution(&committed, base_topology.clone());
     state_block.commit().expect("commit state block");
     let mut expected_topology = Topology::new(base_topology.clone());
-    let mut widened_roster = base_topology.clone();
-    widened_roster.push(missing_peer.clone());
-    expected_topology.block_committed(widened_roster, prev_hash);
+    expected_topology.block_committed(base_topology.clone(), prev_hash);
     let expected = expected_topology.as_ref().to_vec();
     let view = state.view();
     let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
     assert_eq!(actual, expected);
-    assert!(actual.contains(&missing_peer));
+    assert!(!actual.contains(&missing_peer), "an active candidate cannot vote outside the supplied committee");
+    assert!(view.world.peers().iter().any(|peer| peer == &missing_peer));
+    assert_eq!(actual.len(), 4, "the authoritative committee retains exact 3f+1 membership");
     let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
     assert_eq!(prev, base_topology);
 }
@@ -357,7 +357,7 @@ state_test! { sync apply_without_execution_uses_npos_parameters_for_commit_topol
     let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
     assert_eq!(prev, base_topology);
 }
-state_test! { sync apply_without_execution_derives_commit_topology_when_roster_missing
+state_test! { sync apply_without_execution_does_not_invent_committee_when_roster_missing
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
@@ -377,18 +377,16 @@ state_test! { sync apply_without_execution_derives_commit_topology_when_roster_m
     }
     let valid = ValidBlock::new_unverified_for_tests(signed_block);
     let committed = valid.commit_unchecked().unpack(|_| {});
-    let block_hash = committed.as_ref().hash();
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit state block");
-    let mut expected_topology = Topology::new(base_topology.clone());
-    let mut world_peers = base_topology.clone();
-    world_peers.push(new_peer);
-    world_peers.sort();
-    expected_topology.block_committed(world_peers, block_hash);
-    let expected = expected_topology.as_ref().to_vec();
+    // This is an isolated metadata preparation component, not native consensus
+    // admission. A missing caller roster must never infer voters from World.
+    let expected = Vec::<PeerId>::new();
     let view = state.view();
     let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
     assert_eq!(actual, expected);
+    assert!(view.world.peers().iter().any(|peer| peer == &new_peer));
+    assert_eq!(view.world.peers().len(), base_topology.len() + 1);
     let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
     assert_eq!(prev, base_topology);
 }

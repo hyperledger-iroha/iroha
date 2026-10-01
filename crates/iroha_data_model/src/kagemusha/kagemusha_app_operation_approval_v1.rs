@@ -25,6 +25,30 @@ pub const KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_LIFETIME_MS_V1: u64 = 120_000;
 const BODY_BYTES: usize = 2 + 1 + 8 * 32 + 2 * 8;
 const ACCOUNT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-approval-account\0";
 const ORIGINAL_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-operation-approval-original\0";
+/// Digest domain joining exact wrapper signing bytes and original platform evidence for proofs.
+/// It is not a platform signing domain and grants no admission.
+pub const KAGEMUSHA_ORDINARY_APP_APPROVAL_PROOF_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:ordinary-app-approval-proof-binding\0";
+
+/// Decode the counter from the complete original App Attest assertion.
+///
+/// This is a bounded data projection, not signature verification, enrollment
+/// admission or ownership of a durable counter floor. Financial logical indexes
+/// are independent of this Apple assertion counter.
+/// # Errors
+/// Rejects malformed or trailing CBOR, a different authenticator shape or flag.
+pub fn kagemusha_app_attest_original_counter_v1(raw_assertion: &[u8]) -> Result<u32, String> {
+    let (auth_data, _) = super::kagemusha_v1::parse_app_attest_assertion(raw_assertion)
+        .map_err(|error| format!("App Attest assertion parse failed: {error:?}"))?;
+    if auth_data.len() != 37 || auth_data[32] != 0x40 || auth_data[..32] == [0; 32] {
+        return Err("App Attest authenticator shape differs".into());
+    }
+    Ok(u32::from_be_bytes(
+        auth_data[33..37]
+            .try_into()
+            .map_err(|_| "App Attest counter malformed")?,
+    ))
+}
 
 /// Model-owned absolute ranges in the sole platform approval signing message.
 #[derive(Debug, Clone, Copy)]
@@ -269,6 +293,39 @@ pub enum KagemushaAppOperationApprovalEvidenceV1 {
     },
 }
 
+/// Bind exact canonical wrapper signing bytes and original platform evidence for a proof.
+/// The original Norito/WAL digest remains separate; this data helper is neither signature
+/// verification nor a new platform signing grammar.
+/// # Errors
+/// Rejects another wrapper shape or missing/oversized original evidence.
+pub fn kagemusha_ordinary_app_approval_proof_binding_digest_v1(
+    approval: &KagemushaAppOperationApprovalV1,
+) -> Result<[u8; 32], String> {
+    let signing = approval.challenge.canonical_signing_bytes()?;
+    let (tag, original) = match &approval.evidence {
+        KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der }
+            if (8..=72).contains(&signature_der.len()) =>
+        {
+            (1_u8, signature_der.as_slice())
+        }
+        KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion }
+            if !raw_assertion.is_empty()
+                && raw_assertion.len() <= KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1 =>
+        {
+            (2_u8, raw_assertion.as_slice())
+        }
+        _ => return Err("ordinary app proof-binding evidence bound differs".into()),
+    };
+    let mut hash = Sha256::new();
+    hash.update(KAGEMUSHA_ORDINARY_APP_APPROVAL_PROOF_BINDING_DOMAIN_V1);
+    hash.update((signing.len() as u64).to_le_bytes());
+    hash.update(signing);
+    hash.update([tag]);
+    hash.update((original.len() as u64).to_le_bytes());
+    hash.update(original);
+    Ok(hash.finalize().into())
+}
+
 /// Successful signature and original enrollment correlation, without a spending grant.
 /// It has no public constructor, decoder or clone implementation. The genuine
 /// native Guard owner must additionally match its current release/credential,
@@ -277,7 +334,10 @@ pub struct KagemushaVerifiedAppOperationApprovalV1 {
     challenge: KagemushaAppOperationApprovalChallengeV1,
     original: Vec<u8>,
     digest: [u8; 32],
+    proof_binding_digest: [u8; 32],
     app_attest_counter: Option<u32>,
+    authenticated_at_ms: u64,
+    valid_until_ms: u64,
 }
 impl KagemushaVerifiedAppOperationApprovalV1 {
     /// Borrow the exact checked challenge for independent native comparisons.
@@ -295,6 +355,11 @@ impl KagemushaVerifiedAppOperationApprovalV1 {
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
     }
+    /// Model digest of exact verified wrapper signing bytes and original platform evidence.
+    #[must_use]
+    pub const fn proof_binding_digest(&self) -> [u8; 32] {
+        self.proof_binding_digest
+    }
     /// Original verified Apple counter, separate from financial logical indexes.
     #[must_use]
     pub const fn app_attest_counter(&self) -> Option<u32> {
@@ -304,8 +369,9 @@ impl KagemushaVerifiedAppOperationApprovalV1 {
     /// # Errors
     /// Rejects an observation before issue or at/after expiry.
     pub fn recheck_at_trusted_time(&self, trusted_now_ms: u64) -> Result<(), String> {
-        if trusted_now_ms < self.challenge.issued_at_ms
-            || trusted_now_ms >= self.challenge.expires_at_ms
+        if trusted_now_ms < self.authenticated_at_ms
+            || trusted_now_ms < self.challenge.issued_at_ms
+            || trusted_now_ms >= self.valid_until_ms
         {
             return Err("native app approval expired".into());
         }
@@ -330,6 +396,57 @@ impl KagemushaAppOperationApprovalV1 {
         trusted_now_ms: u64,
     ) -> Result<KagemushaVerifiedAppOperationApprovalV1, String> {
         enrollment.recheck_at_trusted_time(trusted_now_ms)?;
+        let selection = enrollment.subject();
+        let valid_until_ms = selection
+            .play_integrity
+            .map_or(selection.expires_at_ms, |pi| {
+                selection.expires_at_ms.min(pi.refresh_before_ms)
+            });
+        self.authenticate_bound(
+            expected,
+            enrollment,
+            original_app_attest_counter_floor,
+            trusted_now_ms,
+            valid_until_ms,
+        )
+    }
+
+    /// Verify the same original approval with a separately authenticated periodic Integrity lease.
+    /// This accepts only an opaque lease for the same enrolled credential; it does not renew
+    /// the operation nonce, financial epoch, challenge or FI certificate.
+    /// # Errors
+    /// Rejects an unrelated/expired lease, substituted original binding or platform signature.
+    pub fn authenticate_with_integrity_lease(
+        &self,
+        expected: &KagemushaAppOperationApprovalChallengeV1,
+        enrollment: &KagemushaVerifiedOrdinaryAppCredentialV1,
+        integrity_lease: &super::KagemushaVerifiedPlayIntegrityRefreshLeaseV1,
+        original_app_attest_counter_floor: Option<u32>,
+        trusted_now_ms: u64,
+    ) -> Result<KagemushaVerifiedAppOperationApprovalV1, String> {
+        enrollment.recheck_with_integrity_lease(integrity_lease, trusted_now_ms)?;
+        let valid_until_ms = enrollment
+            .subject()
+            .expires_at_ms
+            .min(integrity_lease.subject().expires_at_ms)
+            .min(integrity_lease.subject().binding.refresh_before_ms);
+        self.authenticate_bound(
+            expected,
+            enrollment,
+            original_app_attest_counter_floor,
+            trusted_now_ms,
+            valid_until_ms,
+        )
+    }
+
+    fn authenticate_bound(
+        &self,
+        expected: &KagemushaAppOperationApprovalChallengeV1,
+        enrollment: &KagemushaVerifiedOrdinaryAppCredentialV1,
+        original_app_attest_counter_floor: Option<u32>,
+        trusted_now_ms: u64,
+        valid_until_ms: u64,
+    ) -> Result<KagemushaVerifiedAppOperationApprovalV1, String> {
         let message = self.challenge.canonical_signing_bytes()?;
         let selection = enrollment.subject();
         let subject = &self.challenge.subject;
@@ -374,7 +491,10 @@ impl KagemushaAppOperationApprovalV1 {
             challenge: self.challenge,
             original,
             digest: hash.finalize().into(),
+            proof_binding_digest: kagemusha_ordinary_app_approval_proof_binding_digest_v1(self)?,
             app_attest_counter: counter,
+            authenticated_at_ms: trusted_now_ms,
+            valid_until_ms: valid_until_ms.min(self.challenge.expires_at_ms),
         };
         verified.recheck_at_trusted_time(trusted_now_ms)?;
         Ok(verified)
@@ -426,7 +546,7 @@ impl KagemushaAppOperationApprovalEvidenceV1 {
                 }
                 let (auth_data, der) =
                     super::kagemusha_v1::parse_app_attest_assertion(raw_assertion)
-                        .map_err(|e| e.to_string())?;
+                        .map_err(|error| format!("App Attest assertion parse failed: {error:?}"))?;
                 let floor = original_app_attest_counter_floor
                     .ok_or("App Attest original counter floor absent")?;
                 if auth_data.len() != 37 || auth_data[32] != 0x40 || auth_data[..32] != app_identity

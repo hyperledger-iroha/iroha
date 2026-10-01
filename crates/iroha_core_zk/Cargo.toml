@@ -108,7 +108,7 @@ thiserror = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["fs", "process"] }
+rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
 
 [dev-dependencies]
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "test-fixtures"] }

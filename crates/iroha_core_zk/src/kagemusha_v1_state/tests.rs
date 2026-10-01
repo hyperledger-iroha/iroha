@@ -194,7 +194,10 @@ fn snapshot_initial_metadata(
     KagemushaRecoveryMetadataV1::initial(
         state,
         release,
-        credential,
+        KagemushaAcceptedCredentialFloorV1::Oem {
+            credential,
+            release_id: release.release_id(),
+        },
         snapshot_enrollment_binding(state),
         snapshot_recovery_journals(),
         [205; 32],
@@ -1091,7 +1094,7 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
     machine.accepted_recipient_bindings.insert(current_policy);
     assert_eq!(machine.recovery_metadata.revision, 1);
     assert_eq!(
-        machine.accepted_credential_floor().credential,
+        *machine.accepted_credential_floor().oem_original().unwrap(),
         old_credential
     );
 

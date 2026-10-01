@@ -187,6 +187,29 @@ def cli_argv(deployment_path,build_path,output):
 
 
 class CanonicalUpdateContractTests(unittest.TestCase):
+    def test_preparation_scope_is_evidence_without_a_regression_deployment_gate(self):
+        build, _ = fixture()
+        for scope in ('build-only', 'basic', 'full'):
+            with self.subTest(scope=scope):
+                selected = runner.validate_build(dict(build, native_check_scope=scope), build['commit'])
+                self.assertEqual([row['name'] for row in selected], ['iroha3d_taira', 'iroha', 'kagami'])
+        for scope in ('unknown', None, False):
+            with self.subTest(scope=scope), self.assertRaisesRegex(RuntimeError, 'maintained preparation'):
+                runner.validate_build(dict(build, native_check_scope=scope), build['commit'])
+
+    def test_unqualified_preparation_still_requires_release_provenance_and_artifact_identity(self):
+        build, _ = fixture()
+        build['native_check_scope'] = 'build-only'
+        for key, value in (('profile', 'dev'), ('source_unchanged', False),
+                           ('toolchain_unchanged', False), ('release_qualified', True),
+                           ('target', 'x86_64-unknown-linux-gnu')):
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'maintained preparation'):
+                runner.validate_build(dict(build, **{key: value}), build['commit'])
+        changed = copy.deepcopy(build)
+        changed['artifacts'][0]['sha256'] = 'invalid'
+        with self.assertRaisesRegex(RuntimeError, 'artifact identity'):
+            runner.validate_build(changed, build['commit'])
+
     def test_retired_supervisor_option_is_rejected_before_observation_or_dispatch(self):
         with tempfile.TemporaryDirectory() as directory:
             _, _, descriptor, result = local_inputs(directory)

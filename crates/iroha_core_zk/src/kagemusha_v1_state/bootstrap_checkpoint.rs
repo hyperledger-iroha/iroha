@@ -1,7 +1,6 @@
 //! Initial recovery material is created only by the opaque, verified bootstrap owner.
 
 use super::*;
-use iroha_data_model::kagemusha::KagemushaHardwareCredentialV1;
 use std::{fs::File, os::unix::fs::MetadataExt as _, path::Path};
 
 const BOOTSTRAP_FORMAT: private_journal::PrivateJournalFormat =
@@ -40,7 +39,7 @@ fn bootstrap_manifest_bytes(
 pub struct KagemushaBootstrapJournalStageV1<R, G, H> {
     state: KagemushaStateV1,
     proof_release: KagemushaStateProofReleaseV1,
-    initial_credential: KagemushaHardwareCredentialV1,
+    initial_credential: KagemushaAcceptedCredentialFloorV1,
     enrollment: KagemushaRecoveryEnrollmentBindingV1,
     durable_capacity: KagemushaDurableCapacityV1,
     authenticated_history: KagemushaStateAuthenticatedHistoryV1<H>,
@@ -59,7 +58,7 @@ where
     pub(super) fn new(
         state: KagemushaStateV1,
         proof_release: KagemushaStateProofReleaseV1,
-        initial_credential: KagemushaHardwareCredentialV1,
+        initial_credential: KagemushaAcceptedCredentialFloorV1,
         enrollment: KagemushaRecoveryEnrollmentBindingV1,
         durable_capacity: KagemushaDurableCapacityV1,
         authenticated_history: KagemushaStateAuthenticatedHistoryV1<H>,
@@ -67,11 +66,7 @@ where
         guard_verifier: G,
     ) -> Result<Self, KagemushaStateErrorV1> {
         enrollment.validate_for_state(&state)?;
-        KagemushaAcceptedCredentialFloorV1 {
-            credential: initial_credential,
-            release_id: proof_release.release_id(),
-        }
-        .validate_current(&state, &proof_release)?;
+        initial_credential.validate_current(&state, &proof_release)?;
         Ok(Self {
             state,
             proof_release,

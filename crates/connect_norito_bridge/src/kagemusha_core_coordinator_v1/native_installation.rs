@@ -498,6 +498,12 @@ impl KagemushaCoreCoordinatorBackendV1 for NativeInitialSelectionBackend {
 pub fn provision_and_install_kagemusha_native_enrollment_v1(path: &str) -> Result<(), Error> {
     kagemusha_core_coordinator_validate_storage_path_v1(path.as_bytes())
         .map_err(|_| Error::Rejected)?;
+    // Ordinary app identity is an independent signed/native account ceremony. It neither
+    // needs nor grants a non-forking financial provider. Selection is installed once in Rust.
+    #[cfg(unix)]
+    if super::ordinary_app_identity::has_registered_source() {
+        return super::ordinary_app_identity::provision_and_install(path);
+    }
     let source = PROVISIONER.get().ok_or(Error::Unavailable)?.clone();
     INSTALLATION
         .lock()

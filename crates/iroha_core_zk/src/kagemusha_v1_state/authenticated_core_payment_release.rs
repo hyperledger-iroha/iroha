@@ -1062,7 +1062,10 @@ fn verify_device_reply(
         .guard_verifier
         .authenticated_release()
         .map_err(material_error)?;
-    let credential = &machine.recovery_metadata.accepted_credential.credential;
+    let credential = machine
+        .recovery_metadata
+        .accepted_credential
+        .oem_original()?;
     let profile = release
         .enabled_profile(credential.hardware_profile_id)
         .ok_or(KagemushaStateErrorV1::HardwareCertificateMismatch)?;

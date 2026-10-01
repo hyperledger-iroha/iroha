@@ -16,7 +16,6 @@ import os
 import re
 import ssl
 import stat
-import subprocess
 import threading
 import urllib.parse
 import urllib.request
@@ -24,9 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .attestation import (AttestationRejected, children, der_one, fixed32,
+from .attestation import (AttestationRejected, children, der_one,
                           oid, positive_integer, primitive, require)
 from .play_integrity import PlayIntegrityPolicy, _NoRedirect, _unique
+from .openssl_private_rsa import private_rsa_operation
 
 POLICY_SCHEMA = "iroha.kagemusha.play-integrity-verification-policy.v1"
 OAUTH_SCOPE = "https://www.googleapis.com/auth/playintegrity"
@@ -46,7 +46,7 @@ def _json(original: bytes, bound: int, label: str) -> dict:
     try:
         value = json.loads(original.decode("utf-8"), object_pairs_hook=_unique,
                            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-    except (ValueError, UnicodeError, RecursionError) as error:
+    except (ValueError, UnicodeError, RecursionError):
         # Never include source text or a JSON error carrying credential content.
         raise AttestationRejected(f"invalid {label}") from None
     require(type(value) is dict, f"invalid {label}")
@@ -65,6 +65,8 @@ class GoogleDecoderSelection:
 def select_google_decoder(public_original: bytes,
                           native_policy: PlayIntegrityPolicy) -> GoogleDecoderSelection:
     native_policy.validate()
+    require(type(public_original) is bytes and 0 < len(public_original) <= MAX_POLICY_BYTES,
+            "Google decoder policy outside bound")
     require(hashlib.sha256(public_original).digest() == native_policy.policy_digest,
             "Google decoder policy differs from Native original pin")
     value = _json(public_original, MAX_POLICY_BYTES, "Google decoder policy")
@@ -101,32 +103,12 @@ def _b64url(value: bytes) -> str:
 
 def _key_command(private_pem: bytes, openssl: Path, arguments: list[str],
                  message: bytes = b"") -> bytes:
-    """Feed bounded PEM through an inherited pipe; diagnostics never escape."""
-    require(type(private_pem) is bytes and 0 < len(private_pem) <= 8192,
-            "Google OAuth signing key outside bound")
-    read_fd, write_fd = os.pipe()
-    try:
-        # Key limit fits the minimum POSIX pipe capacity. No writer can block
-        # waiting for the child, and no private filesystem path is created.
-        offset = 0
-        while offset < len(private_pem):
-            offset += os.write(write_fd, private_pem[offset:])
-        os.close(write_fd)
-        write_fd = -1
-        result = subprocess.run([str(openssl), *arguments, "/dev/fd/" + str(read_fd)],
-            input=message, capture_output=True, check=False, timeout=5,
-            pass_fds=(read_fd,), env={"PATH": "/usr/bin:/bin"})
-        require(result.returncode == 0 and 0 < len(result.stdout) <= 4096,
-                "Google OAuth signing operation failed")
-        return result.stdout
-    except AttestationRejected:
-        raise
-    except Exception:
-        raise AttestationRejected("Google OAuth signing operation failed") from None
-    finally:
-        os.close(read_fd)
-        if write_fd >= 0:
-            os.close(write_fd)
+    """Keep private PEM in the protected worker; OpenSSL CLI is public-only."""
+    require(openssl.is_absolute() and openssl.is_file(), "Google OAuth crypto environment absent")
+    require(arguments in (["pkey", "-pubout", "-outform", "DER", "-in"],
+                          ["dgst", "-sha256", "-sign"]),
+            "Google OAuth signing purpose differs")
+    return private_rsa_operation(private_pem, public_only=arguments[0] == 'pkey', message=message)
 
 
 def _rsa_bytes(private_pem: bytes, openssl: Path) -> int:
@@ -156,9 +138,11 @@ class GoogleServiceAccountTokenProvider:
     """
     def __init__(self, *, public_policy_original: bytes, native_policy: PlayIntegrityPolicy,
                  credential_fd: int, trusted_time_ms: Callable[[], int],
-                 openssl_path: Path) -> None:
+                 openssl_path: Path, credential_owner_uid: int | None = None) -> None:
         self.selection = select_google_decoder(public_policy_original, native_policy)
-        require(type(credential_fd) is int and credential_fd >= 3
+        self._owner_uid = os.getuid() if credential_owner_uid is None else credential_owner_uid
+        require(type(self._owner_uid) is int and self._owner_uid in (0,os.getuid())
+                and type(credential_fd) is int and credential_fd >= 3
                 and callable(trusted_time_ms) and openssl_path.is_absolute()
                 and openssl_path.is_file(), "Google OAuth custody absent")
         self._fd = os.dup(credential_fd)
@@ -181,7 +165,7 @@ class GoogleServiceAccountTokenProvider:
 
     def _stat(self) -> tuple:
         value = os.fstat(self._fd)
-        require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid()
+        require(stat.S_ISREG(value.st_mode) and value.st_uid == self._owner_uid
                 and value.st_mode & 0o077 == 0 and 0 < value.st_size <= MAX_CREDENTIAL_BYTES,
                 "Google OAuth credential must be an owner-only regular original")
         return (value.st_dev, value.st_ino, value.st_size, value.st_mode,
@@ -234,7 +218,7 @@ class GoogleServiceAccountTokenProvider:
             header = {"alg": "RS256", "typ": "JWT", "kid": credential["private_key_id"]}
             claims = {"iss": self.selection.service_account_email, "scope": OAUTH_SCOPE,
                       "aud": TOKEN_URI, "iat": now, "exp": now + 300}
-            message = ( _b64url(json.dumps(header, separators=(",", ":")).encode("ascii"))
+            message = (_b64url(json.dumps(header, separators=(",", ":")).encode("ascii"))
                         + "." + _b64url(json.dumps(claims, separators=(",", ":")).encode("ascii"))).encode("ascii")
             signature = _key_command(credential["private_key"].encode("ascii"), self._openssl,
                                      ["dgst", "-sha256", "-sign"], message)

@@ -28,7 +28,7 @@ class KagemushaOrdinaryAppEnrollmentPreparationV1Test {
         val domain = "iroha:kagemusha:v1:ordinary-app-enrollment-challenge\u0000".toByteArray(Charsets.US_ASCII)
         val signing = projection.canonicalSigningBytes()
         assertArrayEquals(domain, signing.copyOfRange(0, domain.size))
-        assertEquals(451, ByteBuffer.wrap(signing, domain.size, 8).order(ByteOrder.LITTLE_ENDIAN).long)
+        assertEquals(451L, ByteBuffer.wrap(signing, domain.size, 8).order(ByteOrder.LITTLE_ENDIAN).long)
         assertArrayEquals(expected.copyOfRange(0, 451), signing.copyOfRange(domain.size + 8, signing.size))
         assertArrayEquals(MessageDigest.getInstance("SHA-256").digest(signing), projection.attestationChallenge())
         // Decoding an invalid placeholder signature is still only public byte projection.

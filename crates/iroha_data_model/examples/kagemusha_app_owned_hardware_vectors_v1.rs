@@ -5,13 +5,18 @@
 //! monetary authority. Run this example and retain stdout for Kotlin/Swift
 //! conformance; applications must obtain signing operations from Core.
 
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey};
+use base64::{Engine as _, engine::general_purpose};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     kagemusha::{
-        KagemushaAppOperationApprovalChallengeV1, KagemushaAppOperationApprovalPurposeV1,
-        KagemushaHardwareTransitionSelectionV1, KagemushaOperationKindV1,
+        KagemushaAppEnrollmentPossessionChallengeV1, KagemushaAppOperationApprovalChallengeV1,
+        KagemushaAppOperationApprovalPurposeV1, KagemushaDevicePublicKeyV1,
+        KagemushaHardwarePlatformClassV1, KagemushaHardwareTransitionSelectionV1,
+        KagemushaOperationKindV1, KagemushaOrdinaryAppEnrollmentChallengeV1,
+        KagemushaSignedOrdinaryAppEnrollmentChallengeV1,
+        kagemusha_ordinary_android_app_key_alias_v1,
     },
 };
 use sha2::{Digest as _, Sha256};
@@ -87,6 +92,92 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }));
         }
     }
+    // Separate public fixture issuer and app key, never ledger-account keys.
+    let issuer =
+        KeyPair::from_private_key(PrivateKey::from_bytes(Algorithm::Ed25519, &[0x43; 32])?)?;
+    let app_fixture = p256::ecdsa::SigningKey::from_bytes((&[17; 32]).into())?;
+    let app_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+        app_fixture
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes(),
+    )?;
+    let key_id: [u8; 32] = Sha256::digest(app_key.as_sec1_bytes()).into();
+    let mut enrollment_vectors = Vec::new();
+    for (name, tag, platform) in [
+        (
+            "android_keymint",
+            1_u8,
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+        ),
+        (
+            "apple_app_attest",
+            2,
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+        ),
+    ] {
+        let c = KagemushaOrdinaryAppEnrollmentChallengeV1 {
+            version: 1,
+            platform_class: platform,
+            enrollment_id: [1; 32],
+            client_nonce: [2; 32],
+            server_nonce: [3; 32],
+            account_binding,
+            network_id: [5; 32],
+            lane_id: [6; 32],
+            release_id: [7; 32],
+            hardware_profile_id: [8; 32],
+            suite_id: [9; 32],
+            trust_policy_digest: [10; 32],
+            app_authority_policy_digest: [11; 32],
+            financial_authority_commitment: [12; 32],
+            issuer_policy_digest: [13; 32],
+            policy_epoch: 1,
+            hardware_epoch: 10,
+            issued_at_ms: 1000,
+            expires_at_ms: 121000,
+        };
+        let signing = c.canonical_signing_bytes()?;
+        let signed = KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {
+            challenge: c,
+            signature: Signature::new(issuer.private_key(), &signing),
+        };
+        signed.signature.verify(issuer.public_key(), &signing)?;
+        let transport = signed.to_transport_bytes()?;
+        assert_eq!(
+            KagemushaSignedOrdinaryAppEnrollmentChallengeV1::from_transport_bytes(&transport)?,
+            signed
+        );
+        let e = KagemushaAppEnrollmentPossessionChallengeV1::from_original_enrollment(
+            &c, &app_key, [14; 32],
+        )?;
+        let possession = e.canonical_signing_bytes()?;
+        let integrity = c.play_integrity_request_hash(key_id)?;
+        let alias = if platform == KagemushaHardwarePlatformClassV1::AndroidKeyMint {
+            kagemusha_ordinary_android_app_key_alias_v1(&c)?
+        } else {
+            general_purpose::STANDARD.encode(key_id)
+        };
+        enrollment_vectors.push(norito::json!({
+            "platform": name,
+            "platform_tag": tag,
+            "challenge_signing_hex": (hex::encode(&signing)),
+            "challenge_transport_hex": (hex::encode(&transport)),
+            "challenge_archive_hex": (hex::encode(norito::encode_canonical(&c)?)),
+            "issuer_public_key_hex": (hex::encode(issuer.public_key().to_bytes().1)),
+            "issuer_signature_hex": (hex::encode(signed.signature.payload())),
+            "attestation_challenge_hex": (hex::encode(c.attestation_challenge()?)),
+            "attested_public_key_sec1_hex": (hex::encode(app_key.as_sec1_bytes())),
+            "attested_key_id_hex": (hex::encode(key_id)),
+            "key_alias": alias,
+            "raw_platform_evidence_digest_hex": (hex::encode([14; 32])),
+            "play_integrity_request_hash_hex": (hex::encode(integrity)),
+            "play_integrity_request_hash_base64url": (general_purpose::URL_SAFE_NO_PAD.encode(integrity)),
+            "possession_signing_hex": (hex::encode(&possession)),
+            "possession_sha256_hex": (hex::encode(Sha256::digest(&possession))),
+            "possession_archive_hex": (hex::encode(norito::encode_canonical(&e)?)),
+        }));
+    }
     let result = norito::json!({
         "schema": "iroha.kagemusha.app-owned-hardware.signing-vectors.v1",
         "codec_only": true,
@@ -95,6 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "monetary_authority": false,
         "account_binding_hex": (hex::encode(account_binding)),
         "vectors": vectors,
+        "enrollment_vectors": enrollment_vectors,
     });
     println!("{}", norito::json::to_json_pretty(&result)?);
     Ok(())

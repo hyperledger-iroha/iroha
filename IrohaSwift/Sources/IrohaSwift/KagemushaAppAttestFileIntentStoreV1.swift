@@ -138,6 +138,50 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     }
   }
 
+  /// Release only the exact completed W original consumed by its native owner.
+  /// This identity counter advancement does not acknowledge a monetary commit.
+  public func advanceAfterNativeAppApproval(keyID: String, counter: UInt32,
+    signingDigest: Data, rawAssertion: Data, receipt: KagemushaNativeAppApprovalReceiptV1) throws {
+    let key = try Self.keyBytes(keyID)
+    try Self.validateDigest(signingDigest)
+    guard counter > 0, receipt.keyAlias == keyID, receipt.observedCounter == counter,
+      receipt.signingDigest == signingDigest,
+      receipt.rawAssertionDigest == Data(SHA256.hash(data: rawAssertion)) else {
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+    try withLock { directory in
+      let current = try Self.readRecord(directory)
+      guard current.key == key,
+        case .complete(_, let storedCounter, let storedDigest, let storedRaw) = current.intent,
+        storedCounter == counter, storedDigest == signingDigest, storedRaw == rawAssertion else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
+      try Self.writeRecord(directory, record: Record(key: key, intent: .ready(counter: counter)))
+    }
+  }
+
+  /// Release only the exact completed E original consumed by its native owner.
+  /// This possession counter advancement does not issue a credential or monetary commit.
+  public func advanceAfterNativeEnrollmentPossession(keyID: String, counter: UInt32,
+    signingDigest: Data, rawAssertion: Data, receipt: KagemushaNativeAppEnrollmentPossessionReceiptV1) throws {
+    let key = try Self.keyBytes(keyID)
+    try Self.validateDigest(signingDigest)
+    guard counter > 0, receipt.keyAlias == keyID, receipt.observedCounter == counter,
+      receipt.signingDigest == signingDigest,
+      receipt.rawAssertionDigest == Data(SHA256.hash(data: rawAssertion)) else {
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+    try withLock { directory in
+      let current = try Self.readRecord(directory)
+      guard current.key == key,
+        case .complete(_, let storedCounter, let storedDigest, let storedRaw) = current.intent,
+        storedCounter == counter, storedDigest == signingDigest, storedRaw == rawAssertion else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
+      try Self.writeRecord(directory, record: Record(key: key, intent: .ready(counter: counter)))
+    }
+  }
+
   private func withLock<T>(_ body: (Int32) throws -> T) throws -> T {
     let directory = try Self.openDirectory(directoryPath)
     defer { _ = Darwin.close(directory) }

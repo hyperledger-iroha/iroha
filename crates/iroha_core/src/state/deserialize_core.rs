@@ -1434,6 +1434,102 @@ fn restore_snapshot_nexus_owner_policy(
     nexus.autoscale.enabled = policy.autoscale_enabled;
     Ok(())
 }
+/// Decode and validate both Nexus runtime component cuts without constructing
+/// a State or granting an authenticated native execution tip. The supplied
+/// original hash prefix and World remain independently owned by the test.
+#[cfg(test)]
+pub(in crate::state) fn decode_nexus_runtime_component_for_testing(
+    value: json::Value,
+    committed_block_hashes: &[HashOf<BlockHeader>],
+    world: &World,
+    execution_budget: &iroha_allocation::AllocationBudget,
+    baseline_manifests_hash: Hash,
+    configured: Option<&iroha_config::parameters::actual::Nexus>,
+) -> Result<
+    (
+        Cell<SnapshotNexusRuntime>,
+        iroha_config::parameters::actual::Nexus,
+    ),
+    StateRestoreError,
+> {
+    let runtime: Cell<SnapshotNexusRuntime> = json::from_value(value)?;
+    let (mut nexus, _, _, _, _) = nexus_from_snapshot_runtime(
+        runtime.view().get().clone(),
+        committed_block_hashes,
+        configured,
+    )?;
+    let invalid = |field: &str, message: String| json::Error::InvalidField {
+        field: field.to_owned(),
+        message,
+    };
+    let catalog = runtime_catalog_from_world(&world.view())
+        .map_err(|error| invalid("nexus_runtime.blocks", error.to_string()))?;
+    if catalog
+        .as_ref()
+        .is_some_and(|catalog| catalog.baseline_manifests_hash != baseline_manifests_hash)
+    {
+        return Err(invalid(
+            "state.lane_manifests",
+            "manifest baseline differs from canonical World catalog".to_owned(),
+        )
+        .into());
+    }
+    nexus.configured_dataspace_catalog = match configured {
+        Some(configured) => configured.configured_dataspace_catalog.clone(),
+        None if catalog.is_some() => return Err(invalid("nexus_runtime.blocks.owner_policy",
+            "committed runtime catalog requires the complete configured dataspace baseline at snapshot restore".to_owned()).into()),
+        None => nexus.dataspace_catalog.clone(),
+    };
+    let physical_policy = SnapshotNexusOwnerPolicy::from_nexus(&nexus).dataspaces;
+    nexus.dataspace_catalog =
+        runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, catalog.as_ref())
+            .map_err(|error| invalid("nexus_runtime.blocks.owner_policy", error.to_string()))?;
+    if SnapshotNexusOwnerPolicy::from_nexus(&nexus).dataspaces != physical_policy {
+        return Err(invalid(
+            "nexus_runtime.blocks.owner_policy",
+            "physical ownership differs from canonical World catalog".to_owned(),
+        )
+        .into());
+    }
+    let previous = runtime.predecessor_view();
+    if committed_block_hashes.is_empty() && previous.get().is_some() {
+        return Err(invalid(
+            "nexus_runtime.revert",
+            "height-zero runtime cannot retain predecessor undo".to_owned(),
+        )
+        .into());
+    }
+    if !committed_block_hashes.is_empty() && previous.get().is_none() {
+        return Err(invalid(
+            "nexus_runtime.revert",
+            "committed runtime must retain its predecessor record".to_owned(),
+        )
+        .into());
+    }
+    if let Some(prior) = previous.get() {
+        let prefix = &committed_block_hashes[..committed_block_hashes.len() - 1];
+        let (mut prior_nexus, _, _, _, _) =
+            nexus_from_snapshot_runtime(prior.clone(), prefix, configured)?;
+        let prior_world = world.try_block_and_revert(execution_budget)?;
+        let prior_catalog = runtime_catalog_from_world(&prior_world)
+            .map_err(|error| invalid("nexus_runtime.revert.owner_policy", error.to_string()))?;
+        prior_nexus.dataspace_catalog =
+            runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, prior_catalog.as_ref())
+                .map_err(|error| invalid("nexus_runtime.revert.owner_policy", error.to_string()))?;
+        if SnapshotNexusOwnerPolicy::from_nexus(&prior_nexus).dataspaces
+            != prior.owner_policy.dataspaces
+        {
+            return Err(invalid(
+                "nexus_runtime.revert.owner_policy",
+                "predecessor physical ownership differs from reverted World catalog".to_owned(),
+            )
+            .into());
+        }
+    }
+    drop(previous);
+    Ok((runtime, nexus))
+}
+
 fn validate_snapshot_autoscale_sample_history(
     runtime: &SnapshotNexusRuntime,
     committed_block_hashes: &(impl crate::state::BlockHashRead + ?Sized),

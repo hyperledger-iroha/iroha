@@ -7,8 +7,78 @@ use iroha_data_model::{
     isi::{Mint, Transfer},
 };
 use iroha_primitives::{bigint::BigInt, numeric::Numeric};
-use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
 use nonzero_ext::nonzero;
+
+/// Bind the original recorder to this empty carrier before component effects.
+fn quantity_component_source(header: BlockHeader) -> SignedBlock {
+    iroha_data_model::block::builder::BlockBuilder::new(header)
+        .build_with_signature(0, ALICE_KEYPAIR.private_key())
+}
+
+#[test]
+fn direct_quantity_component_refuses_an_unretained_hash_and_keeps_original_balances() {
+    let domain = DomainId::try_new("quantity-owner", "universal").unwrap();
+    let definition =
+        AssetDefinitionId::derive_from_components(domain.clone(), "units".parse().unwrap());
+    let alice = AssetId::new(definition.clone(), ALICE_ID.clone());
+    let bob = AssetId::new(definition.clone(), BOB_ID.clone());
+    let world = World::with_assets(
+        [Domain::new(domain).build(&ALICE_ID)],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(BOB_ID.clone()).build(&BOB_ID),
+        ],
+        [AssetDefinition::numeric(
+            definition,
+            "Units",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID)],
+        [Asset::new(alice.clone(), Quantity::from(10_u32))],
+        [],
+    );
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let original = quantity_component_source(BlockHeader::new(nonzero!(2_u64), None, None, 7, 0));
+    let (mut block, _recording) =
+        crate::block::ValidBlock::start_component_execution(&original, &state)
+            .expect("original component recorder");
+    let invocation = Hash::new(b"original-direct-quantity-source");
+    {
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(invocation);
+        let error = Transfer::asset_quantity(alice.clone(), 1_u32, BOB_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .expect_err("a copied hash cannot supply its original producer");
+        assert!(
+            error
+                .to_string()
+                .contains("FASTPQ source has no retained producer invocation")
+        );
+        assert_eq!(
+            tx.world.assets.get(&alice).unwrap().as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert!(tx.world.assets.get(&bob).is_none());
+    }
+    let mut tx = block.transaction_for_fastpq_testing(invocation);
+    Transfer::asset_quantity(alice.clone(), 1_u32, BOB_ID.clone())
+        .execute(&ALICE_ID, &mut tx)
+        .expect("the same exact invocation now has finite original custody");
+    assert_eq!(
+        tx.world.assets.get(&alice).unwrap().as_ref(),
+        &Quantity::from(9_u32)
+    );
+    assert_eq!(
+        tx.world.assets.get(&bob).unwrap().as_ref(),
+        &Quantity::one()
+    );
+}
 
 #[test]
 fn ledger_transfers_and_owned_inventory_preserve_quantities_beyond_u64_units() {
@@ -22,7 +92,6 @@ fn ledger_transfers_and_owned_inventory_preserve_quantities_beyond_u64_units() {
 }
 
 fn check_full_quantity_ledger() {
-    let _guard = crate::exec_witness::exec_witness_guard();
     let mut maximum_bytes = [0xff_u8; 64];
     maximum_bytes[63] = 0x7f;
     let maximum = Quantity::from_canonical_numeric(
@@ -77,8 +146,9 @@ fn check_full_quantity_ledger() {
         // retains a third balance so total supply remains the canonical maximum.
         let mut setup = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 6, 0));
         {
-            let mut tx = setup.transaction();
-            tx.tx_call_hash = Some(Hash::new(format!("quantity-fixture-mint-{index}")));
+            let mut tx = setup.transaction_for_fastpq_testing(Hash::new(format!(
+                "quantity-fixture-mint-{index}"
+            )));
             Mint::asset_quantity(initial_supply.clone(), source_id.clone())
                 .execute(&ALICE_ID, &mut tx)
                 .unwrap();
@@ -86,16 +156,17 @@ fn check_full_quantity_ledger() {
         }
         if index == 2 {
             {
-                let mut tx = setup.transaction();
-                tx.tx_call_hash = Some(Hash::new(b"quantity-fixture-whole-transfer"));
+                let mut tx = setup
+                    .transaction_for_fastpq_testing(Hash::new(b"quantity-fixture-whole-transfer"));
                 Transfer::asset_quantity(source_id.clone(), Quantity::one(), BOB_ID.clone())
                     .execute(&ALICE_ID, &mut tx)
                     .unwrap();
                 tx.apply();
             }
             {
-                let mut tx = setup.transaction();
-                tx.tx_call_hash = Some(Hash::new(b"quantity-fixture-fractional-transfer"));
+                let mut tx = setup.transaction_for_fastpq_testing(Hash::new(
+                    b"quantity-fixture-fractional-transfer",
+                ));
                 Transfer::asset_quantity(
                     destination_id.clone(),
                     Quantity::one().try_sub(&to_before).unwrap(),
@@ -108,7 +179,10 @@ fn check_full_quantity_ledger() {
         }
         setup.commit_world_overlay_for_testing().unwrap();
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 7, 0);
-        let mut block = state.block(header);
+        let source = quantity_component_source(header);
+        let (mut block, _recording) =
+            crate::block::ValidBlock::start_component_execution(&source, &state)
+                .expect("original full-domain component recorder");
         assert_eq!(
             block
                 .world
@@ -142,13 +216,11 @@ fn check_full_quantity_ledger() {
                 &Quantity::one().try_sub(&to_before).unwrap()
             );
         }
-        crate::exec_witness::start_block();
         let call = Hash::new(format!("full-quantity-ledger-case-{index}"));
         let from_after = from_before.try_sub(&amount).unwrap();
         let to_after = to_before.try_add(&amount).unwrap();
         {
-            let mut tx = block.transaction();
-            tx.tx_call_hash = Some(call);
+            let mut tx = block.transaction_for_fastpq_testing(call);
             Transfer::asset_quantity(source_id.clone(), amount.clone(), BOB_ID.clone())
                 .execute(&ALICE_ID, &mut tx)
                 .unwrap();
@@ -220,7 +292,7 @@ fn check_full_quantity_ledger() {
                 "valid ledger execution needs all nineteen unit limbs"
             );
         }
-        // The legacy prover still rejects wide values. The full-domain source
+        // The fixed-width prover rejects wide values. The full-domain source
         // producer below must succeed; compact proof integration is the next gate.
         let result = crate::fastpq::batch_and_public_statement_from_finalized_transcripts(
             crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
@@ -305,7 +377,6 @@ fn ledger_supply_changes_between_transfers_preserve_every_source_occurrence() {
 fn check_supply_changes_between_transfers() {
     use iroha_data_model::isi::Burn;
 
-    let _guard = crate::exec_witness::exec_witness_guard();
     for mint in [true, false] {
         let domain = DomainId::try_new("wonderland", "universal").unwrap();
         let definition =
@@ -332,24 +403,26 @@ fn check_supply_changes_between_transfers() {
         );
         let mut setup = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 6, 0));
         {
-            let mut tx = setup.transaction();
-            tx.tx_call_hash = Some(Hash::new(b"mixed-source-initial-mint"));
+            let mut tx =
+                setup.transaction_for_fastpq_testing(Hash::new(b"mixed-source-initial-mint"));
             Mint::asset_quantity(100_u32, source.clone())
                 .execute(&ALICE_ID, &mut tx)
                 .unwrap();
             tx.apply();
         }
         setup.commit_world_overlay_for_testing().unwrap();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 7, 0));
-        crate::exec_witness::start_block();
+        let original =
+            quantity_component_source(BlockHeader::new(nonzero!(2_u64), None, None, 7, 0));
+        let (mut block, _recording) =
+            crate::block::ValidBlock::start_component_execution(&original, &state)
+                .expect("original mixed-supply component recorder");
         let call = Hash::new(if mint {
             b"transfer-mint-transfer".as_slice()
         } else {
             b"transfer-burn-transfer".as_slice()
         });
         {
-            let mut tx = block.transaction();
-            tx.tx_call_hash = Some(call);
+            let mut tx = block.transaction_for_fastpq_testing(call);
             Transfer::asset_quantity(source.clone(), 10_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut tx)
                 .unwrap();

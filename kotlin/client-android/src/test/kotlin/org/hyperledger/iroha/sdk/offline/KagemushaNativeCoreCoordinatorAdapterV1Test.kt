@@ -56,7 +56,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 NoritoHeader.decode(f.qFields[3], null).payload))
         val context = thirdPreparationRetryField(NoritoHeader.decode(f.preparationBytes, null).payload)
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -174,7 +174,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         }
         fun provider(): KagemushaAuthenticatedHardwareProviderV1 {
             val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-                override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+                override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
                 override fun install(storagePath: String) = 0
                 override fun open(storagePath: String) = 1L
                 override fun close(handle: Long) = 0
@@ -210,7 +210,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             canonicalSenderCandidate = f.candidateBytes, canonicalResponseFrame = original))
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
             var invoked = false
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -287,7 +287,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             f.q.profile.hardwareProfileId(), f.credential.laneCommitment(), digest(2), u64(120_007))
         val methods = mutableListOf<Int>()
         val native = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -571,7 +571,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(f.requestBytes.size.toLong()).array() + f.requestBytes))
         val admitted = mutableListOf<Pair<Int, ByteArray>>()
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -671,7 +671,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 active.coreAuthorizationKeyReference(), NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareProfileShape(active.profile), null).payload,
                 NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareCredentialShape(active.credential), null).payload))
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -730,7 +730,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         fun expect(method: Int, request: List<ByteArray>?, response: List<ByteArray>) {
             this.method = method; this.request = request; this.response = response
         }
-        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+        override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
         override fun install(storagePath: String) = 0
         override fun open(storagePath: String) = 1L
         override fun close(handle: Long): Int { closeCalls++; assertEquals(1L, handle); return 0 }
@@ -993,7 +993,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             }
         }
         private val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String) = 1L
             override fun close(handle: Long) = 0
@@ -1087,7 +1087,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         private var outstandingObservation: Triple<Int, ByteArray, ByteArray>? = null
         private var terminalReply: ByteArray? = null
         private val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18)
+            override fun contract() = intArrayOf(2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 21)
             override fun install(storagePath: String) = 0
             override fun open(storagePath: String): Long { outstandingObservation = null; return 1L }
             override fun close(handle: Long) = 0

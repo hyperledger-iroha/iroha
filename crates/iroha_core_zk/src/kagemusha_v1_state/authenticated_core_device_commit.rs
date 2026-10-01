@@ -47,7 +47,10 @@ pub(super) fn verify(
     let profile = release
         .enabled_profile(candidate.prepared.predecessor_state.hardware_profile_id)
         .ok_or_else(rejected)?;
-    let credential = &machine.recovery_metadata.accepted_credential.credential;
+    let credential = machine
+        .recovery_metadata
+        .accepted_credential
+        .oem_original()?;
     let (command, reply) = verify_signed_reply(
         original,
         operation_id,
@@ -91,7 +94,10 @@ pub(super) fn verify_command(
         .guard_verifier
         .authenticated_release()
         .map_err(|_| rejected())?;
-    let credential = &machine.recovery_metadata.accepted_credential.credential;
+    let credential = machine
+        .recovery_metadata
+        .accepted_credential
+        .oem_original()?;
     release
         .enabled_profile(prepared.predecessor_state.hardware_profile_id)
         .ok_or_else(rejected)?;

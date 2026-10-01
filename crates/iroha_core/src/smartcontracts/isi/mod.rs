@@ -1407,15 +1407,122 @@ mod tests {
         state_block.commit_world_overlay_for_testing().unwrap();
         Ok(state)
     }
+    fn authenticated_instruction_state(genesis_instructions: Vec<InstructionBox>) -> State {
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+
+        let mut config = TestChainConfig::new(World::default(), 0);
+        config.genesis_key = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
+        config.genesis_instructions = genesis_instructions;
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        let consensus_mode = config.consensus_mode;
+        let prepared = CertifiedTestChain::prepare(config).expect("prepare signed ISI genesis");
+        // Before spawning a worker, consume the original unique State and apply
+        // its independently validated genesis. Root authority is never copied.
+        let state = Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished ISI State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            consensus_mode.into(),
+            None,
+        )
+        .expect("apply signed ISI genesis");
+        state
+    }
+    fn authenticated_state_with_test_domains() -> Result<State> {
+        let wonderland = DomainId::try_new("wonderland", "universal")?;
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(wonderland.clone(), "rose".parse()?);
+        let trigger_permission: permission::Permission = CanRegisterTrigger {
+            authority: ALICE_ID.clone(),
+        }
+        .into();
+        // These are the same original registrations and grant as the direct
+        // component helper, now authored in the canonical signed genesis source.
+        Ok(authenticated_instruction_state(vec![
+            Register::domain(Domain::new(wonderland)).into(),
+            Register::account(Account::new(ALICE_ID.clone())).into(),
+            Grant::account_permission(trigger_permission, ALICE_ID.clone()).into(),
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id,
+                "rose".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .into(),
+        ]))
+    }
+    fn ordinary_instruction_header(state: &State) -> BlockHeader {
+        BlockHeader::new(
+            std::num::NonZeroU64::new(
+                u64::try_from(state.committed_height()).expect("ISI fixture height") + 1,
+            )
+            .expect("ordinary ISI successor"),
+            state.view().latest_block_hash(),
+            None,
+            1_000,
+            0,
+        )
+    }
+    #[test]
+    async fn authenticated_instruction_fixture_retains_original_registrations_and_root()
+    -> Result<()> {
+        let state = authenticated_state_with_test_domains()?;
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(state.kura().blocks_count(), 1);
+        let genesis = state
+            .kura()
+            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .unwrap();
+        assert_eq!(
+            state.network_id_ref(),
+            &NetworkId::from_genesis_hash(genesis.hash())
+        );
+        let signed =
+            iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&genesis)
+                .expect("original signed ISI root metadata");
+        let view = state.view();
+        assert_eq!(
+            crate::sumeragi::lanes::routing::committed_root_scope(view.world()),
+            Some(signed.sumeragi_context.root_scope)
+        );
+        assert_eq!(ordinary_instruction_header(&state).height().get(), 2);
+        assert_eq!(
+            ordinary_instruction_header(&state).prev_block_hash(),
+            Some(genesis.hash())
+        );
+        let wonderland = DomainId::try_new("wonderland", "universal")?;
+        assert_eq!(
+            view.world.domain(&wonderland)?.owned_by(),
+            &*SAMPLE_GENESIS_ACCOUNT_ID
+        );
+        assert!(view.world.account(&ALICE_ID).is_ok());
+        let rose = AssetDefinitionId::derive_from_components(wonderland, "rose".parse()?);
+        assert_eq!(
+            view.world.asset_definition(&rose)?.owned_by(),
+            &*SAMPLE_GENESIS_ACCOUNT_ID
+        );
+        let trigger_permission: permission::Permission = CanRegisterTrigger {
+            authority: ALICE_ID.clone(),
+        }
+        .into();
+        assert!(
+            view.world
+                .account_permissions
+                .get(&ALICE_ID)
+                .unwrap()
+                .contains(&trigger_permission)
+        );
+        Ok(())
+    }
     #[test]
     async fn default_executor_rejects_invalid_instruction_placeholders() -> Result<()> {
-        let state = State::new(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
-        let mut state_block = state.block(valid_block.as_ref().header().clone());
+        let state = authenticated_instruction_state(Vec::new());
+        let mut state_block = state.block(ordinary_instruction_header(&state));
         let mut state_transaction = state_block.transaction();
         let instruction = InstructionBox::from(iroha_data_model::isi::InvalidInstruction::new(
             "iroha.register",
@@ -1435,13 +1542,8 @@ mod tests {
     }
     #[test]
     async fn default_executor_rejects_custom_instruction_without_custom_executor() -> Result<()> {
-        let state = State::new(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
-        let mut state_block = state.block(valid_block.as_ref().header().clone());
+        let state = authenticated_instruction_state(Vec::new());
+        let mut state_block = state.block(ordinary_instruction_header(&state));
         let mut state_transaction = state_block.transaction();
         let instruction = InstructionBox::from(CustomInstruction::new("requires custom executor"));
         let err = execute_borrowed_instruction(&instruction, &ALICE_ID, &mut state_transaction)
@@ -1705,12 +1807,8 @@ mod tests {
         use iroha_data_model::{
             isi::smart_contract_code, permission, prelude as dm, query::smart_contract::prelude,
         };
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
+        let state = authenticated_state_with_test_domains()?;
+        let mut state_block = state.block(ordinary_instruction_header(&state));
         let mut stx = state_block.transaction();
         let alice = ALICE_ID.clone();
         let token =
@@ -2007,13 +2105,11 @@ mod tests {
     }
     #[test]
     async fn instruction_box_handles_asset_metadata() -> Result<()> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
+        let state = authenticated_state_with_test_domains()?;
+        let mut state_block = state.block(ordinary_instruction_header(&state));
+        let mut state_transaction = state_block.transaction_for_fastpq_testing(
+            iroha_crypto::Hash::new(b"instruction_box_handles_asset_metadata"),
+        );
         let account_id = ALICE_ID.clone();
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,

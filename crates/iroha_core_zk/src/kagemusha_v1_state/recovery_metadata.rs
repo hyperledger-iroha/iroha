@@ -1,10 +1,14 @@
-//! Credential issuance floors and complete, non-forking recovery checkpoints.
+//! Original credential floors and complete selected recovery checkpoints.
 //!
 //! These projections do not confer authority. Publication requires the guard owner's atomic
-//! metadata CAS and a fresh hardware selection with descriptor-owned journal verification.
+//! selected-mode CAS and descriptor-owned journal verification. OEM non-forking hardware and
+//! ordinary Native logical history are distinct; an ordinary floor never claims hardware rollback.
 
 use super::*;
-use iroha_data_model::kagemusha::KagemushaHardwareCredentialV1;
+use iroha_data_model::kagemusha::{
+    KagemushaHardwareCredentialV1, KagemushaOrdinaryAppCredentialV1,
+    kagemusha_ordinary_financial_epoch_id_v1,
+};
 
 mod current_recovery_owner_sealed {
     use super::*;
@@ -195,31 +199,103 @@ impl KagemushaRecoveryJournalsV1 {
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaAcceptedCredentialFloorV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaAcceptedCredentialFloorV1 {
-    /// Original credential, including its original issuer signature and expiry.
-    pub credential: KagemushaHardwareCredentialV1,
-    /// Threshold-authenticated release used to admit the original credential.
-    pub release_id: DigestV1,
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub enum KagemushaAcceptedCredentialFloorV1 {
+    /// Exact independently qualified OEM credential and its admitting release.
+    Oem {
+        /// Complete compact OEM original, never an ordinary app credential.
+        credential: KagemushaHardwareCredentialV1,
+        /// Threshold-authenticated admitting release.
+        release_id: DigestV1,
+    },
+    /// Exact ordinary Ed-signed app credential and its admitting release.
+    /// A decoded original is only a selector: the mode-aware Native owner must retain/reverify
+    /// the genuine issuer admission and full platform/financial relation before using it.
+    OrdinaryApp {
+        /// Complete signed original, retaining the separate app key and financial commitment.
+        credential: KagemushaOrdinaryAppCredentialV1,
+        /// Threshold-authenticated admitting release.
+        release_id: DigestV1,
+    },
 }
 
 impl KagemushaAcceptedCredentialFloorV1 {
+    /// Borrow the exact OEM original. Ordinary app originals cannot enter an OEM transport.
+    /// # Errors
+    /// Refuses the distinct ordinary mode; there is no compact-credential fallback.
+    pub fn oem_original(&self) -> Result<&KagemushaHardwareCredentialV1, KagemushaStateErrorV1> {
+        match self {
+            Self::Oem { credential, .. } => Ok(credential),
+            Self::OrdinaryApp { .. } => Err(KagemushaStateErrorV1::InvalidHardwareProfile),
+        }
+    }
+
+    /// Borrow the exact ordinary original for already mode-admitted Native consumers.
+    #[must_use]
+    pub fn ordinary_original(&self) -> Option<&KagemushaOrdinaryAppCredentialV1> {
+        match self {
+            Self::OrdinaryApp { credential, .. } => Some(credential),
+            Self::Oem { .. } => None,
+        }
+    }
+
+    /// Original independently admitted release identity. This is a public selector only.
+    #[must_use]
+    pub fn release_id(&self) -> DigestV1 {
+        match self {
+            Self::Oem { release_id, .. } | Self::OrdinaryApp { release_id, .. } => *release_id,
+        }
+    }
+
+    /// Exact original identity selected by this floor. This projection grants no authority.
+    /// # Errors
+    /// Refuses a malformed ordinary signed original.
+    pub fn original_digest(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
+        match self {
+            Self::Oem { credential, .. } => Ok(credential.credential_id),
+            Self::OrdinaryApp { credential, .. } => credential
+                .canonical_digest()
+                .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity),
+        }
+    }
+
     fn validate_catalog(
         &self,
         release: &KagemushaStateProofReleaseV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if self.release_id != release.release_id() {
+        let release_id = self.release_id();
+        if release_id != release.release_id() {
             return Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool);
         }
+        if let Self::OrdinaryApp { credential, .. } = self {
+            let c = &credential.subject;
+            let enabled = release
+                .enabled_profile(c.hardware_profile_id)
+                .ok_or(KagemushaStateErrorV1::InvalidHardwareProfile)?;
+            credential
+                .canonical_bytes()
+                .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?;
+            if c.release_id != release_id
+                || c.suite_id != enabled.suite_id
+                || c.policy_epoch != enabled.policy_epoch
+                || c.platform_class != enabled.hardware_profile.platform_class
+                || c.financial_authority_commitment == [0; 32]
+                || c.hardware_epoch == 0
+            {
+                return Err(KagemushaStateErrorV1::InvalidHardwareProfile);
+            }
+            return Ok(());
+        }
+        let credential = self.oem_original()?;
         let enabled = release
-            .enabled_profile(self.credential.hardware_profile_id)
+            .enabled_profile(credential.hardware_profile_id)
             .ok_or(KagemushaStateErrorV1::InvalidHardwareProfile)?;
-        if self.credential.suite_id != enabled.suite_id
-            || self.credential.policy_epoch != enabled.policy_epoch
+        if credential.suite_id != enabled.suite_id
+            || credential.policy_epoch != enabled.policy_epoch
         {
             return Err(KagemushaStateErrorV1::InvalidHardwareProfile);
         }
-        self.credential
+        credential
             .validate_against_profile(&enabled.hardware_profile)
             .map_err(|_| KagemushaStateErrorV1::InvalidHardwareProfile)
     }
@@ -231,7 +307,25 @@ impl KagemushaAcceptedCredentialFloorV1 {
     ) -> Result<(), KagemushaStateErrorV1> {
         self.validate_catalog(release)?;
         release.validate_state_context(state.context())?;
-        let c = &self.credential;
+        if let Self::OrdinaryApp { credential, .. } = self {
+            let c = &credential.subject;
+            let epoch_id = kagemusha_ordinary_financial_epoch_id_v1(c)
+                .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?;
+            if c.network_id != *state.lane.network_id.as_bytes()
+                || c.lane_id != state.lane.device_lane_id
+                || u128::from(c.hardware_epoch) != state.hardware_epoch.generation
+                || epoch_id != state.hardware_epoch.epoch_id
+                || c.app_key_reference != state.device_policy_binding.device_key_reference
+                || c.hardware_profile_id != state.hardware_profile_id
+                || c.policy_epoch != state.policy_epoch
+                || c.suite_id != state.suite_id
+                || state.next_one_use_key_reference != [0; 32]
+            {
+                return Err(KagemushaStateErrorV1::InvalidHardwareProfile);
+            }
+            return Ok(());
+        }
+        let c = self.oem_original()?;
         if c.network_id != state.lane.network_id
             || c.lane_commitment != state.lane.device_lane_id
             || u128::from(c.hardware_epoch_generation) != state.hardware_epoch.generation
@@ -253,13 +347,13 @@ impl KagemushaAcceptedCredentialFloorV1 {
         credential: KagemushaHardwareCredentialV1,
         release: &KagemushaStateProofReleaseV1,
     ) -> Result<Self, KagemushaStateErrorV1> {
-        let next = Self {
+        let next = Self::Oem {
             credential,
             release_id: release.release_id(),
         };
         next.validate_current(state, release)?;
-        let old = &self.credential;
-        let new = &next.credential;
+        let old = self.oem_original()?;
+        let new = next.oem_original()?;
         if new.hardware_epoch_generation < old.hardware_epoch_generation
             || (new.hardware_epoch_generation == old.hardware_epoch_generation
                 && (new.hardware_epoch_id != old.hardware_epoch_id
@@ -366,16 +460,12 @@ impl KagemushaRecoveryMetadataV1 {
     pub(super) fn initial(
         state: &KagemushaStateV1,
         release: &KagemushaStateProofReleaseV1,
-        credential: KagemushaHardwareCredentialV1,
+        accepted_credential: KagemushaAcceptedCredentialFloorV1,
         enrollment: KagemushaRecoveryEnrollmentBindingV1,
         journals: KagemushaRecoveryJournalsV1,
         checkpoint_operation_id: DigestV1,
     ) -> Result<Self, KagemushaStateErrorV1> {
         enrollment.validate_for_state(state)?;
-        let accepted_credential = KagemushaAcceptedCredentialFloorV1 {
-            credential,
-            release_id: release.release_id(),
-        };
         accepted_credential.validate_current(state, release)?;
         let value = Self {
             enrollment,
@@ -416,7 +506,25 @@ impl KagemushaRecoveryMetadataV1 {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
         self.accepted_credential.validate_catalog(floor_release)?;
-        let c = &self.accepted_credential.credential;
+        if let Some(credential) = self.accepted_credential.ordinary_original() {
+            let c = &credential.subject;
+            let epoch_id = kagemusha_ordinary_financial_epoch_id_v1(c)
+                .map_err(|_| KagemushaStateErrorV1::SnapshotIntegrity)?;
+            if c.network_id != *state.lane.network_id.as_bytes()
+                || c.lane_id != state.lane.device_lane_id
+                || c.account_binding != iroha_data_model::kagemusha::KagemushaAppOperationApprovalChallengeV1::account_binding(&self.enrollment.owner.account_id)
+                || u128::from(c.hardware_epoch) > state.hardware_epoch.generation
+                || !accepted_bindings.iter().any(|b| b.device_key_reference == c.app_key_reference)
+                || (u128::from(c.hardware_epoch) == state.hardware_epoch.generation
+                    && (epoch_id != state.hardware_epoch.epoch_id
+                        || c.app_key_reference != state.device_policy_binding.device_key_reference))
+                || state.next_one_use_key_reference != [0; 32]
+            {
+                return Err(KagemushaStateErrorV1::SnapshotRollback);
+            }
+            return Ok(());
+        }
+        let c = self.accepted_credential.oem_original()?;
         if c.network_id != state.lane.network_id
             || c.lane_commitment != state.lane.device_lane_id
             || u128::from(c.hardware_epoch_generation) > state.hardware_epoch.generation

@@ -16,7 +16,8 @@ from .play_integrity import PlayIntegrityPolicy, PlayIntegrityProof
 
 CHALLENGE_DOMAIN = b'iroha:kagemusha:v1:ordinary-app-enrollment-challenge\0'
 INTEGRITY_DOMAIN = b'iroha:kagemusha:v1:play-integrity-enrollment\0'
-POSSESSION_DOMAIN = b'iroha:kagemusha:v1:ordinary-app-enrollment-possession\0'
+POSSESSION_DOMAIN = b'iroha:kagemusha:v1:app-enrollment-possession\0'
+POSSESSION_BODY_BYTES = 371
 EVIDENCE_DOMAIN = b'iroha:kagemusha:v1:ordinary-app-enrollment-evidence\0'
 CHALLENGE_BODY_BYTES = 451
 CHALLENGE_TRANSPORT_BYTES = 515
@@ -71,9 +72,30 @@ class OrdinaryEnrollmentChallenge:
         return hashlib.sha256(INTEGRITY_DOMAIN + self.signing_bytes()
                               + fixed32(attested_key_id, 'actual attested key ID')).digest()
 
-    def possession_message(self, attested_key_id: bytes) -> bytes:
-        body = self.signing_bytes() + fixed32(attested_key_id, 'actual possession key ID')
-        return POSSESSION_DOMAIN + len(body).to_bytes(8, 'little') + body
+    def possession_message(self, attested_key_id: bytes, raw_attestation_sha256: bytes,
+                           issued_at_ms: int, expires_at_ms: int) -> bytes:
+        """Exact native E371 projection, never a pending admission or credential.
+
+        The caller supplies the exact original signed C interval, never a renewed
+        lease. This formatter cannot authenticate C, pending raw-attestation admission
+        or issuer custody; their originals must be verified independently by its caller.
+        """
+        self.signing_bytes()
+        require(type(issued_at_ms) is int and type(expires_at_ms) is int
+                and 0 < issued_at_ms < expires_at_ms < (1 << 64)
+                and expires_at_ms - issued_at_ms <= 120_000
+                and issued_at_ms == self.issued_at_ms and expires_at_ms == self.expires_at_ms,
+                'enrollment possession interval differs from original C')
+        # E retains the original enrollment ID. The distinct authenticated raw
+        # admission binds SHA(full C), including epochs/suite/trust; no alternate E.
+        fields = (self.enrollment_id, self.client_nonce, self.server_nonce,
+                  self.account_binding, self.network_id, self.app_authority_policy_digest,
+                  self.release_id, self.hardware_profile_id, self.lane_id,
+                  attested_key_id, raw_attestation_sha256)
+        body = b'\x01\x00\x01' + b''.join(fixed32(value, 'native E selector') for value in fields)
+        body += issued_at_ms.to_bytes(8, 'little') + expires_at_ms.to_bytes(8, 'little')
+        require(len(body) == POSSESSION_BODY_BYTES, 'enrollment possession E layout changed')
+        return POSSESSION_DOMAIN + POSSESSION_BODY_BYTES.to_bytes(8, 'little') + body
 
 
 def decode_challenge_transport(original: bytes) -> OrdinaryEnrollmentChallenge:
@@ -138,7 +160,8 @@ class EnrollmentPossession:
 
 def verify_enrollment_possession(challenge: OrdinaryEnrollmentChallenge, proof: RawPlatformProof,
                                  raw_attestation: bytes, raw_possession: bytes,
-                                 openssl_path: Path, *, apple_app_id: str | None) -> EnrollmentPossession:
+                                 openssl_path: Path, *, apple_app_id: str | None,
+                                 possession_issued_at_ms: int, possession_expires_at_ms: int) -> EnrollmentPossession:
     """Verify possession of the exact attested key and commit both originals."""
     require(type(proof) is RawPlatformProof and type(raw_attestation) is bytes
             and 0 < len(raw_attestation) <= 128 * 1024
@@ -148,7 +171,8 @@ def verify_enrollment_possession(challenge: OrdinaryEnrollmentChallenge, proof: 
     point = proof.attested_public_key_sec1
     require(proof.device_key_reference == device_key_reference(point), 'ordinary possession key differs')
     key_id = hashlib.sha256(point).digest()
-    message = challenge.possession_message(key_id)
+    message = challenge.possession_message(key_id, proof.evidence_sha256,
+                                           possession_issued_at_ms, possession_expires_at_ms)
     if challenge.platform_class == 1:
         require(proof.platform == 'android_keymint' and apple_app_id is None
                 and 8 <= len(raw_possession) <= 72, 'invalid Android enrollment possession')

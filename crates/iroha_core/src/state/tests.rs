@@ -245,6 +245,88 @@ fn blank_state() -> State {
         LiveQueryStore::start_test(),
     )
 }
+
+/// Apply original signed genesis after a trigger's World-only setup.
+/// Registration-height metadata stays at H1, so setup callbacks cannot run
+/// until the ordinary component invokes them at H2.
+fn authenticate_trigger_fixture(component: State) -> State {
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    assert_eq!(component.committed_height(), 0);
+    let nexus = component.nexus_snapshot();
+    let crypto = component.crypto.read().as_ref().clone();
+    // The original execution bounds are signed inputs; consensus context and
+    // bootstrap custom parameters come from the actual genesis owner.
+    let genesis_parameters = component
+        .world
+        .parameters
+        .view()
+        .get()
+        .parameters()
+        .filter(|parameter| !matches!(parameter, Parameter::Sumeragi(_) | Parameter::Custom(_)))
+        .collect();
+    let mut config = TestChainConfig::new(component.world, 0);
+    config.genesis_parameters = genesis_parameters;
+    config.chain_id = component.chain_id;
+    config.pipeline = component.pipeline;
+    config.governance = Some(component.gov);
+    config.zk = Some(component.zk);
+    config.crypto = Some(crypto);
+    config.fraud_monitoring = component.fraud_monitoring;
+    config.nexus = Some(nexus);
+    let account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("prepare original trigger genesis");
+    let state = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished trigger State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &account,
+        mode.into(),
+        None,
+    )
+    .expect("apply original trigger genesis");
+    state
+}
+
+/// Original component carrier using the retained native parent's clock/hash.
+/// A carrier alone grants no consensus or publication authority.
+fn trigger_component_block(state: &State, height: u64) -> ValidBlock {
+    let parent = state
+        .view()
+        .latest_block()
+        .expect("original trigger genesis");
+    let time_ms = u64::try_from(parent.header().creation_time().as_millis())
+        .expect("trigger fixture timestamp fits")
+        + height;
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).unwrap(),
+        Some(parent.hash()),
+        None,
+        time_ms,
+        0,
+    );
+    let signed = iroha_data_model::block::builder::BlockBuilder::new(header)
+        .build_with_signature(0, ALICE_KEYPAIR.private_key());
+    ValidBlock::new_unverified_for_tests(signed)
+}
+
+state_test! { sync trigger_fixture_retains_original_genesis_and_refuses_a_pristine_root
+    let original = authenticate_trigger_fixture(blank_state());
+    let view = original.view();
+    assert_eq!(view.height(), 1);
+    assert_eq!(view.kura().blocks_count(), 1);
+    assert_eq!(original.network_id_ref().into_genesis_hash(), view.latest_block_hash().unwrap());
+    assert!(crate::sumeragi::lanes::routing::committed_root_scope(view.world()).is_some());
+    let carrier = trigger_component_block(&original, 2);
+    assert_eq!(carrier.as_ref().header().prev_block_hash(), view.latest_block_hash());
+    assert!(carrier.as_ref().header().creation_time() > view.latest_block().unwrap().header().creation_time());
+    let pristine = blank_state();
+    assert!(crate::sumeragi::lanes::routing::committed_root_scope(pristine.view().world()).is_none());
+}
 #[test]
 fn account_role_ranges_borrow_state_without_retaining_lookup_accounts() {
     fn verify(world: &impl WorldReadOnly) {
@@ -1433,24 +1515,36 @@ ledger::nft::create_for_all_users();
 "#, ) .expect("compile sequential NFT contract") };
     let authority = ALICE_ID.clone();
     let code_hash = ivm::contract_code_hash(&program);
-    let_row! { contract_address = iroha_data_model::smart_contract::ContractAddress::derive( &DEFAULT_TEST_NETWORK_ID, &authority, 95, DataSpaceId::UNIVERSAL, ) .expect("derive sequential NFT contract address") };
-    let contract_authority = contract_address.subject_id();
-    let domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&contract_authority);
-    let authority_account = Account::new(authority.clone()).build(&authority);
-    let contract_account = Account::new(contract_authority.clone()).build(&contract_authority);
-    let mut world = World::with([domain], [authority_account, contract_account], []);
-    let_row! { entrypoint_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint { contract: contract_address.clone(), entrypoint: "run".to_owned(), } .into() };
-    world.account_permissions.insert(
-        contract_authority.clone(),
-        BTreeSet::from([entrypoint_permission]),
+    let initial_world = World::with(
+        [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
+        [Account::new(authority.clone()).build(&authority)],
+        [],
     );
-    world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), program);
-    world
-        .contract_manifests
-        .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), manifest.signed(&ALICE_KEYPAIR));
-    let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
-    let mut state_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let state = authenticate_trigger_fixture(State::new(
+        initial_world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(),
+    ));
+    let_row! { contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+        state.network_id_ref(), &authority, 95, DataSpaceId::UNIVERSAL,
+    ).expect("derive sequential NFT contract address") };
+    let contract_authority = contract_address.subject_id();
+    let header = trigger_component_block(&state, 2).as_ref().header();
+    let mut state_block = state.block(header);
     let mut state_transaction = state_block.transaction_for_callback_testing();
+    state_transaction.world.domains.insert(
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+        Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&contract_authority),
+    );
+    Register::account(Account::new(contract_authority.clone()))
+        .execute(&authority, &mut state_transaction).expect("register exact native-network contract subject");
+    let_row! { entrypoint_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+        contract: contract_address.clone(), entrypoint: "run".to_owned(),
+    }.into() };
+    state_transaction.world.account_permissions.insert(
+        contract_authority.clone(), BTreeSet::from([entrypoint_permission]),
+    );
+    let artifact = iroha_data_model::smart_contract::ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+    state_transaction.world.contract_code.insert(artifact, program);
+    state_transaction.world.contract_manifests.insert(artifact, manifest.signed(&ALICE_KEYPAIR));
     // The contract-call fixture needs a canonical active lifecycle and bound
     // subject, not an orphan instance entry rejected by State initialization.
     state_transaction.world.bind_active_contract_subject_for_testing(
@@ -1601,8 +1695,11 @@ state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_
     let_row! { encoder_end = encoder_tail .find("pub struct WorldTransaction") .expect("merge write-set encoder terminator must remain discoverable") };
     let encoder = &encoder_tail[..encoder_end];
     let_row! { fields = struct_body.lines().filter_map(|line| { if !line.starts_with("    ") || line.starts_with("        ") { return None; } let declaration = line .trim() .strip_prefix("pub(crate) ") .or_else(|| line.trim().strip_prefix("pub ")) .unwrap_or_else(|| line.trim()); let (field, _) = declaration.split_once(':')?; field .chars() .all(|character| character == '_' || character.is_ascii_alphanumeric()) .then_some(field) }) };
+    assert!(struct_body.contains("operation_index_scope: iroha_allocation::OwnedAllocationScope"));
     for field in fields {
-        if matches!(field, "dataspace_catalog" | "external_event_buf") {
+        // This original allocation owner is process-local custody, not WSV
+        // content. Every persisted and derived ledger field remains checked.
+        if matches!(field, "dataspace_catalog" | "external_event_buf" | "operation_index_scope") {
             continue;
         }
         assert!(
@@ -3336,7 +3433,7 @@ state_test! { sync quantity_rejects_negative_initial_total
     ));
 }
 #[test]
-#[should_panic(expected = "violates numeric spec")]
+#[should_panic(expected = "AssetNumericSpec(Mismatch")]
 fn world_with_assets_rejects_initial_balance_outside_numeric_spec() {
     let domain_id = DomainId::try_new("invalid_scale", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -5158,6 +5255,16 @@ fn install_existing_nexus_geometry_for_test(
                 failure.error
             )
         });
+    // Rebind the original immutable source set; catalog projection never invents
+    // a manifest or reopens the removed source files.
+    let manifests = state
+        .lane_manifests
+        .read()
+        .rebind(&nexus.lane_catalog, &nexus.governance);
+    manifests
+        .validate_materialized_authority_for_catalog(&nexus.lane_catalog, &nexus.governance)
+        .expect("fixture geometry retains its materialized frozen authority");
+    state.install_lane_manifests_for_testing(&Arc::new(manifests));
     state
         .install_canonical_runtime_projection(
             &nexus,
@@ -9522,25 +9629,37 @@ state_test! { sync apply_lane_lifecycle_rejects_unknown_lane
     let state = blank_test_state();
 
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![LaneId::new(3)], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("unknown retire lane must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::Catalog(
-            iroha_data_model::nexus::LaneCatalogError::MissingLane(missing)
-        ) if missing.as_u32() == 3
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
 }
 state_test! { sync apply_lane_lifecycle_rejects_duplicate_retire_lane
     let duplicate_lane = LaneId::new(1);
     let_row! { state = State::new_with_nexus_for_testing( World::default(), iroha_config::parameters::actual::Nexus { lane_catalog: LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: duplicate_lane, alias: "duplicate-retire".to_owned(), ..LaneConfig::default() }, ], ) .expect("two-lane duplicate-retire fixture"), ..Default::default() }, LiveQueryStore::start_test(), ) };
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![duplicate_lane, duplicate_lane], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("duplicate retire lane must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::Catalog(
-            iroha_data_model::nexus::LaneCatalogError::DuplicateRetireLane(lane)
-        ) if lane == duplicate_lane
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     assert_eq!(
         nexus.lane_catalog.lane_count().get(),
@@ -10053,15 +10172,19 @@ state_test! { sync apply_lane_lifecycle_internal_autoscale_rejects_managed_retir
         install_existing_nexus_geometry_for_test(&state, nexus);
     }
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![out_of_range_lane.id], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle_with_options(&plan, false, true) .expect_err("internal autoscale lifecycle must not retire out-of-range managed lanes") };
     assert!(matches!(
         err,
-        LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
-            lane,
-            min_lane_id: 1,
-            max_lane_id_exclusive: 8
-        } if lane == out_of_range_lane.id
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     assert!(
         state
             .nexus_snapshot()
@@ -10120,11 +10243,19 @@ state_test! { sync apply_lane_lifecycle_rejects_external_autoscale_managed_retir
         .expect("test setup may add internal autoscale lane");
     seed_committed_height_for_state_test(&state, 2);
     let_row! { retire_plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![LaneId::new(1)], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&retire_plan) .expect_err("external lifecycle must not retire autoscale-owned lanes") };
     assert!(matches!(
         err,
-        LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retire_plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     assert!(
         state
             .nexus_snapshot()
@@ -10143,11 +10274,19 @@ state_test! { sync apply_lane_lifecycle_internal_autoscale_rejects_unmanaged_ret
         .apply_lane_lifecycle(&add_manual_lane)
         .expect("test setup may add manual lane");
     let_row! { retire_plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![LaneId::new(8)], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle_with_options(&retire_plan, false, true) .expect_err("internal autoscale lifecycle must not retire unmanaged lanes") };
     assert!(matches!(
         err,
-        LaneLifecycleError::AutoscaleRetireUnmanagedLane(id) if id == LaneId::new(8)
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retire_plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     assert!(
         state
             .nexus_snapshot()
@@ -10173,13 +10312,19 @@ state_test! { sync apply_lane_lifecycle_internal_autoscale_rejects_malformed_man
         install_existing_nexus_geometry_for_test(&state, nexus);
     }
     let_row! { retire_plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![LaneId::new(1)], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle_with_options(&retire_plan, false, true) .expect_err("internal autoscale lifecycle must not retire malformed managed lanes") };
     assert!(matches!(
         err,
-        LaneLifecycleError::InvalidAutoscaleManagedLane { lane, reason }
-            if lane == LaneId::new(1)
-                && reason == "autoscale.created_height must be a positive integer"
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retire_plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     assert!(
         state
             .nexus_snapshot()
@@ -10208,17 +10353,19 @@ fn apply_lane_lifecycle_internal_autoscale_rejects_managed_retire_outside_defaul
         install_existing_nexus_geometry_for_test(&state, nexus);
     }
     let_row! { retire_plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![LaneId::new(1)], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle_with_options(&retire_plan, false, true) .expect_err("internal autoscale lifecycle must not retire outside default dataspace") };
     assert!(matches!(
         err,
-        LaneLifecycleError::AutoscaleManagedLaneWrongDataspace {
-            lane,
-            dataspace,
-            default_dataspace,
-        } if lane == LaneId::new(1)
-            && dataspace == other_dataspace
-            && default_dataspace == DataSpaceId::UNIVERSAL
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retire_plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     assert!(
         state
             .nexus_snapshot()
@@ -10243,12 +10390,19 @@ state_test! { sync apply_lane_lifecycle_rejects_retiring_default_routing_lane
         install_existing_nexus_geometry_for_test(&state, nexus);
     }
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![routed_lane.id], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("retiring the default routing lane must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::RoutingPolicy(reason)
-            if reason.contains("default lane 1 is not present")
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     assert!(
         nexus
@@ -10266,11 +10420,19 @@ state_test! { sync apply_lane_lifecycle_rejects_same_plan_default_lane_replaceme
     let initial_catalog = state.nexus_snapshot().lane_catalog;
     let_row! { initial_entry = state .nexus_snapshot() .lane_config .entry(LaneId::SINGLE) .expect("default lane config exists") .clone() };
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: LaneId::SINGLE, alias: "fresh-default-route".to_string(), ..LaneConfig::default() }], retire: vec![LaneId::SINGLE], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("same-plan replacement of default route must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::PhysicalPrimaryReplacement
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     assert_eq!(nexus.lane_catalog, initial_catalog);
     let_row! { current_entry = nexus .lane_config .entry(LaneId::SINGLE) .expect("default lane config remains present") };
@@ -10290,11 +10452,19 @@ state_test! { sync apply_lane_lifecycle_rejects_retiring_physical_primary_when_r
         install_existing_nexus_geometry_for_test(&state, nexus);
     }
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![LaneId::SINGLE], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { error = state .apply_lane_lifecycle(&plan) .expect_err("Kura's physical primary lane must remain stable") };
     assert!(matches!(
         error,
-        LaneLifecycleError::PhysicalPrimaryReplacement
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     assert_eq!(nexus.lane_catalog, lane_catalog);
     assert!(nexus.lane_config.entry(LaneId::SINGLE).is_some());
@@ -10306,12 +10476,19 @@ state_test! { sync apply_lane_lifecycle_rejects_rebinding_default_lane_without_p
     let_row! { initial_nexus = iroha_config::parameters::actual::Nexus { lane_catalog: LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: routed_lane, alias: "routing-default".to_owned(), ..LaneConfig::default() }, ], ) .expect("lane catalog"), dataspace_catalog: DataSpaceCatalog::new(vec![ DataSpaceMetadata::default(), DataSpaceMetadata { id: migrated, alias: "migrated".to_string(), description: None, fault_tolerance: 1, }, ]) .expect("dataspace catalog"), routing_policy: LaneRoutingPolicy { default_lane: routed_lane, default_dataspace: DataSpaceId::UNIVERSAL, ..Default::default() }, ..iroha_config::parameters::actual::Nexus::default() } };
     let_row! { state = State::new_with_nexus_for_testing( World::default(), initial_nexus, LiveQueryStore::start_test(), ) };
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: routed_lane, dataspace_id: migrated, alias: "routing-default-migrated".to_string(), ..LaneConfig::default() }], retire: vec![routed_lane], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("default lane rebind without policy update must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::RoutingPolicy(reason)
-            if reason.contains("default lane 1 is bound to dataspace 11")
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     let_row! { lane = nexus .lane_catalog .lanes() .iter() .find(|lane| lane.id == routed_lane) .expect("default lane remains present") };
     assert_eq!(lane.dataspace_id, DataSpaceId::UNIVERSAL);
@@ -10340,12 +10517,19 @@ state_test! { sync apply_lane_lifecycle_rejects_retiring_explicit_rule_lane
         install_existing_nexus_geometry_for_test(&state, nexus);
     }
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: Vec::new(), retire: vec![rule_lane.id], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("retiring a rule lane must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::RoutingPolicy(reason)
-            if reason.contains("routing rule 0 lane 1 is not present")
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     assert!(
         nexus
@@ -10368,12 +10552,19 @@ fn apply_lane_lifecycle_rejects_rebinding_explicit_rule_dataspace_without_policy
         LiveQueryStore::start_test(),
     );
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: rule_lane.id, dataspace_id: DataSpaceId::UNIVERSAL, alias: "rule-route-rebound".to_string(), ..LaneConfig::default() }], retire: vec![rule_lane.id], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("rule lane rebind without policy update must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::RoutingPolicy(reason)
-            if reason.contains("routing rule 0 lane 1 is bound to dataspace 0")
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     let_row! { lane = nexus .lane_catalog .lanes() .iter() .find(|lane| lane.id == rule_lane.id) .expect("rule lane remains present") };
     assert_eq!(lane.dataspace_id, rule_dataspace);
@@ -10390,13 +10581,19 @@ state_test! { sync apply_lane_lifecycle_rejects_rebinding_rule_lane_without_rule
         World::default(), initial_nexus, LiveQueryStore::start_test(),
     );
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: rule_lane.id, dataspace_id: migrated, alias: "rule-route-rebound".to_string(), ..LaneConfig::default() }], retire: vec![rule_lane.id], } };
+    let before_retirement = norito::json::to_value(&state).expect("original retirement State");
     let_row! { err = state .apply_lane_lifecycle(&plan) .expect_err("rule lane rebind without a rule dataspace must fail") };
     assert!(matches!(
         err,
-        LaneLifecycleError::RoutingPolicy(reason)
-            if reason.contains("routing rule 0 lane 1 is bound to dataspace 9")
-                && reason.contains("default dataspace is 0")
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == plan.retire[0]
+                && reason == "physical catalog retirement is unsupported; native lane closure retains its data"
     ));
+    assert_eq!(
+        norito::json::to_value(&state).expect("rejected physical retirement State"),
+        before_retirement,
+        "physical retirement must preserve all original State content"
+    );
     let nexus = state.nexus_snapshot();
     let_row! { lane = nexus .lane_catalog .lanes() .iter() .find(|lane| lane.id == rule_lane.id) .expect("rule lane remains present") };
     assert_eq!(lane.dataspace_id, DataSpaceId::UNIVERSAL);
@@ -12986,11 +13183,11 @@ fn install_lane_manifest_registry(state: &State, lanes: &[(LaneId, DataSpaceId, 
     );
     state.install_lane_manifests_for_testing(&registry);
 }
-/// Install deliberately stale route claims for authority rejection tests.
-fn install_stale_lane_manifest_registry_for_test(
+/// Construct isolated stale route claims; they must never be installed as native authority.
+fn stale_lane_manifest_registry_for_test(
     state: &State,
     lanes: &[(LaneId, DataSpaceId, Vec<AccountId>)],
-) {
+) -> LaneManifestRegistryHandle {
     let nexus = state.nexus_snapshot();
     let statuses = lanes
         .iter()
@@ -13028,9 +13225,7 @@ fn install_stale_lane_manifest_registry_for_test(
             (*lane_id, status)
         })
         .collect();
-    state.install_lane_manifests_for_testing(&Arc::new(LaneManifestRegistry::from_statuses(
-        statuses,
-    )));
+    Arc::new(LaneManifestRegistry::from_statuses(statuses))
 }
 fn install_lane_privacy_commitment_fixture(state: &State, private_lane: LaneId) {
     use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
@@ -13068,10 +13263,104 @@ fn install_lane_manifest_registry_with_bindings(
         lane.dataspace_id, dataspace_id,
         "manifest fixture binds the exact route"
     );
+    assert_eq!(
+        validators,
+        validator_bindings
+            .iter()
+            .map(|binding| binding.validator.clone())
+            .collect::<Vec<_>>(),
+        "valid fixture retains the exact declared validator order"
+    );
+    let registry = Arc::new(
+        crate::governance::manifest::test_support::validator_registry(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            BTreeMap::from([(lane_id, validator_bindings)]),
+        ),
+    );
+    state.install_lane_manifests_for_testing(&registry);
+}
+/// Exercise the canonical live-binding validator with an isolated malformed source.
+fn isolated_manifest_validator_bindings(
+    state: &State,
+    registry: &LaneManifestRegistry,
+    lane_id: LaneId,
+) -> Vec<ManifestValidatorBinding> {
+    let height = state.lane_authority_height();
+    let Some(inputs) = state.lane_authority_inputs(lane_id, height) else {
+        return Vec::new();
+    };
+    let Ok(Some(rules)) = lane_authority::manifest_rules_for_lane(lane_id, registry, &inputs)
+    else {
+        return Vec::new();
+    };
+    bounded_authority::live_manifest_validator_bindings(
+        &state.world.view(),
+        lane_id,
+        &rules.validator_bindings,
+        &rules.validators,
+        height,
+    )
+}
+/// Exercise the canonical account projection without materializing a malformed State.
+fn isolated_manifest_validator_accounts(
+    state: &State,
+    registry: &LaneManifestRegistry,
+    lane_id: LaneId,
+) -> Vec<AccountId> {
+    let height = state.lane_authority_height();
+    let Some(inputs) = state.lane_authority_inputs(lane_id, height) else {
+        return Vec::new();
+    };
+    lane_authority::validator_accounts_with_inputs(
+        &state.world.view(),
+        lane_id,
+        registry,
+        &inputs,
+        height,
+    )
+}
+/// Construct a malformed status projection for isolated authority rejection only.
+fn malformed_lane_manifest_registry_with_bindings_for_test(
+    state: &State,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    validators: Vec<AccountId>,
+    validator_bindings: Vec<ManifestValidatorBinding>,
+) -> LaneManifestRegistryHandle {
+    let nexus = state.nexus_snapshot();
+    let lane = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+        .expect("manifest fixture requires an actual configured lane");
+    assert_eq!(
+        lane.dataspace_id, dataspace_id,
+        "manifest fixture binds the exact route"
+    );
     let_row! { rules = GovernanceRules { validators, validator_bindings, ..GovernanceRules::default() } };
     let_row! { status = LaneManifestStatus { lane: lane_id, alias: lane.alias.clone(), dataspace: dataspace_id, visibility: lane.visibility, storage: lane.storage, governance: lane.governance.clone(), manifest_path: Some(std::path::PathBuf::from("/tmp/manifest.json")), governance_rules: Some(rules), privacy_commitments: Vec::new(), } };
     let_row! { registry = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([( lane_id, status, )]))) };
-    state.install_lane_manifests_for_testing(&registry);
+    registry
+}
+state_test! { sync lane_manifest_geometry_fixture_rebind_retains_original_frozen_source
+    let state = blank_test_state();
+    let (_, keys) = bls_accounts_in("manifest-geometry", 4);
+    seed_consensus_keys_with_pops(&state, &keys);
+    install_lane_manifest_registry_for_keypairs(&state, &[LaneId::SINGLE], &keys);
+    let original = state.lane_manifests.read().clone();
+    let nexus = state.nexus_snapshot();
+    assert!(!original.status(LaneId::SINGLE).unwrap().manifest_path.as_ref().unwrap().exists(),
+        "the original source is frozen after its temporary file is removed");
+    install_existing_nexus_geometry_for_test(&state, nexus.clone());
+    let rebound = state.lane_manifests.read().clone();
+    assert!(original.has_same_authority_as(&rebound));
+    assert_eq!(original.consensus_policy_digest(), rebound.consensus_policy_digest());
+    rebound.validate_materialized_authority_for_catalog(&nexus.lane_catalog, &nexus.governance)
+        .expect("rebound authority preserves its original bounded source");
+    assert_eq!(rebound.lane_validators(LaneId::SINGLE), Some(keys.iter().map(|key| AccountId::new(key.public_key().clone())).collect()));
+    assert!(state.try_view().is_ok());
 }
 state_test! { sync lane_manifest_fixtures_preserve_exact_catalog_identity_across_scoped_reads
     let state = State::new_for_testing(World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
@@ -15323,30 +15612,30 @@ state_test! { sync authoritative_lane_validators_ignore_stale_geometry_for_remov
         .expect("apply active catalog");
     let stale_lane = LaneId::new(1);
     let_row! { stale_geometry_catalog = LaneCatalog::new( NonZeroU32::new(2).expect("non-zero lane count"), vec![ LaneConfig::default(), LaneConfig { id: stale_lane, alias: "stale-geometry".to_owned(), ..LaneConfig::default() }, ], ) .expect("stale geometry catalog") };
-    {
-        let mut nexus = state.nexus.write();
-        nexus.lane_config = RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
-    }
     let (validator, validator_keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, std::slice::from_ref(&validator_keypair));
-    install_stale_lane_manifest_registry_for_test(
+    let registry = stale_lane_manifest_registry_for_test(
         &state,
         &[(stale_lane, DataSpaceId::UNIVERSAL, vec![validator.clone()])],
     );
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+    view.nexus.lane_config = RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
+
     assert!(
-        state
-            .manifest_lane_validator_bindings(stale_lane)
+        isolated_manifest_validator_bindings(&state, &registry, stale_lane)
             .is_empty(),
         "stale derived geometry must not make a removed catalog lane manifest-active"
     );
     assert!(
-        state
-            .authoritative_lane_validator_accounts(stale_lane)
+        isolated_manifest_validator_accounts(&state, &registry, stale_lane)
             .is_empty(),
         "stale derived geometry must not revive removed-lane manifest validators"
     );
     assert!(matches!(
-        state.resolve_lane_committee_at_height(
+        view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(stale_lane, DataSpaceId::UNIVERSAL),
             0,
         ),
@@ -15355,6 +15644,8 @@ state_test! { sync authoritative_lane_validators_ignore_stale_geometry_for_remov
             ..
         }) if inactive == stale_lane
     ), "stale derived geometry must not produce relay peers for a removed catalog lane");
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unknown_lane
     let state = blank_test_state();
@@ -15362,22 +15653,25 @@ state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unkno
     let stale_lane = LaneId::new(1);
     let (validator, validator_keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, std::slice::from_ref(&validator_keypair));
-    install_stale_lane_manifest_registry_for_test(
+    let registry = stale_lane_manifest_registry_for_test(
         &state,
         &[(stale_lane, DataSpaceId::UNIVERSAL, vec![validator])],
     );
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+
     assert!(
-        state
-            .manifest_lane_validator_bindings(stale_lane)
+        isolated_manifest_validator_bindings(&state, &registry, stale_lane)
             .is_empty()
     );
     assert!(
-        state
-            .authoritative_lane_validator_accounts(stale_lane)
+        isolated_manifest_validator_accounts(&state, &registry, stale_lane)
             .is_empty()
     );
     assert!(matches!(
-        state.resolve_lane_committee_at_height(
+        view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(stale_lane, DataSpaceId::UNIVERSAL),
             0,
         ),
@@ -15387,19 +15681,17 @@ state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unkno
         }) if inactive == stale_lane
     ));
     assert!(
-        state
-            .manifest_lane_validator_bindings(LaneId::SINGLE)
+        isolated_manifest_validator_bindings(&state, &registry, LaneId::SINGLE)
             .is_empty(),
         "a status-only manifest for an unknown lane must not project into an active sibling"
     );
     assert!(
-        state
-            .authoritative_lane_validator_accounts(LaneId::SINGLE)
+        isolated_manifest_validator_accounts(&state, &registry, LaneId::SINGLE)
             .is_empty(),
         "an unknown lane's roster must not contaminate active account authority"
     );
     assert!(matches!(
-        state.resolve_lane_committee_at_height(
+        view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             0,
         ),
@@ -15409,6 +15701,8 @@ state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unkno
             ..
         })
     ), "an unknown lane's roster must not contaminate active peer authority");
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 state_test! { sync authoritative_lane_validators_ignore_manifest_for_rebound_dataspace
     let mut state = blank_test_state();
@@ -15444,19 +15738,21 @@ state_test! { sync authoritative_lane_validators_ignore_manifest_for_rebound_dat
         });
     let (validator, validator_keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, std::slice::from_ref(&validator_keypair));
-    install_stale_lane_manifest_registry_for_test(&state, &[(lane_id, stale_dataspace, vec![validator])]);
-    assert!(state.manifest_lane_validator_bindings(lane_id).is_empty());
+    let registry = stale_lane_manifest_registry_for_test(&state, &[(lane_id, stale_dataspace, vec![validator])]);
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+
+    assert!(isolated_manifest_validator_bindings(&state, &registry, lane_id).is_empty());
     assert!(
-        state
-            .authoritative_lane_validator_accounts(lane_id)
+        isolated_manifest_validator_accounts(&state, &registry, lane_id)
             .is_empty()
     );
-    assert!(state.resolve_lane_committee_at_height(
+    assert!(view.resolve_lane_committee_at_height(
         LaneAuthorityRoute::new(lane_id, active_dataspace), 0,
     ).is_err(), "the canonical projection must not authorize stale manifest claims");
-    // Exercise malformed input directly as well as its fail-closed canonical projection.
-    let mut view = state.view();
-    view.lane_manifests = Arc::clone(&state.lane_manifests.read());
+    // The isolated malformed view must preserve the exact source rejection.
     assert!(matches!(
         view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(lane_id, active_dataspace),
@@ -15467,6 +15763,8 @@ state_test! { sync authoritative_lane_validators_ignore_manifest_for_rebound_dat
             ..
         }) if rejected == lane_id
     ));
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 state_test! { sync same_dataspace_authority_rejects_rebound_active_sibling_manifest
     let kura = Kura::blank_kura_for_testing();
@@ -15478,31 +15776,32 @@ state_test! { sync same_dataspace_authority_rejects_rebound_active_sibling_manif
     let sibling_lane = LaneId::new(1);
     let (validator, keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
-    install_stale_lane_manifest_registry_for_test(
+    let registry = stale_lane_manifest_registry_for_test(
         &state,
         &[
             (target_lane, DataSpaceId::UNIVERSAL, vec![validator]),
             (sibling_lane, DataSpaceId::new(9), Vec::new()),
         ],
     );
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+
 
     assert!(
-        state
-            .manifest_lane_validator_bindings(target_lane)
+        isolated_manifest_validator_bindings(&state, &registry, target_lane)
             .is_empty(),
         "an active sibling rebound outside its catalog dataspace must seal manifest projection"
     );
     assert!(
-        state
-            .authoritative_lane_validator_accounts(target_lane)
+        isolated_manifest_validator_accounts(&state, &registry, target_lane)
             .is_empty()
     );
-    assert!(state.resolve_lane_committee_at_height(
+    assert!(view.resolve_lane_committee_at_height(
         LaneAuthorityRoute::new(target_lane, DataSpaceId::UNIVERSAL), 0,
     ).is_err(), "the canonical projection must not authorize stale manifest claims");
-    // Exercise malformed input directly as well as its fail-closed canonical projection.
-    let mut view = state.view();
-    view.lane_manifests = Arc::clone(&state.lane_manifests.read());
+    // The isolated malformed view must preserve the exact source rejection.
     assert!(matches!(
         view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(target_lane, DataSpaceId::UNIVERSAL),
@@ -15513,6 +15812,8 @@ state_test! { sync same_dataspace_authority_rejects_rebound_active_sibling_manif
             ..
         }) if rejected == target_lane
     ));
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 
 state_test! { sync manifest_lane_validator_bindings_reject_duplicate_peer_bindings
@@ -15524,7 +15825,7 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_peer_bindin
     seed_consensus_keys_with_pops(&state, std::slice::from_ref(&shared_peer_keypair));
     let shared_peer = PeerId::new(shared_peer_keypair.public_key().clone());
     let validators = vec![ALICE_ID.clone(), BOB_ID.clone()];
-    install_lane_manifest_registry_with_bindings(
+    let registry = malformed_lane_manifest_registry_with_bindings_for_test(
         &state,
         lane_id,
         dataspace_id,
@@ -15538,29 +15839,31 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_peer_bindin
             })
             .collect(),
     );
-    let bindings = state.manifest_lane_validator_bindings(lane_id);
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+
+    let bindings = isolated_manifest_validator_bindings(&state, &registry, lane_id);
     assert!(
         bindings.is_empty(),
         "duplicate explicit bindings for one peer must fail closed instead of picking a validator"
     );
     assert!(matches!(
-        state.resolve_lane_committee_at_height(
+        view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(lane_id, dataspace_id),
             0,
         ),
         Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
     ), "duplicate peer bindings must not expose peer authority");
     assert!(
-        state
-            .authoritative_lane_validator_accounts(lane_id)
+        isolated_manifest_validator_accounts(&state, &registry, lane_id)
             .is_empty(),
         "duplicate peer bindings must not expose account authority"
     );
     assert!(
         validators.iter().all(|validator| {
-            state
-                .lane_manifests
-                .read()
+            registry
                 .lane_validators(lane_id)
                 .unwrap_or_default()
                 .contains(validator)
@@ -15572,6 +15875,8 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_peer_bindin
         peer_id_for_account(&validators[0]),
         "test fixture should use an explicit peer binding rather than signatory inference"
     );
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 state_test! { sync manifest_lane_validator_bindings_reject_duplicate_validator_bindings
     let mut state = blank_test_state();
@@ -15582,7 +15887,7 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_validator_b
     seed_consensus_keys_with_pops(&state, &peer_keypairs);
     let_row! { peers: Vec<_> = peer_keypairs .iter() .map(|keypair| PeerId::new(keypair.public_key().clone())) .collect() };
     let validator = ALICE_ID.clone();
-    install_lane_manifest_registry_with_bindings(
+    let registry = malformed_lane_manifest_registry_with_bindings_for_test(
         &state,
         lane_id,
         dataspace_id,
@@ -15596,21 +15901,25 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_validator_b
             })
             .collect(),
     );
-    let bindings = state.manifest_lane_validator_bindings(lane_id);
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+
+    let bindings = isolated_manifest_validator_bindings(&state, &registry, lane_id);
     assert!(
         bindings.is_empty(),
         "duplicate explicit bindings for one validator must fail closed instead of picking a peer"
     );
     assert!(matches!(
-        state.resolve_lane_committee_at_height(
+        view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(lane_id, dataspace_id),
             0,
         ),
         Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
     ), "duplicate validator bindings must not expose peer authority");
     assert!(
-        state
-            .authoritative_lane_validator_accounts(lane_id)
+        isolated_manifest_validator_accounts(&state, &registry, lane_id)
             .is_empty(),
         "duplicate validator bindings must not expose account authority"
     );
@@ -15623,6 +15932,8 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_validator_b
             .any(|stored| stored == peer)),
         "test fixture should keep both duplicate binding peers in world state"
     );
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 state_test! { sync manifest_lane_validator_bindings_reject_undeclared_validator_bindings
     let mut state = blank_test_state();
@@ -15633,7 +15944,7 @@ state_test! { sync manifest_lane_validator_bindings_reject_undeclared_validator_
     let (rogue_validator, rogue_keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, &[declared_keypair.clone(), rogue_keypair.clone()]);
     let rogue_peer = PeerId::new(rogue_keypair.public_key().clone());
-    install_lane_manifest_registry_with_bindings(
+    let registry = malformed_lane_manifest_registry_with_bindings_for_test(
         &state,
         lane_id,
         dataspace_id,
@@ -15644,10 +15955,13 @@ state_test! { sync manifest_lane_validator_bindings_reject_undeclared_validator_
             torii_url: None,
         }],
     );
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+
     assert_eq!(
-        state
-            .lane_manifests
-            .read()
+        registry
             .lane_validator_bindings(lane_id)
             .unwrap_or_default()
             .len(),
@@ -15655,19 +15969,18 @@ state_test! { sync manifest_lane_validator_bindings_reject_undeclared_validator_
         "test fixture must keep the malformed explicit binding installed"
     );
     assert!(
-        state.manifest_lane_validator_bindings(lane_id).is_empty(),
+        isolated_manifest_validator_bindings(&state, &registry, lane_id).is_empty(),
         "a live explicit binding for an undeclared validator must not be exposed"
     );
     assert!(matches!(
-        state.resolve_lane_committee_at_height(
+        view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(lane_id, dataspace_id),
             0,
         ),
         Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
     ), "undeclared explicit bindings must suppress fallback without granting peer authority");
     assert!(
-        state
-            .authoritative_lane_validator_accounts(lane_id)
+        isolated_manifest_validator_accounts(&state, &registry, lane_id)
             .is_empty(),
         "undeclared explicit bindings must not grant account authority or fall back to declared signatory inference"
     );
@@ -15676,6 +15989,8 @@ state_test! { sync manifest_lane_validator_bindings_reject_undeclared_validator_
         rogue_peer,
         "test fixture should use different declared and rogue peers"
     );
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 state_test! { sync manifest_lane_validators_reject_duplicate_declared_validators_without_bindings
     let mut state = blank_test_state();
@@ -15684,17 +15999,20 @@ state_test! { sync manifest_lane_validators_reject_duplicate_declared_validators
     configure_restricted_lane_for_manifest_binding_test(&mut state, lane_id, dataspace_id);
     let (validator, keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
-    install_lane_manifest_registry_with_bindings(
+    let registry = malformed_lane_manifest_registry_with_bindings_for_test(
         &state,
         lane_id,
         dataspace_id,
         vec![validator.clone(), validator.clone()],
         Vec::new(),
     );
+    assert!(registry.validate_materialized_source_projection().is_err(),
+        "status-only malformed input cannot become materialized native authority");
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&registry);
+
     assert_eq!(
-        state
-            .lane_manifests
-            .read()
+        registry
             .lane_validators(lane_id)
             .unwrap_or_default()
             .len(),
@@ -15702,24 +16020,21 @@ state_test! { sync manifest_lane_validators_reject_duplicate_declared_validators
         "test fixture must keep duplicate declared validators installed"
     );
     assert!(
-        state
-            .lane_manifests
-            .read()
+        registry
             .lane_validator_bindings(lane_id)
             .unwrap_or_default()
             .is_empty(),
         "test fixture must exercise the no-explicit-binding fallback path"
     );
     assert!(matches!(
-        state.resolve_lane_committee_at_height(
+        view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(lane_id, dataspace_id),
             0,
         ),
         Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
     ), "duplicate declared validators must fail closed instead of deduplicating into peer authority");
     assert!(
-        state
-            .authoritative_lane_validator_accounts(lane_id)
+        isolated_manifest_validator_accounts(&state, &registry, lane_id)
             .is_empty(),
         "duplicate declared validators must fail closed instead of deduplicating into account authority"
     );
@@ -15728,6 +16043,8 @@ state_test! { sync manifest_lane_validators_reject_duplicate_declared_validators
         PeerId::new(keypair.public_key().clone()),
         "test fixture should otherwise have a live signatory peer"
     );
+    assert!(state.try_view().is_ok(), "isolated malformed registry cannot contaminate native State");
+
 }
 state_test! { sync authoritative_lane_validator_accounts_use_explicit_manifest_peer_binding
     let mut state = blank_test_state();
@@ -19674,9 +19991,11 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut state_block = state.block(header);
-    let _guard = crate::exec_witness::exec_witness_guard();
-    crate::exec_witness::start_block();
+    let original = iroha_data_model::block::builder::BlockBuilder::new(header)
+        .build_with_signature(0, ALICE_KEYPAIR.private_key());
+    let (mut state_block, _recording) =
+        ValidBlock::start_component_execution(&original, &state)
+            .expect("original witness component recorder");
     let_row! { asset_def_id = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "rose".parse().unwrap(), ) };
     let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
     crate::exec_witness::record_write_asset(&asset_id, &Quantity::from(42_u32));
@@ -19706,6 +20025,15 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
             == iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
     }));
     assert!(state_block.take_exec_witness().is_none());
+}
+state_test! { sync capture_exec_witness_refuses_a_pristine_scope_without_its_original_recorder
+    let state = blank_state();
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    assert_eq!(
+        block.capture_exec_witness(),
+        Err("State execution has no original recorder".to_owned())
+    );
+    assert!(block.take_exec_witness().is_none());
 }
 state_test! { sync vk_set_hash_deterministic
     let order_a = [("vk_alpha", "circuit_a"), ("vk_beta", "circuit_b")];
@@ -19752,9 +20080,10 @@ state_test! { result time_trigger_failure_retains_declared_projection_in_its_typ
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing()?;
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
-    let mut state_block = state.block(header);
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, None);
+    let state = authenticate_trigger_fixture(state);
+    let source = trigger_component_block(&state, 2);
+    let (mut state_block, _recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, source.as_ref());
     assert_eq!(outputs.len(), 1);
     let iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) = &outputs[0] else { panic!("scheduled source must own Time output") };
     assert!(row.result.is_err(), "expected trigger execution to fail");
@@ -19797,9 +20126,10 @@ state_test! { result time_trigger_cannot_synthesize_governance_ballot
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing()?;
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
-    let mut state_block = state.block(header);
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, None);
+    let state = authenticate_trigger_fixture(state);
+    let source = trigger_component_block(&state, 2);
+    let (mut state_block, _recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, source.as_ref());
     assert_eq!(outputs.len(), 1);
     let error = outputs[0].result().as_ref().expect_err("trigger-carried governance ballot must fail closed");
     assert!(
@@ -19824,16 +20154,19 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
         let_row! { replacement_schedule = Schedule { start_ms: 10_000, period_ms: None, } };
         let_row! { replacement_trigger = Trigger::new( trigger_id.clone(), Action::new( Vec::<InstructionBox>::new(), Repeats::Exactly(1), ALICE_ID.clone(), TimeEventFilter(ExecutionTime::Schedule(replacement_schedule)), ) .expect("trigger action fixture satisfies validation invariants"), ) };
         let_row! { instructions = vec![ InstructionBox::from(Unregister::trigger(trigger_id.clone())), InstructionBox::from(Register::trigger(replacement_trigger)), ] };
-        let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( instructions, Repeats::Exactly(1), ALICE_ID.clone(), TimeEventFilter(ExecutionTime::Schedule(Schedule { start_ms: 0, period_ms: None, })), ) .expect("trigger action fixture satisfies validation invariants"), ) };
+        let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( instructions, Repeats::Exactly(1), ALICE_ID.clone(), TimeEventFilter(ExecutionTime::Schedule(Schedule { start_ms: 1_000, period_ms: None, })), ) .expect("trigger action fixture satisfies validation invariants"), ) };
         Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
         stx.apply();
     }
-    let _ = state_block.apply_without_execution(&block1, Vec::new());
-    state_block.commit()?;
-    state.kura.store_block(block1.clone()).expect("retain the actual previous timestamp for Time matching");
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); h.creation_time_ms = 2; }) };
-    let mut state_block = state.block(block2.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block2.as_ref()));
+    state_block.commit_world_overlay_for_testing()?;
+    let state = authenticate_trigger_fixture(state);
+    let parent = state.view().latest_block().expect("original trigger genesis");
+    assert!(parent.header().creation_time() < Duration::from_millis(1_000));
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(parent.hash()), None, 1_001, 0);
+    let source = iroha_data_model::block::builder::BlockBuilder::new(header)
+        .build_with_signature(0, ALICE_KEYPAIR.private_key());
+    let (mut state_block, _recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, &source);
     assert_eq!(outputs.len(), 1);
     assert!(outputs[0].result().is_ok(), "{:?}", outputs[0].result());
     let_row! { action = state_block .world .triggers() .time_triggers() .get(&trigger_id) .expect("replacement trigger should remain registered") };
@@ -19853,6 +20186,40 @@ state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
         ExecutionTime::PreCommit => panic!("expected replacement schedule"),
     }
     Ok(())
+}
+state_test! { sync trigger_genesis_preserves_original_execution_bounds
+    let component = blank_state();
+    {
+        let mut parameters = component.world.parameters.block();
+        parameters.smart_contract.execution_depth = 3;
+        parameters.commit();
+    }
+    let original_execution = component.world.parameters.view().get().parameters()
+        .filter(|parameter| !matches!(parameter, Parameter::Sumeragi(_) | Parameter::Custom(_)))
+        .collect::<Vec<_>>();
+    let state = authenticate_trigger_fixture(component);
+    let actual_execution = state.world.parameters.view().get().parameters()
+        .filter(|parameter| !matches!(parameter, Parameter::Sumeragi(_) | Parameter::Custom(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(actual_execution, original_execution);
+    assert_eq!(state.world.parameters.view().get().smart_contract().execution_depth(), 3);
+    assert_eq!(state.committed_height(), 1);
+}
+state_test! { sync empty_network_fixture_keeps_original_recorder_and_native_history
+    let state = authenticate_trigger_fixture(blank_state());
+    let parent_hash = state.view().latest_block_hash();
+    for height in [2, 3] {
+        let source = trigger_component_block(&state, height);
+        let (block, recording, outputs, _) =
+            crate::state::run_empty_network_owner_fixture(&state, source.as_ref());
+        assert!(outputs.is_empty());
+        assert_eq!(block.retained_execution_outputs_for_test().unwrap(), outputs.as_slice());
+        drop(block);
+        drop(recording);
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(state.view().latest_block_hash(), parent_hash);
+        assert_eq!(state.view().kura().blocks_count(), 1);
+    }
 }
 state_test! { sync time_trigger_nft_seq_base_strides_by_256
     let base0 = StateBlock::time_trigger_nft_seq_base(42, 0);
@@ -25634,12 +26001,12 @@ state_test! { sync transaction_failure_rolls_back_asset_world_and_trigger_change
     );
 }
 state_test! { sync execute_called_trigger_failure_rolls_back_state
-    let state = blank_state();
+    let state = authenticate_trigger_fixture(blank_state());
     let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
     let missing_domain = DomainId::try_new("dummy", "universal").unwrap();
     let_row! { asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap(), ) };
     // Commit initial domain, account, and the by-call trigger.
-    let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(1).unwrap()); }) };
+    let_row! { block = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -25662,7 +26029,7 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
         state_block.commit_world_overlay_for_testing().unwrap();
     }
     // Execute the trigger and expect rejection; state changes must rollback.
-    let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); header.creation_time_ms = 2; }) };
+    let_row! { block = trigger_component_block(&state, 2) };
     {
         // Exercise atomic rollback through the signed executor, which owns the
         // callback journal and discards the failed transaction overlay.
@@ -25714,14 +26081,14 @@ state_test! { sync execute_called_trigger_failure_rolls_back_state
     );
 }
 state_test! { sync self_calling_trigger_stops_at_synchronous_execution_depth
-    let state = blank_state();
+    let state = authenticate_trigger_fixture(blank_state());
     {
         let mut parameters = state.world.parameters.block();
         parameters.smart_contract.execution_depth = 3;
         parameters.commit();
     }
     let trigger_id: TriggerId = "bounded_self_call".parse().expect("valid trigger id");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let header = state.view().latest_block().expect("original trigger parent").header();
     let mut block = state.block(header);
     let mut transaction = block.transaction_for_callback_testing();
     Register::domain(Domain::new(
@@ -25782,7 +26149,7 @@ fn signed_callback_boundary_source(
 
 state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrapping
     use iroha_data_model::prelude::DataEvent;
-    let state = blank_state();
+    let state = authenticate_trigger_fixture(blank_state());
     {
         let mut parameters = state.world.parameters.block();
         parameters.set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
@@ -25792,7 +26159,7 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
     }
     let trigger_id: TriggerId = "max_depth_data_trigger".parse().expect("valid trigger id");
     let flag_key: Name = "max_depth_flag".parse().expect("valid metadata key");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let header = state.view().latest_block().expect("original trigger parent").header();
     let mut block = state.block(header);
     {
         let mut transaction = block.transaction_for_callback_testing();
@@ -25822,18 +26189,19 @@ state_test! { sync data_trigger_depth_u8_max_rejects_without_panicking_or_wrappi
         transaction.apply_callback_for_testing().expect("capture successful component callbacks");
     }
     block.commit_world_overlay_for_testing().expect("commit trigger setup");
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let header = trigger_component_block(&state, 2).as_ref().header();
     let callback_source = signed_callback_boundary_source(&state, header, vec![
         Register::domain(Domain::new(
             DomainId::try_new("depth_seed", "universal").expect("valid direct callback source domain"),
         )).into(),
     ]);
     let mut block = state.block(header);
-    let mut transaction = block.transaction();
+    let mut transaction = block.transaction_for_fastpq_testing(
+        Hash::from(callback_source.hash_as_entrypoint()),
+    );
     // Keep this exact signed source alive through the direct callback body.
     // A rejected/unfitted unit overlay is dropped, never applied as a Network row.
     transaction.current_entrypoint_index = Some(0);
-    transaction.tx_call_hash = Some(Hash::from(callback_source.hash_as_entrypoint()));
     transaction.current_tx_hash = Some(callback_source.hash());
     let_row! { event = data_pre::DomainEvent::Created( Domain::new(DomainId::try_new("depth_seed", "universal").expect("valid seed domain")) .build(&ALICE_ID), ) };
     transaction
@@ -26373,12 +26741,12 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
             action::{Action, Repeats},
         },
     };
-    let state = blank_state();
+    let state = authenticate_trigger_fixture(blank_state());
     let trigger_id: TriggerId = "generic_ivm_callback".parse().expect("trigger id");
     let_row! { mut program = ivm::ProgramMetadata { max_cycles: 100, ..ivm::ProgramMetadata::default() } .encode() };
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let generic_code_hash = ivm::contract_code_hash(&program);
-    let_row! { block1 = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); }) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut transaction = state_block.transaction_for_callback_testing();
@@ -26415,7 +26783,7 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
         transaction.apply_callback_for_testing().expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().expect("commit generic trigger");
     }
-    let_row! { block2 = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(2_u64)); }) };
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut transaction = state_block.transaction_for_callback_testing();
     let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };
@@ -26481,6 +26849,11 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
     );
 }
 state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argument_decode
+    let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+        capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+        max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        max_decoded_ops: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+    });
     use crate::smartcontracts::code::{activate_instance, register_code_bytes, register_manifest};
     use iroha_data_model::{
         events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
@@ -26493,7 +26866,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
     };
     use iroha_test_samples::ALICE_KEYPAIR;
     use kotodama_lang::compiler::Compiler as KotodamaCompiler;
-    let state = blank_state();
+    let state = authenticate_trigger_fixture(blank_state());
     const REQUIRED_PERMISSION: &str = "raw_trigger_run";
     let trigger_id: TriggerId = "protected_raw_callback".parse().expect("trigger id");
     let_row! { src = r#"
@@ -26513,7 +26886,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let_row! { contract_address = ContractAddress::derive( state.network_id_ref(), &ALICE_ID, 77, DataSpaceId::UNIVERSAL, ) .expect("derive raw trigger contract address") };
     let contract_subject = contract_address.subject_id();
-    let_row! { block1 = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(1).unwrap()); header.creation_time_ms = 1; }) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -26563,7 +26936,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         stx.apply_callback_for_testing().expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().unwrap();
     }
-    let_row! { block2 = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); header.creation_time_ms = 2; }) };
+    let_row! { block2 = trigger_component_block(&state, 2) };
     {
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -26945,6 +27318,11 @@ let _ev = ev;
     );
 }
 state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_argument_decode
+    let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+        capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+        max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        max_decoded_ops: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+    });
     use crate::smartcontracts::code::{activate_instance, register_code_bytes, register_manifest};
     use iroha_data_model::{
         events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
@@ -26960,7 +27338,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     };
     use iroha_test_samples::ALICE_KEYPAIR;
     use kotodama_lang::compiler::Compiler as KotodamaCompiler;
-    let state = blank_state();
+    let state = authenticate_trigger_fixture(blank_state());
     const REQUIRED_PERMISSION: &str = "contract_trigger_run";
     let_row! { src = r#"
         seiyaku ProtectedContractCallTrigger {
@@ -26986,7 +27364,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
     let_row! { contract_address = ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL) .expect("derive contract address") };
     let contract_subject = contract_address.subject_id();
-    let_row! { block1 = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(1).unwrap()); header.creation_time_ms = 1; }) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -27026,7 +27404,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         stx.apply_callback_for_testing().expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().unwrap();
     }
-    let_row! { block2 = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); header.creation_time_ms = 2; }) };
+    let_row! { block2 = trigger_component_block(&state, 2) };
     {
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -27226,7 +27604,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
     use iroha_test_samples::ALICE_KEYPAIR;
     use kotodama_lang::compiler::Compiler as KotodamaCompiler;
     use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
-    let state = blank_state();
+    let state = authenticate_trigger_fixture(blank_state());
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let_row! { rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( domain_id.clone(), "rose".parse().unwrap(), ) };
     let_row! { gold_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components( domain_id.clone(), "gold".parse().unwrap(), ) };
@@ -27277,7 +27655,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
     let bytecode = IvmBytecode::from_compiled(program.clone());
     let_row! { contract_address = ContractAddress::derive( state.network_id_ref(), &ALICE_ID, 95, DataSpaceId::UNIVERSAL, ) .expect("derive alias-transfer callback contract address") };
     let contract_subject = contract_address.subject_id();
-    let_row! { block1 = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(1).unwrap()); header.creation_time_ms = 1; }) };
+    let_row! { block1 = ValidBlock::new_unverified_for_tests(state.view().latest_block().expect("original trigger parent").as_ref().clone()) };
     {
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -27460,7 +27838,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
         stx.apply_callback_for_testing().expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().unwrap();
     }
-    let_row! { block2 = new_dummy_block_with_payload(|header| { header.set_height(NonZeroU64::new(2).unwrap()); header.creation_time_ms = 2; }) };
+    let_row! { block2 = trigger_component_block(&state, 2) };
     {
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -27503,15 +27881,17 @@ state_test! { sync execute_called_trigger_respects_executor_validation
     let_row! { domain: Domain = Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID) };
     let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
     let world = World::with([domain], [account], []);
-    let mut executor_block = world.executor.block();
-    *executor_block.get_mut() = executor;
-    executor_block.commit();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+    let state = authenticate_trigger_fixture(State::new_with_chain(
+        world, kura, query_handle, ChainId::from("test-chain"),
+    ));
+    let mut executor_block = state.world.executor.block();
+    *executor_block.get_mut() = executor;
+    executor_block.commit();
     let trigger_id: TriggerId = "executor_guarded_trigger".parse().unwrap();
     let_row! { trigger = Trigger::new( trigger_id.clone(), Action::new( vec![InstructionBox::from(Log::new( Level::INFO, "trigger log".to_owned(), ))], Repeats::Indefinitely, ALICE_ID.clone(), ExecuteTriggerEventFilter::new() .for_trigger(trigger_id.clone()) .under_authority(ALICE_ID.clone()), ) .expect("trigger action fixture satisfies validation invariants"), ) };
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+    let header = state.view().latest_block().expect("original trigger parent").header();
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction_for_callback_testing();
@@ -27521,7 +27901,7 @@ state_test! { sync execute_called_trigger_respects_executor_validation
         stx.apply_callback_for_testing().expect("capture successful component callbacks");
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
+    let header = trigger_component_block(&state, 2).as_ref().header();
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction_for_callback_testing();
     let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };

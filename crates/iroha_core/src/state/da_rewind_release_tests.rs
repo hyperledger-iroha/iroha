@@ -145,6 +145,9 @@ fn replacement_rewind_retains_notifications_through_original_capture_refusal_and
         }
         assert_eq!(callback.observations(), [0; 5]);
         let original = std::ptr::from_ref(&*carrier);
+        // Repeated capture validates the already-drained original recorder
+        // under the same exclusive guard required by the capture owner.
+        let _capture_guard = crate::exec_witness::exec_witness_guard();
         carrier
             .capture_exec_witness()
             .expect("actual original output capture");

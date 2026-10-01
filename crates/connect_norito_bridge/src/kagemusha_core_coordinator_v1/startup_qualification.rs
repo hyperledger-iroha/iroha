@@ -174,7 +174,10 @@ impl NativeStartupQualificationOwnerV1 {
             .map_err(|_| ObservationErrorV1::Authentication)?;
         let checkpoint = selected.checkpoint().clone();
         let enrollment = selected.enrollment_binding().clone();
-        let accepted = selected.accepted_credential_floor().credential;
+        let accepted = *selected
+            .accepted_credential_floor()
+            .oem_original()
+            .map_err(|_| ObservationErrorV1::InvalidQualification)?;
         let epoch = selected.hardware_epoch();
         let binding = selected.device_policy_binding();
         let release = core
@@ -200,7 +203,11 @@ impl NativeStartupQualificationOwnerV1 {
             .map_err(|_| ObservationErrorV1::Authentication)?;
         if current.checkpoint() != &checkpoint
             || current.enrollment_binding() != &enrollment
-            || current.accepted_credential_floor().credential != accepted
+            || *current
+                .accepted_credential_floor()
+                .oem_original()
+                .map_err(|_| ObservationErrorV1::InvalidQualification)?
+                != accepted
         {
             return Err(ObservationErrorV1::Conflict);
         }
@@ -216,7 +223,10 @@ impl NativeStartupQualificationOwnerV1 {
             .map_err(|_| ObservationErrorV1::Authentication)?;
         let checkpoint = selected.checkpoint().clone();
         let enrollment = selected.enrollment_binding().clone();
-        let accepted = selected.accepted_credential_floor().credential;
+        let accepted = *selected
+            .accepted_credential_floor()
+            .oem_original()
+            .map_err(|_| ObservationErrorV1::InvalidQualification)?;
         let epoch = selected.hardware_epoch();
         let binding = selected.device_policy_binding();
         let release = core
@@ -242,7 +252,11 @@ impl NativeStartupQualificationOwnerV1 {
             .map_err(|_| ObservationErrorV1::Authentication)?;
         if current.checkpoint() != &checkpoint
             || current.enrollment_binding() != &enrollment
-            || current.accepted_credential_floor().credential != accepted
+            || *current
+                .accepted_credential_floor()
+                .oem_original()
+                .map_err(|_| ObservationErrorV1::InvalidQualification)?
+                != accepted
         {
             return Err(ObservationErrorV1::Conflict);
         }

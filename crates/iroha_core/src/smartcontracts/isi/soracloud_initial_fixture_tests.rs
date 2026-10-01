@@ -206,7 +206,7 @@ fn state_with_initial_soracloud_permission(kura: &Arc<Kura>) -> Result<State, ey
     config.chain_id = component.chain_id;
     let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
     let mode = config.consensus_mode;
-    let prepared = CertifiedTestChain::prepare(config)?;
+    let prepared = CertifiedTestChain::prepare(config).map_err(|failure| failure.error)?;
     let state = Arc::try_unwrap(prepared.state)
         .unwrap_or_else(|_| panic!("unpublished SoraCloud State is unique"));
     startup::apply_genesis(

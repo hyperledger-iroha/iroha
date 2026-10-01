@@ -4322,7 +4322,9 @@ mod tests {
     ) -> Result<(), InstructionExecutionError> {
         let header = block_header_at(height, now_unix);
         let mut block = state.block(header.clone());
-        let mut transaction = block.transaction();
+        // Local journal fixture only: retain a bounded direct execution slot before
+        // custody changes. This World-only commit does not publish a Network carrier.
+        let mut transaction = block.transaction_for_callback_testing();
         operation(&mut transaction)?;
         transaction.apply();
         block
@@ -4549,9 +4551,6 @@ mod tests {
             .world
             .smart_contract_state
             .insert(status_key().clone(), encode(&status));
-    }
-    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
-        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
     fn asset_balance(
         state_transaction: &StateTransaction<'_, '_>,
@@ -4858,12 +4857,83 @@ mod tests {
         assert!(read_policy(stx.world()).expect("read policy").is_none());
     }
     #[test]
+    fn orderbook_numeric_custody_requires_original_retained_component_source() {
+        let buyer = keypair(0xE1);
+        let authority = account(&buyer);
+        let state = state_with_accounts(&[&buyer]);
+        let candidate = order(&buyer, 1);
+        let initial_balance;
+        {
+            let mut block = state.block(block_header());
+            let mut stx = block.transaction();
+            let policy_digest = activate_policy(&mut stx, &authority);
+            initial_balance = asset_balance(&stx, &authority);
+            let error = SubmitSorafsOrderbookOrder::new(encode(&candidate), policy_digest)
+                .execute(&authority, &mut stx)
+                .expect_err("unretained component input cannot fund bid custody");
+            assert!(
+                error
+                    .to_string()
+                    .contains("protocol source has no authenticated mandatory owner")
+            );
+            assert_eq!(asset_balance(&stx, &authority), initial_balance);
+            assert!(
+                read_order(stx.world(), candidate.order_id)
+                    .expect("read refused order")
+                    .is_none()
+            );
+            assert!(
+                read_nonce(stx.world(), &authority)
+                    .expect("read refused nonce")
+                    .is_none()
+            );
+            assert!(
+                stx.world
+                    .asset_escrows
+                    .get(&orderbook_order_escrow_id(candidate.order_id))
+                    .is_none()
+            );
+        }
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction_for_callback_testing();
+        let policy_digest = activate_policy(&mut stx, &authority);
+        SubmitSorafsOrderbookOrder::new(encode(&candidate), policy_digest)
+            .execute(&authority, &mut stx)
+            .expect("the same signed order uses its original bounded component slot");
+        let required = bid_order_escrow_requirement_v1(
+            &candidate,
+            policy().max_maker_fee_bps,
+            policy().max_taker_fee_bps,
+        )
+        .expect("derive original bid custody");
+        assert_eq!(
+            asset_balance(&stx, &authority),
+            initial_balance
+                .checked_sub(&required.into_quantity())
+                .expect("exact custody debit")
+        );
+        assert_eq!(
+            read_nonce(stx.world(), &authority)
+                .expect("read admitted nonce")
+                .expect("admitted nonce")
+                .highest_nonce,
+            candidate.nonce
+        );
+        assert_eq!(
+            read_order(stx.world(), candidate.order_id)
+                .expect("read admitted order")
+                .expect("admitted order")
+                .canonical_order,
+            encode(&candidate)
+        );
+    }
+    #[test]
     fn signed_order_submission_persists_authoritative_record_and_nonce() {
         let buyer = keypair(0x21);
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
         let order = order(&buyer, 1);
         let initial_balance = asset_balance(&stx, &authority);
@@ -4929,7 +4999,7 @@ mod tests {
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &settlement_id);
         let bid = order(&buyer, 1);
         let escrow_id = orderbook_order_escrow_id(bid.order_id);
@@ -4961,7 +5031,7 @@ mod tests {
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
         let order = order(&buyer, 1);
         let mut noncanonical = encode(&order);
@@ -4990,7 +5060,7 @@ mod tests {
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
         let base = order(&buyer, 1);
         let mut candidates = Vec::new();
@@ -5055,7 +5125,7 @@ mod tests {
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer, &attacker]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
         let base = order(&buyer, 1);
         let wrong_signer = sign_order(base.clone(), &attacker);
@@ -5184,7 +5254,7 @@ mod tests {
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
         let first = order(&buyer, 1);
         SubmitSorafsOrderbookOrder::new(encode(&first), policy_digest)
@@ -5224,7 +5294,7 @@ mod tests {
         let authority = account(&buyer);
         let mut state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
         let first = order(&buyer, 1);
         let second = order(&buyer, 2);
@@ -5449,7 +5519,7 @@ mod tests {
         let authority = account(&buyer);
         let state = state_with_accounts(&[&buyer, &attacker]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &authority);
         let order = order(&buyer, 2);
         SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
@@ -5584,8 +5654,7 @@ mod tests {
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0x2B);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x2B; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &settlement_id);
         stx.world
             .provider_owners
@@ -5632,8 +5701,8 @@ mod tests {
         let capped_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut capped_block = capped_state.block(block_header());
-        let mut capped = capped_block.transaction();
-        seed_test_call_hash(&mut capped, 0x30);
+        let mut capped =
+            capped_block.transaction_for_fastpq_testing(Hash::prehashed([0x30; Hash::LENGTH]));
         let capped_fixture = seed_two_fill_match(
             &mut capped,
             &settlement_id,
@@ -5654,8 +5723,8 @@ mod tests {
         let exhausted_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut exhausted_block = exhausted_state.block(block_header());
-        let mut exhausted = exhausted_block.transaction();
-        seed_test_call_hash(&mut exhausted, 0x31);
+        let mut exhausted =
+            exhausted_block.transaction_for_fastpq_testing(Hash::prehashed([0x31; Hash::LENGTH]));
         let exhausted_fixture = seed_two_fill_match(
             &mut exhausted,
             &settlement_id,
@@ -5709,8 +5778,7 @@ mod tests {
             .into_key_value();
         state.world.accounts.insert(attacker_key, attacker_value);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0x90);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x90; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &settlement_id);
         stx.world
             .provider_owners
@@ -5977,8 +6045,7 @@ mod tests {
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xB6);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &settlement_id);
         stx.world
             .provider_owners
@@ -6136,8 +6203,7 @@ mod tests {
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xAC);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xAC; Hash::LENGTH]));
         let fixture = seed_two_fill_match(
             &mut stx,
             &settlement_id,
@@ -6187,8 +6253,7 @@ mod tests {
         let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xB1);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
         let fixture = seed_two_fill_match(
             &mut stx,
             &settlement_id,
@@ -6222,7 +6287,7 @@ mod tests {
         let attacker_id = account(&attacker);
         let state = state_with_accounts(&[&operator, &buyer, &attacker]);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_callback_testing();
         let policy_digest = activate_policy(&mut stx, &operator_id);
         let mut expired = order(&buyer, 1);
         expired.expiry_unix = NOW;
@@ -6337,8 +6402,7 @@ mod tests {
             TEST_TRADE_LOCK_MICRO,
         );
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xA1);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA1; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &authority);
         let first = receipt(&provider, 1, 9, 8, 0, 10);
         assert_eq!(first.xor_debited, xor_micro(100));
@@ -6593,8 +6657,7 @@ mod tests {
             .into_key_value();
         state.world.accounts.insert(relayer_key, relayer_value);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xA2);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA2; Hash::LENGTH]));
         let policy_digest = activate_policy(&mut stx, &authority);
         let base = receipt(&provider, 1, 6, 7, 0, 10);
         open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &base);

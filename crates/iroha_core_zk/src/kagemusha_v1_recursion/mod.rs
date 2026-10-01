@@ -37,6 +37,21 @@ mod mint_helper;
 #[cfg(feature = "zk-halo2-ipa")]
 mod mint_transport_decider;
 mod native_backend;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-production-prover")
+))]
+mod ordinary_app_guard_binding;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-production-prover")
+))]
+mod ordinary_approval_proof_binding;
+#[cfg(all(
+    feature = "zk-halo2-ipa",
+    any(test, feature = "kagemusha-production-prover")
+))]
+mod ordinary_platform_equation;
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 // TODO: Verify a pinned shard protocol and contiguous full-carrier coverage in the
 // live Claim/Terminal fold before any partial-MSM shard can authorize value.

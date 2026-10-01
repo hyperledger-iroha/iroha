@@ -65,6 +65,30 @@ fn state_for(world: World) -> State {
     )
 }
 
+/// Publish the original signed root for the ordinary Initial-dispatch fixture.
+fn authenticated_state_for(world: World) -> State {
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    let config = TestChainConfig::new(world, 0);
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let consensus_mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("prepare topology fixture genesis");
+    let state = std::sync::Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished topology fixture State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        consensus_mode.into(),
+        None,
+    )
+    .expect("publish the original signed topology fixture root");
+    state
+}
+
 fn header(state: &State) -> BlockHeader {
     BlockHeader::new(
         1.try_into().expect("positive height"),
@@ -383,8 +407,21 @@ fn every_registered_topology_action_stays_closed_without_state_mutation() {
         &operator,
         [permission(Capability::Operate, DEPLOYMENT)],
     );
-    let state = state_for(world);
-    let mut block = state.block(header(&state));
+    let state = authenticated_state_for(world);
+    assert_eq!(state.committed_height(), 1);
+    let parent = state
+        .view()
+        .latest_block_hash()
+        .expect("original signed genesis");
+    assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+    let header = BlockHeader::new(
+        2.try_into().expect("ordinary positive height"),
+        Some(parent),
+        None,
+        1_000,
+        0,
+    );
+    let mut block = state.block(header);
     let mut tx = block.transaction();
     let before = tx
         .world()

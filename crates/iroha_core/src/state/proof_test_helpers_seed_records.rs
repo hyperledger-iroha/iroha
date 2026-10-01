@@ -73,6 +73,7 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
     stx.apply_callback_for_testing()
         .expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
+    let state = authenticate_trigger_fixture(state);
     let_row! { block2 = new_dummy_block_with_payload( |h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
     // Now execute the by-call trigger via transaction API and expect data trigger to chain
     let mut state_block2 = state.block(block2.as_ref().header());
@@ -157,7 +158,8 @@ state_test! { sync deterministic_pipeline_block_approved_trigger_executes
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
@@ -191,7 +193,8 @@ state_test! { sync constrained_pipeline_block_trigger_ignores_wrong_height_appro
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
@@ -223,8 +226,9 @@ state_test! { sync one_shot_pipeline_trigger_executes_once_for_multiple_matching
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
-    let_row! { block3 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(3).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
+    let_row! { block3 = trigger_component_block(&state, 3) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     let_row! { steps = stx .execute_pipeline_triggers([ PipelineEventBox::from(BlockEvent { header: block2.as_ref().header(), status: BlockStatus::Approved, }), PipelineEventBox::from(BlockEvent { header: block3.as_ref().header(), status: BlockStatus::Approved, }), ]) .expect("matching approved block events should execute at most once") };
@@ -260,7 +264,8 @@ state_test! { sync one_shot_pipeline_transaction_trigger_executes_once_for_dupli
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
     let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
     let mut state_block = state.block(block2.as_ref().header());
@@ -314,7 +319,8 @@ state_test! { sync deterministic_pipeline_transaction_approved_and_rejected_trig
     }
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let tx_hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
     let tx_hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
     let mut state_block = state.block(block2.as_ref().header());
@@ -383,7 +389,8 @@ state_test! { sync malformed_enabled_pipeline_trigger_does_not_execute_or_decrem
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
@@ -430,7 +437,8 @@ state_test! { sync numeric_zero_enabled_pipeline_trigger_does_not_execute_or_dec
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
@@ -474,7 +482,8 @@ state_test! { sync constrained_pipeline_transaction_trigger_ignores_near_miss_ev
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([
@@ -522,11 +531,12 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
+    let mut state = authenticate_trigger_fixture(state);
     assert!(
         state.world.triggers.remove_contract_for_test(blob_hash),
         "contract entry should be removed for test setup"
     );
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     let_row! { err = stx .execute_pipeline_triggers([PipelineEventBox::from(BlockEvent { header: block2.as_ref().header(), status: BlockStatus::Approved, })]) .expect_err("missing bytecode should reject pipeline trigger execution") };
@@ -590,12 +600,11 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
+    let state = authenticate_trigger_fixture(state);
 
-    let_row! { block2 = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(2).unwrap());
-    }) };
-    let mut state_block = state.block(block2.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block2.as_ref()));
+    let_row! { block2 = trigger_component_block(&state, 2) };
+    let (mut state_block, _recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, block2.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -675,12 +684,11 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
+    let state = authenticate_trigger_fixture(state);
 
-    let_row! { block2 = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(2).unwrap());
-    }) };
-    let mut state_block = state.block(block2.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block2.as_ref()));
+    let_row! { block2 = trigger_component_block(&state, 2) };
+    let (mut state_block, _recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, block2.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -753,13 +761,11 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
+    let state = authenticate_trigger_fixture(state);
 
-    let_row! { block2 = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(2).unwrap());
-    }) };
-    let mut state_block = state.block(block2.as_ref().header());
-    let fragments_before = state_block.committed_fragment_count();
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block2.as_ref()));
+    let_row! { block2 = trigger_component_block(&state, 2) };
+    let (mut state_block, recording, outputs, fragments_before) =
+        crate::state::run_empty_network_owner_fixture(&state, block2.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -791,12 +797,11 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
             .expect("replacement sibling must remain registered");
         assert_eq!(replacement.repeats(), &Repeats::Exactly(1));
     }
+    drop(recording);
 
-    let_row! { block3 = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(3).unwrap());
-    }) };
-    let mut state_block = state.block(block3.as_ref().header());
-    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block, Some(block3.as_ref()));
+    let_row! { block3 = trigger_component_block(&state, 3) };
+    let (mut state_block, _recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, block3.as_ref());
     let outcomes = outputs.iter().map(|output| {
         let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
             panic!("only matched Pipeline sources exist in this fixture");
@@ -878,16 +883,17 @@ state_test! { sync data_trigger_revalidates_the_captured_incarnation_and_event
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
+    let state = authenticate_trigger_fixture(state);
 
-    let_row! { block2 = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(2).unwrap());
-    }) };
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let callback_source = signed_callback_boundary_source(&state, block2.as_ref().header(), vec![
         Mint::asset_quantity(1_u32, asset_id.clone()).into(),
         Mint::asset_quantity(1_u32, asset_id.clone()).into(),
     ]);
     let mut state_block = state.block(block2.as_ref().header());
-    let mut stx = state_block.transaction();
+    let mut stx = state_block.transaction_for_fastpq_testing(
+        Hash::from(callback_source.hash_as_entrypoint()),
+    );
     // The same signed two-instruction source owns both direct drains. This
     // boundary fixture inspects its disposable overlay and never applies it.
     stx.current_entrypoint_index = Some(0);
@@ -944,7 +950,8 @@ state_test! { sync pipeline_trigger_instruction_failure_rolls_back_and_preserves
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
@@ -986,7 +993,8 @@ state_test! { sync pipeline_trigger_chained_data_failure_rolls_back_and_preserve
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     stx.execute_pipeline_triggers([PipelineEventBox::from(BlockEvent {
@@ -1029,7 +1037,8 @@ state_test! { sync by_call_chained_data_trigger_failure_rolls_back_and_preserves
         .unwrap();
     stx.apply_callback_for_testing().expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
-    let_row! { block2 = new_dummy_block_with_payload(|h| { h.set_height(NonZeroU64::new(2).unwrap()); }) };
+    let state = authenticate_trigger_fixture(state);
+    let_row! { block2 = trigger_component_block(&state, 2) };
     let mut state_block = state.block(block2.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     let_row! { event = ExecuteTriggerEvent { trigger_id: by_call_id.clone(), authority: ALICE_ID.clone(), args: Json::default(), } };

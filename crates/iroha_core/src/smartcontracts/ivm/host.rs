@@ -15175,7 +15175,13 @@ seiyaku StaleRuntimeBinding {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(
+            next_height,
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
         let mut tx = block.transaction();
         if tx.world.account(&account_id).is_err() {
             Register::account(Account::new(account_id.clone()))

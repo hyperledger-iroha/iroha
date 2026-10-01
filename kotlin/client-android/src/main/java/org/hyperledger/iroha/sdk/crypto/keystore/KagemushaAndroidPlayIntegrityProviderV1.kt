@@ -3,9 +3,13 @@ package org.hyperledger.iroha.sdk.crypto.keystore
 import android.content.Context
 import com.google.android.gms.tasks.Task
 import com.google.android.play.core.integrity.IntegrityManagerFactory
+import com.google.android.play.core.integrity.StandardIntegrityException
 import com.google.android.play.core.integrity.StandardIntegrityManager
+import com.google.android.play.core.integrity.model.StandardIntegrityErrorCode
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
 
 /** Opaque original Google evidence, never a client-verified verdict or qualification. */
 class KagemushaAndroidPlayIntegrityTokenOriginalV1 internal constructor(@JvmField val cloudProjectNumber: Long,
@@ -49,11 +53,14 @@ class KagemushaAndroidPlayIntegrityProviderV1 internal constructor(private val b
                         check(hashText.length == 43)
                         requireOriginal()
                         checkNotNull(provider).request(hashText).whenComplete { token, tokenError ->
+                            if (tokenError != null && backend.invalidatesPreparedProvider(tokenError)) {
+                                synchronized(lock) { if (prepared === warm) { preparedProject = null; prepared = null } }
+                            }
                             try {
                                 requireOriginal()
                                 if (tokenError != null) throw tokenError
                                 val raw = checkNotNull(token)
-                                check(raw.isNotEmpty() && raw.length <= 128 * 1024 && raw.all { it.code in 0x21..0x7e }) {
+                                check(raw.isNotEmpty() && raw.length <= MAXIMUM_OPAQUE_TOKEN_BYTES && raw.all { it.code in 0x21..0x7e }) {
                                     "Original Google token is outside the supported bound"
                                 }
                                 val evidence = KagemushaAndroidPlayIntegrityTokenOriginalV1(cloudProjectNumber, original, raw)
@@ -66,10 +73,26 @@ class KagemushaAndroidPlayIntegrityProviderV1 internal constructor(private val b
         } catch (error: Throwable) { result.completeExceptionally(error) }
         return result
     }
+
+    companion object {
+        /** The issuer's original encrypted token bound; no decoded verdict is accepted here. */
+        const val MAXIMUM_OPAQUE_TOKEN_BYTES: Int = 64 * 1024
+    }
 }
 
 internal interface KagemushaPlayIntegrityBackendV1 {
     fun prepare(cloudProjectNumber: Long): CompletableFuture<KagemushaPlayIntegrityPreparedV1>
+    fun invalidatesPreparedProvider(error: Throwable): Boolean {
+        var original = error
+        repeat(8) {
+            if (original is StandardIntegrityException) {
+                return original.errorCode == StandardIntegrityErrorCode.INTEGRITY_TOKEN_PROVIDER_INVALID
+            }
+            if (original !is CompletionException && original !is ExecutionException) return false
+            original = original.cause ?: return false
+        }
+        return false
+    }
 }
 internal interface KagemushaPlayIntegrityPreparedV1 {
     fun request(originalHashText: String): CompletableFuture<String>

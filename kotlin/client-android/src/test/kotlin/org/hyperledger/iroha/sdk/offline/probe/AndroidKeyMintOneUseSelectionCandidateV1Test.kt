@@ -1,7 +1,11 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+
 package org.hyperledger.iroha.sdk.offline.probe
+
+import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidOriginalJournalIoV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidOriginalJournalIoV1
 
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -19,7 +23,7 @@ import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaKeyMintExp
 
 private fun fakeSec1(byte: Byte): ByteArray = byteArrayOf(0x04) + ByteArray(64) { byte }
 
-private class TestJournalIo(private val onSync: () -> Unit) : SelectionJournalIoV1 {
+private class TestJournalIo(private val onSync: () -> Unit) : KagemushaAndroidOriginalJournalIoV1 {
     companion object { private val processLocks = java.util.concurrent.ConcurrentHashMap<String, Any>() }
     var tearEvidenceWrite = false
     override fun exists(file: java.io.File): Boolean {
@@ -51,6 +55,11 @@ private class TestJournalIo(private val onSync: () -> Unit) : SelectionJournalIo
         }
         onSync()
         if (torn) throw IllegalStateException("evidence write torn after signing")
+    }
+
+    override fun syncExisting(file: java.io.File) {
+        FileChannel.open(file.toPath(), setOf(StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)).use { it.force(true) }
+        onSync()
     }
 
     override fun <T> withLock(file: java.io.File, action: () -> T): T =

@@ -1,8 +1,10 @@
 # Local Taira release preparation
 
-Run the native CLI checks, build the four AArch64 Linux executables, and capture
-read-only copies through one maintained command. This replaces per-release local
-build and capture scripts. Python 3.11+, Git, the repository Rust toolchain,
+Build the four AArch64 Linux executables and capture read-only copies through
+one maintained command. `prepare` always records build-only evidence and runs no
+regression checks. Optional Basic, Full and focused diagnostics use `check`; none
+is a deployment prerequisite for Taira or production. This replaces per-release
+local build and capture scripts. Python 3.11+, Git, the repository Rust toolchain,
 cargo-zigbuild, Zig and an existing warm Cargo target directory are required.
 Native checks also require executable `lsof` at `/usr/sbin/lsof` on macOS or
 `/usr/bin/lsof` on Linux. Both full and focused gates reject a missing or
@@ -22,7 +24,7 @@ funding is unavailable; public-reset qualification still requires an enabled
 HTTP 200 policy. Discovery does not establish signing trust: funding operations
 continue to require independently trusted issuer and issuance inputs.
 
-Run only the early native gate:
+Run optional native diagnostics:
 
     python3 scripts/taira_release.py check
 
@@ -97,8 +99,7 @@ log before explicitly starting a fresh session after failure or interruption.
 These records are mutable-source diagnostics; `prepare` does not accept or reuse
 them as immutable release qualification.
 
-Before signing an immutable release, use an exact focused diagnostic in the same
-warm development lane:
+For an exact optional regression diagnostic, use the same warm development lane:
 
     python3 scripts/taira_release.py check \
       --focus-regression core=sumeragi::node::tests::idle_chain_never_advances_and_real_work_survives_restart
@@ -113,9 +114,10 @@ to the chosen `--native-check-scope`; unknown or repeated selections fail before
 Cargo starts. Independent failures are aggregated; dependent network tests run
 only after those checks pass. This mutable-source diagnostic writes no release
 qualification checkpoint. Each phase reports its own Cargo feature graph; an
-early pass does not qualify the later graph. `prepare` has no focus option and
-still requires its complete immutable gate. Omit the option to run the normal
-development gate. Reuse the same warm target across both phases; earlier failure
+early pass does not qualify the later graph. `prepare` runs no regression checks
+and accepts neither `--focus-regression` nor `--native-check-scope` nor a
+`--build-only` switch. Omit the focus option to run the normal development
+diagnostic. Reuse the same warm target across both phases; earlier failure
 feedback does not imply a shorter total build when Cargo feature sets differ.
 
 The CLI regression selection runs as one serial native test process, using exact
@@ -149,6 +151,16 @@ Prepare binaries from an explicitly selected signed commit in the optimizations 
       --cargo-zigbuild /absolute/real/cargo-zigbuild \
       --cargo-zigbuild-sha256 REVIEWED_CARGO_ZIGBUILD_SHA256
 
+Every fresh preparation records `native_check_scope: "build-only"` and
+`checks.passed: false`, meaning regression checks were not run. Signed source
+capture, package closure, pinned tools, six jobs, release profile and immutable
+artifact custody remain required. Existing failed or diagnostic records are never
+relabeled as a successful check. Transfer and the same-revision owner-signed
+dispatcher transition preserve the actual typed check evidence without requiring
+regression success. Native deployment preflight, signed canary, finality,
+readiness and restart proof still run; the build result keeps `release_qualified`
+and `deployed` false.
+
 Use independently reviewed tool digests and the full signing-key fingerprint
 (GPG uppercase hexadecimal, or SSH SHA256 form). A valid signature from another
 locally known key is rejected. Paths must be absolute and contain no
@@ -171,26 +183,21 @@ The selected commit can differ from HEAD, so unrelated commits already made on
 the index, or require another checkout.
 It reads the selected commit's Git objects into a private, read-only source
 capture under the selected Cargo target's `taira-release-sources/`. It creates no Git repository,
-worktree or branch. Both native checks and the Linux build consume this capture;
+worktree or branch. The Linux build consumes this capture;
 One explicit `source/target` binding points to the selected existing warm Cargo
 target for native fixture output; source inventories verify this binding without
 traversing generated files. Native fixture processes also run from that external
 target directory. The snapshot covers signed Git entries; the output binding is
 recorded separately as `source_output_target`. Every signed source path remains
-read-only. Private Kagami signing fixtures use a canonical native temporary
-directory with mode 0700 and key files with mode 0600; both scopes exercise
-their round-trip and rejection controls without writing to the source capture.
-Subsequent
-checkout edits, merges or HEAD changes cannot mix source versions into
-the build. Native test selection is loaded from the captured gate helper, including
-a resumed check after the checkout has changed. Resume additionally authenticates
+read-only. Subsequent checkout edits, merges or HEAD changes cannot mix source
+versions into the build. Resume additionally authenticates
 the recorded request and captured bytes. Unrelated HEAD advancement is allowed
 before fresh preparation and resume; a different branch, signer, or executing
 controller is rejected before source capture. Changes to controller files require
 a preparation selecting the signed commit containing those exact controller files.
 
 Each selected warm Cargo lane has one stable source path. A lane-wide lock covers
-capture refresh, native checks, Linux compilation and artifact capture, including
+capture refresh, Linux compilation and artifact capture, including
 an active child if its launcher exits. Source replacement occurs only between
 preparations. Unchanged files and complete unchanged directory subtrees retain their timestamps.
 Directory watches in native build scripts therefore remain fresh when only
@@ -230,16 +237,15 @@ and home Cargo configuration cannot override these inputs; a root-level Cargo
 config stops preparation with an actionable error. The captured Zig driver and
 installed sccache remain in use. No target or cache is cleaned or replaced.
 Compiler overrides, interpreter hooks and runtime credentials are not forwarded.
-The native gate receives the same source, toolchain and explicit target directory.
-
-Both scopes also verify that idle governance sweeps create no execution fragment,
+Optional `check` diagnostics use their selected toolchain and explicit target
+directory. Both diagnostic scopes also verify that idle governance sweeps create no execution fragment,
 while successful and failed due sweeps retain their effects and audit records.
 
 Both scopes first verify that fresh catalog fixtures authenticate their intended
 geometry during construction and retain their explicit network identity. A later
 runtime update cannot replace the original storage catalog.
 
-Both native qualification scopes require certified catalog and bootstrap parameter
+Both optional diagnostic scopes include certified catalog and bootstrap parameter
 commit and recovery tests, plus rejection of changed parameters or mismatched
 runtime effects after staging. The four-validator catalog test separately proves
 the committed topology and transaction history survive restart and full replay.
@@ -254,7 +260,8 @@ separately. An initialized installation may therefore retain artifacts from
 different releases without treating its configuration revision as its executable
 revision. Candidate artifacts still use one canonical release directory.
 
-After verifying the complete native Cargo output set, a bounded owner-private
+During optional diagnostics, after verifying the complete native Cargo output
+set, a bounded owner-private
 ledger records only final test executables and retires recorded superseded outputs
 before checking copy capacity. Retirement runs under Cargo's locks after exact
 inode checks and an OS open-file check; a later copy failure leaves the current
@@ -282,58 +289,17 @@ against their captured SHA256 using bounded reads that preserve the stream offse
 This catches same-size edits even when filesystem timestamps coincide. Existing
 metadata, path, copied-content and archive-content checks remain mandatory.
 
-Before Cargo, the gate reconciles
-the shipping binary table with Cargo manifests and the early compilation targets.
-Configuration library and integration tests, CLI, SDK, Torii, crypto, P2P, Core, proof and fixture harnesses,
-including all four shipping entry points, then share one Cargo invocation,
-resolving the union of their existing default features. Configuration runs first
-and fails immediately, including when a native-check checkpoint can be reused.
-MV ownership, native archive recovery, and Core, Torii and daemon startup checks run
-next; failures are collected across the startup groups before stopping, without
-running CLI or network tests. The priority CLI reset-scope control and Torii
-admission groups follow and report their combined failures. This passed prefix is
-recorded in `pre-network-checks.json` before shipping codegen. The four-peer
-fixture's shipping build then selects the authoritative shipping binaries with
-their default features, in the same warm target, tool environment and locks,
-without a test profile or dev-feature injection. Its Cargo library artifact events
-must exclude Core's `iroha-core-tests` and Torii's `test-fixtures`, including
-accidental default or normal-dependency opt-ins, before any peer starts. This audit
-and the four-peer fixture rerun on every attempt, including checkpoint reuse.
-These include bounded regressions for failure reporting and worker teardown under
-a held lifecycle operation, plus retained-output recovery through real actor admission.
-Live Decision cleanup also exercises the shared runner reconciliation after an idle
-runtime turn, before exact acknowledgement can release the Apply fence.
-Recovered Decision Fetch checks run real periodic runtime turns before the signed
-response arrives and while its persistence is queued, then complete Store,
-Validate and the cold Apply handoff. An exact retry retains the original request
-owner; unrelated or unauthenticated work cannot claim its coordinates.
-After the four-peer fixture, the remaining CLI batch, the canonical Kagami
-projection, proof, crypto, transport, consensus and fixture selections run and
-report their combined failures. Only then does preparation record the complete
-census in `independent-checks.json`. Test copies whose selected census already
-completed are released before shipping codegen. Shipping targets without selected tests provide actual
-compilation evidence, with no invented test passes. The native production build
-uses the same four shipping packages and binaries, plus the ordinary `iroha3d`
-fixture launcher; the four-peer test continues to launch that ordinary binary.
-The Linux release command and its production features remain unchanged. Proof
-harnesses are not rebuilt separately after the network test. This reduces repeated
-dependency work; it does not promise a fixed build duration.
-The fixture checks read the public Taira Nexus profile without runtime inputs
-and verify that collection decoding preserves declared configuration defaults
-while rejecting malformed values.
+The standalone `check` command owns the native harness census and network
+fixtures described in [Taira CLI release checks](taira_release_check.md).
+It reports actual selected test outcomes; its failures do not become deployment
+admission gates. `prepare` reconciles the shipping binary table with the signed
+Cargo manifests and builds exactly the four shipping binaries from the captured
+source. It writes no pre-network or independent-regression checkpoint.
 
 Rerun the exact same `prepare` command and output directory after interruption.
 The command locks that owner-private preparation directory, checks that its
 recorded inputs still match the fixed signed source capture and tools, and resumes locally:
 
-- Completed native checks are reused for those exact inputs unless foreign
-  local-package fingerprints had to be retired.
-- After a shipping-build, capacity or four-peer failure, the exact passed
-  pre-network prefix is reused: configuration, shipping codegen, the four-peer
-  fixture and the deferred census run again. A complete independent pass is
-  reused only with its exact census and copied test artifacts. A changed census
-  or artifact retires the affected checkpoint into the new attempt before any
-  selected test reruns; fingerprint retirement retires all three.
 - A failed or interrupted build runs Cargo again in the same warm target. Cargo
   reuses its cache; each attempt gets a fresh private log and capture directory.
 - A completed read-only capture is revalidated and reused without running checks
@@ -360,8 +326,8 @@ observe a remote guest's sparse backing disk. Run the deployment capacity check
 below on the guest and its backing host. No cache or output is deleted
 automatically, and the warm Cargo target is never replaced with a new lane.
 
-The output directory contains read-only `request.json`, `pre-network-checks.json`,
-`independent-checks.json`, `checks.json`, and `result.json`, a persistent private
+The output directory contains read-only `request.json`, `checks.json` with
+`passed: false`, and `result.json`, a persistent private
 `session.lock`, and numbered `attempts/`
 directories. Failed attempt logs and partial captures stay available. Successful
 captures contain four 0500 executables and a 0400 `capture.json`; its artifact paths
@@ -382,7 +348,7 @@ Validate the local orchestration without Cargo or network:
 
     PYTHONPATH=scripts python3 -B -m unittest discover -s pytests/scripts -p 'test_taira_release*.py'
 
-The gate's existing selection and diagnostics are documented in
+Optional standalone selections and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
 
 ## Transferring a prepared release
@@ -397,7 +363,7 @@ the native deployment workflow below.
 
 ## Preparing validator configuration for a public reset
 
-Generate the fresh four-validator Taira bundle with the qualified native Kagami
+Generate the fresh four-validator Taira bundle with the same-revision native Kagami
 on the approved Linux validator host. Keep its private output outside Git at the
 same absolute path throughout installation and operation. Project each generated
 validator through the same-revision native CLI using an inherited owner-private
