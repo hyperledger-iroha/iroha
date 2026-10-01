@@ -268,14 +268,14 @@ fn mobile_bootstrap_preparation_requires_authenticated_release_before_creating_s
 }
 
 #[test]
-fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_files() {
+fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_four_files() {
     use iroha_data_model::testing::kagemusha_release::KagemushaExperimentalReleaseFixtureV1;
 
     let (directory, _keys, _policy, seed, input) = fixture();
     let artifact_root = directory.path().join("artifacts");
     fs::create_dir(&artifact_root).unwrap();
     let bindings = crate::kagemusha::tests::write_experimental_artifact_fixture(&artifact_root);
-    assert_eq!(bindings.len(), 50);
+    assert_eq!(bindings.len(), 54);
     let scope = KagemushaTestnetExperimentScopeV1 {
         asset_identity_digest: seed.scope.asset_identity_digest,
         asset_incarnation: seed.scope.asset_incarnation,
@@ -367,14 +367,19 @@ fn mobile_bootstrap_preparation_authenticates_threshold_release_and_all_fifty_fi
 
     // A valid release signature does not excuse different bytes in any content-addressed file.
     let resolver = KagemushaDirectoryArtifactResolverV1::new(&artifact_root).unwrap();
-    fs::write(resolver.path_for_digest(bindings[49].sha256), [0xff]).unwrap();
     args.checkpoint_output = directory.path().join("refused-checkpoint.norito");
-    assert!(prepare(&args, &mut std::io::BufWriter::new(Vec::new())).is_err());
-    assert!(!args.checkpoint_output.exists());
-    assert_eq!(
-        fs::read(directory.path().join("prepared-checkpoint.norito")).unwrap(),
-        bytes
-    );
+    for binding in &bindings[49..] {
+        let artifact_path = resolver.path_for_digest(binding.sha256);
+        let original = fs::read(&artifact_path).unwrap();
+        fs::write(&artifact_path, [0xff]).unwrap();
+        assert!(prepare(&args, &mut std::io::BufWriter::new(Vec::new())).is_err());
+        assert!(!args.checkpoint_output.exists());
+        assert_eq!(
+            fs::read(directory.path().join("prepared-checkpoint.norito")).unwrap(),
+            bytes
+        );
+        fs::write(artifact_path, original).unwrap();
+    }
 }
 
 #[test]

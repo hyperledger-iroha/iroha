@@ -147,6 +147,7 @@ fn return_error_mapping_retains_all_local_variants_and_metered_owners() {
         }),
         VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
         VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
+        VMError::ExecutionDeferred(ExecutionDeferral::VerifierArtifactsUnavailable),
         VMError::Metered {
             gas: 17,
             source: Box::new(VMError::AllocationDeferred(capacity)),

@@ -93,8 +93,8 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // TODO: complete credential binding, hiding review and resource qualification
 // before activating this profile.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x11, 0x00, 0x3e, 0xd1, 0xb6, 0x20, 0x6e, 0xd4, 0x1e, 0x59, 0xbe, 0xd5, 0x9c, 0x2b, 0xbd, 0x5a,
-    0xd0, 0x2e, 0x60, 0xe1, 0xf6, 0xae, 0xde, 0x93, 0x35, 0x3e, 0x29, 0xb7, 0x14, 0x39, 0x9a, 0x1a,
+    0x84, 0xad, 0xb1, 0x33, 0xf8, 0x30, 0xc7, 0x44, 0x99, 0x03, 0x08, 0x56, 0xef, 0x1c, 0x6d, 0x20,
+    0xc4, 0x79, 0x20, 0x4e, 0x2f, 0x78, 0x06, 0x77, 0x13, 0x1a, 0x6d, 0xa4, 0x48, 0x71, 0x3f, 0x91,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -763,6 +763,9 @@ mod tests {
         fields[14] =
             hex::decode("307915059aa0f173351facf134c2c08df720e365cfdb96c239eca44c07b654bb")
                 .unwrap();
+        // These historical pins included the original 32 whole-segment totals
+        // and 64 public RFC-stream products; restore their exact old descriptor.
+        fields[17] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:word-capacity-recurrence=local-compute+digest+memory-call-last:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors".to_vec();
         // These rejection fixtures predate the selected-input writer multiplicities.
         // Freeze both the descriptor and its exact original schedule digest;
         // inheriting either current field would manufacture a mixed profile.
@@ -773,7 +776,7 @@ mod tests {
         .unwrap();
     }
     #[test]
-    fn retired_profile_restoration_freezes_both_p256_manifest_fields() {
+    fn retired_profile_restoration_freezes_sha_and_p256_manifest_fields() {
         let sha_digests = [[0x51; 48]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
         let p256_digest = [0x61; 48];
         let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
@@ -782,6 +785,7 @@ mod tests {
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
         let mut substituted = canonical.clone();
+        substituted[17] = b"substituted-current-sha-call-descriptor".to_vec();
         substituted[27] = b"substituted-current-p256-descriptor".to_vec();
         substituted[28] = vec![0x91; 48];
         restore_retired_public_terminal_profile_descriptors_v1(&mut canonical);
@@ -789,7 +793,7 @@ mod tests {
         assert_eq!(substituted, canonical);
         assert_eq!(canonical[28].len(), 48);
         for (field, (retired, current)) in canonical.iter().zip(fields).enumerate() {
-            if ![9, 10, 13, 14, 27, 28].contains(&field) {
+            if ![9, 10, 13, 14, 17, 27, 28].contains(&field) {
                 assert_eq!(retired, current);
             }
         }
@@ -799,8 +803,18 @@ mod tests {
         let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
         let fields = compiled_profile_fields_v1(&sha, &p256);
         let profile = core::str::from_utf8(fields[9]).unwrap();
-        assert!(profile.contains("main-public-terminal-records=384-rfc80+sha304"));
-        assert!(profile.contains("main-claim-envelope-bytes=6180"));
+        assert!(profile.contains("main-public-terminal-records=212-rfc4+sha208"));
+        assert!(
+            profile
+                .contains("main-claim-envelope-bytes=4420+includes992-key-and-digest-DEEP-values")
+        );
+        assert!(profile.contains("main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224"));
+        assert!(profile.contains(
+            "MAIN31-derived-key-and-digest-openings:5-power8+6-power2+20-power32:all-admissible-and-authenticated"
+        ));
+        assert!(profile.contains("max-encoded-combined-bound=9413406"));
+        assert!(profile.contains("main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411"));
+        assert!(profile.contains("max-proof-bytes=9437184"));
         assert!(profile.contains("quotient-chunk-stride=fri-degree-cap-minus137"));
         assert!(profile.contains(
             "quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation"

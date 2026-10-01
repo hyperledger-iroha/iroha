@@ -30,6 +30,8 @@ mod main_fixed_replay_batch_tests;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[path = "main_fri_retention.rs"]
 mod main_fri_retention;
+#[path = "main_key_joins.rs"]
+pub(super) mod main_key_joins;
 #[cfg(test)]
 #[path = "main_native_boundary_tests.rs"]
 mod main_native_boundary_tests;
@@ -50,6 +52,8 @@ mod main_resource_tests;
 #[cfg(test)]
 #[path = "main_secret_ownership_tests.rs"]
 mod main_secret_ownership_tests;
+#[path = "main_sha_union.rs"]
+pub(super) mod main_sha_union;
 #[path = "main_terminal_links.rs"]
 mod main_terminal_links;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -221,6 +225,10 @@ pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
     aux_polynomials: MainTracePolynomialSetV1,
     terminal_claims: ZkX509MainTerminalClaimsV1,
     link_alphas: Vec<E>,
+    key_plan: main_key_joins::MainKeyJoinPlanV1,
+    key_alphas: Vec<E>,
+    sha_union_plan: main_sha_union::MainShaUnionPlanV1,
+    sha_union_alphas: Vec<E>,
     alphas: Vec<Vec<Vec<E>>>,
     transcript: TransparentTranscriptV1,
     composition_transcript_state: PrivacyOuterDigestV1,
@@ -252,6 +260,15 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 group.base_root == PrivacyOuterDigestV1::default()
                     || group.aux_root == PrivacyOuterDigestV1::default()
             })
+            || self.sha_union_plan != main_sha_union::MainShaUnionPlanV1::new_v1(&self.layout)?
+            || self.sha_union_alphas.len() != main_sha_union::UNION_QUOTIENTS_V1
+            || self.sha_union_alphas.capacity() != main_sha_union::UNION_QUOTIENTS_V1
+            || self
+                .sha_union_alphas
+                .iter()
+                .any(|alpha| !alpha.is_canonical())
+            || self.key_alphas.len() != main_key_joins::BLOCKS_V1
+            || self.key_alphas.iter().any(|alpha| !alpha.is_canonical())
             || self.link_alphas.len() != main_terminal_links::LINK_COUNT_V1
             || self.link_alphas.capacity() != main_terminal_links::LINK_COUNT_V1
             || self.link_alphas.iter().any(|alpha| !alpha.is_canonical())
@@ -338,6 +355,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &providers,
             &self.alphas,
             &self.link_alphas,
+            &self.key_plan,
+            &self.key_alphas,
+            &self.sha_union_plan,
+            &self.sha_union_alphas,
             main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
                 &self.layout,
                 self.assembly.allocated_payload_bytes_v1(),
@@ -550,6 +571,14 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         let alphas = derive_constraint_alphas_v1(&mut transcript, &layout)?;
         let link_alphas = main_terminal_links::MainTerminalLinkPlanV1::new_v1(&layout)?
             .derive_alphas_v1(&mut transcript)?;
+        let key_plan = main_key_joins::MainKeyJoinPlanV1::new_v1(
+            &layout,
+            statement,
+            assembly.rfc_base.schedule.shape,
+        )?;
+        let key_alphas = key_plan.derive_alphas_v1(&mut transcript)?;
+        let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout)?;
+        let sha_union_alphas = sha_union_plan.derive_alphas_v1(&mut transcript)?;
         let composition_transcript_state = transcript.state();
         let phase = ZkX509MainCompositionPhaseV1 {
             layout,
@@ -564,6 +593,10 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             aux_polynomials,
             terminal_claims,
             link_alphas,
+            key_plan,
+            key_alphas,
+            sha_union_plan,
+            sha_union_alphas,
             alphas,
             transcript,
             composition_transcript_state,
@@ -640,12 +673,20 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &fri_mask_roots,
         )
         .map_err(map_aggregate_error_v1)?;
-        let deep_point = aggregate::derive_deep_point_v1(
-            &mut self.transcript,
-            AGGREGATE_PARAMETERS_V1,
-            &shared_layout,
-        )
-        .map_err(map_aggregate_error_v1)?;
+        let deep_point = self
+            .key_plan
+            .derive_point_v1(&mut self.transcript, &shared_layout)?;
+        let key_policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
+            &self.layout,
+            self.assembly.allocated_payload_bytes_v1(),
+        )?;
+        let key_openings = self.key_plan.open_v1(
+            &self.layout,
+            &self.base_polynomials,
+            &sources,
+            deep_point,
+            key_policy,
+        )?;
         let mut deep_trace_groups = Vec::new();
         deep_trace_groups
             .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
@@ -692,6 +733,8 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         .map_err(map_aggregate_error_v1)?;
         let (canonical_deep_traces, canonical_deep_compositions) =
             canonical_deep_values_v1(&deep, &self.layout)?;
+        main_key_joins::MainKeyJoinPlanV1::absorb_openings_v1(&key_openings, &mut self.transcript)?;
+        let key_mixes = main_key_joins::MainKeyJoinPlanV1::derive_mixes_v1(&mut self.transcript)?;
         let mixes = derive_fri_mixes_v1(&mut self.transcript, &self.layout)?;
         let mut fri_bases = main_fri_retention::MainRetainedFriInputsV1::new_v1(
             main_fri_bases_from_polynomials_v1(
@@ -704,6 +747,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 deep_point,
                 &canonical_deep_traces,
                 &canonical_deep_compositions,
+                &self.key_plan,
+                &key_openings,
+                &key_mixes,
+                key_policy,
             )?,
             self.layout.common_lde_size(),
         )?;
@@ -943,7 +990,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             deep,
         };
         let aggregate_bytes = encode_zk_x509_segmented_stark_proof_v1(&proof, &self.layout)?;
-        encode_zk_x509_main_proof_envelope_v1(self.terminal_claims, &aggregate_bytes)
+        encode_zk_x509_main_proof_envelope_v1(self.terminal_claims, &key_openings, &aggregate_bytes)
     }
 }
 /// Exact six-provider registry for the verifier-owned full MAIN layout.
@@ -1473,6 +1520,9 @@ fn main_registration_composition_coefficient_chunks_v1(
     fixed: &mut ZeroizingMainFixedPolynomialSetV1,
     alphas: &[Vec<E>],
     shared_layout: &aggregate::AggregateProofLayoutV1,
+    sha_union_plan: &main_sha_union::MainShaUnionPlanV1,
+    sha_union_centers: &[[F; 4]; 4],
+    sha_union_alphas: &[E],
     bounded_transform: main_bounded_transform::MainBoundedTransformPolicyV1,
 ) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
     #[cfg(test)]
@@ -1499,6 +1549,17 @@ fn main_registration_composition_coefficient_chunks_v1(
     {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
+    let has_centered_union = matches!(
+        registration.segment.adapter,
+        SegmentAdapterIdV1::Rfc5280 | SegmentAdapterIdV1::Sha256CallBus
+    );
+    let bounded_transform = if has_centered_union {
+        bounded_transform.reserve_additional_v1(
+            main_sha_union::ShaUnionEndpointDenominatorsV1::payload_charge_v1(),
+        )?
+    } else {
+        bounded_transform
+    };
     let transform_policy = bounded_transform.for_quotient_layout_v1(
         registration.segment.base_width,
         registration.segment.aux_width,
@@ -1554,6 +1615,13 @@ fn main_registration_composition_coefficient_chunks_v1(
             registration.segment.trace_log2,
             stripe,
         )?;
+        let sha_union_denominators = if has_centered_union {
+            Some(main_sha_union::ShaUnionEndpointDenominatorsV1::new_v1(
+                stripe,
+            )?)
+        } else {
+            None
+        };
         #[cfg(test)]
         denominator_timer.complete_v1();
         #[cfg(test)]
@@ -1633,6 +1701,19 @@ fn main_registration_composition_coefficient_chunks_v1(
                                     &scratch.fixed_next,
                                     &alphas[lane],
                                 )?;
+                                if let Some(denominators) = &sha_union_denominators {
+                                    if lane != 0 {
+                                        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                                    }
+                                    *target = target.add(sha_union_plan.local_value_v1(
+                                        registration,
+                                        row,
+                                        &aux,
+                                        sha_union_centers,
+                                        sha_union_alphas,
+                                        denominators,
+                                    )?);
+                                }
                             }
                             Ok::<_, ZkX509StarkErrorV1>(())
                         },
@@ -1831,6 +1912,10 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
     providers: &[MainProverConstraintProviderV1<'_, '_>],
     alphas: &[Vec<Vec<E>>],
     link_alphas: &[E],
+    key_plan: &main_key_joins::MainKeyJoinPlanV1,
+    key_alphas: &[E],
+    sha_union_plan: &main_sha_union::MainShaUnionPlanV1,
+    sha_union_alphas: &[E],
     bounded_transform: main_bounded_transform::MainBoundedTransformPolicyV1,
     rng: &mut R,
 ) -> Result<RetainedCompositionMaterialV1, ZkX509StarkErrorV1> {
@@ -1855,6 +1940,16 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
+    if sha_union_plan != &main_sha_union::MainShaUnionPlanV1::new_v1(layout)?
+        || sha_union_alphas.len() != main_sha_union::UNION_QUOTIENTS_V1
+        || sha_union_alphas.iter().any(|alpha| !alpha.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let sha_union_centers = match sources {
+        MainTraceReplaySourcesV1::Bound { log19, .. } => log19.rfc.sha_union_centers_v1(),
+        _ => return Err(ZkX509StarkErrorV1::TranscriptMismatch),
+    };
     let shared_layout = layout.as_shared()?;
     let coefficient_cap = shared_layout
         .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
@@ -1903,6 +1998,9 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
                     fixed,
                     &alphas[registration_index],
                     &shared_layout,
+                    sha_union_plan,
+                    sha_union_centers,
+                    sha_union_alphas,
                     bounded_transform,
                 )?,
                 zeroize_extension_lanes_v1,
@@ -1937,6 +2035,24 @@ fn main_composition_material_from_polynomials_v1<R: TryRngCore>(
             .and_then(|lane| lane.get_mut(0))
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
     )?;
+    key_plan.accumulate_v1(
+        layout,
+        base_polynomials,
+        sources,
+        key_alphas,
+        bounded_transform,
+        coefficient_chunks
+            .get_mut(0)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+    )?;
+    sha_union_plan.accumulate_v1(
+        layout,
+        aux_polynomials,
+        sources,
+        sha_union_alphas,
+        bounded_transform,
+        &mut coefficient_chunks,
+    )?;
     let geometry = super::super::composition_masking::QuotientChunkGeometryV1::new_v1(
         &shared_layout,
         AGGREGATE_PARAMETERS_V1,
@@ -1966,6 +2082,10 @@ fn main_fri_bases_from_polynomials_v1(
     deep_point: E,
     deep_trace_groups: &[aggregate::AggregateOpenedDeepTraceGroupV1],
     deep_compositions: &[Vec<E>],
+    key_plan: &main_key_joins::MainKeyJoinPlanV1,
+    key_openings: &[E; main_key_joins::OPENINGS_V1],
+    key_mixes: &[E],
+    key_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
 ) -> Result<Vec<Vec<E>>, ZkX509StarkErrorV1> {
     layout.validate_exact_full_profile_registration_v1()?;
     base_polynomials.validate_v1(layout, MainTraceColumnKindV1::Base)?;
@@ -2101,6 +2221,22 @@ fn main_fri_bases_from_polynomials_v1(
             )?;
         }
     }
+    if SECURITY_LANES != 1 {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    key_plan.accumulate_deep_v1(
+        layout,
+        base_polynomials,
+        sources,
+        deep_point,
+        key_openings,
+        key_mixes,
+        key_policy,
+        &mut accumulators
+            .get_mut(0)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+            .0,
+    )?;
     let common_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
     let mut evaluated = ZeroizingExtensionChunksV1::new(Vec::new(), zeroize_extension_chunks_v1);
@@ -3272,7 +3408,7 @@ struct ShaMainFp4AirContextV1<'a> {
     word: ZkX509ShaWordStarkChallengesV1,
     call: ZkX509ShaCallBusChallengesV1,
     rfc: ZkX509Rfc5280StarkChallengesV1,
-    terminal: super::super::sha_call_bus_stark::ZkX509ShaSegmentTerminalV1,
+    segment: u8,
     ca_calls: &'a [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 }
 impl ShaMainFp4AirEvaluatorV1 {
@@ -3282,7 +3418,7 @@ impl ShaMainFp4AirEvaluatorV1 {
         next: &ZkX509ShaBatchRowV1<E>,
         context: ShaMainFp4AirContextV1<'_>,
     ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
-        if self.registration.segment.instance != u16::from(context.terminal.segment) {
+        if self.registration.segment.instance != u16::from(context.segment) {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         let residues =
@@ -3292,7 +3428,7 @@ impl ShaMainFp4AirEvaluatorV1 {
                 context.word,
                 context.call,
                 context.rfc,
-                context.terminal,
+                context.segment,
                 context.ca_calls,
             )
             .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
@@ -3632,6 +3768,15 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     let alphas = derive_constraint_alphas_v1(&mut transcript, &layout)?;
     let link_alphas = main_terminal_links::MainTerminalLinkPlanV1::new_v1(&layout)?
         .derive_alphas_v1(&mut transcript)?;
+    let key_plan = main_key_joins::MainKeyJoinPlanV1::new_v1(
+        &layout,
+        statement,
+        ZkX509Rfc5280StarkShapeV1::from_statement(rfc_statement)
+            .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?,
+    )?;
+    let key_alphas = key_plan.derive_alphas_v1(&mut transcript)?;
+    let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout)?;
+    let sha_union_alphas = sha_union_plan.derive_alphas_v1(&mut transcript)?;
     aggregate::absorb_composition_roots_v1(
         &mut transcript,
         AGGREGATE_PARAMETERS_V1,
@@ -3647,9 +3792,7 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     )
     .map_err(map_aggregate_error_v1)?;
     let shared_layout = layout.as_shared()?;
-    let deep_point =
-        aggregate::derive_deep_point_v1(&mut transcript, AGGREGATE_PARAMETERS_V1, &shared_layout)
-            .map_err(map_aggregate_error_v1)?;
+    let deep_point = key_plan.derive_point_v1(&mut transcript, &shared_layout)?;
     aggregate::absorb_deep_openings_v1(
         &mut transcript,
         &proof.deep,
@@ -3657,6 +3800,10 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &shared_layout,
     )
     .map_err(map_aggregate_error_v1)?;
+    main_key_joins::MainKeyJoinPlanV1::absorb_openings_v1(&envelope.key_openings, &mut transcript)?;
+    let key_mixes = main_key_joins::MainKeyJoinPlanV1::derive_mixes_v1(&mut transcript)?;
+    let key_supplemental =
+        key_plan.supplemental_v1(deep_point, &envelope.key_openings, &key_mixes)?;
     let mixes = derive_fri_mixes_v1(&mut transcript, &layout)?;
     let deep_mixes = aggregate_deep_lane_mixes_v1(&mixes, &layout)?;
     let (fri_betas, terminal_fields) = aggregate::verify_fri_commitments_v1(
@@ -3761,6 +3908,11 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         deep_point,
         &alphas,
         &link_alphas,
+        &key_plan,
+        &key_alphas,
+        &envelope.key_openings,
+        &sha_union_plan,
+        &sha_union_alphas,
         &log5,
         &projection,
         &io,
@@ -3783,6 +3935,7 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &expected_indices,
         &fri_betas,
         &terminal_fields,
+        &key_supplemental,
     )
     .inspect_err(|_error| {
         #[cfg(test)]

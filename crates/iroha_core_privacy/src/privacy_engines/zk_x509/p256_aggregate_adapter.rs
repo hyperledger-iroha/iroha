@@ -3454,6 +3454,21 @@ const SINK_SELECTION_REAL_BITS_BASE: usize = SINK_SELECTION_ACTIVE_BASE + 1;
 const SINK_SELECTION_SELECTED_BITS_BASE: usize = SINK_SELECTION_REAL_BITS_BASE + 8;
 const _: () = assert!(SINK_SELECTION_SELECTED_BITS_BASE + 8 == P256_BINDING_SINK_BASE_WIDTH_V1);
 const _: () = assert!(SINK_SELECTION_CONTINUE_FIXED + 1 == P256_BINDING_SINK_FIXED_WIDTH_V1);
+/// Existing committed real key and constant activity columns, before dummy selection.
+pub(crate) const fn p256_real_key_input_columns_v1() -> (usize, usize, usize) {
+    (
+        SINK_SELECTION_REAL_BASE,
+        SINK_SELECTION_ACTIVE_BASE,
+        P256_INPUT_SELECTION_ROW_START_V1,
+    )
+}
+/// Unreduced SHA digest bytes in the committed real input, before dummy selection.
+pub(crate) const fn p256_real_digest_input_columns_v1() -> (usize, usize) {
+    (
+        SINK_SELECTION_REAL_BASE,
+        P256_INPUT_SELECTION_ROW_START_V1 + 4 * 32,
+    )
+}
 fn p256_inactive_real_byte_v1(byte: usize) -> Result<u8, P256AggregateAdapterErrorV1> {
     if byte < 4 * 32 {
         Ok(0)

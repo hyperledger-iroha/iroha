@@ -495,17 +495,26 @@ impl<'state> StateBlock<'state> {
                 TransactionsBlockError::ExecutionDeferred(reason)
             }
         })?;
-        // The governed registry may have changed in the staged World overlay.
-        // An authenticated runtime must match the exact staged authority; the
-        // built-in reject-all runtime remains valid across a certified change
-        // and cannot authorize monetary operations. The token below owns the
-        // consensus mutation before any State journal can publish.
+        // Canonical governance may advance before this process loads successor verifier
+        // artifacts. Validate the original registry and local cache independently here;
+        // the exact transition token below still owns every consensus registry mutation.
+        // The actual top-up/redemption entry points must match this original governed
+        // registry before proof verification and defer stale/missing artifacts locally.
+        // No local key reload, clone, or role rebinding occurs during publication.
         let verifier: &dyn std::any::Any = kagemusha_v1_runtime_verifier.as_ref();
-        if let Err(error) = crate::smartcontracts::isi::kagemusha::runtime_matches_governed_registry(
-            verifier,
-            world.kagemusha_verifier_registry.get(),
-        ) {
-            error!(block_height, %error, "KAGEMUSHA verifier authority differs from staged World");
+        let runtime_check = world
+            .kagemusha_verifier_registry
+            .get()
+            .validate()
+            .map_err(str::to_owned)
+            .and_then(|()| {
+                crate::smartcontracts::isi::kagemusha::validate_runtime_cache_for_publication(
+                    verifier,
+                    state_ref.network_id,
+                )
+            });
+        if let Err(error) = runtime_check {
+            error!(block_height, %error, "KAGEMUSHA governed registry or local artifact cache is invalid");
             return Err(TransactionsBlockError::KagemushaVerifierAuthority);
         }
         let predecessor = state_ref.world.kagemusha_verifier_registry.view();

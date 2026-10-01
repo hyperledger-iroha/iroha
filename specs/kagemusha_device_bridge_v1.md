@@ -46,10 +46,10 @@ Invoice deduplication is outside the monetary protocol.
 
 Every linked native bridge exports one canonical Norito
 `KagemushaNativeContractVectorV1`. Its typed body contains exact counts and
-ordered `{code, name}` entries for the three peer messages, 50 proof-artifact
-roles, eight qualified relations, six helper circuits, sixteen mandatory
+ordered `{code, name}` entries for the three peer messages, 54 proof-artifact
+roles, eight qualified relations, seven helper circuits, sixteen mandatory
 hardware capabilities, and 22 secure-device operations. The helper inventory
-ends with `mint_hash_shard` and `mint_hash_claim`; the relation inventory is the
+ends with `mint_hash_shard`, `mint_hash_claim`, and `ordinary_app_guard`; the relation inventory is the
 six monetary operations followed by `terminal_authorization` and
 `commit_wrapper`.
 
@@ -62,10 +62,10 @@ ASCII "iroha:kagemusha:native-contract-vector:v1"
 ```
 
 Its pinned SHA-256 is
-`13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9`.
+`1cf1ef5c687224279fc35823b50051d16d86b624e431a15e93ac8d8a98d0df8c`.
 The complete archive is bounded at 4,096 bytes. Rust reconstructs every entry
 from the authoritative V1 constants/enums and rejects noncanonical encoding,
-count/order/name drift, or digest mismatch. Swift, Kotlin, and mirrored Java
+count/order/name drift, or digest mismatch. Swift and Kotlin (including Java-source consumers)
 expose the raw canonical archive as an optional native probe.
 
 This digest is an ABI/tamper pin only. It is not a signature, hardware
@@ -513,11 +513,11 @@ state, so recovery remains the qualified backend's responsibility.
 `KagemushaCoreCoordinatorFrameV1` and `KagemushaCoreCoordinatorBridgeV1` are
 transport layers, not implementations of `KagemushaNativeCoreCoordinatorV1`.
 The shared `fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv` corpus
-covers payment methods 1–11, both sender kinds, both recovery selectors, and
-missing recovery; method 12 enrollment and method 13 App Attest acknowledgment
-have focused tests. Its opaque archive strings do not represent valid proofs or credentials.
+covers all 21 methods in 28 cases, both sender kinds, both recovery selectors,
+and missing recovery. The native producer validates every request/response pair;
+its opaque archive strings do not represent valid proofs or credentials.
 `KagemushaNativeCoreCoordinatorAdapterV1` supplies the typed Swift and Kotlin
-adapter, with a mirrored Java facade. Native-owned canonical Norito archives
+adapter, with Java-source consumers using the Kotlin implementation. Native-owned canonical Norito archives
 are version 1 and bounded to 16 KiB each:
 
 | Schema suffix under `iroha.kagemusha.core.v1.` | Ordered fields |

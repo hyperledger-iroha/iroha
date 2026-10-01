@@ -117,12 +117,16 @@ pub enum ExecutionDeferral {
     AllocationUnavailable,
     /// The local active execution memory admission owner has no capacity.
     ActiveMemoryCapacity,
+    /// Governed verifier artifacts are not loaded or require an authenticated reload.
+    /// This local availability condition cannot become a transaction rejection.
+    VerifierArtifactsUnavailable,
 }
 impl fmt::Display for ExecutionDeferral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::AllocationUnavailable => "local allocation unavailable",
             Self::ActiveMemoryCapacity => "local active execution memory capacity unavailable",
+            Self::VerifierArtifactsUnavailable => "local governed verifier artifacts unavailable",
         })
     }
 }
@@ -579,5 +583,20 @@ mod execution_deferral_tests {
             (None, VMError::AllocationDeferred(refusal))
         );
         drop(occupied);
+    }
+    #[test]
+    fn unavailable_governed_verifier_is_local_and_cannot_be_metered() {
+        let reason = ExecutionDeferral::VerifierArtifactsUnavailable;
+        assert_eq!(
+            reason.to_string(),
+            "local governed verifier artifacts unavailable"
+        );
+        let original = VMError::ExecutionDeferred(reason);
+        assert_eq!(VMError::metered(777, original.clone()), original);
+        assert_eq!(original.execution_deferral(), Some(reason));
+        assert_eq!(
+            original.split_metered(),
+            (None, VMError::ExecutionDeferred(reason))
+        );
     }
 }

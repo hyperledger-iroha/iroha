@@ -354,7 +354,11 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
                     }
                 })
                 .unwrap();
-            assert_eq!(terminals.segment, source.claims.sha.segments[segment]);
+            assert_eq!(usize::from(terminals.segment.segment), segment);
+            assert_eq!(
+                terminals.segment.combined_rfc_products(),
+                source.rfc.sha_union_centers_v1()[segment]
+            );
             assert!(base_seen.iter().all(|count| *count == 1));
             assert!(aux_seen.iter().all(|count| *count == 1));
         } else if let Some(p256) = p256_registration {

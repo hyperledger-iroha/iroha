@@ -7969,6 +7969,7 @@ pub(crate) mod valid {
             for reason in [
                 ivm::error::ExecutionDeferral::AllocationUnavailable,
                 ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+                ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable,
             ] {
                 assert_eq!(
                     map_block_err_to_reason(&BlockValidationError::ExecutionDeferred(

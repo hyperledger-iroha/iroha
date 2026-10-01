@@ -689,6 +689,23 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap().join("possession");
         let mut attempt = KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).unwrap();
+        assert!(KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(root.join(FORMAT.filename))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         let selector = p.possession_challenge(300).unwrap().enrollment_attempt_id;
         let fields = attempt.preparation_fields(&p, selector, 300).unwrap();
         assert_eq!(fields.len(), 14);

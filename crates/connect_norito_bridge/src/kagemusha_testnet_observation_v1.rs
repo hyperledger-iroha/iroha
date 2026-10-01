@@ -228,7 +228,7 @@ fn require_scope_release_pins(
 /// release, network, or reserve pins from the submitted wallet proof or from that package.
 ///
 /// This Rust-only entrypoint does not make a stock mobile binary usable by itself:
-/// TODO: package an approved signed testnet release, its 50 exact artifacts and
+/// TODO: package an approved signed testnet release, its 54 exact artifacts and
 /// independently pinned app configuration, then invoke this at app startup.
 ///
 /// # Errors

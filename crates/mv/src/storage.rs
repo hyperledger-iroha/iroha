@@ -14,6 +14,9 @@ use std::{borrow::Borrow, collections::BTreeSet, ops::RangeBounds};
 mod detached_publication;
 #[path = "storage/frozen_read.rs"]
 mod frozen_read;
+#[path = "storage/original_read.rs"]
+mod original_read;
+pub use original_read::CommittedStorageView;
 #[path = "storage/physical.rs"]
 mod physical;
 pub use detached_publication::DetachedPublicationSlot;

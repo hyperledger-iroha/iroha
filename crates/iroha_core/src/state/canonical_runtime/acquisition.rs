@@ -143,6 +143,11 @@ pub(in crate::state) struct AcquiredRuntimeBlock<'state> {
 }
 
 impl<'state> AcquiredRuntimeBlock<'state> {
+    /// Check this exact State owner without reacquiring or projecting its values.
+    pub(in crate::state) fn belongs_to(&self, state: &State) -> bool {
+        std::ptr::eq(self.target, state)
+    }
+
     /// Borrow the exact acquired originals and their checked projections.
     pub(in crate::state) fn fields(&self) -> &AcquiredRuntimeBlockFields<'state> {
         self.fields

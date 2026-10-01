@@ -65,7 +65,7 @@ independent audit, SDK, hardware, and deployment evidence.
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
 | ZK-AMS | Native40 qPCS/FRI roots and staged transcript use the shared six-lane owner and [sole three-section V1 wire](crypto/zk_ams_rns_native_wire_v1.md). Source packing retains both native48 anchors. One 72,386-entry inventory replaces disconnected commitment owners; original fallible entropy continues through source and authenticated D/S preparation. The repaired fixture-based direct-proof suite passes all 34 tests on ordinary stacks, including four actual 16,384-gate proofs. Actual source replay and composite MKHE admission remain unavailable, and full qPCS hashing exceeds the unchanged work cap. | Complete actual source/prover and composite admission, a reviewed qPCS commitment/evaluation design within whole-proof resource bounds, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. Fixture proofs do not qualify a production source. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
-| ZK-X509 | Local certificate AIR components and a bounded joined codec exist; activation is unavailable. Verifier equations connecting P256/projection byte declarations to the shared byte trace remain incomplete. Native comparison exposed missing selected-input multiplicity in the closed fixed-schedule compiler; the complete post-pin privacy selection has 942 passes and 14 failures. | Complete those source joins, remove exposed intermediate claims, regenerate the combined profile and prove the full relation under the unchanged 9,437,184-byte and resource limits. Local proof acceptance does not establish the complete credential relation. |
+| ZK-X509 | The recorded private-output candidate passes normal builds, genuine pins, all 1,017 selected controls, required Metal parity and maximum-proof/fresh-verifier acceptance. Maximum time and literal address-space limits fail. The new private SHA/RFC bridge removes another 112 public scalars and passes native compilation and regenerated pins; five X509 test failures need repair, and 320 public scalars remain. Activation is unavailable. | Complete remaining source joins and terminal privacy, regenerate profiles, and prove the full relation under the unchanged 9,437,184-byte and resource limits. Local proof acceptance does not establish the complete credential relation. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |
 | Bootle/Lantern | Native lattice anonymous credential and Falcon issuer implementation. | Independent arithmetic/sampling/custody review, issuer lifecycle, maximum-shape and release qualification. |
 | Orchard | Sole Orchard/PostNu6_3 profile with two-pass preparation and authorization. | Audited parameter/proof provenance and full native/SDK/network qualification. |
@@ -76,18 +76,29 @@ independent audit, SDK, hardware, and deployment evidence.
 The X509 candidate uses the shared 136-query, eightfold-LDE profile: MAIN
 has a log-22 common domain and the accumulator pads its 104 active rows to
 8,192 rows on a log-16 LDE. All six MAIN groups retain their native polynomial
-and transition domains under one joined base root and one joined auxiliary root.
-Full current/next Fp4 DEEP constraints precede verification of the reduced
-current-row query wire. The private terminal repair retains 285 RFC base, 280
-auxiliary and 102 verifier-fixed columns, with 1,702 local degree-four constraints
-and a separate 192-equation MAIN endpoint plan. It removes 364 public scalars;
-384 MAIN and 108 accumulator scalars remain exposed. Canonical quotient chunks
-use independent adjacent masks with 137 Fp4 coefficients and unchanged FRI caps.
-The revised codec arithmetic bounds combined X5S1 at 9,415,166 bytes; native
-profile regeneration passes, while the fixed-schedule repair and further source joins require another profile generation, proof generation and resource measurement.
-The historical 9,420,938-byte proof passes local verification and memory limits
-but exceeds the 300-second proving limit. Its acceptance does not establish the
-missing byte-source joins, full soundness, hiding or activation.
+and transition domains under joined base and auxiliary roots. Full current/next
+Fp4 DEEP constraints precede reduced current-row query verification.
+
+The recorded private-output candidate passes normal builds, all three authentic
+pins, all 1,017 selected ordinary controls, complete RFC key-output replay and
+required four-domain CPU/Metal coefficient parity. Its 9,415,198-byte maximum
+proof passes self-verification, public verification and fresh-process replay.
+Peak RSS is 10,059,268,096 bytes, below 12 GiB. Proving takes 2,368.354388 seconds
+against 300 seconds, and a 509,631,414,272-byte virtual-size observation exceeds
+the literal 32 GiB ceiling. This is a failed qualification, not a complete
+credential or zero-knowledge result.
+
+The new SHA/RFC private bridge retains 285 RFC base, 280 auxiliary and 102 fixed
+columns with 1,654 local degree-four constraints. It adds 16 private constant
+bridges and 20 quartic joins using existing authenticated openings, and removes
+112 public scalars. The remaining 212 MAIN and 108 accumulator public values
+still block full hiding. Canonical chunks retain 137 independent adjacent Fp4
+mask coefficients and unchanged FRI caps. The source-derived complete bound is
+9,413,406 bytes. Bounded source/algebra and ownership review, normal compilation
+and authentic profile/proof pins pass. The expanded ordinary privacy run records
+1,039 passes and 19 failures, including five X509 assertions and fourteen new
+IVM fixture/copyback failures. Corrections, full native controls and maximum
+proof/resource measurement on the changed source remain required.
 
 BFV arithmetic diagnostics reconstruct artifact-bound traces and bounds through
 `bfv_full_bootstrap_diagnostic_execution_v1`. They share the witness relation and
@@ -97,6 +108,17 @@ plaintext-multiple public-key equation loses its noise modulo the plaintext
 modulus. Signed review evidence cannot repair that mathematical defect. A secure
 replacement and its independent qualification are required; rounded diagnostics
 are not a qualified replacement.
+
+The held Q204 native canonical-input/Galois successor passes 19 component controls
+and independent input/digit review. It derives digits and negacyclic automorphisms
+from the same complete canonical input owner under one allocation ledger. Its
+4,079,616-byte owned bound and 44,597,248-byte test-process RSS are component
+measurements, not a full application certificate. Policy/common-secret custody,
+secure parameters, relinearization/refresh assembly and the complete program
+relation remain absent. A separate reviewed IVM lifecycle/private-history/access
+cohort passes all 15 native controls; descriptor
+producers, initialized-byte return/copyback, complete machine semantics and
+finalized State binding remain open. Neither cohort changes production admission.
 The September 23 current-source correction encodes the complete 32-byte BFV
 statement hash injectively in eight little-endian `u32` Goldilocks limbs across
 38-column trace rows. The former four-`u64` modulo-field encoding aliased
@@ -125,7 +147,7 @@ implementation markers must not be substituted for the qualification record in
 | Component | Completion criterion still required |
 | --- | --- |
 | Generic native STARK | Current Binding and Explicit paths reconstruct the complete public trace/composition roots and enforce a zero terminal value. A future hidden-trace AIR still needs a verified initial degree/proximity argument; binary fold consistency alone is insufficient. Standalone public-padding verification remains unavailable, and BFV/Soracloud callers must complete explicit material replay. |
-| FASTPQ | Core ordinary and AXT wrappers select canonical masked DEEP artifacts with bounded verification, six-lane commitments and the complete typed statement. Current maximum ordinary and AXT component proofs and fresh retained-artifact verification pass unchanged byte/memory/work limits. Finish finalized-source admission/network behavior, independent AIR/FRI, witness-privacy and qROM review, and broader hardware evidence. Component proof acceptance does not qualify finalized authority. |
+| FASTPQ | Core ordinary and AXT wrappers select canonical masked DEEP artifacts with bounded verification, six-lane commitments and the complete typed statement. Recorded maximum ordinary and AXT component proofs and fresh retained-artifact verification pass unchanged byte/memory/work limits on their historical source. Finish finalized-source admission/network behavior, independent AIR/FRI, witness-privacy and qROM review, and broader hardware evidence. Component proof acceptance does not qualify finalized authority. |
 | AXT | Both Core execution pipelines now commit exact ordered canonical transaction wires; missing block-owned commitments cannot be synthesized from transcript identities. Anchor-bound proof verification checks ordered wire membership, exact public roots and context, and mandatory expiry. Consensus witness roots and transfer-batch trees still commit subsets, which cannot substitute for full persisted WSV roots. Complete successful-execution/transfer binding, rooted state witnesses, immutable anchor resolution and durable spend nonces. |
 | BFV/Soracloud | Complete the full BFV-RNS relation, full-size/eight-party KAT, resource measurements and governed parameter/lattice/noise/qROM evidence. The artifact-aware native wrapper is a replay check, not production qualification. |
 | MKHE | Complete the separate atomic 40-limb source/materialization/packing/cross-field/padding verifier and production composite within the unchanged qPCS resource limits. Unavailable stages cannot issue receipts. |
@@ -134,8 +156,16 @@ implementation markers must not be substituted for the qualification record in
 | Kaigi | Final 31-row authorization and 25-row usage proofs; retained original-account participation, exact keys/schema, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |
 | Elections | Complete Parliament private ballot/deadline/retry, finalized-beacon, rollback/restore and independent timed-OVN/threshold-BLS review on four validators. The separate standalone election product also requires final credential-linked ballot and closed-corpus tally relations, key custody, SDK fixtures and native/network qualification; see [the election statement boundary](zk_audit_matrix.md#election-statement-completion). |
 | SDKs and fixtures | Rust, Kotlin/Java consumers, Swift, JavaScript, Python and C# use the same final canonical bytes and native admission; signed same-source native packages and target-platform execution. Structural parser/source tests alone cannot qualify an SDK. |
-| Hardware | FASTPQ's masked producer dispatches bounded leaf batches through explicit CPU or required-device policy; parent hashes, transcript and polynomial work use CPU. Actual Metal tests cover every leaf oracle and readiness without a CPU fallback. Complete whole-proof hardware/resource evidence, device-buffer erasure, CUDA execution and target-specific side-channel review; earlier scalar-permutation/FFT preflights cannot qualify the final protocol. A feature build or selected mode is not device execution. |
+| Hardware | FASTPQ's masked producer dispatches bounded leaf batches through explicit CPU or required-device policy; parent hashes, transcript and polynomial work use CPU. Recorded Metal tests cover every leaf oracle and readiness without a CPU fallback on their tested source. Complete whole-proof hardware/resource evidence, device-buffer erasure, CUDA execution and target-specific side-channel review; earlier scalar-permutation/FFT preflights cannot qualify the final protocol. A feature build or selected mode is not device execution. |
 | Release and deployment | Clean signed source/lock/toolchain identity, complete independent audit classes and finding dispositions, real 48-stage/54-artifact evidence, exact four-validator quorum, staged restart/canary/convergence and authenticated endpoint readback. |
+
+The last tested merged SDK host library passes normal native builds and loaded-image
+ABI-25 checks: 359 actual exports, 117 Kotlin JNI symbols and all 38 retired
+Java-Android aliases absent. Selected bridge/top-up controls and two genuine canonical
+top-up regenerations pass. The full 674 ordinary bridge controls finish with 635 passes and 39 failures on
+unchanged source. Fixture corrections and native rerunning remain required; the
+component passes do not replace final Kotlin/Swift consumers, target devices or
+same-candidate signed packages.
 
 The SDK release matrix retains ten consumers in this order: `kotlin_jvm`,
 `kotlin_android`, `java_source_kotlin`, `swift_c_bridge`, `javascript_napi`,

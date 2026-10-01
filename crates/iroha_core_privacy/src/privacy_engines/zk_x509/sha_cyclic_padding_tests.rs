@@ -4,12 +4,10 @@ fn assert_actual_sha_cyclic_boundaries_v1(
     segment: usize,
     rows: &[ZkX509ShaBatchRowV1; 7],
     binding: ZkX509CredentialPreAuxBindingV1,
-    terminal: ZkX509ShaSegmentTerminalV1,
+    terminal: u8,
     ca_calls: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 ) {
-    let evaluate = |current: &ZkX509ShaBatchRowV1,
-                    next: &ZkX509ShaBatchRowV1,
-                    terminal: ZkX509ShaSegmentTerminalV1| {
+    let evaluate = |current: &ZkX509ShaBatchRowV1, next: &ZkX509ShaBatchRowV1, terminal: u8| {
         evaluate_zk_x509_sha_batch_residues_v1(
             current,
             next,
@@ -67,22 +65,29 @@ fn assert_actual_sha_cyclic_boundaries_v1(
             "segment {segment}, live product {column}"
         );
     }
-    for product in 0..24 {
-        let mut wrong = terminal;
-        if product < 4 {
-            wrong.source_products[product] = wrong.source_products[product].add(F::ONE);
-        } else if product < 8 {
-            wrong.digest_products[product - 4] = wrong.digest_products[product - 4].add(F::ONE);
-        } else {
-            let index = product - 8;
-            wrong.rfc_stream_products[index / 4][index % 4] =
-                wrong.rfc_stream_products[index / 4][index % 4].add(F::ONE);
-        }
+    // The eight source/digest totals are private. Changing their final live
+    // value still violates the preceding live recurrence in every segment.
+    for column in ZK_X509_SHA_INPUT_PRODUCTS_V1..ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1 {
+        let mut wrong_last = rows[3];
+        wrong_last.aux[column] = wrong_last.aux[column].add(F::ONE);
         assert!(
-            evaluate(&rows[3], &rows[4], wrong)
+            evaluate(&rows[2], &wrong_last, terminal)
                 .iter()
                 .any(|value| *value != F::ZERO),
-            "segment {segment}, terminal product {product}"
+            "segment {segment}, private final product {column}"
+        );
+    }
+    // All16 RFC stream endpoints are private; every changed final live
+    // value is still rejected by its actual preceding-row recurrence.
+    for product in 0..16 {
+        let mut wrong = rows[3];
+        let column = ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1 + product;
+        wrong.aux[column] = wrong.aux[column].add(F::ONE);
+        assert!(
+            evaluate(&rows[2], &wrong, terminal)
+                .iter()
+                .any(|value| *value != F::ZERO),
+            "segment {segment}, private RFC endpoint product {product}"
         );
     }
 }
@@ -200,9 +205,7 @@ fn sha_physical_padding_wrap_has_zero_residues_and_rejects_nonzero_cells() {
                 .count(),
             24
         );
-        let terminal = ZkX509ShaSegmentProductStateV1::one_v1()
-            .terminal_v1(segment)
-            .unwrap();
+        let terminal = segment as u8;
         let boundaries = neutral_ca_call_boundaries();
         let evaluate = |current: &ZkX509ShaBatchRowV1| {
             evaluate_zk_x509_sha_batch_residues_v1(

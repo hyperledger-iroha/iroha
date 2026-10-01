@@ -1599,12 +1599,7 @@ pub(super) fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
     }
 }
 pub(super) fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaimsV1 {
-    let mut sha = ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1();
-    for segment in &mut sha.segments {
-        for stream in &mut segment.rfc_stream_products {
-            stream.fill(F::ONE);
-        }
-    }
+    let sha = ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1();
     ZkX509MainTerminalClaimsV1 {
         rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
         sha,

@@ -258,6 +258,15 @@ fn trace_layout_is_bound_before_roots_and_joined_scalar_savings_are_exact() {
 
 #[test]
 fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
+    complete_oods_fixture_with_supplemental_v1(false);
+}
+
+#[test]
+fn supplemental_openings_of_nonconstant_columns_bind_through_real_fri() {
+    complete_oods_fixture_with_supplemental_v1(true);
+}
+
+fn complete_oods_fixture_with_supplemental_v1(with_supplemental: bool) {
     use rand::{SeedableRng as _, rngs::StdRng};
     for trace_layout in [
         AggregateTraceLayoutV1::GroupedCurrent,
@@ -265,6 +274,11 @@ fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
     ] {
         let parameters = AggregateStarkParametersV1 {
             fri_commitment_layout: AggregateFriCommitmentLayoutV1::Paired,
+            security_lanes: if with_supplemental {
+                1
+            } else {
+                PARAMETERS.security_lanes
+            },
             ..PARAMETERS
         };
         let groups = vec![AggregateTraceGroupLayoutV1 {
@@ -291,7 +305,24 @@ fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
         } else {
             0
         };
-        let base = vec![vec![F(7); rows]];
+        let domain_root = goldilocks_primitive_root_v1(layout.common_lde_log2).unwrap();
+        let base_polynomial = |point: E| {
+            if with_supplemental {
+                E::from_base(F(7))
+                    .add(point.mul_base(F(13)))
+                    .add(point.mul(point).mul_base(F(17)))
+            } else {
+                E::from_base(F(7))
+            }
+        };
+        let base = vec![
+            (0..rows)
+                .map(|index| {
+                    let x = F(GOLDILOCKS_GENERATOR_V1).mul(domain_root.pow(index as u128));
+                    base_polynomial(E::from_base(x)).coefficients()[0]
+                })
+                .collect::<Vec<_>>(),
+        ];
         let aux = vec![vec![F(11); rows]];
         let material = vec![AggregateTraceGroupMaterialV1 {
             base_tree: row_tree_v1(
@@ -358,8 +389,12 @@ fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
         let wire = |value| E::from_base(F(value)).coefficients().map(F::value);
         let deep = AggregateDeepProofV1 {
             trace_groups: vec![AggregateDeepTraceGroupOpeningV1 {
-                base_current: vec![wire(7)],
-                base_next: vec![wire(7)],
+                base_current: vec![base_polynomial(point).coefficients().map(F::value)],
+                base_next: vec![
+                    base_polynomial(point.mul_base(goldilocks_primitive_root_v1(8).unwrap()))
+                        .coefficients()
+                        .map(F::value),
+                ],
                 aux_current: vec![wire(11)],
                 aux_next: vec![wire(11)],
             }],
@@ -369,6 +404,30 @@ fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
             ],
         };
         absorb_deep_openings_v1(&mut transcript, &deep, parameters, &layout).unwrap();
+        let supplemental = if with_supplemental {
+            let target = point.pow(2).mul_base(F(13));
+            assert!(deep_point_is_admissible_v1(target, parameters, &layout).unwrap());
+            let value = base_polynomial(target);
+            transcript
+                .absorb(
+                    b"public-test-supplemental-values",
+                    &[&target.to_be_bytes(), &value.to_be_bytes()],
+                )
+                .unwrap();
+            let mix = transcript
+                .challenge_fp4(b"public-test-supplemental-mix")
+                .unwrap();
+            vec![AggregateSupplementalDeepOpeningV1 {
+                group: 0,
+                base_column: 0,
+                point: target,
+                value,
+                mix,
+            }]
+        } else {
+            Vec::new()
+        };
+
         // Independently constant base/aux polynomials and zero quotient chunks
         // have zero DEEP divided differences at both distinct opening points.
         let mixes = vec![
@@ -393,7 +452,32 @@ fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
                     DOMAINS,
                     &layout,
                     lane,
-                    mask.evaluations.clone(),
+                    if with_supplemental {
+                        mask.evaluations
+                            .iter()
+                            .enumerate()
+                            .map(|(index, masked)| {
+                                let x = E::from_base(
+                                    F(GOLDILOCKS_GENERATOR_V1).mul(domain_root.pow(index as u128)),
+                                );
+                                // For P(X)=7+13X+17X², (P(X)-P(t))/(X-t)=13+17(X+t).
+                                // This independent closed polynomial never calls the verifier quotient helper.
+                                let divided = |t| E::from_base(F(13)).add(x.add(t).mul_base(F(17)));
+                                masked
+                                    .add(divided(point).mul_base(F(2)))
+                                    .add(
+                                        divided(
+                                            point
+                                                .mul_base(goldilocks_primitive_root_v1(8).unwrap()),
+                                        )
+                                        .mul_base(F(3)),
+                                    )
+                                    .add(divided(supplemental[0].point).mul(supplemental[0].mix))
+                            })
+                            .collect()
+                    } else {
+                        mask.evaluations.clone()
+                    },
                     &mut transcript,
                 )
                 .unwrap()
@@ -466,10 +550,55 @@ fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
                       betas: &[Vec<E>],
                       terminals: &[Vec<E>]| {
             verify_opened_query_relations_after_complete_oods_v1(
-                proof, deep, point, &mixes, parameters, &layout, &indices, betas, terminals,
+                proof,
+                deep,
+                point,
+                &mixes,
+                parameters,
+                &layout,
+                &indices,
+                betas,
+                terminals,
+                &supplemental,
             )
         };
         verify(&proof, &deep, &betas, &terminals).unwrap();
+        if with_supplemental {
+            for variant in 0..6 {
+                let mut changed = supplemental.clone();
+                match variant {
+                    0 => changed[0].value = changed[0].value.add(E::ONE),
+                    1 => changed[0].point = changed[0].point.add(E::ONE),
+                    2 => changed[0].mix = changed[0].mix.add(E::ONE),
+                    3 => changed[0].group = 1,
+                    4 => changed[0].base_column = 1,
+                    _ => changed[0].point = E::ZERO,
+                }
+                assert!(
+                    verify_opened_query_relations_after_complete_oods_v1(
+                        &proof, &deep, point, &mixes, parameters, &layout, &indices, &betas,
+                        &terminals, &changed
+                    )
+                    .is_err()
+                );
+            }
+            assert!(
+                verify_opened_query_relations_after_complete_oods_v1(
+                    &proof,
+                    &deep,
+                    point,
+                    &mixes,
+                    parameters,
+                    &layout,
+                    &indices,
+                    &betas,
+                    &terminals,
+                    &[]
+                )
+                .is_err()
+            );
+        }
+
         for coordinate in 0..4 {
             let mut changed = deep.clone();
             let group = &mut changed.trace_groups[0];

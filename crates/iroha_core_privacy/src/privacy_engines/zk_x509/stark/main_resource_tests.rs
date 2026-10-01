@@ -600,8 +600,16 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     // Exact local registration census after private endpoint equations
     // replaced public claims and six metadata plus23 key-source RFC equations
     // were added: 23 *2^21 =48,234,496 extra local residue evaluations.
-    // Joined-link replay work has its separate source-bound owner census.
-    assert_eq!(residues, 28_748_521_472);
+    // The RFC private-output slice then removes 24 local constraints, saving
+    // 24 * 2^21 = 50,331,648 evaluations. Joined-link replay work has its
+    // separate source-bound owner census.
+    // Four SHA registrations each remove eight unconsumed public endpoint
+    // constraints, saving 4 * 8 * 2^22 = 134,217,728 evaluations.
+    // Replacing 24 raw aggregate constraints by 16 bridge constraints, and
+    // removing 16 RFC and 64 SHA public scalar bindings, removes a further
+    // 24 * 2^21 + 4 * 16 * 2^22 local evaluations. The 20 new private
+    // quotient terms and 32 original-column replays are counted separately.
+    assert_eq!(residues, 28_245_204_992);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,
