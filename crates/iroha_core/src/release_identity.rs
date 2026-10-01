@@ -288,8 +288,9 @@ fn is_exact_commit(source: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// Verify canonical signed genesis bytes against the explicitly selected genesis key.
+/// Authenticate canonical original signed genesis intents against the selected genesis key.
 /// Returns the actual block hash and its validated signed consensus metadata.
+/// Execution results remain authenticated by the startup and committed-block validators.
 pub fn genesis_identity(
     bytes: &[u8],
     public_key: &PublicKey,
@@ -298,7 +299,7 @@ pub fn genesis_identity(
     if !block.header().is_genesis() || block.encode_wire()?.as_slice() != bytes {
         eyre::bail!("release genesis is not canonical framed Norito");
     }
-    crate::validate_genesis_block(
+    crate::block::check_genesis_block_intents(
         &block,
         &iroha_data_model::account::AccountId::new(public_key.clone()),
     )?;

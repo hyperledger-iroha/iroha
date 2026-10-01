@@ -883,6 +883,7 @@ def _verify_prepared_transaction_authentication_v1(
     *,
     expected_authority: str,
     network_id: "NetworkId",
+    chain_discriminant: int,
     context: str,
 ) -> None:
     from .crypto import AccountId as ExactAccountId
@@ -930,6 +931,7 @@ def _verify_prepared_transaction_authentication_v1(
         str(prepared["semantic_hash_hex"]),
         fee_payment_json,
         json.dumps(operation_context, sort_keys=True, separators=(",", ":")),
+        chain_discriminant=chain_discriminant,
     )
     if not hmac.compare_digest(envelope.hash_hex(), str(prepared["transaction_hash_hex"])):
         raise ValueError(f"{context} transaction hash differs from the exact signed wire")
@@ -1955,10 +1957,7 @@ def _normalize_exact_i105_account_id(
     if "@" in literal:
         raise ValueError(f"{context} must be an exact canonical I105 account id")
     try:
-        address = AccountAddress.parse_encoded(
-            literal,
-            expected_discriminant=expected_discriminant,
-        )
+        address = AccountAddress.parse_encoded(literal, expected_discriminant=expected_discriminant)
     except AccountAddressError as exc:
         raise ValueError(
             f"{context} must be an exact canonical I105 account id"
@@ -8704,7 +8703,6 @@ class VerifiedCommittedTransaction:
             if not isinstance(raw_outcome, Mapping):
                 raise TypeError(f"verified batch outcome {index} must be an object")
             required_fields = {
-            "proof_kind",
                 "leg_index",
                 "leg_id",
                 "asset",
@@ -11801,10 +11799,14 @@ def _require_crypto() -> ModuleType:
     return _crypto
 
 
-def signed_transaction_envelope_from_json(envelope_json: str) -> "SignedTransactionEnvelope":
+def signed_transaction_envelope_from_json(
+    envelope_json: str, *, chain_discriminant: int,
+) -> "SignedTransactionEnvelope":
     """Parse a signed transaction envelope from a JSON payload."""
 
-    return _require_crypto().signed_transaction_envelope_from_json(envelope_json)
+    return _require_crypto().signed_transaction_envelope_from_json(
+        envelope_json, chain_discriminant=chain_discriminant,
+    )
 
 
 @dataclass(frozen=True, init=False)
@@ -12570,22 +12572,7 @@ class ToriiClient(
         )
 
     def _native_transaction_account_id(self, value: Any, context: str) -> str:
-        literal = _require_non_empty_string(value, context)
-        if "@" in literal:
-            return literal
-        candidate_discriminants = [DEFAULT_I105_DISCRIMINANT]
-        if self._chain_discriminant != DEFAULT_I105_DISCRIMINANT:
-            candidate_discriminants.append(self._chain_discriminant)
-        for discriminant in candidate_discriminants:
-            try:
-                address = AccountAddress.parse_encoded(
-                    literal,
-                    expected_discriminant=discriminant,
-                )
-            except AccountAddressError:
-                continue
-            return address.to_i105(DEFAULT_I105_DISCRIMINANT)
-        return literal
+        return _normalize_exact_i105_account_id(value, context, expected_discriminant=self._chain_discriminant)
 
     def _exact_account_identity_pin(self, value: Any, context: str) -> str:
         """Validate an exact I105 literal while treating its discriminator as presentation."""
@@ -12597,18 +12584,9 @@ class ToriiClient(
         parts = literal.split("#")
         if len(parts) not in {2, 3} or not all(parts):
             return literal
-        definition, account_id = parts[0], parts[1]
-        scope = parts[2] if len(parts) == 3 else None
-        native_account_id = self._native_transaction_account_id(
-            account_id,
-            f"{context}.account_id",
-        )
-        if native_account_id == account_id:
-            return literal
-        result = f"{definition}#{native_account_id}"
-        if scope is not None:
-            result = f"{result}#{scope}"
-        return result
+        account_id = parts[1]
+        self._native_transaction_account_id(account_id, f"{context}.account_id")
+        return literal
 
     def privacy_capabilities_v1(
         self, *, canonical_auth: ToriiCanonicalRequestAuth
@@ -12793,6 +12771,7 @@ class ToriiClient(
         envelope = crypto.signed_transaction_envelope_from_versioned_v1(
             wire,
             signing_context.network_id,
+            chain_discriminant=self._chain_discriminant,
         )
         authenticated_wire = getattr(envelope, "signed_transaction_versioned", None)
         if not isinstance(authenticated_wire, (bytes, bytearray, memoryview)) or bytes(
@@ -12921,6 +12900,7 @@ class ToriiClient(
         network_id: "NetworkId",
         native_finality_proof_chain_json: str,
         expected_chain: str,
+        expected_chain_discriminant: int,
         trusted_checkpoint: bytes,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
@@ -12929,9 +12909,17 @@ class ToriiClient(
 
         The native proof page must begin at the selected checkpoint and extend
         consecutively to the carrier. Network, chain and checkpoint are caller
-        trust inputs. Check ``result_ok`` before treating execution as successful,
+        trust inputs. The required chain discriminant must match the configured
+        client and controls every native account-address projection. Check ``result_ok`` before treating execution as successful,
         and retain ``promoted_checkpoint`` atomically with the accepted result.
         """
+
+        if type(expected_chain_discriminant) is not int:
+            raise TypeError("expected_chain_discriminant must be an exact integer")
+        if not 0 <= expected_chain_discriminant <= 65535:
+            raise ValueError("expected_chain_discriminant must be a u16")
+        if expected_chain_discriminant != self._chain_discriminant:
+            raise ValueError("expected_chain_discriminant must match the configured client")
 
         from .crypto import (
             build_find_committed_transaction_query,
@@ -12987,6 +12975,7 @@ class ToriiClient(
             native_finality_proof_chain_json=native_finality_proof_chain_json,
             expected_network_id=network_id,
             expected_chain=expected_chain,
+            expected_chain_discriminant=expected_chain_discriminant,
             trusted_checkpoint=trusted_checkpoint,
         )
         result = VerifiedCommittedTransaction.from_payload(verified)
@@ -13110,10 +13099,7 @@ class ToriiClient(
             private_key=private_key,
             private_key_hex=private_key_hex,
         )
-        canonical_authority = self._native_transaction_account_id(
-            authority,
-            "authority",
-        )
+        canonical_authority = self._native_transaction_account_id(authority, "authority")
         canonical_account = self._native_transaction_account_id(
             account_id,
             party,
@@ -13250,7 +13236,9 @@ class ToriiClient(
     def submit_transaction_json(self, envelope_json: str) -> Optional[Any]:
         """Submit a transaction described by the JSON produced via `to_json`."""
 
-        envelope = signed_transaction_envelope_from_json(envelope_json)
+        envelope = signed_transaction_envelope_from_json(
+            envelope_json, chain_discriminant=self._chain_discriminant,
+        )
         return self.submit_transaction_envelope(envelope)
 
     def submit_transaction_draft_and_wait(
@@ -13307,7 +13295,9 @@ class ToriiClient(
     ) -> Any:
         """Submit a transaction JSON blob and wait for final status."""
 
-        envelope = signed_transaction_envelope_from_json(envelope_json)
+        envelope = signed_transaction_envelope_from_json(
+            envelope_json, chain_discriminant=self._chain_discriminant,
+        )
         return self.submit_transaction_envelope_and_wait(
             envelope,
             interval=interval,
@@ -15762,6 +15752,7 @@ class ToriiClient(
         instruction = _require_crypto().Instruction.nexus_lane_lifecycle(
             json.dumps(_json_safe_value(status), sort_keys=True, separators=(",", ":")),
             json.dumps(plan, sort_keys=True, separators=(",", ":")),
+            chain_discriminant=self._chain_discriminant,
         )
         return self.build_and_submit_transaction(
             network_id,
@@ -16826,6 +16817,7 @@ class ToriiClient(
             network_id,
             authority,
             private_key,
+            chain_discriminant=self._chain_discriminant,
             fee_payment=fee_payment,
             instructions=instructions,
             creation_time_ms=creation_time_ms,
@@ -17149,6 +17141,7 @@ class ToriiClient(
         return TransactionDraft(
             TransactionConfig(
                 network_id=signing_context.network_id,
+                chain_discriminant=self._chain_discriminant,
                 authority=effective_authority,
                 fee_payment=(
                     fee_payment
@@ -18737,6 +18730,7 @@ class ToriiClient(
                 prepared,
                 expected_authority=canonical_authority,
                 network_id=expected_network_id,
+                chain_discriminant=self._chain_discriminant,
                 context="prepare_account_faucet.response",
             )
         return response
@@ -18796,6 +18790,7 @@ class ToriiClient(
             exact_prepared,
             expected_authority=canonical_authority,
             network_id=expected_network_id,
+            chain_discriminant=self._chain_discriminant,
             context="submit_prepared_account_faucet.prepared",
         )
         response = self._request(
@@ -19010,6 +19005,7 @@ class ToriiClient(
                     prepared,
                     expected_authority=canonical_authority,
                     network_id=expected_network_id,
+                    chain_discriminant=self._chain_discriminant,
                     context="prepare_account_onboarding.response",
                 )
             elif schema == ACCOUNT_ONBOARDING_PROOF_REQUIRED_SCHEMA:
@@ -19278,6 +19274,7 @@ class ToriiClient(
             exact_prepared,
             expected_authority=canonical_authority,
             network_id=expected_network_id,
+            chain_discriminant=self._chain_discriminant,
             context="submit_prepared_account_onboarding.prepared",
         )
         response = self._request(
@@ -20055,7 +20052,8 @@ class ToriiClient(
         """List asset holders via `GET /v1/assets/{definition}/holders` (optional `asset_id`)."""
 
         definition = _require_non_empty_string(
-            asset_definition_id, "asset_definition_id"
+            asset_definition_id,
+            "asset_definition_id",
         )
         params: Dict[str, Any] = {}
         if limit is not None:
@@ -21361,7 +21359,8 @@ class ToriiClient(
         """Return the exact tally response, or ``None`` for an unknown referendum."""
 
         exact_referendum_id = _require_governance_selector_string(
-            referendum_id, "referendum_id"
+            referendum_id,
+            "referendum_id",
         )
         return self._governance_tally_payload(
             exact_referendum_id, canonical_auth=canonical_auth

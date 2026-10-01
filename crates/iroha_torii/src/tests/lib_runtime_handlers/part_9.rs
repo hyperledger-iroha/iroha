@@ -1182,7 +1182,7 @@ async fn app_api_get_by_id_not_found_returns_404() {
     let caller = AccountId::new(key_pair.public_key().clone());
     let mut app = app_with_root_scope_for_handler_test(world_with_account(&caller), false);
     // The exact routing lookup and its authenticated handler both preserve scoped absence.
-    let direct = routing::handle_get_contract_code(
+    let direct = match routing::handle_get_contract_code(
         app.state.clone(),
         iroha_data_model::smart_contract::ContractArtifactId::new(
             DataSpaceId::UNIVERSAL,
@@ -1190,8 +1190,10 @@ async fn app_api_get_by_id_not_found_returns_404() {
         ),
     )
     .await
-    .expect("scoped absence mapping")
-    .into_response();
+    {
+        Err(error) => error.into_response(),
+        Ok(_) => panic!("absent scoped artifact unexpectedly exists"),
+    };
     assert_eq!(direct.status(), axum::http::StatusCode::NOT_FOUND);
     let code_hash = hex::encode(Hash::new(b"missing scoped contract artifact").as_ref());
     let method = axum::http::Method::GET;

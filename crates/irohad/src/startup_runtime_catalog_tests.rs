@@ -79,6 +79,8 @@ fn effective_catalog(
     dataspaces.push(dataspace.clone());
     effective.dataspace_catalog = DataSpaceCatalog::new(dataspaces).expect("restored runtime DS");
     let runtime = NexusRuntimeCatalogV1 {
+        retired_dataspaces: Vec::new(),
+        retired_lanes: Vec::new(),
         version: NexusRuntimeCatalogV1::VERSION,
         baseline_dataspaces_hash: dataspace_catalog_hash(&configured.configured_dataspace_catalog),
         baseline_manifests_hash: iroha_crypto::Hash::prehashed(

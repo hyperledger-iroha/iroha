@@ -2326,6 +2326,7 @@ fn evaluate_fee_sponsor_capacity(
     beneficiary: &AccountId,
     block_height: u64,
     charges: &[FeeChargeBound],
+    route_dataspace_id: Option<DataSpaceId>,
 ) -> Result<BTreeMap<AssetDefinitionId, FeeSponsorCapacity>, NexusFeeAdmissionError> {
     let mut totals = BTreeMap::<AssetDefinitionId, Quantity>::new();
     for charge in charges {
@@ -2346,12 +2347,14 @@ fn evaluate_fee_sponsor_capacity(
                 format!("fee sponsor asset `{asset_definition_id}` is not registered"),
             )
         })?;
-        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
-            return Err(NexusFeeAdmissionError::sponsor(
-                FeeRejectionCode::InvalidProgramConfiguration,
-                format!("fee sponsor asset `{asset_definition_id}` must use Global balance scope"),
-            ));
-        }
+        let _ = definition;
+        private_fees::sponsor_asset_scope(world, &asset_definition_id, route_dataspace_id)
+            .map_err(|error| {
+                NexusFeeAdmissionError::sponsor(
+                    FeeRejectionCode::InvalidProgramConfiguration,
+                    error.reason().to_owned(),
+                )
+            })?;
         let budget = resolved
             .revision
             .asset_budgets
@@ -4073,15 +4076,7 @@ fn evaluate_nexus_fee_admission_payload(
 ) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
     require_direct_fee_settlement(nexus)?;
     let fees = private_fees::effective(world, &nexus.fees)?;
-    // TODO: Private sponsorship needs vaults with exact dataspace custody. Public
-    // sponsor-program identifiers alone cannot authorize a private monetary debit.
-    if private_fees::private_scope(world, route_dataspace_id)?.is_some()
-        && payload.fee_payment.sponsor_program().is_some()
-    {
-        return Err(NexusFeeAdmissionError::ConfigInvalid(
-            "private-root fee sponsors require a scoped vault owner".into(),
-        ));
-    }
+    private_fees::private_scope(world, route_dataspace_id)?;
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission_payload(payload)?;
     let mut charges = Vec::with_capacity(2);
     let fee = compute_nexus_fee_amount(&fees, tx_bytes_len, instruction_count, gas_used)
@@ -4156,6 +4151,12 @@ fn evaluate_nexus_fee_admission_payload(
             })
         }
         Some((program_id, program_revision)) => {
+            private_fees::validate_sponsor_custody(
+                world,
+                &nexus.fees.sponsor_vault_custody_account_id,
+                route_dataspace_id,
+                &charges,
+            )?;
             let resolved = resolve_fee_sponsor_program(
                 world,
                 nexus,
@@ -4172,6 +4173,7 @@ fn evaluate_nexus_fee_admission_payload(
                 &payload.authority,
                 next_block_height,
                 &charges,
+                route_dataspace_id,
             )?;
             Ok(FeeAdmissionQuote {
                 charges,
@@ -4768,6 +4770,16 @@ impl Executor {
             asset_definition_id: asset_definition_id.clone(),
             max_bound: amount.clone(),
         };
+        private_fees::validate_sponsor_custody(
+            &state_transaction.world,
+            &state_transaction
+                .nexus
+                .fees
+                .sponsor_vault_custody_account_id,
+            state_transaction.current_dataspace_id,
+            core::slice::from_ref(&charge),
+        )
+        .map_err(nexus_fee_admission_error_to_validation_fail)?;
         validate_signed_charge_limits(
             transaction.fee_payment_intent(),
             core::slice::from_ref(&charge),
@@ -4779,6 +4791,7 @@ impl Executor {
             authority,
             state_transaction.block_height(),
             core::slice::from_ref(&charge),
+            state_transaction.current_dataspace_id,
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
         let budget = resolved
@@ -4988,11 +5001,6 @@ impl Executor {
             state_transaction.current_dataspace_id,
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
-        if private_scope.is_some() && sponsor.is_some() {
-            return Err(ValidationFail::NotPermitted(
-                "private-root fee sponsors require a scoped vault owner".into(),
-            ));
-        }
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
             return Ok(());
@@ -16047,7 +16055,7 @@ mod tests {
             max_bound: Quantity::from(1_u32),
         };
         let world = world.block();
-        let error = evaluate_fee_sponsor_capacity(&world, &resolved, &sponsor, 1, &[charge])
+        let error = evaluate_fee_sponsor_capacity(&world, &resolved, &sponsor, 1, &[charge], None)
             .expect_err("sponsor accounting must reject dataspace-scoped fee assets");
         assert_eq!(error.code(), FeeRejectionCode::InvalidProgramConfiguration);
         assert!(error.reason().contains("Global balance scope"));

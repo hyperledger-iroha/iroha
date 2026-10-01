@@ -4638,7 +4638,11 @@ fn geometry_checkpoint_from_snapshot(
     let chain_id: ChainId = json::from_str(required_snapshot_object_field(input, "chain_id")?)
         .map_err(TryWriteError::Serialization)?;
     // Validate current and undo geometry before retaining the snapshot identity.
-    snapshot_lane_geometry_images(&runtime, height, &network_id)?;
+    let world = required_snapshot_object_field(input, "world")?;
+    let parameters: Cell<iroha_data_model::parameter::Parameters> =
+        json::from_str(required_snapshot_object_field(world, "parameters")?)
+            .map_err(TryWriteError::Serialization)?;
+    snapshot_lane_geometry_images(&runtime, &parameters, height, &network_id)?;
     let native_tip = json::from_str(required_snapshot_object_field(
         input,
         "native_execution_tip",
@@ -4667,6 +4671,7 @@ type SnapshotLaneGeometryProjection = (
 // A changed last block must use its retained undo, never a later State view.
 fn snapshot_lane_geometry_images(
     runtime: &Cell<SnapshotNexusRuntime>,
+    parameters: &Cell<iroha_data_model::parameter::Parameters>,
     height: u64,
     network_id: &NetworkId,
 ) -> Result<
@@ -4678,6 +4683,8 @@ fn snapshot_lane_geometry_images(
 > {
     let current = runtime.view();
     let predecessor = runtime.predecessor_view();
+    let current_parameters = parameters.view();
+    let previous_parameters = parameters.predecessor_view();
     let recovery = if height == 0 {
         None
     } else {
@@ -4689,10 +4696,19 @@ fn snapshot_lane_geometry_images(
                 .clone(),
             height - 1,
             network_id,
+            previous_parameters
+                .get()
+                .as_ref()
+                .unwrap_or_else(|| current_parameters.get()),
         )?)
     };
     Ok((
-        snapshot_lane_geometry_projection(current.get().clone(), height, network_id)?,
+        snapshot_lane_geometry_projection(
+            current.get().clone(),
+            height,
+            network_id,
+            current_parameters.get(),
+        )?,
         recovery,
     ))
 }
@@ -4706,6 +4722,7 @@ fn snapshot_lane_geometry_projection(
     runtime: SnapshotNexusRuntime,
     height: u64,
     network_id: &NetworkId,
+    parameters: &iroha_data_model::parameter::Parameters,
 ) -> Result<SnapshotLaneGeometryProjection, TryWriteError> {
     if runtime.version != SnapshotNexusRuntime::VERSION
         || runtime.autoscale_last_transition_height > height
@@ -4728,7 +4745,6 @@ fn snapshot_lane_geometry_projection(
             "snapshot Nexus lane catalog is invalid: {error}"
         )))
     })?;
-    let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
     let mut lineage = BTreeMap::new();
     let mut latest_hashes = BTreeSet::new();
     for entry in runtime.lane_incarnation_lineage {
@@ -4763,6 +4779,16 @@ fn snapshot_lane_geometry_projection(
         incarnations.insert(lane.id, entry.incarnation);
         activation_heights.insert(lane.id, entry.activation_height);
     }
+    let (lane_config, incarnations, activation_heights) =
+        crate::state::retained_lane_geometry_from_parameters(
+            &lane_catalog,
+            &incarnations,
+            &activation_heights,
+            &lineage,
+            parameters,
+            height,
+        )
+        .map_err(|error| TryWriteError::Serialization(json::Error::Message(error.to_string())))?;
     Ok((
         lane_config,
         incarnations,

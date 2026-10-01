@@ -65,6 +65,7 @@ FAUCET_AMOUNT = "100"
 VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 
+
 def canonical_proof_attachment(
     *,
     backend: str = "halo2/ipa",
@@ -135,13 +136,13 @@ def test_signed_pipeline_details_is_exact_network_bound_and_one_shot(
 
     details = client.get_pipeline_transaction_details(
         transaction_hash,
-        authority="alice@wonderland",
+        authority=account_address(0x51),
         private_key=bytes([0x51]) * 32,
     )
 
     assert details["hash"] == transaction_hash
     assert captured == {
-        "authority": "alice@wonderland",
+        "authority": account_address(0x51),
         "private_key": bytes([0x51]) * 32,
         "network_id": NETWORK_ID,
         "entrypoint_hash": transaction_hash,
@@ -177,7 +178,7 @@ def test_signed_pipeline_details_never_replays_redirects(
     with pytest.raises(RuntimeError, match=f"unexpected status {redirect_status}"):
         client.get_pipeline_transaction_details(
             "cd" * 32,
-            authority="alice@wonderland",
+            authority=account_address(0x51),
             private_key=bytes([0x51]) * 32,
         )
 
@@ -533,6 +534,7 @@ def test_prepared_transaction_v1_shared_golden_authenticates_inner_context() -> 
             prepared["semantic_hash_hex"],
             json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
             json.dumps(operation_context, sort_keys=True, separators=(",", ":")),
+            chain_discriminant=753,
         )
         assert envelope.hash_hex() == prepared["transaction_hash_hex"]
         substituted_context = copy.deepcopy(operation_context)
@@ -550,6 +552,7 @@ def test_prepared_transaction_v1_shared_golden_authenticates_inner_context() -> 
                 prepared["semantic_hash_hex"],
                 json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
                 json.dumps(substituted_context, sort_keys=True, separators=(",", ":")),
+                chain_discriminant=753,
             )
         if vector["name"] == "onboarding_prepared":
             receipt = prepared["receipt"]
@@ -577,7 +580,9 @@ def test_prepared_transaction_v1_shared_golden_authenticates_inner_context() -> 
 
 
 @pytest.mark.parametrize("name", ["onboarding_prepared", "faucet_prepared"])
-def test_prepared_transaction_v1_rejects_validly_signed_missing_operation_binding(name: str) -> None:
+def test_prepared_transaction_v1_rejects_validly_signed_missing_operation_binding(
+    name: str,
+) -> None:
     fixture_path = (
         Path(__file__).resolve().parents[3]
         / "fixtures"
@@ -640,7 +645,9 @@ def test_prepared_transaction_v1_rejects_validly_signed_missing_operation_bindin
     unbound_wire = b"\x01" + field(field(signature_wire)) + field(unbound_payload) + field(b"\x00")
     network_id = NetworkId.parse(vector["network_id"])
     # The negative case must reach the prepared verifier with a valid signature.
-    crypto_module.signed_transaction_envelope_from_versioned_v1(unbound_wire, network_id)
+    crypto_module.signed_transaction_envelope_from_versioned_v1(
+        unbound_wire, network_id, chain_discriminant=753
+    )
     operation_context = (
         {
             "receipt": prepared["receipt"],
@@ -667,6 +674,7 @@ def test_prepared_transaction_v1_rejects_validly_signed_missing_operation_bindin
             prepared["semantic_hash_hex"],
             json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
             json.dumps(operation_context, sort_keys=True, separators=(",", ":")),
+            chain_discriminant=753,
         )
 
 
@@ -716,6 +724,7 @@ def test_prepared_faucet_native_context_rejects_optional_pow_claim(
             prepared["semantic_hash_hex"],
             json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
             json.dumps(operation_context, sort_keys=True, separators=(",", ":")),
+            chain_discriminant=753,
         )
 
 
@@ -1559,7 +1568,11 @@ def test_account_faucet_is_explicit_prepare_then_exact_submit(
 @pytest.mark.parametrize(
     ("field", "substituted", "message"),
     [
-        ("asset_definition_id", ALTERNATE_FAUCET_ASSET_DEFINITION_ID, "asset_definition_id differs"),
+        (
+            "asset_definition_id",
+            ALTERNATE_FAUCET_ASSET_DEFINITION_ID,
+            "asset_definition_id differs",
+        ),
         ("amount", "101", "amount differs"),
     ],
 )
@@ -1600,7 +1613,11 @@ def test_faucet_prepare_rejects_independent_policy_substitution(
 @pytest.mark.parametrize(
     ("field", "substituted", "message"),
     [
-        ("asset_definition_id", ALTERNATE_FAUCET_ASSET_DEFINITION_ID, "asset_definition_id differs"),
+        (
+            "asset_definition_id",
+            ALTERNATE_FAUCET_ASSET_DEFINITION_ID,
+            "asset_definition_id differs",
+        ),
         ("amount", "101", "amount differs"),
     ],
 )
@@ -2078,6 +2095,8 @@ def test_each_privacy_verifier_registry_label_rejects_structural_mutations() -> 
                 mutation,
                 label,
             )
+
+
 def zk_verifying_key_commitment(backend: str, vk_bytes: bytes) -> str:
     backend_bytes = backend.encode("utf-8")
     preimage = (
@@ -4037,7 +4056,6 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
     assert session.calls == []
 
 
-
 def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
     tx_hash = "d" * 64
     session = FakeSession([])
@@ -4054,7 +4072,7 @@ def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
     client.call_contract_batch_and_wait = call_batch  # type: ignore[method-assign]
 
     result = client.call_contract_and_wait(
-        authority="authority@is",
+        authority=account_address(0x51),
         private_key_hex="11" * 32,
         contract_alias="contract::is",
         entrypoint="main",
@@ -4066,7 +4084,7 @@ def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
     )
 
     assert "chain_id" not in captured
-    assert captured["authority"] == "authority@is"
+    assert captured["authority"] == account_address(0x51)
     assert captured["private_key"] is None
     assert captured["private_key_hex"] == "11" * 32
     entries = captured["entries"]
@@ -4092,7 +4110,7 @@ def test_call_contract_and_wait_rejects_retired_chain_id_before_dispatch() -> No
 
     with pytest.raises(TypeError, match="chain_id"):
         client.call_contract_and_wait(  # type: ignore[call-arg]
-            authority="authority@is",
+            authority=account_address(0x51),
             private_key_hex="11" * 32,
             contract_alias="contract::is",
             entrypoint="main",
@@ -4118,7 +4136,7 @@ def test_mint_assets_quantity_and_wait_batches_records_in_one_transaction() -> N
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     result = client.mint_assets_quantity_and_wait(
-        authority="authority@is",
+        authority=account_address(0x51),
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         mints=[
@@ -4145,7 +4163,7 @@ def test_transaction_draft_rejects_retired_chain_and_padded_authority_before_sig
         match="unexpected keyword argument 'chain_id'",
     ):
         client._transaction_draft(
-            authority="authority@is",
+            authority=account_address(0x51),
             fee_payment=FEE_PAYMENT,
             **{"chain_id": "chain"},
         )
@@ -4176,7 +4194,7 @@ def test_transfer_assets_quantity_and_wait_batches_records_in_one_transaction() 
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     result = client.transfer_assets_quantity_and_wait(
-        authority="source@is",
+        authority=account_address(0x11),
         fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         transfers=[
@@ -4197,7 +4215,7 @@ def test_transfer_assets_quantity_and_wait_batches_records_in_one_transaction() 
     draft = captured["draft"]
     assert result == {"hash": "transfer-batch"}
     assert len(draft) == 2
-    assert draft.config.authority == "source@is"
+    assert draft.config.authority == account_address(0x11)
     assert captured["kwargs"]["private_key_hex"] == "22" * 32
     assert captured["kwargs"]["wait"] is True
 
@@ -4214,22 +4232,22 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     grant = client.grant_account_permission_and_wait(
-        authority="authority@is",
+        authority=account_address(0x51),
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         account_id=account,
         permission_name="CanEnrollFeeSponsorProgram",
-        permission_payload={"program_id": "sponsor@is/retail"},
+        permission_payload={"program_id": f"{account_address(0x44)}/retail"},
         transaction_metadata={"purpose": "fee-sponsor-program"},
         wait=False,
     )
     revoke = client.revoke_account_permission_and_wait(
-        authority="authority@is",
+        authority=account_address(0x51),
         fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
         account_id=account,
         permission_name="CanEnrollFeeSponsorProgram",
-        permission_payload={"program_id": "sponsor@is/retail"},
+        permission_payload={"program_id": f"{account_address(0x44)}/retail"},
         wait=True,
     )
 
@@ -4246,7 +4264,7 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     assert revoke_kwargs["wait"] is True
 
 
-def test_permission_grant_normalizes_configured_chain_discriminant_for_transaction_draft() -> None:
+def test_permission_grant_preserves_selected_chain_for_transaction_draft() -> None:
     client = ToriiClient(
         "http://torii.example",
         session=FakeSession([]),
@@ -4256,7 +4274,6 @@ def test_permission_grant_normalizes_configured_chain_discriminant_for_transacti
     )
     captured: dict[str, object] = {}
     account = account_address(0x45, 0x0171)
-    fixed_account = account_address(0x45)
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured["draft"] = draft
@@ -4271,17 +4288,18 @@ def test_permission_grant_normalizes_configured_chain_discriminant_for_transacti
         private_key_hex="11" * 32,
         account_id=account,
         permission_name="CanEnrollFeeSponsorProgram",
-        permission_payload={"program_id": "sponsor@is/retail"},
+        permission_payload={"program_id": f"{account_address(0x44)}/retail"},
         wait=False,
     ) == {"hash": "permission-taira"}
 
     draft = captured["draft"]
-    assert draft.config.authority == fixed_account
+    assert draft.config.authority == account
+    assert draft.config.chain_discriminant == 0x0171
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "11" * 32
 
 
-def test_transfer_helper_normalizes_configured_chain_discriminant_for_transaction_draft() -> None:
+def test_transfer_helper_preserves_selected_chain_for_transaction_draft() -> None:
     client = ToriiClient(
         "http://torii.example",
         session=FakeSession([]),
@@ -4292,7 +4310,6 @@ def test_transfer_helper_normalizes_configured_chain_discriminant_for_transactio
     captured: dict[str, object] = {}
     source = account_address(0x46, 0x0171)
     destination = account_address(0x47, 0x0171)
-    fixed_source = account_address(0x46)
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
@@ -4313,12 +4330,13 @@ def test_transfer_helper_normalizes_configured_chain_discriminant_for_transactio
     ) == {"hash": "transfer-taira"}
 
     draft = captured["draft"]
-    assert draft.config.authority == fixed_source
+    assert draft.config.authority == source
+    assert draft.config.chain_discriminant == 0x0171
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "22" * 32
 
 
-def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
+def test_transfer_helper_preserves_selected_scoped_asset_id_account_segment() -> None:
     client = ToriiClient(
         "http://torii.example",
         session=FakeSession([]),
@@ -4329,7 +4347,6 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     captured: dict[str, object] = {}
     source = account_address(0x48, 0x0171)
     destination = account_address(0x49, 0x0171)
-    fixed_source = account_address(0x48)
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     scope = "dataspace:6647857470246403404"
 
@@ -4351,7 +4368,8 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     ) == {"hash": "transfer-taira-scoped"}
 
     draft = captured["draft"]
-    assert draft.config.authority == fixed_source
+    assert draft.config.authority == source
+    assert draft.config.chain_discriminant == 0x0171
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "23" * 32
 
@@ -4366,14 +4384,17 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
         Instruction.register_zk_asset(
             asset_definition_id,
             vk_unshield={"backend": "halo2/ipa", "name": "vk_unshield"},
+            chain_discriminant=753,
         ),
-        Instruction.verify_proof(proof),
+        Instruction.verify_proof(proof, chain_discriminant=753),
     ]
 
     encoded = [instruction.to_json() for instruction in instructions]
     assert all(payload for payload in encoded)
-    assert "\"vk_shield\"" not in encoded[0]
-    assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
+    assert '"vk_shield"' not in encoded[0]
+    assert [
+        Instruction.from_json(payload, chain_discriminant=753).to_json() for payload in encoded
+    ] == encoded
 
 
 def test_legacy_zk_ace_instruction_and_client_surfaces_are_absent() -> None:
@@ -4455,10 +4476,11 @@ def test_register_zk_asset_entry_surfaces_reject_transitional_keywords(
         match=rf"unexpected keyword argument '{unexpected_kwarg}'",
     ):
         if entry_surface == "instruction":
-            Instruction.register_zk_asset(asset_definition_id, **unexpected)
+            Instruction.register_zk_asset(asset_definition_id, **unexpected, chain_discriminant=753)
         elif entry_surface == "transaction_draft":
             TransactionDraft(
                 TransactionConfig(
+                    chain_discriminant=753,
                     network_id=NETWORK_ID,
                     authority=account_address(0x75),
                     fee_payment=FEE_PAYMENT,
@@ -4471,7 +4493,7 @@ def test_register_zk_asset_entry_surfaces_reject_transitional_keywords(
                 session=FakeSession([]),
                 max_retries=0,
             ).register_zk_asset_and_wait(
-                authority="authority@is",
+                authority=account_address(0x51),
                 fee_payment=FEE_PAYMENT,
                 private_key_hex="11" * 32,
                 asset_definition_id=asset_definition_id,
@@ -4484,7 +4506,9 @@ def test_zk_registration_helper_rejects_adversarial_inputs() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
     with pytest.raises(ValueError, match="backend:name"):
-        Instruction.register_zk_asset(asset_definition_id, vk_unshield="halo2/ipa")
+        Instruction.register_zk_asset(
+            asset_definition_id, vk_unshield="halo2/ipa", chain_discriminant=753
+        )
 
 
 def test_zk_client_helpers_build_transaction_drafts() -> None:
@@ -4501,7 +4525,7 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     assert client.register_zk_asset_and_wait(
-        authority="authority@is",
+        authority=account_address(0x51),
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         asset_definition_id=asset_definition_id,
@@ -4585,7 +4609,7 @@ def test_verify_proof_client_helper_rejects_non_mapping_before_submission() -> N
         ),
         (
             "transfer_assets_quantity_and_wait",
-            {"transfers": [{"asset_id": f'asset#{account_address(0x46)}', "quantity": "1"}]},
+            {"transfers": [{"asset_id": f"asset#{account_address(0x46)}", "quantity": "1"}]},
             TypeError,
             r"transfers\[0\]\.destination",
         ),
@@ -4618,7 +4642,7 @@ def test_batch_helpers_reject_invalid_records(
 
     with pytest.raises(error_type, match=match):
         method(
-            authority="authority@is",
+            authority=account_address(0x51),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
             **kwargs,
@@ -4660,7 +4684,7 @@ def test_permission_helpers_reject_invalid_inputs(
 
     with pytest.raises(ValueError, match=match):
         client.grant_account_permission_and_wait(
-            authority="authority@is",
+            authority=account_address(0x51),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
             **kwargs,
@@ -4729,3 +4753,18 @@ def test_prepared_operation_transcript_authenticates_public_request_identity() -
     assert transcript != client_module._prepared_binding_transcript(
         client_module.PREPARED_TRANSACTION_SCHEMA, "onboarding", substituted
     )
+
+
+@pytest.mark.parametrize(
+    "authority", ["authority@is", "authority@is.dataspace", account_address(0x46, 877)]
+)
+def test_native_transaction_helpers_refuse_alias_or_foreign_discriminator_before_draft(authority):
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([]),
+        max_retries=0,
+        chain_discriminant=117,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
+    )
+    with pytest.raises(ValueError, match="exact canonical I105"):
+        client._transaction_draft(authority=authority, fee_payment=FEE_PAYMENT)

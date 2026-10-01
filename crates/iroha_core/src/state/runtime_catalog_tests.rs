@@ -201,6 +201,11 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
     parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
     ));
+    parameters.set_parameter(
+        crate::sumeragi::lanes::routing::test_support::closed_native_lane_policy(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
+    );
     parameters.commit();
     let state = State::new_with_nexus_for_testing(
         genesis_world,
@@ -322,6 +327,8 @@ pub(crate) fn catalog_transition_for_testing(
 ) -> NexusCatalogTransitionV1 {
     let nexus = state.nexus_snapshot();
     NexusCatalogTransitionV1 {
+        dataspace_retirements: Vec::new(),
+        lane_retirements: Vec::new(),
         version: NexusCatalogTransitionV1::VERSION,
         expected_catalog_hash: LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog),
         expected_incarnation_root: lane_lifecycle_incarnation_root(
@@ -390,6 +397,8 @@ fn runtime_catalog_preflight_preserves_prior_additions_and_rejects_replacement()
         let mut nexus = state.nexus_snapshot();
         let baseline_registry = state.lane_manifests.read().clone();
         let first = NexusRuntimeCatalogV1 {
+            retired_dataspaces: Vec::new(),
+            retired_lanes: Vec::new(),
             version: 1,
             baseline_dataspaces_hash: iroha_data_model::nexus::dataspace_catalog_hash(
                 &nexus.configured_dataspace_catalog,
@@ -496,6 +505,7 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let before = state.nexus_snapshot();
+        let original_native_policy = crate::sumeragi::lanes::lane_policy(&state.world.view());
         let payload = catalog_payload(&state, &keys);
         let mut block = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
@@ -506,7 +516,18 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
         ));
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .expect("complete atomic catalog transition");
         let runtime = runtime_catalog_from_world(&transaction.world)
             .unwrap()
@@ -560,7 +581,18 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
                 .is_some()
         );
         assert!(matches!(
-            transaction.stage_consensus_catalog_transition(&payload),
+            transaction.stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone()
+                ),
+                &payload
+            ),
             Err(LaneLifecycleError::LifecycleAlreadyStaged)
         ));
         drop(transaction);
@@ -569,9 +601,10 @@ fn runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops
             "aborted transaction cannot publish topology"
         );
         assert!(runtime_catalog_from_world(&block.world).unwrap().is_none());
-        assert!(
-            crate::sumeragi::lanes::lane_policy(&block.world).is_none(),
-            "aborting the catalog transaction must also discard native lane activation"
+        assert_eq!(
+            crate::sumeragi::lanes::lane_policy(&block.world),
+            original_native_policy,
+            "aborting the catalog transaction must retain the exact original native policy"
         );
     });
 }
@@ -602,7 +635,18 @@ fn runtime_catalog_activates_native_private_lane_and_routes_exact_dataspace() {
         let params = block.world.parameters().sumeragi.clone();
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .unwrap();
         transaction.apply();
         step::advance(&mut block, &LaneStepInput::default()).unwrap();
@@ -791,7 +835,18 @@ fn runtime_catalog_rejects_native_lane_conflict_without_partial_state() {
         let before = block.world.parameters().clone();
         let mut transaction = block.transaction();
         transaction
-            .stage_consensus_catalog_transition(&payload)
+            .stage_consensus_catalog_transition(
+                &AccountId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![1; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                ),
+                &payload,
+            )
             .expect_err("conflicting native policy cannot be overwritten");
         assert_eq!(transaction.world.parameters(), &before);
         assert!(transaction.pending_lane_lifecycle.is_none());
@@ -830,7 +885,18 @@ fn runtime_catalog_rejects_ineligible_committee_without_partial_state() {
             ));
             let mut transaction = block.transaction();
             transaction
-                .stage_consensus_catalog_transition(&payload)
+                .stage_consensus_catalog_transition(
+                    &AccountId::new(
+                        iroha_crypto::KeyPair::try_from_seed(
+                            vec![1; 32],
+                            iroha_crypto::Algorithm::BlsNormal,
+                        )
+                        .unwrap()
+                        .public_key()
+                        .clone(),
+                    ),
+                    &payload,
+                )
                 .expect_err("invalid authority cannot activate");
             assert_eq!(transaction.nexus.lane_catalog, before.lane_catalog);
             assert_eq!(
@@ -871,7 +937,18 @@ fn runtime_catalog_rejects_stale_roots_and_genesis_without_partial_state() {
             ));
             let mut transaction = block.transaction();
             transaction
-                .stage_consensus_catalog_transition(&payload)
+                .stage_consensus_catalog_transition(
+                    &AccountId::new(
+                        iroha_crypto::KeyPair::try_from_seed(
+                            vec![1; 32],
+                            iroha_crypto::Algorithm::BlsNormal,
+                        )
+                        .unwrap()
+                        .public_key()
+                        .clone(),
+                    ),
+                    &payload,
+                )
                 .expect_err("stale or pre-genesis catalog request");
             assert!(
                 runtime_catalog_from_world(&transaction.world)
@@ -895,6 +972,8 @@ fn runtime_catalog_accessor_rejects_malformed_protected_state_and_baseline_drift
         let baseline = state.nexus_snapshot().configured_dataspace_catalog;
         let payload = catalog_payload(&state, &keys);
         let runtime = NexusRuntimeCatalogV1 {
+            retired_dataspaces: Vec::new(),
+            retired_lanes: Vec::new(),
             version: 1,
             baseline_dataspaces_hash: iroha_data_model::nexus::dataspace_catalog_hash(&baseline),
             baseline_manifests_hash: Hash::prehashed(

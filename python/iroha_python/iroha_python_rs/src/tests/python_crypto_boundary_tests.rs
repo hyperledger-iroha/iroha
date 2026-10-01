@@ -10,7 +10,9 @@ fn fee_sponsor_program_ids_require_exact_canonical_literals() {
     assert_eq!(parsed.name.as_ref(), "retail");
     assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
     assert!(parse_fee_sponsor_program_id(&sponsor_literal).is_err());
-    assert!(parse_fee_sponsor_program_id(&format!("{}/retail", taira_i105_from_seed(0x74))).is_err());
+    assert!(
+        parse_fee_sponsor_program_id(&format!("{}/retail", taira_i105_from_seed(0x74))).is_err()
+    );
 }
 #[test]
 fn i105_discriminant_hint_decodes_valid_literals_only() {
@@ -201,7 +203,8 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
     ensure_python();
     let authority = canonical_i105_from_seed(0x51);
     let new_builder = || {
-        TransactionBuilder::new(
+        TransactionBuilder::construct(
+            0x02F1,
             &python_test_network_id(),
             &authority,
             authority_fee_payment_json(),
@@ -484,7 +487,11 @@ fn sorafs_alias_proof_fixture_rejects_bad_cid_and_expiry_overflow() {
         let overflow = PyDict::new(py);
         overflow.set_item("generated_at_unix", u64::MAX).unwrap();
         let error = sorafs_alias_proof_fixture_py(py, Some(&overflow)).unwrap_err();
-        assert!(error.to_string().contains("overflows the default alias expiry"));
+        assert!(
+            error
+                .to_string()
+                .contains("overflows the default alias expiry")
+        );
     });
 }
 #[test]
@@ -513,7 +520,8 @@ fn transaction_submission_native_boundary_pins_wire_hash_and_receipt_signer() {
     let authority = AccountId::new(PublicKey::from(transaction_private))
         .canonical_i105()
         .expect("canonical transaction authority");
-    let mut builder = TransactionBuilder::new(
+    let mut builder = TransactionBuilder::construct(
+        0x02F1,
         &python_test_network_id(),
         &authority,
         authority_fee_payment_json(),
@@ -859,4 +867,280 @@ fn x509_python_result_keeps_exact_action_and_ledger_semantics() {
         "presentation_action"
     );
     assert_eq!(ZK_X509_LEDGER_EFFECT_V1, "zk_x509_certificate_nullifier");
+}
+
+#[test]
+fn transaction_builder_retains_selected_chain_across_quote_sign_and_errors() {
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+    ensure_python();
+    let outer = ChainDiscriminantGuard::enter(751);
+    let mut canonical_hash = None;
+    for selected in [0_u16, 117, 369, 753, u16::MAX] {
+        let authority = custom_i105_from_seed(0x61, selected);
+        let sponsor = custom_i105_from_seed(0x62, selected);
+        let intent = format!(
+            r#"{{"payer":"sponsor","value":{{"program_id":{{"sponsor":"{sponsor}","name":"selected"}},"program_revision":1,"charge_limits":[],"gas_limit":100}}}}"#
+        );
+        let mut builder =
+            TransactionBuilder::construct(selected, &python_test_network_id(), &authority, &intent)
+                .expect("explicit selected builder");
+        assert_eq!(builder.chain_discriminant(), selected);
+        assert_eq!(
+            chain_discriminant(),
+            751,
+            "construction restores caller scope"
+        );
+        builder.set_creation_time_ms(42).unwrap();
+        let payload = builder.payload_json().expect("native selected JSON");
+        assert!(payload.contains(&authority));
+        assert!(payload.contains(&sponsor));
+        assert_eq!(chain_discriminant(), 751, "rendering restores caller scope");
+        let payload_hash = builder.to_model_builder().payload_hash_bytes();
+        if let Some(expected) = canonical_hash {
+            assert_eq!(
+                payload_hash, expected,
+                "I105 domain never changes native model bytes"
+            );
+        } else {
+            canonical_hash = Some(payload_hash);
+        }
+        let wrong_authority = custom_i105_from_seed(0x61, selected.wrapping_add(1));
+        let wrong_payload = payload.replace(&authority, &wrong_authority);
+        assert!(
+            builder
+                .sign_quoted_payload(&wrong_payload, &intent, &[0x61; 32])
+                .is_err(),
+            "foreign-domain quote refuses before signing"
+        );
+        assert_eq!(
+            chain_discriminant(),
+            751,
+            "failed quote restores caller scope"
+        );
+        assert!(builder.set_fee_payment_json("{}").is_err());
+        assert_eq!(
+            chain_discriminant(),
+            751,
+            "failed JSON decoder restores caller scope"
+        );
+        let signed = builder
+            .sign_quoted_payload(&payload, &intent, &[0x61; 32])
+            .expect("exact native quote signs");
+        assert_eq!(signed.authority, authority);
+        assert_eq!(chain_discriminant(), 751, "signing restores caller scope");
+        assert!(
+            TransactionBuilder::construct(
+                selected,
+                &python_test_network_id(),
+                &wrong_authority,
+                &intent
+            )
+            .is_err(),
+            "constructor rejects another chain domain"
+        );
+        assert_eq!(chain_discriminant(), 751);
+    }
+    Python::attach(|py| {
+        let authority = custom_i105_from_seed(0x61, 117);
+        let selected = pyo3::types::PyInt::new(py, 117);
+        assert!(
+            TransactionBuilder::new(
+                &python_test_network_id(),
+                &authority,
+                authority_fee_payment_json(),
+                selected.as_any()
+            )
+            .is_ok()
+        );
+        let boolean = pyo3::types::PyBool::new(py, true);
+        assert!(
+            TransactionBuilder::new(
+                &python_test_network_id(),
+                &authority,
+                authority_fee_payment_json(),
+                boolean.as_any()
+            )
+            .is_err(),
+            "Python bool is never a selected u16"
+        );
+    });
+    assert_eq!(chain_discriminant(), 751);
+    drop(outer);
+}
+
+#[test]
+fn signed_envelope_reconstruction_requires_selected_chain_and_restores_scope() {
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+    ensure_python();
+    let outer = ChainDiscriminantGuard::enter(751);
+    let network = python_test_network_id();
+    let authority = custom_i105_from_seed(0x61, 117);
+    let mut builder =
+        TransactionBuilder::construct(117, &network, &authority, authority_fee_payment_json())
+            .expect("selected builder");
+    let signed = builder
+        .sign(&[0x61; 32])
+        .expect("selected transaction signs");
+    Python::attach(|py| {
+        let selected = pyo3::types::PyInt::new(py, 117);
+        let recovered = signed_transaction_envelope_from_versioned_v1_py(
+            &signed.signed_transaction_versioned,
+            &network,
+            selected.as_any(),
+        )
+        .expect("exact selected envelope");
+        assert_eq!(recovered.authority, authority);
+        assert_eq!(recovered.hash, signed.hash);
+        assert_eq!(
+            recovered.signed_transaction_versioned,
+            signed.signed_transaction_versioned
+        );
+        assert_eq!(chain_discriminant(), 751);
+        let json = recovered.to_json().expect("selected envelope JSON");
+        let envelope_type = py.get_type::<SignedTransactionEnvelope>();
+        let roundtrip =
+            SignedTransactionEnvelope::from_json(&envelope_type, &json, selected.as_any())
+                .expect("selected JSON authentication");
+        assert_eq!(roundtrip.authority, authority);
+        let foreign = pyo3::types::PyInt::new(py, 753);
+        assert!(
+            SignedTransactionEnvelope::from_json(&envelope_type, &json, foreign.as_any()).is_err()
+        );
+        assert_eq!(chain_discriminant(), 751);
+        let boolean = pyo3::types::PyBool::new(py, true);
+        assert!(
+            signed_transaction_envelope_from_versioned_v1_py(
+                b"invalid wire",
+                &network,
+                boolean.as_any(),
+            )
+            .err()
+            .expect("invalid selected chain rejects")
+            .is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        );
+        assert!(
+            SignedTransactionEnvelope::from_json(&envelope_type, "invalid JSON", boolean.as_any())
+                .err()
+                .expect("invalid selected chain rejects")
+                .is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        );
+        assert!(
+            verify_prepared_transaction_context_v1_py(
+                b"invalid wire",
+                &network,
+                &authority,
+                "{}",
+                "invalid",
+                "",
+                "{}",
+                "{}",
+                boolean.as_any(),
+            )
+            .err()
+            .expect("invalid selected chain rejects")
+            .is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        );
+        assert_eq!(
+            chain_discriminant(),
+            751,
+            "success and refusal restore caller chain scope"
+        );
+    });
+    drop(outer);
+}
+
+#[test]
+fn native_instruction_retains_selected_chain_through_staging_and_rendering() {
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+    ensure_python();
+    let _outer = ChainDiscriminantGuard::enter(751);
+    let authority = custom_i105_from_seed(0x61, 117);
+    Python::attach(|py| {
+        let selected = pyo3::types::PyInt::new(py, 117);
+        let instruction_type = py.get_type::<Instruction>();
+        let instruction = Instruction::set_account_key_value(
+            &instruction_type,
+            &authority,
+            "status",
+            Some(&pyo3::types::PyString::new(py, "ready").into_any()),
+            selected.as_any(),
+        )
+        .expect("metadata instruction parses exact selected authority");
+        assert_eq!(instruction.chain_discriminant(), 117);
+        assert_eq!(chain_discriminant(), 751);
+        let json = instruction
+            .to_json()
+            .expect("instruction retains selected rendering");
+        assert_eq!(
+            json,
+            json::to_json(&instruction.inner).unwrap(),
+            "native instruction JSON preserves its canonical binary framing"
+        );
+        assert_eq!(chain_discriminant(), 751);
+        let recovered = Instruction::from_json(&instruction_type, &json, selected.as_any())
+            .expect("exact selected instruction JSON");
+        assert_eq!(recovered.chain_discriminant(), 117);
+        assert_eq!(recovered.inner, instruction.inner);
+        assert_eq!(instruction.__copy__().chain_discriminant(), 117);
+        let foreign = pyo3::types::PyInt::new(py, 753);
+        let asset = AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .unwrap();
+        let structured = format!(
+            r#"{{"name":"SetAssetTransferBlacklist","params":{{"account_id":"{authority}","asset_definition_id":"{asset}","blacklisted":true}}}}"#
+        );
+        assert!(Instruction::from_json(&instruction_type, &structured, selected.as_any()).is_ok());
+        assert!(Instruction::from_json(&instruction_type, &structured, foreign.as_any()).is_err());
+        assert!(
+            Instruction::set_account_key_value(
+                &instruction_type,
+                &authority,
+                "status",
+                Some(&pyo3::types::PyString::new(py, "ready").into_any()),
+                foreign.as_any(),
+            )
+            .is_err(),
+            "a typed account constructor also refuses a foreign selected chain"
+        );
+        let mut builder = TransactionBuilder::construct(
+            117,
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .unwrap();
+        builder.add_instruction(&instruction).unwrap();
+        assert!(builder.payload_json().unwrap().contains(&authority));
+        let foreign_authority = custom_i105_from_seed(0x61, 753);
+        let foreign_instruction = Instruction::set_account_key_value(
+            &instruction_type,
+            &foreign_authority,
+            "status",
+            Some(&pyo3::types::PyString::new(py, "ready").into_any()),
+            foreign.as_any(),
+        )
+        .unwrap();
+        assert_eq!(
+            norito::to_bytes(&instruction.inner).unwrap(),
+            norito::to_bytes(&foreign_instruction.inner).unwrap(),
+            "account address domain does not alter canonical model bytes"
+        );
+        assert!(
+            builder.add_instruction(&foreign_instruction).is_err(),
+            "selected owner cannot be substituted by an equivalent model in another domain"
+        );
+        let boolean = pyo3::types::PyBool::new(py, true);
+        assert!(
+            Instruction::from_json(&instruction_type, "invalid JSON", boolean.as_any())
+                .err()
+                .unwrap()
+                .is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        );
+        assert_eq!(
+            chain_discriminant(),
+            751,
+            "every constructor/rendering/refusal restores the caller domain"
+        );
+    });
 }

@@ -811,3 +811,50 @@ fn fee_quote_route_requires_the_exact_full_width_deployment_dataspace() -> Resul
     assert!(native::validate_quote_route(&quote, DataSpaceId::new(u64::MAX - 1)).is_err());
     Ok(())
 }
+
+#[test]
+fn native_intents_are_retained_before_dispatch_and_reject_another_context() -> Result<()> {
+    let (config, record) = fixture()?;
+    let expected = record.clone();
+    let prepared = PreparedDeployment { record };
+    let intents = prepared.intended_transactions()?;
+    assert_eq!(intents.len(), expected.transactions.len());
+    for (intent, stage) in intents.iter().zip(&expected.transactions) {
+        let signed = decode_transaction(stage)?;
+        assert_eq!(intent.transaction_hash, hex::encode(signed.hash().as_ref()));
+        assert_eq!(intent.authority, *signed.authority());
+        assert_eq!(intent.executable, *signed.instructions());
+        assert_eq!(intent.metadata, *signed.metadata());
+        assert_eq!(intent.fee_payment, *signed.fee_payment_intent());
+        assert_eq!(intent.entrypoint_kind, "External");
+    }
+    let directory = tempfile::tempdir()?;
+    let journal = directory.path().join("pre-submit-intents");
+    let service = DeploymentService::new(config.clone())?;
+    service.persist(&prepared, &journal)?;
+    let retained = service.retained_intended_transactions(&journal)?;
+    assert_eq!(
+        norito::json::to_value(&retained)?,
+        norito::json::to_value(&intents)?
+    );
+    assert!(!journal.join(RECEIPT_FILE_NAME).exists());
+    let mut changed = config;
+    changed.network_id = NetworkId::from_genesis_hash(HashOf::<
+        iroha::data_model::block::BlockHeader,
+    >::from_untyped_unchecked(Hash::new(
+        b"different native deployment network",
+    )));
+    assert!(
+        DeploymentService::new(changed)?
+            .retained_intended_transactions(&journal)
+            .is_err()
+    );
+    let mut corrupt = expected;
+    corrupt.transactions[0].hash = "substituted".to_owned();
+    assert!(
+        PreparedDeployment { record: corrupt }
+            .intended_transactions()
+            .is_err()
+    );
+    Ok(())
+}

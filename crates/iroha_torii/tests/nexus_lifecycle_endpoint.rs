@@ -180,6 +180,8 @@ async fn lifecycle_get_returns_exact_present_runtime_root_in_both_formats() {
     use iroha_data_model::{nexus::NexusRuntimeCatalogV1, parameter::Parameter};
     let harness = build_app();
     let runtime = NexusRuntimeCatalogV1 {
+        retired_dataspaces: Vec::new(),
+        retired_lanes: Vec::new(),
         version: NexusRuntimeCatalogV1::VERSION,
         baseline_dataspaces_hash: iroha_data_model::nexus::dataspace_catalog_hash(
             &harness.state.nexus_snapshot().configured_dataspace_catalog,

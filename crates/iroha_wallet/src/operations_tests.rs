@@ -763,6 +763,99 @@ fn private_operation_http_deadline_cannot_be_extended() {
 }
 
 #[test]
+fn parameter_update_retains_exact_native_policy_fee_and_wire_before_single_dispatch() {
+    use iroha_data_model::{
+        parameter::Parameter, private_dataspace::PrivateDataspaceAdmissionPolicy,
+    };
+    let (mut service, transport) = service();
+    service.config.account_chain_discriminant = 753;
+    service.client =
+        Client::with_http_transport(service.config.clone(), transport.clone()).unwrap();
+    let policy = PrivateDataspaceAdmissionPolicy {
+        max_registered_roots: 16,
+        max_roots_per_owner: 1,
+    };
+    let request = ParameterUpdateRequest {
+        parameter: Parameter::Custom(policy.into_custom_parameter().unwrap()),
+        options: private_options(),
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("parent-admission");
+    let original = service.prepare_parameter_update(&request, &path).unwrap();
+    assert_eq!(original.status, OperationStatus::Prepared);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+    let raw = original.data["native_signed_transaction_hex"]
+        .as_str()
+        .unwrap();
+    let transaction = SignedTransaction::decode_all_versioned(&hex::decode(raw).unwrap()).unwrap();
+    transaction.verify_signature().unwrap();
+    assert_eq!(transaction.network_id(), Some(&service.config.network_id));
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        panic!("native parameter")
+    };
+    let expected: InstructionBox =
+        iroha_data_model::isi::SetParameter::new(request.parameter.clone()).into();
+    assert_eq!(instructions.as_ref(), &[expected]);
+    let mut changed = request.clone();
+    changed.parameter = Parameter::Custom(
+        PrivateDataspaceAdmissionPolicy {
+            max_registered_roots: 17,
+            max_roots_per_owner: 1,
+        }
+        .into_custom_parameter()
+        .unwrap(),
+    );
+    assert!(service.submit_parameter_update(&path, &changed).is_err());
+    changed = request.clone();
+    changed
+        .options
+        .max_total_fees
+        .values_mut()
+        .for_each(|maximum| *maximum = Quantity::from(20_u32));
+    assert!(service.inspect_parameter_update(&path, &changed).is_err());
+    assert!(
+        service
+            .submit(&path, NativeOperationKind::ParameterUpdate)
+            .is_err()
+    );
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+    *transport.journal.lock().unwrap() = Some(path.clone());
+    assert_eq!(
+        service
+            .submit_parameter_update(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(
+        service
+            .submit_parameter_update(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    let mut recovered = request.clone();
+    recovered.options.deadline = std::time::Instant::now() + Duration::from_secs(60);
+    assert_eq!(
+        service
+            .resume_parameter_update(&path, &recovered)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    assert_eq!(
+        service
+            .inspect_parameter_update(&path, &recovered)
+            .unwrap()
+            .data["native_signed_transaction_hex"]
+            .as_str(),
+        Some(raw)
+    );
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn bounded_alias_preserves_exact_request_fee_limits_and_wire_through_recovery() {
     let (service, transport) = service();
     let (request, plan) = alias_fixture(&service.config, false, 5);

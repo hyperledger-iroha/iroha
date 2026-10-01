@@ -60,8 +60,47 @@ kagami contract deploy hello.ko
 
 This retains four owner-private local validators, their original owner identity,
 and exact parent-operation journals. A timeout leaves that work available for
-status and retry. Official Taira profile publication and combined runtime
-qualification remain tracked acceptance gates; the CLI invents no release key.
+status and retry. The validators run on the machine executing `dataspace up`;
+the selected parent remains a separate authenticated network. Parent profile
+publication and combined runtime qualification remain release gates.
+
+The network owner publishes bootstrap custody with the maintained native tool:
+
+```bash
+kagami network-bootstrap --definition ./parent-bootstrap.json \
+  --checkpoint ./authenticated-native-checkpoint.nrt \
+  --genesis ./original-genesis.signed.nrt \
+  --release-key ./private-release-custody.key --out-dir ./fresh-bootstrap
+```
+
+The closed Norito JSON definition selects `schema_version = 1`, `network_name`,
+positive `serial`, `generation` and `minimum_serial` (at most `serial`),
+`release_public_key`, `checkpoint_url`, `genesis_public_key`, genesis-derived
+`network_id`, `chain_id`, `account_chain_discriminant`, qualified
+`native_world_schema`, `issued_at_ms`, `expires_at_ms` (at most 24 hours),
+approved HTTPS `torii_roots`, BLS `peers` (`node_id`, `torii_root`), and the
+independently selected `checkpoint_hash`, `checkpoint_height` and
+`checkpoint_block_hash`. Optional `build_registry` carries approved
+`torii_roots`. Optional `faucet` carries `torii_root`, independently selected
+`issuer`, `asset_definition_id`, positive `amount`, `max_operation_fee` and
+`max_namespace_rent`; both spending caps must fit within `amount`. An absent
+faucet grants no automatic funding or spending allowance.
+
+The tool validates the original signed Global genesis and complete native
+checkpoint before reading the owner-private Ed25519 release key. It refuses a
+different key, network, scope, checkpoint, expired window or existing output.
+The fresh directory atomically contains `network-checkpoint.nrt`,
+`network-profiles.nrt`, the closed public definition, original signed genesis,
+and native checkpoint. It retains no private key. The operator independently
+authenticates the installation carrying `network-profiles.nrt` and publishes
+only `network-checkpoint.nrt` at the exact selected HTTPS URL.
+
+Each fresh private root commits its own `gas#app.<name>` restricted currency,
+positive base/gas rates, and a funded local onboarding sponsor vault. The vault
+uses exact private scope with beneficiary enrollment, operation rules and finite
+transaction/block/program/beneficiary epoch budgets. Parent currencies and vaults
+cannot fund private execution. Business sponsorship requires a separately staged
+revision bound to the exact deployed contract address, code hash and entrypoints.
 
 The [developer acceptance goals](../../specs/kagami_mochi_devex_goals.md) track
 remaining native-platform, private-dataspace, and end-to-end qualification.

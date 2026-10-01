@@ -63,16 +63,20 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
             release_authority=release_authority,
             expires_at_ms=1_234_567,
             evidence_hashes=["11" * 32],
+            chain_discriminant=753,
         ),
-        Instruction.drawdown_asset_lock("lock-sdk-1", "2.5", "12.5"),
-        Instruction.cancel_asset_lock("lock-sdk-1", "10"),
-        Instruction.expire_asset_lock("lock-sdk-1"),
+        Instruction.drawdown_asset_lock("lock-sdk-1", "2.5", "12.5", chain_discriminant=753),
+        Instruction.cancel_asset_lock("lock-sdk-1", "10", chain_discriminant=753),
+        Instruction.expire_asset_lock("lock-sdk-1", chain_discriminant=753),
     ]
     encoded = [instruction.to_json() for instruction in instructions]
-    assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
+    assert [
+        Instruction.from_json(payload, chain_discriminant=753).to_json() for payload in encoded
+    ] == encoded
 
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority=source,
             fee_payment=authority_fee_payment(charge_limits=[]),
@@ -93,10 +97,13 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
 
     draft_encoded = [instruction.to_json() for instruction in draft.instructions]
     assert len(draft_encoded) == 4
-    assert [Instruction.from_json(payload).to_json() for payload in draft_encoded] == draft_encoded
+    assert [
+        Instruction.from_json(payload, chain_discriminant=753).to_json()
+        for payload in draft_encoded
+    ] == draft_encoded
 
 
-def test_cancel_asset_lock_instruction_builder_has_exact_two_argument_runtime_shape() -> None:
+def test_cancel_asset_lock_instruction_builder_requires_two_fields_and_selected_chain() -> None:
     signature = inspect.signature(Instruction.cancel_asset_lock)
     assert [
         (parameter.name, parameter.kind, parameter.default)
@@ -112,6 +119,7 @@ def test_cancel_asset_lock_instruction_builder_has_exact_two_argument_runtime_sh
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
             inspect.Parameter.empty,
         ),
+        ("chain_discriminant", inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.empty),
     ]
 
     builder = cast(Any, Instruction.cancel_asset_lock)
@@ -230,10 +238,11 @@ def test_native_asset_lock_accepts_exact_quantity_boundaries(amount: str) -> Non
         "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
         account_address(0x73),
         amount,
+        chain_discriminant=753,
     )
 
     encoded = instruction.to_json()
-    assert Instruction.from_json(encoded).to_json() == encoded
+    assert Instruction.from_json(encoded, chain_discriminant=753).to_json() == encoded
 
 
 @pytest.mark.parametrize(
@@ -252,6 +261,7 @@ def test_native_asset_lock_rejects_out_of_domain_quantities(amount: str) -> None
             "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
             account_address(0x73),
             amount,
+            chain_discriminant=753,
         )
 
 
@@ -267,6 +277,7 @@ def test_cancel_asset_lock_instruction_rejects_non_positive_or_noncanonical_rema
         Instruction.cancel_asset_lock(
             "lock-sdk-invalid-cancel-remaining",
             expected_remaining_amount,
+            chain_discriminant=753,
         )
 
 
@@ -274,9 +285,10 @@ def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
     exact_bound = "🔒" * 1_024
     assert len(exact_bound.encode("utf-8")) == 4_096
     assert CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 == 4_096
-    Instruction.cancel_asset_lock(exact_bound, "1")
+    Instruction.cancel_asset_lock(exact_bound, "1", chain_discriminant=753)
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority=account_address(0x75),
             fee_payment=authority_fee_payment(charge_limits=[]),
@@ -287,7 +299,7 @@ def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
     over_bound = exact_bound + "a"
     assert len(over_bound.encode("utf-8")) == 4_097
     with pytest.raises(ValueError, match="at most 4096 UTF-8 bytes"):
-        Instruction.cancel_asset_lock(over_bound, "1")
+        Instruction.cancel_asset_lock(over_bound, "1", chain_discriminant=753)
     with pytest.raises(ValueError, match="at most 4096 UTF-8 bytes"):
         draft.cancel_asset_lock(over_bound, "1")
 
@@ -298,10 +310,11 @@ def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
 )
 def test_cancel_asset_lock_rejects_unclean_lock_id_preimage(lock_id: str) -> None:
     with pytest.raises(ValueError, match="lock-ID preimage"):
-        Instruction.cancel_asset_lock(lock_id, "1")
+        Instruction.cancel_asset_lock(lock_id, "1", chain_discriminant=753)
 
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority=account_address(0x75),
             fee_payment=authority_fee_payment(charge_limits=[]),
@@ -337,6 +350,7 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
     account = account_address(0x74)
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
@@ -369,6 +383,7 @@ def test_asset_lock_transaction_draft_rejects_non_positive_expected_remaining_am
     account = account_address(0x75)
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
@@ -393,6 +408,7 @@ def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
     account = account_address(0x75)
     draft = TransactionDraft(
         TransactionConfig(
+            chain_discriminant=753,
             network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),

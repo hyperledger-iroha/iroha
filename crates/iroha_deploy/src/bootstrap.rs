@@ -8,8 +8,8 @@
 //! A running verifier retains its own advancing checkpoint; a release must never replace that
 //! checkpoint with an older tip. Changing the installed authority fails closed against retained
 //! releases and requires an independently authenticated key-rotation migration.
-// TODO(DX5): publish release-signed Taira checkpoints and install the independently selected
-// release key/floor in native runtime bundles, then connect this owner to dataspace provisioning.
+// The maintained `kagami network-bootstrap` publisher requires independently selected public
+// policy, signed parent genesis and native checkpoint before opening release-signing custody.
 
 use std::{fs::File, path::Path, sync::Mutex};
 
@@ -128,6 +128,23 @@ pub struct NetworkRelease {
     pub checkpoint_block_hash: Hash,
 }
 
+impl NetworkRelease {
+    /// Validate complete public policy and the independently selected native parent checkpoint.
+    /// This checks exact network, scope, currency allowances and certified committee bindings
+    /// before an operator opens release-signing custody; it does not select the trust inputs.
+    ///
+    /// # Errors
+    /// Invalid bounded policy, checkpoint substitution or native consensus verification failure.
+    pub fn validate_checkpoint(&self, checkpoint: &SumeragiFinalityCheckpoint) -> Result<()> {
+        validate_release(self)?;
+        let bytes = checkpoint
+            .encode_canonical()
+            .map_err(|_| BootstrapError::Invalid("invalid native checkpoint frame"))?;
+        verify_checkpoint(self, &bytes)?;
+        Ok(())
+    }
+}
+
 /// Sole canonical wire artifact, without a response-selected verification key.
 #[derive(Debug, Clone, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_deploy::bootstrap::SignedNetworkCheckpointV1")]
@@ -148,7 +165,7 @@ impl SignedNetworkCheckpoint {
         checkpoint: &SumeragiFinalityCheckpoint,
         private_key: &PrivateKey,
     ) -> Result<Self> {
-        validate_release(&release)?;
+        release.validate_checkpoint(checkpoint)?;
         if private_key.algorithm() != Algorithm::Ed25519 {
             return Err(BootstrapError::Invalid(
                 "release signing requires the installed Ed25519 authority",

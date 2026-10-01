@@ -291,8 +291,10 @@ impl<'state> StateBlock<'state> {
             lane_incarnation_activation_heights,
             kagemusha_v1_runtime_verifier,
             kagemusha_registry_transition_authorization,
-            zk: _,
+            zk,
             nexus,
+            lane_manifests,
+            lane_compliance,
             pending_da_commitments,
             pending_da_pin_intents,
             pending_autoscale_lifecycle,
@@ -357,10 +359,17 @@ impl<'state> StateBlock<'state> {
             None
         };
         if world_effects.is_none() {
-            let predecessor_nexus = canonical_runtime
-                .get_before_block()
-                .nexus_projection(&runtime_policy.nexus)
-                .map_err(|_| TransactionsBlockError::AutoscaleLaneLifecycle)?;
+            let predecessor_nexus = runtime_catalog_carrier_predecessor(
+                canonical_runtime.get_before_block(),
+                world.parameters.get_before_block(),
+                &runtime_policy,
+                &nexus,
+                &lane_manifests,
+                lane_compliance.as_deref(),
+                &zk,
+                pending_autoscale_lifecycle.as_ref(),
+            )
+            .map_err(|_| TransactionsBlockError::AutoscaleLaneLifecycle)?;
             if let Err(err) = validate_runtime_catalog_block_overlay(
                 world.parameters.get_before_block(),
                 world,
@@ -368,6 +377,11 @@ impl<'state> StateBlock<'state> {
                 &predecessor_nexus,
                 pending_autoscale_lifecycle.as_ref(),
                 block_height,
+                _curr_block
+                    .creation_time()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
             ) {
                 error!(
                     block_height,
@@ -404,6 +418,8 @@ impl<'state> StateBlock<'state> {
                 nexus.lane_catalog = pending.catalog_update.updated_catalog.clone();
                 nexus.lane_config = pending.catalog_update.updated_lane_config.clone();
                 nexus.dataspace_catalog = pending.catalog_update.updated_dataspace_catalog.clone();
+                nexus.routing_policy = pending.catalog_update.updated_routing_policy.clone();
+                nexus.autoscale = pending.catalog_update.updated_autoscale;
             }
             let effects = world_commit::PreparedWorldCommit::prepare_overlay_mutations(
                 world,

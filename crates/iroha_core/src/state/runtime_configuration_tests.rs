@@ -360,6 +360,8 @@ fn runtime_nexus_setter_requires_exact_protected_dataspace_projection() {
         );
         let original = state.nexus_snapshot();
         let runtime = NexusRuntimeCatalogV1 {
+            retired_dataspaces: Vec::new(),
+            retired_lanes: Vec::new(),
             version: NexusRuntimeCatalogV1::VERSION,
             baseline_dataspaces_hash: dataspace_catalog_hash(
                 &original.configured_dataspace_catalog,

@@ -465,6 +465,8 @@ fn transition(
         "new dataspace or lane is already present; this first-release plan cannot overwrite it",
     )?;
     let value = NexusCatalogTransitionV1 {
+        dataspace_retirements: Vec::new(),
+        lane_retirements: Vec::new(),
         version: NexusCatalogTransitionV1::VERSION,
         expected_catalog_hash: baseline.catalog_hash,
         expected_incarnation_root: baseline.incarnation_root,

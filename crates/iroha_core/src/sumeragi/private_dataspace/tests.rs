@@ -146,7 +146,7 @@ fn parent_registration_requires_committed_global_scope_active_owner_and_admissio
                 alias: "unknown".into(),
                 ..register.clone()
             },
-            "unknown",
+            "alias differs",
         ),
         (
             authority(1),
@@ -189,6 +189,178 @@ fn parent_registration_requires_committed_global_scope_active_owner_and_admissio
             .unwrap_err()
             .to_string()
             .contains("disabled")
+    );
+}
+
+#[test]
+fn private_registration_waits_for_prior_physical_alias_retirement() {
+    use iroha_data_model::nexus::{
+        DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneLifecycleParameterV1,
+        NexusCatalogTransitionV1, RuntimeDataSpaceRetirementV1,
+    };
+    use iroha_model_base::topology::LaneId;
+    use std::{num::NonZeroU32, sync::Arc};
+
+    // The old physical identity is retained exactly; the new private identity is
+    // independently derived from the current paid name and native child genesis.
+    let old_physical = DataSpaceId::new(7);
+    assert_ne!(
+        old_physical,
+        crate::sns::dataspace_id_for_sns_alias("acme").unwrap()
+    );
+    let lanes = LaneCatalog::new(
+        NonZeroU32::new(8).unwrap(),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: LaneId::new(7),
+                dataspace_id: old_physical,
+                alias: "acme".into(),
+                ..Default::default()
+            },
+        ],
+    )
+    .unwrap();
+    let dataspaces = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: old_physical,
+            alias: "acme".into(),
+            description: Some("exact original physical descriptor".into()),
+            fault_tolerance: 1,
+        },
+    ])
+    .unwrap();
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.lane_catalog = lanes.clone();
+    nexus.configured_lane_catalog = lanes;
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.dataspace_catalog = dataspaces.clone();
+    nexus.configured_dataspace_catalog = dataspaces;
+    let mut old_lease = lease(&authority(1));
+    old_lease.metadata.insert(
+        crate::sns::SNS_DATASPACE_ID_METADATA_KEY.parse().unwrap(),
+        iroha_primitives::json::Json::new(7_u64),
+    );
+    let old_lease_bytes = old_lease.encode();
+    let mut parent_world = world(Some(SumeragiRootScope::Global), Some(policy()));
+    parent_world.smart_contract_state_mut_for_testing().insert(
+        crate::sns::record_storage_key(&old_lease.selector),
+        old_lease_bytes.clone(),
+    );
+    let mut parameters = parent_world.parameters.block();
+    parameters.set_parameter(test_support::closed_native_lane_policy(
+        SumeragiRootScope::Global,
+    ));
+    parameters.commit();
+    let parent = State::new_with_nexus_for_testing(
+        parent_world,
+        nexus.clone(),
+        LiveQueryStore::start_test(),
+    );
+    parent.install_lane_manifests_for_testing(&Arc::new(
+        crate::governance::manifest::LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        ),
+    ));
+    let (mut native_child, register) = registration(&parent);
+    let child_registration = PrivateDataspaceRegistration::decode(&register.registration).unwrap();
+    let mut first = parent.block(header(1));
+    assert!(
+        execute(&mut first, &authority(1), register.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("locally configured")
+    );
+    // This publishes exact synthetic test membership through the native State
+    // commit path; it does not claim that the fixture has network finality.
+    first.commit_empty_block_for_testing().unwrap();
+
+    let request = NexusCatalogTransitionV1 {
+        version: 1,
+        dataspace_additions: Vec::new(),
+        lane_additions: Vec::new(),
+        manifest_additions: Vec::new(),
+        dataspace_retirements: vec![RuntimeDataSpaceRetirementV1 {
+            dataspace_id: old_physical,
+            alias: "acme".into(),
+            owner: authority(1),
+            expected_ownership_generation: 1,
+        }],
+        lane_retirements: vec![LaneId::new(7)],
+        expected_catalog_hash: LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog),
+        expected_incarnation_root: LaneLifecycleParameterV1::incarnation_root(
+            &LaneLifecycleParameterV1::canonical_incarnations(
+                &nexus.lane_catalog,
+                &parent.lane_incarnations_snapshot(),
+            )
+            .unwrap(),
+        ),
+        expected_runtime_catalog_hash: None,
+    };
+    let mut retiring = parent.block(header(2));
+    let mut transaction = retiring.transaction();
+    transaction
+        .stage_consensus_catalog_transition(&authority(1), &request)
+        .unwrap();
+    transaction.apply();
+    assert!(
+        execute(&mut retiring, &authority(1), register.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("staged physical")
+    );
+    assert!(retiring.world.private_dataspaces().records().is_empty());
+    retiring.commit_empty_block_for_testing().unwrap();
+
+    let mut after = parent.block(header(3));
+    execute(&mut after, &authority(1), register).unwrap();
+    let body = native_child.block_with_submitted_work(native_child.next_header());
+    let proof = native_child.certify(body);
+    let decision = native_child
+        .verifier()
+        .verify_retained_decision(&proof)
+        .unwrap();
+    let anchor = PrivateDataspaceAnchor::from_certificate(
+        &child_registration,
+        decision.block().commit_certificate().unwrap(),
+    )
+    .unwrap();
+    execute(
+        &mut after,
+        &authority(2),
+        AnchorPrivateDataspace {
+            dataspace_id: anchor.dataspace_id,
+            anchor: norito::encode_canonical(&anchor).unwrap(),
+        },
+    )
+    .unwrap();
+    let child = after.world.private_dataspaces().records().first().unwrap();
+    assert_eq!(child.anchor.cursor().height, 2);
+    assert_eq!(
+        child.anchor.registration().scope,
+        SumeragiRootScope::Dataspace {
+            parent_network_id: *parent.network_id_ref(),
+            dataspace_id: crate::sns::dataspace_id_for_sns_alias("acme").unwrap(),
+        }
+    );
+    let runtime = crate::state::runtime_catalog_from_world(&after.world)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        runtime.retired_dataspaces[0].retirement.dataspace_id,
+        old_physical
+    );
+    assert_eq!(runtime.retired_lanes[0].lane, nexus.lane_catalog.lanes()[1]);
+    assert_eq!(
+        after
+            .world
+            .smart_contract_state()
+            .get(&crate::sns::record_storage_key(&old_lease.selector)),
+        Some(&old_lease_bytes),
     );
 }
 
@@ -318,6 +490,16 @@ fn admission_parameter_rejects_malformed_payload_and_retains_previous_policy() {
 
 #[test]
 fn parent_receipt_uses_original_certified_archive_and_survives_native_replay() {
+    // Block execution and recovery run on the daemon's bounded Sumeragi owner;
+    // libtest's unrelated 2 MiB worker is not that production stack contract.
+    crate::sumeragi::threads::sumeragi_thread_builder("private-parent-native-replay")
+        .spawn(parent_receipt_replay_on_sumeragi_owner)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn parent_receipt_replay_on_sumeragi_owner() {
     use crate::query::native_receipts::private_dataspace_record_proof;
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     use iroha_crypto::{Algorithm, KeyPair};
@@ -330,39 +512,70 @@ fn parent_receipt_uses_original_certified_archive_and_survives_native_replay() {
     let key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
     let transaction = chain.sign(&key, [register.into()], 1_999);
     assert_eq!(chain.commit_at(2_000, vec![transaction]), vec![true]);
-    let receipt = private_dataspace_record_proof(&chain.state().view(), 2, id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(receipt.record.anchor.cursor().height, 1);
-    let validators = genesis_epoch(chain.genesis())
-        .unwrap()
-        .committee
-        .into_iter()
-        .map(|member| FinalityValidator {
-            public_key: member.validator.public_key().clone(),
-            proof_of_possession: member.proof_of_possession,
-        })
-        .collect();
-    let mut verifier =
-        SumeragiFinalityVerifier::new(chain.genesis(), "sumeragi-certified-test-chain", validators)
-            .unwrap();
-    verifier
-        .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 1).unwrap())
-        .unwrap();
-    let certified = verifier
-        .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 2).unwrap())
-        .unwrap();
-    receipt.verify(id, &certified).unwrap();
-    assert!(private_dataspace_record_proof(&chain.state().view(), 1, id).is_err());
-    assert!(
-        private_dataspace_record_proof(&chain.state().view(), 2, DataSpaceId::UNIVERSAL)
+    let native_state = chain.state();
+    let genesis = chain.genesis();
+    let receipt = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("private-parent-native-receipt-read".to_owned())
+            .stack_size(iroha_config::parameters::defaults::concurrency::TOKIO_STACK_BYTES_MIN)
+            .spawn_scoped(scope, || {
+                let receipt = private_dataspace_record_proof(&native_state.view(), 2, id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(receipt.record.anchor.cursor().height, 1);
+                let validators = genesis_epoch(genesis)
+                    .unwrap()
+                    .committee
+                    .into_iter()
+                    .map(|member| FinalityValidator {
+                        public_key: member.validator.public_key().clone(),
+                        proof_of_possession: member.proof_of_possession,
+                    })
+                    .collect();
+                let mut verifier = SumeragiFinalityVerifier::new(
+                    genesis,
+                    "sumeragi-certified-test-chain",
+                    validators,
+                )
+                .unwrap();
+                verifier
+                    .verify(
+                        &crate::sumeragi::finality::build_proof(&native_state.view(), 1).unwrap(),
+                    )
+                    .unwrap();
+                let certified = verifier
+                    .verify(
+                        &crate::sumeragi::finality::build_proof(&native_state.view(), 2).unwrap(),
+                    )
+                    .unwrap();
+                receipt.verify(id, &certified).unwrap();
+                assert!(private_dataspace_record_proof(&native_state.view(), 1, id).is_err());
+                assert!(
+                    private_dataspace_record_proof(&native_state.view(), 2, DataSpaceId::UNIVERSAL)
+                        .unwrap()
+                        .is_none()
+                );
+                receipt
+            })
             .unwrap()
-            .is_none()
-    );
+            .join()
+            .unwrap()
+    });
     let mut replayed = CertifiedTestChain::start(config()).unwrap();
     replayed.replay_from(&chain).unwrap();
-    assert_eq!(
-        private_dataspace_record_proof(&replayed.state().view(), 2, id).unwrap(),
-        Some(receipt)
-    );
+    let replayed_state = replayed.state();
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("private-parent-replayed-receipt-read".to_owned())
+            .stack_size(iroha_config::parameters::defaults::concurrency::TOKIO_STACK_BYTES_MIN)
+            .spawn_scoped(scope, || {
+                assert_eq!(
+                    private_dataspace_record_proof(&replayed_state.view(), 2, id).unwrap(),
+                    Some(receipt)
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    });
 }

@@ -860,6 +860,7 @@ class DefaultNexusTransactionCodec:
         draft = TransactionDraft(
             TransactionConfig(
                 network_id=_require_network_id(payload_input["network_id"]),
+                chain_discriminant=chain_discriminant,
                 authority=authority,
                 fee_payment=payload_input["fee_payment"],
                 creation_time_ms=payload_input.get("creation_time_ms"),

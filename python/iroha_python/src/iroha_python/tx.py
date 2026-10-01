@@ -154,6 +154,7 @@ class TransactionConfig:
     network_id: NetworkId
     authority: str
     fee_payment: Mapping[str, Any]
+    chain_discriminant: int
     creation_time_ms: Optional[int] = None
     ttl_ms: Optional[int] = None
     nonce: Optional[int] = None
@@ -168,6 +169,10 @@ class TransactionConfig:
             self.authority,
             "TransactionConfig.authority",
         )
+        if type(self.chain_discriminant) is not int or not 0 <= self.chain_discriminant <= 65535:
+            raise ValueError(
+                "TransactionConfig.chain_discriminant must be an independently selected u16"
+            )
         fee_payment = _freeze_json(
             _normalize_mapping_payload(
                 self.fee_payment,
@@ -456,6 +461,7 @@ class TransactionDraft:
                 owner,
                 _normalize_quantity(amount),
                 duration,
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -510,6 +516,7 @@ class TransactionDraft:
             contract_alias,
             lease_expiry_ms,
             expected_previous_contract_address,
+            chain_discriminant=self._config.chain_discriminant,
         )
         return self.add_instruction(instruction)
 
@@ -599,7 +606,11 @@ class TransactionDraft:
         """Append a `RegisterDomain` instruction and return the draft for fluent chaining."""
 
         metadata_payload = _normalize_metadata(metadata)
-        self.add_instruction(Instruction.register_domain(domain_id, metadata_payload))
+        self.add_instruction(
+            Instruction.register_domain(
+                domain_id, metadata_payload, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def register_account(
@@ -611,7 +622,11 @@ class TransactionDraft:
         """Append a `RegisterAccount` instruction."""
 
         metadata_payload = _normalize_metadata(metadata)
-        self.add_instruction(Instruction.register_account(account_id, metadata_payload))
+        self.add_instruction(
+            Instruction.register_account(
+                account_id, metadata_payload, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def register_rwa(
@@ -625,7 +640,11 @@ class TransactionDraft:
             "rwa",
             top_level_quantity=True,
         )
-        self.add_instruction(Instruction.register_rwa(rwa_payload))
+        self.add_instruction(
+            Instruction.register_rwa(
+                rwa_payload, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def register_asset_definition(
@@ -662,16 +681,9 @@ class TransactionDraft:
             else _require_exact_non_empty_string(owning_domain, "owning_domain")
         )
         if balance_scope_policy not in {"Global", "DataspaceRestricted"}:
-            raise ValueError(
-                "balance_scope_policy must be Global or DataspaceRestricted"
-            )
-        if (
-            balance_scope_policy == "DataspaceRestricted"
-            and normalized_owning_domain is None
-        ):
-            raise ValueError(
-                "owning_domain is required for DataspaceRestricted balances"
-            )
+            raise ValueError("balance_scope_policy must be Global or DataspaceRestricted")
+        if balance_scope_policy == "DataspaceRestricted" and normalized_owning_domain is None:
+            raise ValueError("owning_domain is required for DataspaceRestricted balances")
         normalized_name = _require_exact_non_empty_string(name, "name")
 
         metadata_payload = _normalize_metadata(metadata)
@@ -687,6 +699,7 @@ class TransactionDraft:
                 mintable=mintable,
                 balance_scope_policy=balance_scope_policy,
                 metadata=metadata_payload,
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -707,6 +720,7 @@ class TransactionDraft:
             Instruction.register_zk_asset(
                 definition,
                 vk_unshield=vk_unshield,
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -716,21 +730,33 @@ class TransactionDraft:
 
         if not isinstance(proof, Mapping):
             raise TypeError("proof must be a mapping")
-        self.add_instruction(Instruction.verify_proof(dict(proof)))
+        self.add_instruction(
+            Instruction.verify_proof(
+                dict(proof), chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def mint_asset_quantity(self, asset_id: str, quantity: QuantityLike) -> TransactionDraft:
         """Append a nominal-quantity `MintAsset` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
-        self.add_instruction(Instruction.mint_asset_quantity(asset_id, normalized_quantity))
+        self.add_instruction(
+            Instruction.mint_asset_quantity(
+                asset_id, normalized_quantity, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def burn_asset_quantity(self, asset_id: str, quantity: QuantityLike) -> TransactionDraft:
         """Append a nominal-quantity `BurnAsset` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
-        self.add_instruction(Instruction.burn_asset_quantity(asset_id, normalized_quantity))
+        self.add_instruction(
+            Instruction.burn_asset_quantity(
+                asset_id, normalized_quantity, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def transfer_asset_quantity(
@@ -747,6 +773,7 @@ class TransactionDraft:
                 asset_id,
                 normalized_quantity,
                 destination,
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -771,17 +798,11 @@ class TransactionDraft:
             unknown = set(payment).difference({"id", "to", "amount"})
             missing = {"id", "to", "amount"}.difference(payment)
             if unknown or missing:
-                raise ValueError(
-                    f"payments[{index}] must contain exactly id, to, and amount"
-                )
+                raise ValueError(f"payments[{index}] must contain exactly id, to, and amount")
             normalized_payments.append(
                 {
-                    "id": _require_exact_non_empty_string(
-                        payment["id"], f"payments[{index}].id"
-                    ),
-                    "to": _require_exact_non_empty_string(
-                        payment["to"], f"payments[{index}].to"
-                    ),
+                    "id": _require_exact_non_empty_string(payment["id"], f"payments[{index}].id"),
+                    "to": _require_exact_non_empty_string(payment["to"], f"payments[{index}].to"),
                     "amount": _normalize_positive_quantity(
                         payment["amount"], f"payments[{index}].amount"
                     ),
@@ -791,11 +812,10 @@ class TransactionDraft:
         self.add_instruction(
             Instruction.transfer_asset_batch(
                 _require_exact_non_empty_string(source_account, "source_account"),
-                _require_exact_non_empty_string(
-                    asset_definition_id, "asset_definition_id"
-                ),
+                _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
                 json.dumps(normalized_payments, separators=(",", ":"), sort_keys=True),
                 mode=_require_exact_non_empty_string(mode_value, "mode"),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -832,6 +852,7 @@ class TransactionDraft:
                 _normalize_asset_transfer_availability(incoming, "incoming"),
                 _normalize_asset_transfer_availability(outgoing, "outgoing"),
                 reason=normalized_reason,
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -851,6 +872,7 @@ class TransactionDraft:
                 _require_exact_non_empty_string(account_id, "account_id"),
                 _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
                 blacklisted,
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -868,6 +890,7 @@ class TransactionDraft:
                 _require_exact_non_empty_string(account_id, "account_id"),
                 _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
                 _normalize_asset_transfer_limits(limits),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -885,6 +908,7 @@ class TransactionDraft:
                 _require_exact_non_empty_string(account_id, "account_id"),
                 _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
                 (_normalize_quantity(holding_limit) if holding_limit is not None else None),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -915,6 +939,7 @@ class TransactionDraft:
                 ),
                 expires_at_ms=expires_at_ms,
                 evidence_hashes=list(evidence_hashes or []),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -961,6 +986,7 @@ class TransactionDraft:
                 normalized_conditions,
                 expires_at_ms,
                 evidence_digests=list(evidence_digests or []),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -981,6 +1007,7 @@ class TransactionDraft:
                 _require_exact_non_empty_string(condition_id, "condition_id"),
                 dict(_normalize_mapping_payload(_payload_mapping(value, "value"), "value")),
                 evidence_digest=evidence_digest,
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -990,7 +1017,8 @@ class TransactionDraft:
 
         self.add_instruction(
             Instruction.expire_conditional_escrow(
-                _require_exact_non_empty_string(escrow_id, "escrow_id")
+                _require_exact_non_empty_string(escrow_id, "escrow_id"),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -1011,6 +1039,7 @@ class TransactionDraft:
                     expected_remaining_amount,
                     "expected_remaining_amount",
                 ),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -1029,6 +1058,7 @@ class TransactionDraft:
                     expected_remaining_amount,
                     "expected_remaining_amount",
                 ),
+                chain_discriminant=self._config.chain_discriminant,
             )
         )
         return self
@@ -1037,7 +1067,10 @@ class TransactionDraft:
         """Append an `ExpireAssetLock` instruction."""
 
         self.add_instruction(
-            Instruction.expire_asset_lock(_require_non_empty_string(escrow_id, "escrow_id"))
+            Instruction.expire_asset_lock(
+                _require_non_empty_string(escrow_id, "escrow_id"),
+                chain_discriminant=self._config.chain_discriminant,
+            )
         )
         return self
 
@@ -1053,7 +1086,12 @@ class TransactionDraft:
         destination = _require_non_empty_string(destination, "destination")
         name = _require_non_empty_string(name, "permission name")
         self.add_instruction(
-            Instruction.grant_account_permission(destination, name, payload=payload)
+            Instruction.grant_account_permission(
+                destination,
+                name,
+                payload=payload,
+                chain_discriminant=self._config.chain_discriminant,
+            )
         )
         return self
 
@@ -1069,7 +1107,12 @@ class TransactionDraft:
         destination = _require_non_empty_string(destination, "destination")
         name = _require_non_empty_string(name, "permission name")
         self.add_instruction(
-            Instruction.revoke_account_permission(destination, name, payload=payload)
+            Instruction.revoke_account_permission(
+                destination,
+                name,
+                payload=payload,
+                chain_discriminant=self._config.chain_discriminant,
+            )
         )
         return self
 
@@ -1115,6 +1158,7 @@ class TransactionDraft:
             int(rate_bps),
             int(maturity_timestamp_ms),
             governance_payload,
+            chain_discriminant=self._config.chain_discriminant,
         )
         self.add_instruction(instruction)
         return self
@@ -1125,14 +1169,18 @@ class TransactionDraft:
     ) -> TransactionDraft:
         """Settle a repo using only its immutable on-chain maturity terms."""
 
-        instruction = Instruction.repo_unwind(agreement_id)
+        instruction = Instruction.repo_unwind(
+            agreement_id, chain_discriminant=self._config.chain_discriminant
+        )
         self.add_instruction(instruction)
         return self
 
     def repo_margin_call(self, agreement_id: str) -> TransactionDraft:
         """Append a `RepoMarginCallIsi` instruction to record a margin check."""
 
-        instruction = Instruction.repo_margin_call(agreement_id)
+        instruction = Instruction.repo_margin_call(
+            agreement_id, chain_discriminant=self._config.chain_discriminant
+        )
         self.add_instruction(instruction)
         return self
 
@@ -1149,7 +1197,11 @@ class TransactionDraft:
         """
 
         target = account_id or self._config.authority
-        self.add_instruction(Instruction.set_account_key_value(target, key, value))
+        self.add_instruction(
+            Instruction.set_account_key_value(
+                target, key, value, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def remove_account_key_value(
@@ -1164,7 +1216,11 @@ class TransactionDraft:
         """
 
         target = account_id or self._config.authority
-        self.add_instruction(Instruction.remove_account_key_value(target, key))
+        self.add_instruction(
+            Instruction.remove_account_key_value(
+                target, key, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def transfer_domain(
@@ -1177,7 +1233,11 @@ class TransactionDraft:
         """Append a `TransferDomain` instruction."""
 
         origin = source or self._config.authority
-        self.add_instruction(Instruction.transfer_domain(origin, domain_id, destination))
+        self.add_instruction(
+            Instruction.transfer_domain(
+                origin, domain_id, destination, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def transfer_asset_definition(
@@ -1191,7 +1251,12 @@ class TransactionDraft:
 
         origin = source or self._config.authority
         self.add_instruction(
-            Instruction.transfer_asset_definition(origin, definition_id, destination)
+            Instruction.transfer_asset_definition(
+                origin,
+                definition_id,
+                destination,
+                chain_discriminant=self._config.chain_discriminant,
+            )
         )
         return self
 
@@ -1205,7 +1270,11 @@ class TransactionDraft:
         """Append a `TransferNft` instruction."""
 
         origin = source or self._config.authority
-        self.add_instruction(Instruction.transfer_nft(origin, nft_id, destination))
+        self.add_instruction(
+            Instruction.transfer_nft(
+                origin, nft_id, destination, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def transfer_rwa(
@@ -1221,7 +1290,13 @@ class TransactionDraft:
         origin = source or self._config.authority
         normalized_quantity = _normalize_quantity(quantity)
         self.add_instruction(
-            Instruction.transfer_rwa(origin, rwa_id, normalized_quantity, destination)
+            Instruction.transfer_rwa(
+                origin,
+                rwa_id,
+                normalized_quantity,
+                destination,
+                chain_discriminant=self._config.chain_discriminant,
+            )
         )
         return self
 
@@ -1236,7 +1311,11 @@ class TransactionDraft:
             "merge",
             top_level_quantity=False,
         )
-        self.add_instruction(Instruction.merge_rwas(merge_payload))
+        self.add_instruction(
+            Instruction.merge_rwas(
+                merge_payload, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def redeem_rwa(
@@ -1248,19 +1327,27 @@ class TransactionDraft:
         """Append a `RedeemRwa` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
-        self.add_instruction(Instruction.redeem_rwa(rwa_id, normalized_quantity))
+        self.add_instruction(
+            Instruction.redeem_rwa(
+                rwa_id, normalized_quantity, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def freeze_rwa(self, rwa_id: str) -> TransactionDraft:
         """Append a `FreezeRwa` instruction."""
 
-        self.add_instruction(Instruction.freeze_rwa(rwa_id))
+        self.add_instruction(
+            Instruction.freeze_rwa(rwa_id, chain_discriminant=self._config.chain_discriminant)
+        )
         return self
 
     def unfreeze_rwa(self, rwa_id: str) -> TransactionDraft:
         """Append an `UnfreezeRwa` instruction."""
 
-        self.add_instruction(Instruction.unfreeze_rwa(rwa_id))
+        self.add_instruction(
+            Instruction.unfreeze_rwa(rwa_id, chain_discriminant=self._config.chain_discriminant)
+        )
         return self
 
     def hold_rwa(
@@ -1272,7 +1359,11 @@ class TransactionDraft:
         """Append a `HoldRwa` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
-        self.add_instruction(Instruction.hold_rwa(rwa_id, normalized_quantity))
+        self.add_instruction(
+            Instruction.hold_rwa(
+                rwa_id, normalized_quantity, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def release_rwa(
@@ -1284,7 +1375,11 @@ class TransactionDraft:
         """Append a `ReleaseRwa` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
-        self.add_instruction(Instruction.release_rwa(rwa_id, normalized_quantity))
+        self.add_instruction(
+            Instruction.release_rwa(
+                rwa_id, normalized_quantity, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def force_transfer_rwa(
@@ -1298,7 +1393,12 @@ class TransactionDraft:
 
         normalized_quantity = _normalize_quantity(quantity)
         self.add_instruction(
-            Instruction.force_transfer_rwa(rwa_id, normalized_quantity, destination)
+            Instruction.force_transfer_rwa(
+                rwa_id,
+                normalized_quantity,
+                destination,
+                chain_discriminant=self._config.chain_discriminant,
+            )
         )
         return self
 
@@ -1310,7 +1410,11 @@ class TransactionDraft:
         """Append a `SetRwaControls` instruction."""
 
         controls_payload = _normalize_mapping_payload(controls, "controls")
-        self.add_instruction(Instruction.set_rwa_controls(rwa_id, controls_payload))
+        self.add_instruction(
+            Instruction.set_rwa_controls(
+                rwa_id, controls_payload, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def set_rwa_key_value(
@@ -1322,7 +1426,11 @@ class TransactionDraft:
         """Append a `SetRwaKeyValue` instruction."""
 
         normalized_value = _normalize_json_value(value, "value")
-        self.add_instruction(Instruction.set_rwa_key_value(rwa_id, key, normalized_value))
+        self.add_instruction(
+            Instruction.set_rwa_key_value(
+                rwa_id, key, normalized_value, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def remove_rwa_key_value(
@@ -1332,7 +1440,11 @@ class TransactionDraft:
     ) -> TransactionDraft:
         """Append a `RemoveRwaKeyValue` instruction."""
 
-        self.add_instruction(Instruction.remove_rwa_key_value(rwa_id, key))
+        self.add_instruction(
+            Instruction.remove_rwa_key_value(
+                rwa_id, key, chain_discriminant=self._config.chain_discriminant
+            )
+        )
         return self
 
     def settlement_dvp(
@@ -1355,6 +1467,7 @@ class TransactionDraft:
             order=effective_plan.order.value,
             atomicity=effective_plan.atomicity.value,
             metadata=metadata_payload,
+            chain_discriminant=self._config.chain_discriminant,
         )
         self.add_instruction(instruction)
         return self
@@ -1379,6 +1492,7 @@ class TransactionDraft:
             order=effective_plan.order.value,
             atomicity=effective_plan.atomicity.value,
             metadata=metadata_payload,
+            chain_discriminant=self._config.chain_discriminant,
         )
         self.add_instruction(instruction)
         return self
@@ -1406,17 +1520,14 @@ class TransactionDraft:
             self._config.network_id,
             self._config.authority,
             private_key,
+            chain_discriminant=self._config.chain_discriminant,
             fee_payment=_thaw_json(self._config.fee_payment),
             instructions=payload_instructions,
             entries=payload_entries,
             creation_time_ms=self._creation_time_ms,
             ttl_ms=self._config.ttl_ms,
             nonce=self._config.nonce,
-            metadata=(
-                None
-                if self._config.metadata is None
-                else _thaw_json(self._config.metadata)
-            ),
+            metadata=(None if self._config.metadata is None else _thaw_json(self._config.metadata)),
             lane_privacy_attachments=self._lane_privacy_attachments,
         )
 
@@ -1562,11 +1673,10 @@ class TransactionDraft:
             self._config.network_id,
             self._config.authority,
             json.dumps(_thaw_json(self._config.fee_payment), separators=(",", ":")),
+            chain_discriminant=self._config.chain_discriminant,
         )
         if self._privacy_capability_manifest is not None:
-            builder.bind_privacy_exact12_capability_manifest_v1(
-                self._privacy_capability_manifest
-            )
+            builder.bind_privacy_exact12_capability_manifest_v1(self._privacy_capability_manifest)
         builder.set_creation_time_ms(self._creation_time_ms)
         if self._config.ttl_ms is not None:
             builder.set_ttl_ms(int(self._config.ttl_ms))
@@ -1623,6 +1733,7 @@ class TransactionDraft:
 
         manifest: dict[str, Any] = {
             "network_id": self._config.network_id.literal,
+            "chain_discriminant": self._config.chain_discriminant,
             "authority": self._config.authority,
         }
         if self._explicit_batch:

@@ -557,12 +557,12 @@ class KaigiInstructionWireV1:
         encoded = base64.b64encode(self.to_norito_bytes()).decode("ascii")
         return json.dumps(encoded, separators=(",", ":"))
 
-    def to_instruction(self) -> "Instruction":
+    def to_instruction(self, *, chain_discriminant: int) -> "Instruction":
         """Decode this archive through the Rust-backed native instruction boundary."""
 
         from .crypto import Instruction
 
-        instruction = Instruction.from_json(self.to_json())
+        instruction = Instruction.from_json(self.to_json(), chain_discriminant=chain_discriminant)
         if instruction.wire_id() != self.wire_id:
             raise RuntimeError("native Kaigi instruction decoder changed the canonical wire ID")
         if bytes(instruction.to_norito_bytes()) != self.to_norito_bytes():
@@ -916,6 +916,7 @@ def build_create_kaigi_instruction(
     nullifier: KaigiParticipantNullifierV1 | None = None,
     roster_root: bytes | str | None = None,
     proof: bytes | None = None,
+    chain_discriminant: int,
 ) -> "Instruction":
     """Build a native ``CreateKaigi`` instruction from typed keyword arguments."""
 
@@ -936,7 +937,7 @@ def build_create_kaigi_instruction(
         nullifier=nullifier,
         roster_root=roster_root,
         proof=proof,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_join_kaigi_instruction(
@@ -947,6 +948,7 @@ def build_join_kaigi_instruction(
     nullifier: KaigiParticipantNullifierV1 | None = None,
     roster_root: bytes | str | None = None,
     proof: bytes | None = None,
+    chain_discriminant: int,
 ) -> "Instruction":
     """Build a native ``JoinKaigi`` instruction from typed keyword arguments."""
 
@@ -957,7 +959,7 @@ def build_join_kaigi_instruction(
         nullifier=nullifier,
         roster_root=roster_root,
         proof=proof,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_leave_kaigi_instruction(
@@ -968,6 +970,7 @@ def build_leave_kaigi_instruction(
     nullifier: KaigiParticipantNullifierV1 | None = None,
     roster_root: bytes | str | None = None,
     proof: bytes | None = None,
+    chain_discriminant: int,
 ) -> "Instruction":
     """Build a native ``LeaveKaigi`` instruction from typed keyword arguments."""
 
@@ -978,7 +981,7 @@ def build_leave_kaigi_instruction(
         nullifier=nullifier,
         roster_root=roster_root,
         proof=proof,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_end_kaigi_instruction(
@@ -989,6 +992,7 @@ def build_end_kaigi_instruction(
     nullifier: KaigiParticipantNullifierV1 | None = None,
     roster_root: bytes | str | None = None,
     proof: bytes | None = None,
+    chain_discriminant: int,
 ) -> "Instruction":
     """Build a native ``EndKaigi`` instruction from typed keyword arguments."""
 
@@ -999,7 +1003,7 @@ def build_end_kaigi_instruction(
         nullifier=nullifier,
         roster_root=roster_root,
         proof=proof,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_record_kaigi_usage_instruction(
@@ -1009,6 +1013,7 @@ def build_record_kaigi_usage_instruction(
     billed_gas: int = 0,
     usage_commitment: bytes | None = None,
     proof: bytes | None = None,
+    chain_discriminant: int,
 ) -> "Instruction":
     """Build a native ``RecordKaigiUsage`` instruction from typed keyword arguments."""
 
@@ -1018,22 +1023,22 @@ def build_record_kaigi_usage_instruction(
         billed_gas=billed_gas,
         usage_commitment=usage_commitment,
         proof=proof,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_set_kaigi_relay_manifest_instruction(
-    *, call_id: KaigiIdV1, relay_manifest: KaigiRelayManifestV1 | None
+    *, call_id: KaigiIdV1, relay_manifest: KaigiRelayManifestV1 | None, chain_discriminant: int
 ) -> "Instruction":
     """Build a native ``SetKaigiRelayManifest`` instruction from typed keyword arguments."""
 
     return encode_set_kaigi_relay_manifest_instruction_v1(
         call_id=call_id,
         relay_manifest=relay_manifest,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_register_kaigi_relay_instruction(
-    *, relay_id: str, hpke_public_key: bytes, bandwidth_class: int
+    *, relay_id: str, hpke_public_key: bytes, bandwidth_class: int, chain_discriminant: int
 ) -> "Instruction":
     """Build a native ``RegisterKaigiRelay`` instruction from typed keyword arguments."""
 
@@ -1041,13 +1046,17 @@ def build_register_kaigi_relay_instruction(
         relay_id=relay_id,
         hpke_public_key=hpke_public_key,
         bandwidth_class=bandwidth_class,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
-def build_unregister_kaigi_relay_instruction(*, relay_id: str) -> "Instruction":
+def build_unregister_kaigi_relay_instruction(
+    *, relay_id: str, chain_discriminant: int
+) -> "Instruction":
     """Build a native ``UnregisterKaigiRelay`` instruction."""
 
-    return encode_unregister_kaigi_relay_instruction_v1(relay_id=relay_id).to_instruction()
+    return encode_unregister_kaigi_relay_instruction_v1(relay_id=relay_id).to_instruction(
+        chain_discriminant=chain_discriminant
+    )
 
 
 def build_report_kaigi_relay_health_instruction(
@@ -1057,6 +1066,7 @@ def build_report_kaigi_relay_health_instruction(
     status: str,
     reported_at_ms: int,
     notes: str | None = None,
+    chain_discriminant: int,
 ) -> "Instruction":
     """Build a native ``ReportKaigiRelayHealth`` instruction from typed keyword arguments."""
 
@@ -1066,7 +1076,7 @@ def build_report_kaigi_relay_health_instruction(
         status=status,
         reported_at_ms=reported_at_ms,
         notes=notes,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 __all__ = [

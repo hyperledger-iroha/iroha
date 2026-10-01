@@ -13216,16 +13216,38 @@ impl<'state> StateBlock<'state> {
         // A later instruction may introduce custody after lifecycle staging.
         // Validate the unpruned original overlay: pruning first would erase
         // the reward records needed to reconcile its still-retained reserves.
-        let predecessor = fields
-            .canonical_runtime
-            .get_before_block()
-            .nexus_projection(&fields.runtime_policy.nexus)?;
+        let predecessor = runtime_catalog_carrier_predecessor(
+            fields.canonical_runtime.get_before_block(),
+            fields.world.parameters.get_before_block(),
+            &fields.runtime_policy,
+            &fields.nexus,
+            &fields.lane_manifests,
+            fields.lane_compliance.as_deref(),
+            &fields.zk,
+            Some(pending),
+        )?;
         ensure_pending_autoscale_lifecycle_staking_is_safe(
             &fields.world,
             &predecessor,
             pending,
             fields._curr_block.height().get(),
         )?;
+        if pending.runtime_catalog.is_some() {
+            validate_runtime_catalog_block_overlay(
+                fields.world.parameters.get_before_block(),
+                &fields.world,
+                &fields.network_id,
+                &predecessor,
+                Some(pending),
+                fields._curr_block.height().get(),
+                fields
+                    ._curr_block
+                    .creation_time()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            )?;
+        }
         State::prune_lane_lifecycle_world_block_state_for_lanes(
             &mut fields.world,
             &pending.catalog_update.lanes_to_reset,
@@ -21384,6 +21406,11 @@ macro_rules! world_ro_accessors {
 /// Provides accessors to parameters, peers, domains, accounts, assets,
 /// roles, triggers and the executor configuration without mutation.
 pub trait WorldReadOnly {
+    /// Refuse active native privacy pool/reserve authority without exposing private evidence keys.
+    fn ensure_physical_retirement_privacy_safe(
+        &self,
+        targets: &BTreeSet<DataSpaceId>,
+    ) -> Result<(), String>;
     world_ro_accessors!(configuration, declaration);
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
@@ -22243,6 +22270,9 @@ pub trait WorldReadOnly {
 macro_rules! impl_world_ro {
     ($($ident:ty),*) => {$(
         impl WorldReadOnly for $ident {
+            fn ensure_physical_retirement_privacy_safe(&self, targets: &BTreeSet<DataSpaceId>) -> Result<(), String> {
+                physical_dataspace_retirement_safety::ensure_privacy_retirement_safe(&self.privacy_commitments, targets)
+            }
             world_ro_accessors!(configuration, implementation);
             world_ro_accessors!(identity, implementation);
             world_ro_accessors!(assets, implementation);
@@ -26057,12 +26087,21 @@ impl State {
         self.kura
             .bind_lane_storage_network(self.network_id)
             .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?;
-        let lane_config = self.nexus_snapshot().lane_config;
+        let nexus = self.nexus_snapshot();
         let lane_incarnations = self.lane_incarnations_snapshot();
         let lane_incarnation_activation_heights =
             self.lane_incarnation_activation_heights_snapshot();
         let authoritative_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
         let lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
+        let (lane_config, lane_incarnations, lane_incarnation_activation_heights) =
+            retained_lane_geometry_from_parameters(
+                &nexus.lane_catalog,
+                &lane_incarnations,
+                &lane_incarnation_activation_heights,
+                &lane_incarnation_lineage,
+                self.world.view().parameters(),
+                authoritative_height,
+            )?;
         let lineage_root =
             lane_incarnation_lineage_root(&self.network_id, &lane_incarnation_lineage);
         self.kura
@@ -32411,18 +32450,42 @@ impl State {
                 current_block_height,
             )?;
         }
+        let (
+            previous_storage_config,
+            previous_storage_incarnations,
+            previous_storage_activation_heights,
+        ) = retained_lane_geometry_from_parameters(
+            &previous_nexus.lane_catalog,
+            &previous_lane_incarnations,
+            &previous_lane_incarnation_activation_heights,
+            &previous_lane_incarnation_lineage,
+            self.world.view().parameters(),
+            current_block_height,
+        )?;
+        let (
+            updated_storage_config,
+            updated_storage_incarnations,
+            updated_storage_activation_heights,
+        ) = retained_lane_geometry_from_parameters(
+            &nexus.lane_catalog,
+            &updated_lane_incarnations,
+            &updated_lane_incarnation_activation_heights,
+            &updated_lane_incarnation_lineage,
+            self.world.view().parameters(),
+            current_block_height,
+        )?;
         if self.kura.emergency_fast_startup_enabled() {
             warn!(
                 "emergency Fast startup skipped lane-geometry publication and backend reconciliation"
             );
         } else {
             self.apply_lane_geometry_updates(
-                &previous_lane_config,
-                &nexus.lane_config,
-                &previous_lane_incarnations,
-                &updated_lane_incarnations,
-                &previous_lane_incarnation_activation_heights,
-                &updated_lane_incarnation_activation_heights,
+                &previous_storage_config,
+                &updated_storage_config,
+                &previous_storage_incarnations,
+                &updated_storage_incarnations,
+                &previous_storage_activation_heights,
+                &updated_storage_activation_heights,
                 &previous_lane_incarnation_lineage,
                 &updated_lane_incarnation_lineage,
                 &geometry_replaced_lane_ids,
@@ -32430,9 +32493,9 @@ impl State {
                 &mut releases,
             )?;
             if let Err(failure) = self.mark_lane_geometry_catalog_published(
-                &nexus.lane_config,
-                &updated_lane_incarnations,
-                &updated_lane_incarnation_activation_heights,
+                &updated_storage_config,
+                &updated_storage_incarnations,
+                &updated_storage_activation_heights,
                 &updated_lane_incarnation_lineage,
                 configured_baseline,
             ) {
@@ -32444,10 +32507,10 @@ impl State {
                     return Err(error);
                 }
                 self.rollback_lane_geometry_updates(
-                    &previous_lane_config,
-                    &nexus.lane_config,
-                    &previous_lane_incarnations,
-                    &previous_lane_incarnation_activation_heights,
+                    &previous_storage_config,
+                    &updated_storage_config,
+                    &previous_storage_incarnations,
+                    &previous_storage_activation_heights,
                     &previous_lane_incarnation_lineage,
                     &geometry_replaced_lane_ids,
                     current_block_height,
@@ -32859,6 +32922,7 @@ impl State {
                     plan,
                     current_block_height,
                     allow_autoscale_managed_changes,
+                    false,
                 )?;
                 let world = self.world.view();
                 let mut prospective_nexus = nexus.clone();
@@ -33162,12 +33226,12 @@ impl State {
             return Ok(());
         }
         self.apply_lane_geometry_updates(
-            &update.previous_lane_config,
-            &update.updated_lane_config,
-            &update.previous_lane_incarnations,
-            &update.updated_lane_incarnations,
-            &update.previous_lane_incarnation_activation_heights,
-            &update.updated_lane_incarnation_activation_heights,
+            &update.previous_storage_geometry.config,
+            &update.updated_storage_geometry.config,
+            &update.previous_storage_geometry.incarnations,
+            &update.updated_storage_geometry.incarnations,
+            &update.previous_storage_geometry.activation_heights,
+            &update.updated_storage_geometry.activation_heights,
             &update.previous_lane_incarnation_lineage,
             &update.updated_lane_incarnation_lineage,
             &update.replaced_lane_ids,
@@ -33175,9 +33239,9 @@ impl State {
             releases,
         )?;
         if let Err(failure) = self.mark_lane_geometry_catalog_published(
-            &update.updated_lane_config,
-            &update.updated_lane_incarnations,
-            &update.updated_lane_incarnation_activation_heights,
+            &update.updated_storage_geometry.config,
+            &update.updated_storage_geometry.incarnations,
+            &update.updated_storage_geometry.activation_heights,
             &update.updated_lane_incarnation_lineage,
             None,
         ) {
@@ -33189,10 +33253,10 @@ impl State {
                 return Err(error);
             }
             self.rollback_lane_geometry_updates(
-                &update.previous_lane_config,
-                &update.updated_lane_config,
-                &update.previous_lane_incarnations,
-                &update.previous_lane_incarnation_activation_heights,
+                &update.previous_storage_geometry.config,
+                &update.updated_storage_geometry.config,
+                &update.previous_storage_geometry.incarnations,
+                &update.previous_storage_geometry.activation_heights,
                 &update.previous_lane_incarnation_lineage,
                 &update.replaced_lane_ids,
                 block_height,
@@ -33222,13 +33286,13 @@ impl State {
             releases,
         )?;
         let diff = lane_topology_diff(
-            &update.previous_lane_config,
-            &update.updated_lane_config,
+            &update.previous_storage_geometry.config,
+            &update.updated_storage_geometry.config,
             &update.replaced_lane_ids,
         );
         self.preflight_lane_geometry_updates(
-            &update.previous_lane_config,
-            &update.updated_lane_config,
+            &update.previous_storage_geometry.config,
+            &update.updated_storage_geometry.config,
             &diff,
         )
     }
@@ -33239,7 +33303,9 @@ impl State {
         block_header_hash: HashOf<BlockHeader>,
         releases: &mut LaneLifecycleReleases<'_>,
     ) -> Result<(), LaneLifecycleError> {
-        ensure_physical_catalog_additions_only(&pending.plan)?;
+        if pending.runtime_catalog.is_none() {
+            ensure_physical_catalog_additions_only(&pending.plan)?;
+        }
         let update = &pending.catalog_update;
         let nexus = self.nexus_snapshot();
         if pending.transition_height != block_height {
@@ -33296,6 +33362,7 @@ impl State {
                 runtime,
                 &pending.plan,
             )?;
+            runtime_catalog_project_retired_routes(&mut prospective_nexus, Some(runtime))?;
         }
         let derivation_header_hash = block_header_hash;
         let mut expected_update = prepare_lane_lifecycle_update(
@@ -33308,21 +33375,42 @@ impl State {
             &pending.plan,
             pending.transition_height,
             allow_autoscale_managed_changes,
+            pending.runtime_catalog.is_some() && !pending.plan.retire.is_empty(),
         )?;
-        ensure_runtime_catalog_lanes_preserved(
-            &self.world.view(),
-            &nexus.lane_catalog,
-            &expected_update.updated_catalog,
-        )?;
+        if pending.runtime_catalog.is_none() {
+            ensure_runtime_catalog_lanes_preserved(
+                &self.world.view(),
+                &nexus.lane_catalog,
+                &expected_update.updated_catalog,
+            )?;
+        }
         expected_update.previous_dataspace_catalog = nexus.dataspace_catalog.clone();
         expected_update.updated_dataspace_catalog = prospective_nexus.dataspace_catalog.clone();
+        if let Some(runtime) = &pending.runtime_catalog {
+            let previous = runtime_catalog_from_world(&self.world.view())?;
+            bind_runtime_catalog_update(
+                &mut expected_update,
+                &nexus,
+                &prospective_nexus,
+                previous.as_ref(),
+                runtime,
+            )?;
+        } else if let Some(runtime) = runtime_catalog_from_world(&self.world.view())? {
+            bind_runtime_catalog_update(
+                &mut expected_update,
+                &nexus,
+                &prospective_nexus,
+                Some(&runtime),
+                &runtime,
+            )?;
+        }
         let committed_lane_manifests = if let Some(runtime) = &pending.runtime_catalog {
             Arc::new(
                 releases
                     .manifests
                     .read()
                     .with_runtime_additions(
-                        &runtime.manifests,
+                        &runtime_catalog_active_manifests(runtime),
                         &expected_update.updated_catalog,
                         &prospective_nexus.dataspace_catalog,
                         &nexus.governance,
@@ -33360,6 +33448,10 @@ impl State {
                 reason: err.message(),
             })?;
         if expected_update.updated_catalog != update.updated_catalog
+            || expected_update.updated_routing_policy != update.updated_routing_policy
+            || expected_update.updated_autoscale != update.updated_autoscale
+            || expected_update.previous_storage_geometry != update.previous_storage_geometry
+            || expected_update.updated_storage_geometry != update.updated_storage_geometry
             || expected_update.updated_dataspace_catalog != update.updated_dataspace_catalog
             || !lane_config_entries_match(
                 &expected_update.updated_lane_config,
@@ -33388,13 +33480,13 @@ impl State {
             }
         }
         ensure_catalog_autoscale_lanes_consistent(
-            &nexus,
+            &prospective_nexus,
             &update.updated_catalog,
             pending.transition_height,
             &BTreeSet::new(),
         )?;
         validate_nexus_routing_policy(
-            &nexus.routing_policy,
+            &prospective_nexus.routing_policy,
             &update.updated_catalog,
             &prospective_nexus.dataspace_catalog,
         )
@@ -33410,7 +33502,15 @@ impl State {
         &mut self,
         cfg: &iroha_config::parameters::actual::TieredState,
     ) -> Result<(), LaneLifecycleError> {
-        let effective_lane_config = self.nexus_snapshot().lane_config;
+        let nexus = self.nexus_snapshot();
+        let (effective_lane_config, _, _) = retained_lane_geometry_from_parameters(
+            &nexus.lane_catalog,
+            &self.lane_incarnations_snapshot(),
+            &self.lane_incarnation_activation_heights_snapshot(),
+            &self.lane_incarnation_lineage_snapshot(),
+            self.world.view().parameters(),
+            u64::try_from(self.committed_height()).unwrap_or(u64::MAX),
+        )?;
         let baseline_lane_config = iroha_config::parameters::actual::LaneConfig::default();
         let mut backend = self.tiered_backend.lock();
         if let Some(original) = self.tiered_startup_geometry.as_ref() {
@@ -33709,6 +33809,12 @@ impl State {
 include!("state/lane_lifecycle_support.rs");
 include!("state/geometry_publication.rs");
 include!("state/runtime_catalog.rs");
+#[path = "state/physical_dataspace_retirement_safety.rs"]
+mod physical_dataspace_retirement_safety;
+include!("state/physical_catalog_retirement.rs");
+#[cfg(test)]
+#[path = "state/physical_catalog_retirement_tests.rs"]
+mod physical_catalog_retirement_tests;
 include!("state/runtime_catalog_startup.rs");
 include!("state/runtime_catalog_commit.rs");
 fn prepare_lane_lifecycle_update(
@@ -33721,8 +33827,11 @@ fn prepare_lane_lifecycle_update(
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
     current_block_height: u64,
     allow_autoscale_managed_changes: bool,
+    physical_retirement_authorized: bool,
 ) -> core::result::Result<LaneLifecycleCatalogUpdate, LaneLifecycleError> {
-    ensure_physical_catalog_additions_only(plan)?;
+    if !physical_retirement_authorized {
+        ensure_physical_catalog_additions_only(plan)?;
+    }
     if plan.additions.is_empty() && plan.retire.is_empty() {
         return Err(LaneLifecycleError::EmptyPlan);
     }
@@ -33766,7 +33875,8 @@ fn prepare_lane_lifecycle_update(
             if let Some(lane) = existing_lane {
                 ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus)?;
             }
-        } else if let Some(lane) = existing_lane
+        } else if !physical_retirement_authorized
+            && let Some(lane) = existing_lane
             && lane_claims_autoscale_managed(lane)
             && ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus).is_ok()
             && ensure_autoscale_managed_lane_created_height_not_future(lane, current_block_height)
@@ -33874,8 +33984,20 @@ fn prepare_lane_lifecycle_update(
         previous_dataspace_catalog: nexus.dataspace_catalog.clone(),
         updated_dataspace_catalog: nexus.dataspace_catalog.clone(),
         previous_routing_policy: nexus.routing_policy.clone(),
+        updated_routing_policy: nexus.routing_policy.clone(),
         previous_autoscale: nexus.autoscale,
+        updated_autoscale: nexus.autoscale,
         updated_catalog,
+        previous_storage_geometry: HistoricalLaneGeometry {
+            config: previous_lane_config.clone(),
+            incarnations: previous_lane_incarnations.clone(),
+            activation_heights: previous_lane_incarnation_activation_heights.clone(),
+        },
+        updated_storage_geometry: HistoricalLaneGeometry {
+            config: updated_lane_config.clone(),
+            incarnations: updated_lane_incarnations.clone(),
+            activation_heights: updated_lane_incarnation_activation_heights.clone(),
+        },
         previous_lane_config,
         updated_lane_config,
         previous_lane_incarnations: previous_lane_incarnations.clone(),
@@ -40566,7 +40688,7 @@ impl StateTransaction<'_, '_> {
                 reason: "it owns work in the committing block",
             });
         }
-        let lifecycle_update = prepare_lane_lifecycle_update(
+        let mut lifecycle_update = prepare_lane_lifecycle_update(
             &self.nexus,
             &self.lane_incarnations,
             &self.lane_incarnation_lineage,
@@ -40575,6 +40697,7 @@ impl StateTransaction<'_, '_> {
             self._curr_block.hash(),
             &payload.plan,
             block_height,
+            false,
             false,
         )?;
         ensure_runtime_catalog_lanes_preserved(
@@ -40585,6 +40708,15 @@ impl StateTransaction<'_, '_> {
         let mut prospective_nexus = self.nexus.clone();
         prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+        if let Some(runtime) = runtime_catalog_from_world(&self.world)? {
+            bind_runtime_catalog_update(
+                &mut lifecycle_update,
+                &self.nexus,
+                &prospective_nexus,
+                Some(&runtime),
+                &runtime,
+            )?;
+        }
         ensure_live_shared_dataspace_staking_owner_is_not_reset(
             &self.world,
             &self.nexus,

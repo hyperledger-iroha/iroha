@@ -89,7 +89,11 @@ struct LifecycleSurface {
     previous_dataspaces: DataSpaceCatalog,
     updated_dataspaces: DataSpaceCatalog,
     previous_routing: LaneRoutingPolicy,
+    updated_routing: LaneRoutingPolicy,
     previous_autoscale: Vec<u64>,
+    updated_autoscale: Vec<u64>,
+    previous_storage_geometry: HistoricalLaneGeometry,
+    updated_storage_geometry: HistoricalLaneGeometry,
     updated_catalog: LaneCatalog,
     previous_lane_config: iroha_config::parameters::actual::LaneConfig,
     updated_lane_config: iroha_config::parameters::actual::LaneConfig,
@@ -107,6 +111,39 @@ struct LifecycleSurface {
     transition_height: u64,
     incarnation_root: Hash,
     runtime_catalog: Option<Hash>,
+}
+
+fn autoscale_surface(autoscale: &iroha_config::parameters::actual::Autoscale) -> Vec<u64> {
+    let iroha_config::parameters::actual::Autoscale {
+        enabled,
+        min_lane_id,
+        max_lane_id_exclusive,
+        target_block_ms,
+        scale_out_latency_ratio,
+        scale_in_latency_ratio,
+        scale_out_utilization_ratio,
+        scale_in_utilization_ratio,
+        scale_out_window_blocks,
+        scale_in_window_blocks,
+        cooldown_blocks,
+        per_lane_target_tps,
+        last_transition_height,
+    } = autoscale;
+    vec![
+        u64::from(*enabled),
+        u64::from(min_lane_id.get()),
+        u64::from(max_lane_id_exclusive.get()),
+        target_block_ms.get(),
+        scale_out_latency_ratio.to_bits(),
+        scale_in_latency_ratio.to_bits(),
+        scale_out_utilization_ratio.to_bits(),
+        scale_in_utilization_ratio.to_bits(),
+        u64::from(scale_out_window_blocks.get()),
+        u64::from(scale_in_window_blocks.get()),
+        u64::from(cooldown_blocks.get()),
+        u64::from(per_lane_target_tps.get()),
+        *last_transition_height,
+    ]
 }
 
 impl LifecycleSurface {
@@ -127,7 +164,11 @@ impl LifecycleSurface {
             previous_dataspace_catalog,
             updated_dataspace_catalog,
             previous_routing_policy,
+            updated_routing_policy,
             previous_autoscale,
+            updated_autoscale,
+            previous_storage_geometry,
+            updated_storage_geometry,
             updated_catalog,
             previous_lane_config,
             updated_lane_config,
@@ -140,41 +181,16 @@ impl LifecycleSurface {
             lanes_to_reset,
             replaced_lane_ids,
         } = catalog_update;
-        let iroha_config::parameters::actual::Autoscale {
-            enabled,
-            min_lane_id,
-            max_lane_id_exclusive,
-            target_block_ms,
-            scale_out_latency_ratio,
-            scale_in_latency_ratio,
-            scale_out_utilization_ratio,
-            scale_in_utilization_ratio,
-            scale_out_window_blocks,
-            scale_in_window_blocks,
-            cooldown_blocks,
-            per_lane_target_tps,
-            last_transition_height,
-        } = previous_autoscale;
         Ok(Self {
             previous_catalog: previous_catalog.clone(),
             previous_dataspaces: previous_dataspace_catalog.clone(),
             updated_dataspaces: updated_dataspace_catalog.clone(),
             previous_routing: previous_routing_policy.clone(),
-            previous_autoscale: vec![
-                u64::from(*enabled),
-                u64::from(min_lane_id.get()),
-                u64::from(max_lane_id_exclusive.get()),
-                target_block_ms.get(),
-                scale_out_latency_ratio.to_bits(),
-                scale_in_latency_ratio.to_bits(),
-                scale_out_utilization_ratio.to_bits(),
-                scale_in_utilization_ratio.to_bits(),
-                u64::from(scale_out_window_blocks.get()),
-                u64::from(scale_in_window_blocks.get()),
-                u64::from(cooldown_blocks.get()),
-                u64::from(per_lane_target_tps.get()),
-                *last_transition_height,
-            ],
+            updated_routing: updated_routing_policy.clone(),
+            previous_autoscale: autoscale_surface(previous_autoscale),
+            updated_autoscale: autoscale_surface(updated_autoscale),
+            previous_storage_geometry: previous_storage_geometry.clone(),
+            updated_storage_geometry: updated_storage_geometry.clone(),
             updated_catalog: updated_catalog.clone(),
             previous_lane_config: previous_lane_config.clone(),
             updated_lane_config: updated_lane_config.clone(),
@@ -664,7 +680,19 @@ mod tests {
                 previous_dataspace_catalog: block.nexus.dataspace_catalog.clone(),
                 updated_dataspace_catalog: block.nexus.dataspace_catalog.clone(),
                 previous_routing_policy: block.nexus.routing_policy.clone(),
+                updated_routing_policy: block.nexus.routing_policy.clone(),
                 previous_autoscale: block.nexus.autoscale,
+                updated_autoscale: block.nexus.autoscale,
+                previous_storage_geometry: HistoricalLaneGeometry {
+                    config: block.nexus.lane_config.clone(),
+                    incarnations: block.lane_incarnations.clone(),
+                    activation_heights: block.lane_incarnation_activation_heights.clone(),
+                },
+                updated_storage_geometry: HistoricalLaneGeometry {
+                    config: block.nexus.lane_config.clone(),
+                    incarnations: block.lane_incarnations.clone(),
+                    activation_heights: block.lane_incarnation_activation_heights.clone(),
+                },
                 updated_catalog: block.nexus.lane_catalog.clone(),
                 previous_lane_config: block.nexus.lane_config.clone(),
                 updated_lane_config: block.nexus.lane_config.clone(),
@@ -704,6 +732,55 @@ mod tests {
             crate::snapshot::canonical_staged_state_snapshot_hash(&block)
         );
         assert!(surface.verify(&block).is_err());
+        block
+            .pending_autoscale_lifecycle
+            .as_mut()
+            .unwrap()
+            .transition_height = 1;
+        let original = block
+            .pending_autoscale_lifecycle
+            .as_ref()
+            .unwrap()
+            .catalog_update
+            .clone();
+        for mutation in 0..4 {
+            let update = &mut block
+                .pending_autoscale_lifecycle
+                .as_mut()
+                .unwrap()
+                .catalog_update;
+            match mutation {
+                0 => update.updated_routing_policy.default_lane = LaneId::new(7),
+                1 => update.updated_autoscale.enabled = !update.updated_autoscale.enabled,
+                2 => {
+                    update.previous_storage_geometry.incarnations.insert(
+                        LaneId::SINGLE,
+                        Hash::new(b"substituted predecessor storage"),
+                    );
+                }
+                3 => {
+                    update
+                        .updated_storage_geometry
+                        .activation_heights
+                        .insert(LaneId::SINGLE, 24);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                checkpoint,
+                crate::snapshot::canonical_staged_state_snapshot_hash(&block)
+            );
+            assert!(
+                surface.verify(&block).is_err(),
+                "retirement publication input {mutation} escaped its exact local seal"
+            );
+            block
+                .pending_autoscale_lifecycle
+                .as_mut()
+                .unwrap()
+                .catalog_update = original.clone();
+            surface.verify(&block).unwrap();
+        }
     }
 
     #[test]

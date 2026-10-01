@@ -426,6 +426,7 @@ kagemusha.operation	GET	/v1/kagemusha/operations/{operation_id}	public	torii_def
 kagemusha.readiness	GET	/v1/kagemusha/readiness	public	torii_default	public	read	http	feature(app_api)	true	true	true	false
 kagemusha.redeem	POST	/v1/kagemusha/redeem	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	true	true	false
 kagemusha.top_up	POST	/v1/kagemusha/top-up	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	true	true	false
+ledger.authority_originals	POST	/v1/ledger/authority-originals	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	false	true	false	true
 ledger.block_proof	GET	/v1/ledger/block/{height}/proof/{entry_hash}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 ledger.executed_block_wire	GET	/v1/ledger/block/{height}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 ledger.headers	GET	/v1/ledger/headers	public	torii_default	public	read	http	always	true	true	false	false

@@ -151,6 +151,7 @@ def test_replication_instruction_decoders_are_schema_closed() -> None:
             _ORDER_ID,
             _PROVIDER_ID,
             27,
+            chain_discriminant=753,
         )
     with pytest.raises(ValueError, match="expected_authority"):
         CompleteReplicationOrderInstruction.from_payload(
@@ -293,10 +294,10 @@ def test_replication_payloads_convert_to_native_instructions() -> None:
     complete = _completion()
     expire = ExpireReplicationOrderInstruction(_ORDER_ID, 29)
     encoded = (
-        issue.to_instruction().to_json(),
-        bound_issue.to_instruction().to_json(),
-        complete.to_instruction().to_json(),
-        expire.to_instruction().to_json(),
+        issue.to_instruction(chain_discriminant=753).to_json(),
+        bound_issue.to_instruction(chain_discriminant=753).to_json(),
+        complete.to_instruction(chain_discriminant=753).to_json(),
+        expire.to_instruction(chain_discriminant=753).to_json(),
     )
     for payload in encoded:
         encoded_archive = json.loads(payload)
@@ -304,7 +305,7 @@ def test_replication_payloads_convert_to_native_instructions() -> None:
         archive = base64.b64decode(encoded_archive, validate=True)
         assert archive.startswith(b"NRT0")
         assert base64.b64encode(archive).decode("ascii") == encoded_archive
-        assert Instruction.from_json(payload).to_json() == payload
+        assert Instruction.from_json(payload, chain_discriminant=753).to_json() == payload
 
     assert (
         Instruction.complete_replication_order(
@@ -314,6 +315,7 @@ def test_replication_payloads_convert_to_native_instructions() -> None:
             _authority(),
             3,
             ProviderIngestFinalizedAnchorV1(41, _BLOCK_HASH),
+            chain_discriminant=753,
         ).to_json()
         == encoded[2]
     )

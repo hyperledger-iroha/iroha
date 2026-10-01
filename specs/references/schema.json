@@ -454,6 +454,26 @@
       }
     ]
   },
+  "AccountRecoveryCancellationApproved": {
+    "Struct": [
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "alias",
+        "type": "AccountAlias"
+      },
+      {
+        "name": "approver",
+        "type": "AccountId"
+      },
+      {
+        "name": "request",
+        "type": "AccountRecoveryRequest"
+      }
+    ]
+  },
   "AccountRecoveryCancelled": {
     "Struct": [
       {
@@ -498,11 +518,16 @@
       },
       {
         "discriminant": 4,
+        "tag": "CancellationApproved",
+        "type": "AccountRecoveryCancellationApproved"
+      },
+      {
+        "discriminant": 5,
         "tag": "Cancelled",
         "type": "AccountRecoveryCancelled"
       },
       {
-        "discriminant": 5,
+        "discriminant": 6,
         "tag": "Finalized",
         "type": "AccountRecoveryFinalized"
       }
@@ -595,6 +620,10 @@
         "type": "AccountAlias"
       },
       {
+        "name": "request_generation",
+        "type": "NonZero<u64>"
+      },
+      {
         "name": "active_account_id_at_proposal",
         "type": "AccountId"
       },
@@ -604,6 +633,10 @@
       },
       {
         "name": "approvals",
+        "type": "SortedVec<AccountId>"
+      },
+      {
+        "name": "cancellation_approvals",
         "type": "SortedVec<AccountId>"
       },
       {
@@ -3017,6 +3050,14 @@
       }
     ]
   },
+  "CanCheckSorafsStreamTokenGateway": {
+    "Struct": [
+      {
+        "name": "gateway_id",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "CanCheckSorafsTopologyApproval": {
     "Struct": [
       {
@@ -3077,6 +3118,7 @@
       }
     ]
   },
+  "CanManageSorafsStreamTokenGateway": null,
   "CanManageSorafsTopologyCustody": {
     "Struct": [
       {
@@ -3166,6 +3208,14 @@
       {
         "name": "provider_id",
         "type": "ProviderId"
+      }
+    ]
+  },
+  "CanOperateSorafsStreamTokenGateway": {
+    "Struct": [
+      {
+        "name": "gateway_id",
+        "type": "Array<u8, 32>"
       }
     ]
   },
@@ -3663,6 +3713,34 @@
       {
         "name": "duration_ms",
         "type": "NonZero<u64>"
+      }
+    ]
+  },
+  "ConfidentialComputeMechanism": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Encryption"
+      },
+      {
+        "discriminant": 1,
+        "tag": "SecretSharing"
+      }
+    ]
+  },
+  "ConfidentialComputePolicy": {
+    "Struct": [
+      {
+        "name": "mechanism",
+        "type": "ConfidentialComputeMechanism"
+      },
+      {
+        "name": "key_version",
+        "type": "NonZero<u32>"
+      },
+      {
+        "name": "allowed_audiences",
+        "type": "SortedVec<String>"
       }
     ]
   },
@@ -4456,6 +4534,18 @@
       }
     ]
   },
+  "DaManifestPolicy": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Strict"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Audit"
+      }
+    ]
+  },
   "DaPinIntent": {
     "Struct": [
       {
@@ -4970,6 +5060,26 @@
     ]
   },
   "DataSpaceId": "u64",
+  "DataSpaceMetadata": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "DataSpaceId"
+      },
+      {
+        "name": "alias",
+        "type": "String"
+      },
+      {
+        "name": "description",
+        "type": "Option<String>"
+      },
+      {
+        "name": "fault_tolerance",
+        "type": "u32"
+      }
+    ]
+  },
   "DataTriggerStep": {
     "Struct": [
       {
@@ -7214,6 +7324,20 @@
       {
         "name": "max_amount",
         "type": "Quantity"
+      }
+    ]
+  },
+  "FeeDebitSource": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "account",
+        "type": "AccountId"
+      },
+      {
+        "discriminant": 1,
+        "tag": "sponsor_program",
+        "type": "FeeSponsorProgramId"
       }
     ]
   },
@@ -11536,7 +11660,119 @@
     ]
   },
   "LaneCommitmentId": "u16",
+  "LaneConfig": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "LaneId"
+      },
+      {
+        "name": "shard_id",
+        "type": "Option<ShardId>"
+      },
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
+      },
+      {
+        "name": "alias",
+        "type": "String"
+      },
+      {
+        "name": "description",
+        "type": "Option<String>"
+      },
+      {
+        "name": "visibility",
+        "type": "LaneVisibility"
+      },
+      {
+        "name": "lane_type",
+        "type": "Option<String>"
+      },
+      {
+        "name": "governance",
+        "type": "Option<String>"
+      },
+      {
+        "name": "settlement",
+        "type": "Option<String>"
+      },
+      {
+        "name": "storage",
+        "type": "LaneStorageProfile"
+      },
+      {
+        "name": "proof_scheme",
+        "type": "DaProofScheme"
+      },
+      {
+        "name": "manifest_policy",
+        "type": "DaManifestPolicy"
+      },
+      {
+        "name": "confidential_compute",
+        "type": "Option<ConfidentialComputePolicy>"
+      },
+      {
+        "name": "scheduler",
+        "type": "Option<LaneSchedulerPolicy>"
+      },
+      {
+        "name": "settlement_buffer",
+        "type": "Option<LaneSettlementBufferPolicy>"
+      },
+      {
+        "name": "metadata",
+        "type": "SortedMap<String, String>"
+      }
+    ]
+  },
   "LaneId": "u32",
+  "LaneLifecycleIncarnationEntry": {
+    "Struct": [
+      {
+        "name": "lane_id",
+        "type": "LaneId"
+      },
+      {
+        "name": "incarnation",
+        "type": "Hash"
+      }
+    ]
+  },
+  "LaneLifecycleStatusV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u8"
+      },
+      {
+        "name": "lane_count",
+        "type": "u32"
+      },
+      {
+        "name": "lanes",
+        "type": "Vec<LaneConfig>"
+      },
+      {
+        "name": "catalog_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "incarnations",
+        "type": "Vec<LaneLifecycleIncarnationEntry>"
+      },
+      {
+        "name": "incarnation_root",
+        "type": "Hash"
+      },
+      {
+        "name": "runtime_catalog_hash",
+        "type": "Option<Hash>"
+      }
+    ]
+  },
   "LanePrivacyMerkleWitness": {
     "Struct": [
       {
@@ -11567,6 +11803,62 @@
         "discriminant": 0,
         "tag": "merkle",
         "type": "LanePrivacyMerkleWitness"
+      }
+    ]
+  },
+  "LaneSchedulerPolicy": {
+    "Struct": [
+      {
+        "name": "teu_capacity",
+        "type": "Option<NonZero<u64>>"
+      },
+      {
+        "name": "starvation_bound_slots",
+        "type": "Option<NonZero<u64>>"
+      }
+    ]
+  },
+  "LaneSettlementBufferPolicy": {
+    "Struct": [
+      {
+        "name": "account_id",
+        "type": "AccountId"
+      },
+      {
+        "name": "asset_definition_id",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "capacity",
+        "type": "XorQuantity"
+      }
+    ]
+  },
+  "LaneStorageProfile": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "FullReplica"
+      },
+      {
+        "discriminant": 1,
+        "tag": "CommitmentOnly"
+      },
+      {
+        "discriminant": 2,
+        "tag": "SplitReplica"
+      }
+    ]
+  },
+  "LaneVisibility": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Public"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Restricted"
       }
     ]
   },
@@ -15305,6 +15597,14 @@
       }
     ]
   },
+  "MutateSorafsStreamTokenGateway": {
+    "Struct": [
+      {
+        "name": "request",
+        "type": "StreamTokenGatewayRequestV1"
+      }
+    ]
+  },
   "MutateSorafsTopologyAuthority": {
     "Struct": [
       {
@@ -15373,6 +15673,46 @@
       {
         "name": "completions",
         "type": "Vec<InvocationCompletionV1>"
+      }
+    ]
+  },
+  "NexusCatalogTransitionV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u8"
+      },
+      {
+        "name": "expected_catalog_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "expected_incarnation_root",
+        "type": "Hash"
+      },
+      {
+        "name": "expected_runtime_catalog_hash",
+        "type": "Option<Hash>"
+      },
+      {
+        "name": "dataspace_additions",
+        "type": "Vec<RuntimeDataSpaceAdditionV1>"
+      },
+      {
+        "name": "lane_additions",
+        "type": "Vec<LaneConfig>"
+      },
+      {
+        "name": "manifest_additions",
+        "type": "Vec<RuntimeLaneManifestV1>"
+      },
+      {
+        "name": "dataspace_retirements",
+        "type": "Vec<RuntimeDataSpaceRetirementV1>"
+      },
+      {
+        "name": "lane_retirements",
+        "type": "Vec<LaneId>"
       }
     ]
   },
@@ -15461,6 +15801,98 @@
       {
         "name": "description",
         "type": "Option<String>"
+      }
+    ]
+  },
+  "NexusFeeReceipt": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "source_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
+      },
+      {
+        "name": "lane_id",
+        "type": "LaneId"
+      },
+      {
+        "name": "block_height",
+        "type": "u64"
+      },
+      {
+        "name": "debit_source",
+        "type": "FeeDebitSource"
+      },
+      {
+        "name": "fee_asset_id",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "program_revision",
+        "type": "Option<u64>"
+      },
+      {
+        "name": "lease_id",
+        "type": "Option<Hash>"
+      },
+      {
+        "name": "fee_amount",
+        "type": "Quantity"
+      },
+      {
+        "name": "settlement",
+        "type": "NexusFeeSettlementV1"
+      },
+      {
+        "name": "schedule",
+        "type": "NexusFeeScheduleInputs"
+      }
+    ]
+  },
+  "NexusFeeScheduleInputs": {
+    "Struct": [
+      {
+        "name": "tx_bytes_len",
+        "type": "u64"
+      },
+      {
+        "name": "instruction_count",
+        "type": "u64"
+      },
+      {
+        "name": "gas_used",
+        "type": "u64"
+      },
+      {
+        "name": "base_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_byte_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_instruction_fee",
+        "type": "Quantity"
+      },
+      {
+        "name": "per_gas_unit_fee",
+        "type": "Quantity"
+      }
+    ]
+  },
+  "NexusFeeSettlementV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "burn"
       }
     ]
   },
@@ -15773,6 +16205,38 @@
       {
         "name": "matcher",
         "type": "NexusRoutingMatcherStatus"
+      }
+    ]
+  },
+  "NexusRuntimeCatalogV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u8"
+      },
+      {
+        "name": "baseline_dataspaces_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "baseline_manifests_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "dataspaces",
+        "type": "Vec<RuntimeDataSpaceAdditionV1>"
+      },
+      {
+        "name": "manifests",
+        "type": "Vec<RuntimeLaneManifestV1>"
+      },
+      {
+        "name": "retired_dataspaces",
+        "type": "Vec<RuntimeDataSpaceRetirementRecordV1>"
+      },
+      {
+        "name": "retired_lanes",
+        "type": "Vec<RuntimeLaneRetirementV1>"
       }
     ]
   },
@@ -16175,6 +16639,9 @@
   "Option<ConditionalEscrowAttestation>": {
     "Option": "ConditionalEscrowAttestation"
   },
+  "Option<ConfidentialComputePolicy>": {
+    "Option": "ConfidentialComputePolicy"
+  },
   "Option<ConfidentialFeatureDigest>": {
     "Option": "ConfidentialFeatureDigest"
   },
@@ -16295,6 +16762,12 @@
   "Option<LanePrivacyProof>": {
     "Option": "LanePrivacyProof"
   },
+  "Option<LaneSchedulerPolicy>": {
+    "Option": "LaneSchedulerPolicy"
+  },
+  "Option<LaneSettlementBufferPolicy>": {
+    "Option": "LaneSettlementBufferPolicy"
+  },
   "Option<ManifestAliasBinding>": {
     "Option": "ManifestAliasBinding"
   },
@@ -16360,6 +16833,9 @@
   },
   "Option<Name>": {
     "Option": "Name"
+  },
+  "Option<NexusFeeReceipt>": {
+    "Option": "NexusFeeReceipt"
   },
   "Option<NexusLaneRuntimeUpgradeHookStatus>": {
     "Option": "NexusLaneRuntimeUpgradeHookStatus"
@@ -16496,6 +16972,9 @@
   "Option<SccpRouteActivationV1>": {
     "Option": "SccpRouteActivationV1"
   },
+  "Option<ShardId>": {
+    "Option": "ShardId"
+  },
   "Option<SignedGameCheckpointV1>": {
     "Option": "SignedGameCheckpointV1"
   },
@@ -16516,6 +16995,9 @@
   },
   "Option<StreamTokenExecutionV1>": {
     "Option": "StreamTokenExecutionV1"
+  },
+  "Option<StreamTokenGatewayQuotaRequestV1>": {
+    "Option": "StreamTokenGatewayQuotaRequestV1"
   },
   "Option<StreamingSoranetRoute>": {
     "Option": "StreamingSoranetRoute"
@@ -22070,6 +22552,10 @@
       {
         "name": "activated_at_unix_ms",
         "type": "u64"
+      },
+      {
+        "name": "origin",
+        "type": "ReputationJournalPolicyOriginV1"
       }
     ]
   },
@@ -22098,6 +22584,10 @@
       {
         "name": "token_recorder_authority",
         "type": "AccountId"
+      },
+      {
+        "name": "stream_token_delivery",
+        "type": "StreamTokenReputationDeliveryTemplateV1"
       },
       {
         "name": "max_source_age_ms",
@@ -22250,6 +22740,20 @@
         "discriminant": 2,
         "tag": "stream_token_validation",
         "type": "StreamTokenValidationOutcomeV1"
+      }
+    ]
+  },
+  "ReputationJournalPolicyOriginV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "genesis",
+        "type": "StreamTokenGatewayExecutionV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "network",
+        "type": "StreamTokenGatewayExecutionV1"
       }
     ]
   },
@@ -23017,6 +23521,82 @@
       {
         "name": "permission",
         "type": "Permission"
+      }
+    ]
+  },
+  "RuntimeDataSpaceAdditionV1": {
+    "Struct": [
+      {
+        "name": "descriptor",
+        "type": "DataSpaceMetadata"
+      },
+      {
+        "name": "manifest_hash",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "RuntimeDataSpaceRetirementRecordV1": {
+    "Struct": [
+      {
+        "name": "retirement",
+        "type": "RuntimeDataSpaceRetirementV1"
+      },
+      {
+        "name": "retirement_height",
+        "type": "u64"
+      }
+    ]
+  },
+  "RuntimeDataSpaceRetirementV1": {
+    "Struct": [
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
+      },
+      {
+        "name": "alias",
+        "type": "String"
+      },
+      {
+        "name": "owner",
+        "type": "AccountId"
+      },
+      {
+        "name": "expected_ownership_generation",
+        "type": "u64"
+      }
+    ]
+  },
+  "RuntimeLaneManifestV1": {
+    "Struct": [
+      {
+        "name": "lane_id",
+        "type": "LaneId"
+      },
+      {
+        "name": "manifest",
+        "type": "Json"
+      }
+    ]
+  },
+  "RuntimeLaneRetirementV1": {
+    "Struct": [
+      {
+        "name": "lane",
+        "type": "LaneConfig"
+      },
+      {
+        "name": "incarnation",
+        "type": "Hash"
+      },
+      {
+        "name": "activation_height",
+        "type": "u64"
+      },
+      {
+        "name": "retirement_height",
+        "type": "u64"
       }
     ]
   },
@@ -24672,6 +25252,7 @@
       }
     ]
   },
+  "ShardId": "u32",
   "Signature": {
     "Struct": [
       {
@@ -27173,6 +27754,12 @@
       "value": "u64"
     }
   },
+  "SortedMap<String, String>": {
+    "Map": {
+      "key": "String",
+      "value": "String"
+    }
+  },
   "SortedMap<String, Vec<u8>>": {
     "Map": {
       "key": "String",
@@ -27648,6 +28235,18 @@
       }
     ]
   },
+  "StreamTokenCarRangeV1": {
+    "Struct": [
+      {
+        "name": "start",
+        "type": "u64"
+      },
+      {
+        "name": "end_inclusive",
+        "type": "u64"
+      }
+    ]
+  },
   "StreamTokenCheckPhaseV1": {
     "Enum": [
       {
@@ -27707,6 +28306,18 @@
       {
         "name": "phase",
         "type": "StreamTokenCheckPhaseV1"
+      }
+    ]
+  },
+  "StreamTokenChunkRequestV1": {
+    "Struct": [
+      {
+        "name": "chunk_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "stored_length",
+        "type": "u64"
       }
     ]
   },
@@ -27830,6 +28441,7 @@
       }
     ]
   },
+  "StreamTokenExactHeaderDigestV1": "Array<u8, 32>",
   "StreamTokenExcludedKindV1": {
     "Enum": [
       {
@@ -27910,6 +28522,472 @@
       }
     ]
   },
+  "StreamTokenGatewayActionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "configure",
+        "type": "StreamTokenGatewayPolicyV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "admit",
+        "type": "StreamTokenGatewayAdmissionRequestV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "acknowledge",
+        "type": "StreamTokenGatewayAdmissionRecordV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "release_lease",
+        "type": "StreamTokenGatewayAdmissionRecordV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "expire",
+        "type": "StreamTokenGatewayActionV1::Expire"
+      },
+      {
+        "discriminant": 5,
+        "tag": "check",
+        "type": "StreamTokenGatewayCheckV1"
+      },
+      {
+        "discriminant": 6,
+        "tag": "cancel_reputation_delivery",
+        "type": "StreamTokenGatewayActionV1::CancelReputationDelivery"
+      }
+    ]
+  },
+  "StreamTokenGatewayActionV1::CancelReputationDelivery": {
+    "Struct": [
+      {
+        "name": "record",
+        "type": "StreamTokenGatewayAdmissionRecordV1"
+      },
+      {
+        "name": "expected_recorder_policy_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "reason",
+        "type": "StreamTokenReputationCancellationReasonV1"
+      }
+    ]
+  },
+  "StreamTokenGatewayActionV1::Expire": {
+    "Struct": [
+      {
+        "name": "max_items",
+        "type": "u32"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionDeliveryStateV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "pending",
+        "type": "StreamTokenGatewayAdmissionDeliveryStateV1::Pending"
+      },
+      {
+        "discriminant": 1,
+        "tag": "acknowledged_exact_replay",
+        "type": "StreamTokenGatewayAdmissionDeliveryStateV1::AcknowledgedExactReplay"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionDeliveryStateV1::AcknowledgedExactReplay": {
+    "Struct": [
+      {
+        "name": "acknowledged_through_sequence",
+        "type": "u64"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionDeliveryStateV1::Pending": {
+    "Struct": [
+      {
+        "name": "predecessor_sequence",
+        "type": "u64"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionQualificationV1": {
+    "Struct": [
+      {
+        "name": "gateway_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "revision",
+        "type": "u64"
+      },
+      {
+        "name": "policy_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "max_pending",
+        "type": "u32"
+      },
+      {
+        "name": "max_tracked_tokens",
+        "type": "u32"
+      },
+      {
+        "name": "lease_ttl_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionReadbackV1": {
+    "Struct": [
+      {
+        "name": "acknowledged_through_sequence",
+        "type": "u64"
+      },
+      {
+        "name": "high_water_sequence",
+        "type": "u64"
+      },
+      {
+        "name": "records",
+        "type": "Vec<StreamTokenGatewayAdmissionRecordV1>"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionRecordV1": {
+    "Struct": [
+      {
+        "name": "serving_attempt_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "admitted_under",
+        "type": "StreamTokenGatewayAdmissionQualificationV1"
+      },
+      {
+        "name": "provider_id",
+        "type": "ProviderId"
+      },
+      {
+        "name": "outcome",
+        "type": "StreamTokenValidationOutcomeV1"
+      },
+      {
+        "name": "retry_after_secs",
+        "type": "Option<u32>"
+      },
+      {
+        "name": "lease_id",
+        "type": "Option<Array<u8, 32>>"
+      },
+      {
+        "name": "lease_expires_at_unix_ms",
+        "type": "Option<u64>"
+      },
+      {
+        "name": "lease_token_expires_at_epoch",
+        "type": "Option<u64>"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionRequestV1": {
+    "Struct": [
+      {
+        "name": "serving_attempt_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "context",
+        "type": "StreamTokenValidationRequestContextV1"
+      },
+      {
+        "name": "token_body_digest",
+        "type": "Option<Array<u8, 32>>"
+      },
+      {
+        "name": "token_key_version",
+        "type": "Option<u32>"
+      },
+      {
+        "name": "validated_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "status",
+        "type": "StreamTokenValidationStatusV1"
+      },
+      {
+        "name": "quota",
+        "type": "Option<StreamTokenGatewayQuotaRequestV1>"
+      }
+    ]
+  },
+  "StreamTokenGatewayAdmissionResultV1": {
+    "Struct": [
+      {
+        "name": "record",
+        "type": "StreamTokenGatewayAdmissionRecordV1"
+      },
+      {
+        "name": "delivery_state",
+        "type": "StreamTokenGatewayAdmissionDeliveryStateV1"
+      }
+    ]
+  },
+  "StreamTokenGatewayCheckSubjectV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "qualification"
+      },
+      {
+        "discriminant": 1,
+        "tag": "admission",
+        "type": "StreamTokenGatewayCheckSubjectV1::Admission"
+      },
+      {
+        "discriminant": 2,
+        "tag": "serving",
+        "type": "StreamTokenGatewayCheckSubjectV1::Serving"
+      },
+      {
+        "discriminant": 3,
+        "tag": "pending",
+        "type": "StreamTokenGatewayCheckSubjectV1::Pending"
+      },
+      {
+        "discriminant": 4,
+        "tag": "acknowledged",
+        "type": "StreamTokenGatewayCheckSubjectV1::Acknowledged"
+      },
+      {
+        "discriminant": 5,
+        "tag": "released",
+        "type": "StreamTokenGatewayCheckSubjectV1::Released"
+      }
+    ]
+  },
+  "StreamTokenGatewayCheckSubjectV1::Acknowledged": {
+    "Struct": [
+      {
+        "name": "record",
+        "type": "StreamTokenGatewayAdmissionRecordV1"
+      }
+    ]
+  },
+  "StreamTokenGatewayCheckSubjectV1::Admission": {
+    "Struct": [
+      {
+        "name": "request_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "result",
+        "type": "StreamTokenGatewayAdmissionResultV1"
+      }
+    ]
+  },
+  "StreamTokenGatewayCheckSubjectV1::Pending": {
+    "Struct": [
+      {
+        "name": "max_items",
+        "type": "u32"
+      },
+      {
+        "name": "readback_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "StreamTokenGatewayCheckSubjectV1::Released": {
+    "Struct": [
+      {
+        "name": "record",
+        "type": "StreamTokenGatewayAdmissionRecordV1"
+      }
+    ]
+  },
+  "StreamTokenGatewayCheckSubjectV1::Serving": {
+    "Struct": [
+      {
+        "name": "request_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "result",
+        "type": "StreamTokenGatewayAdmissionResultV1"
+      }
+    ]
+  },
+  "StreamTokenGatewayCheckV1": {
+    "Struct": [
+      {
+        "name": "challenge",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "expected_operator",
+        "type": "AccountId"
+      },
+      {
+        "name": "expected_observer",
+        "type": "AccountId"
+      },
+      {
+        "name": "floor",
+        "type": "StreamTokenGatewayFinalityFloorV1"
+      },
+      {
+        "name": "subject",
+        "type": "StreamTokenGatewayCheckSubjectV1"
+      }
+    ]
+  },
+  "StreamTokenGatewayExecutionV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "transaction_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "entry_index",
+        "type": "u32"
+      },
+      {
+        "name": "instruction_index",
+        "type": "u32"
+      },
+      {
+        "name": "recorded_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "authority",
+        "type": "AccountId"
+      }
+    ]
+  },
+  "StreamTokenGatewayFinalityFloorV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "context_id",
+        "type": "HeightContextId"
+      }
+    ]
+  },
+  "StreamTokenGatewayPolicyV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "compliance_gateway_id",
+        "type": "String"
+      },
+      {
+        "name": "qualification",
+        "type": "StreamTokenGatewayAdmissionQualificationV1"
+      },
+      {
+        "name": "operators",
+        "type": "SortedVec<AccountId>"
+      },
+      {
+        "name": "observers",
+        "type": "SortedVec<AccountId>"
+      },
+      {
+        "name": "valid_from_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "valid_until_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "max_observation_age_ms",
+        "type": "u64"
+      },
+      {
+        "name": "admission_enabled",
+        "type": "bool"
+      }
+    ]
+  },
+  "StreamTokenGatewayQuotaRequestV1": {
+    "Struct": [
+      {
+        "name": "token_id",
+        "type": "String"
+      },
+      {
+        "name": "max_streams",
+        "type": "u16"
+      },
+      {
+        "name": "requests_per_minute",
+        "type": "u32"
+      },
+      {
+        "name": "rate_limit_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "requested_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "expires_at_epoch",
+        "type": "u64"
+      },
+      {
+        "name": "observed_at_epoch",
+        "type": "u64"
+      }
+    ]
+  },
+  "StreamTokenGatewayRequestV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "gateway_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "expected_policy_revision",
+        "type": "u64"
+      },
+      {
+        "name": "expected_policy_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "action",
+        "type": "StreamTokenGatewayActionV1"
+      }
+    ]
+  },
   "StreamTokenNativeOperationV1": {
     "Struct": [
       {
@@ -27971,6 +29049,168 @@
       }
     ]
   },
+  "StreamTokenPresentationV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "missing"
+      },
+      {
+        "discriminant": 1,
+        "tag": "exact_header",
+        "type": "StreamTokenExactHeaderDigestV1"
+      }
+    ]
+  },
+  "StreamTokenReputationCancellationReasonV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "credential_unavailable"
+      },
+      {
+        "discriminant": 1,
+        "tag": "authority_withdrawn"
+      }
+    ]
+  },
+  "StreamTokenReputationDeliveryDispositionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "pending"
+      },
+      {
+        "discriminant": 1,
+        "tag": "delivered",
+        "type": "StreamTokenReputationDeliveryDispositionV1::Delivered"
+      },
+      {
+        "discriminant": 2,
+        "tag": "excluded"
+      },
+      {
+        "discriminant": 3,
+        "tag": "expired",
+        "type": "StreamTokenReputationDeliveryDispositionV1::Expired"
+      },
+      {
+        "discriminant": 4,
+        "tag": "governance_cancelled",
+        "type": "StreamTokenReputationDeliveryDispositionV1::GovernanceCancelled"
+      }
+    ]
+  },
+  "StreamTokenReputationDeliveryDispositionV1::Delivered": {
+    "Struct": [
+      {
+        "name": "journal_sequence",
+        "type": "u64"
+      },
+      {
+        "name": "event_id",
+        "type": "ReputationJournalEventIdV1"
+      },
+      {
+        "name": "execution",
+        "type": "StreamTokenGatewayExecutionV1"
+      }
+    ]
+  },
+  "StreamTokenReputationDeliveryDispositionV1::Expired": {
+    "Struct": [
+      {
+        "name": "execution",
+        "type": "StreamTokenGatewayExecutionV1"
+      }
+    ]
+  },
+  "StreamTokenReputationDeliveryDispositionV1::GovernanceCancelled": {
+    "Struct": [
+      {
+        "name": "recorder_policy_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "gateway_qualification",
+        "type": "StreamTokenGatewayAdmissionQualificationV1"
+      },
+      {
+        "name": "reason",
+        "type": "StreamTokenReputationCancellationReasonV1"
+      },
+      {
+        "name": "execution",
+        "type": "StreamTokenGatewayExecutionV1"
+      }
+    ]
+  },
+  "StreamTokenReputationDeliveryIntentV1": {
+    "Struct": [
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "record",
+        "type": "StreamTokenGatewayAdmissionRecordV1"
+      },
+      {
+        "name": "request_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_execution",
+        "type": "StreamTokenGatewayExecutionV1"
+      },
+      {
+        "name": "recorder_policy",
+        "type": "ReputationJournalAuthorityPolicyRecordV1"
+      },
+      {
+        "name": "transaction_ttl_limit_ms",
+        "type": "u64"
+      },
+      {
+        "name": "payload",
+        "type": "TransactionPayload"
+      }
+    ]
+  },
+  "StreamTokenReputationDeliveryTemplateV1": {
+    "Struct": [
+      {
+        "name": "allowed_gateways",
+        "type": "Vec<Array<u8, 32>>"
+      },
+      {
+        "name": "fee_payment",
+        "type": "FeePaymentIntent"
+      },
+      {
+        "name": "time_to_live_ms",
+        "type": "u64"
+      },
+      {
+        "name": "height_ttl",
+        "type": "u64"
+      }
+    ]
+  },
+  "StreamTokenRequestRouteV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "car_range",
+        "type": "StreamTokenCarRangeV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "chunk",
+        "type": "StreamTokenChunkRequestV1"
+      }
+    ]
+  },
   "StreamTokenReviewedV1": {
     "Struct": [
       {
@@ -28020,6 +29260,42 @@
       {
         "name": "status",
         "type": "StreamTokenValidationStatusV1"
+      }
+    ]
+  },
+  "StreamTokenValidationRequestContextV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u8"
+      },
+      {
+        "name": "provider_id",
+        "type": "ProviderId"
+      },
+      {
+        "name": "manifest_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "manifest_cid",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "chunk_profile_handle",
+        "type": "String"
+      },
+      {
+        "name": "request_nonce_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "token_presentation",
+        "type": "StreamTokenPresentationV1"
+      },
+      {
+        "name": "route",
+        "type": "StreamTokenRequestRouteV1"
       }
     ]
   },
@@ -29739,7 +31015,8 @@
   "TransactionResult": {
     "Tuple": [
       "Result<Vec<DataTriggerStep>, TransactionRejectionReason>",
-      "Vec<AssetBatchTransferOutcome>"
+      "Vec<AssetBatchTransferOutcome>",
+      "Option<NexusFeeReceipt>"
     ]
   },
   "TransactionSignature": "SignatureOf<TransactionPayload>",
@@ -30836,6 +32113,15 @@
   "Vec<KotobaTranslationEntry>": {
     "Vec": "KotobaTranslationEntry"
   },
+  "Vec<LaneConfig>": {
+    "Vec": "LaneConfig"
+  },
+  "Vec<LaneId>": {
+    "Vec": "LaneId"
+  },
+  "Vec<LaneLifecycleIncarnationEntry>": {
+    "Vec": "LaneLifecycleIncarnationEntry"
+  },
   "Vec<Metadata>": {
     "Vec": "Metadata"
   },
@@ -31115,6 +32401,21 @@
   "Vec<RoleId>": {
     "Vec": "RoleId"
   },
+  "Vec<RuntimeDataSpaceAdditionV1>": {
+    "Vec": "RuntimeDataSpaceAdditionV1"
+  },
+  "Vec<RuntimeDataSpaceRetirementRecordV1>": {
+    "Vec": "RuntimeDataSpaceRetirementRecordV1"
+  },
+  "Vec<RuntimeDataSpaceRetirementV1>": {
+    "Vec": "RuntimeDataSpaceRetirementV1"
+  },
+  "Vec<RuntimeLaneManifestV1>": {
+    "Vec": "RuntimeLaneManifestV1"
+  },
+  "Vec<RuntimeLaneRetirementV1>": {
+    "Vec": "RuntimeLaneRetirementV1"
+  },
   "Vec<Rwa>": {
     "Vec": "Rwa"
   },
@@ -31132,6 +32433,9 @@
   },
   "Vec<StateDescriptor>": {
     "Vec": "StateDescriptor"
+  },
+  "Vec<StreamTokenGatewayAdmissionRecordV1>": {
+    "Vec": "StreamTokenGatewayAdmissionRecordV1"
   },
   "Vec<StreamingRouteBinding>": {
     "Vec": "StreamingRouteBinding"

@@ -123,9 +123,11 @@ class RecordingSession(requests.Session):
         return self._response
 
 
-def _client_with_session() -> tuple[ToriiClient, RecordingSession]:
+def _client_with_session(*, chain_discriminant: int = 753) -> tuple[ToriiClient, RecordingSession]:
     session = RecordingSession()
-    client = ToriiClient("http://localhost:8080", session=session)
+    client = ToriiClient(
+        "http://localhost:8080", session=session, chain_discriminant=chain_discriminant
+    )
     return client, session
 
 
@@ -462,7 +464,7 @@ def test_get_transaction_status_rejects_retired_auto_response_scope() -> None:
 def test_build_and_submit_transaction_exposes_no_wait_scope_or_success_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, _session = _client_with_session()
+    client, _session = _client_with_session(chain_discriminant=369)
     envelope = SimpleNamespace(hash=b"\xaa" * 32)
     captured: Dict[str, Any] = {}
 
@@ -470,6 +472,7 @@ def test_build_and_submit_transaction_exposes_no_wait_scope_or_success_override(
         @staticmethod
         def build_signed_transaction(*args: Any, **_kwargs: Any) -> Any:
             captured["network_id"] = args[0]
+            captured["chain_discriminant"] = _kwargs["chain_discriminant"]
             return envelope
 
     def fake_submit_transaction_envelope_and_wait(
@@ -502,6 +505,7 @@ def test_build_and_submit_transaction_exposes_no_wait_scope_or_success_override(
     assert result == {"status": "Committed"}
     assert captured["envelope"] is envelope
     assert captured["network_id"] == network_id
+    assert captured["chain_discriminant"] == 369
     assert "scope" not in captured
     assert "success_statuses" not in captured
 

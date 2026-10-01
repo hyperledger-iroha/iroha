@@ -1,4 +1,5 @@
 """Full-controller identity parity against the required native cryptographic owner."""
+
 from __future__ import annotations
 
 import json
@@ -69,20 +70,33 @@ def test_all_full_controller_owners_preserve_rust_fixture(item):
     assert _account_id.decode_canonical_i105_account_id(item["i105"]) == raw
     assert _account_id.encode_i105_account_id(raw, 753) == item["i105"]
     assert str(AccountId(item["i105"])) == item["i105"]
-    assert bytes(native._encode_account_id_v1(item["i105"])[1]) == bytes.fromhex(item["account_id_frame_hex"])
+    assert bytes(native._encode_account_id_v1(item["i105"])[1]) == bytes.fromhex(
+        item["account_id_frame_hex"]
+    )
     # Generic typed instruction identities retain their complete controller.
     instructions = (
-        native.Instruction.register_account(item["i105"], None),
-        native.Instruction.set_account_key_value(item["i105"], "label", "full-controller"),
-        native.Instruction.remove_account_key_value(item["i105"], "label"),
-        native.Instruction.grant_account_permission(item["i105"], "CanSetAccountKeyValue"),
-        native.Instruction.revoke_account_permission(item["i105"], "CanSetAccountKeyValue"),
+        native.Instruction.register_account(item["i105"], None, chain_discriminant=753),
+        native.Instruction.set_account_key_value(
+            item["i105"], "label", "full-controller", chain_discriminant=753
+        ),
+        native.Instruction.remove_account_key_value(item["i105"], "label", chain_discriminant=753),
+        native.Instruction.grant_account_permission(
+            item["i105"], "CanSetAccountKeyValue", chain_discriminant=753
+        ),
+        native.Instruction.revoke_account_permission(
+            item["i105"], "CanSetAccountKeyValue", chain_discriminant=753
+        ),
     )
     for instruction in instructions:
         encoded = instruction.to_json()
-        assert native.Instruction.from_json(encoded).to_json() == encoded
+        assert native.Instruction.from_json(encoded, chain_discriminant=753).to_json() == encoded
     network = native.NetworkId.parse("hash:" + "A5" * 32 + "#95D7")
-    builder = native.TransactionBuilder(network, item["i105"], json.dumps({"payer": "authority", "value": {"charge_limits": [], "gas_limit": None}}))
+    builder = native.TransactionBuilder(
+        network,
+        item["i105"],
+        json.dumps({"payer": "authority", "value": {"charge_limits": [], "gas_limit": None}}),
+        chain_discriminant=753,
+    )
     builder.add_instruction(instructions[0])
     assert json.loads(builder.payload_json())["authority"] == item["i105"]
     if item["name"] != "ed25519":
@@ -106,7 +120,12 @@ def test_all_full_controller_owners_preserve_rust_fixture(item):
     assert rebuilt.canonical_bytes() == raw
     for padding in (" ", "\t", "\r\n", "\u00a0", "\u2003", "\u202f", "\u3000"):
         for literal in (padding + item["i105"], item["i105"] + padding):
-            for parse in (AccountAddress.parse_encoded, AccountAddress.from_i105, AccountId, _account_id.decode_canonical_i105_account_id):
+            for parse in (
+                AccountAddress.parse_encoded,
+                AccountAddress.from_i105,
+                AccountId,
+                _account_id.decode_canonical_i105_account_id,
+            ):
                 with pytest.raises(ValueError):
                     parse(literal)
 

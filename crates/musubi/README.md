@@ -45,3 +45,13 @@ to its authenticated target and exact commit. Both fresh deployment and recovery
 caller's scope and fee review before execution.
 
 Focused validation: `cargo test -p musubi --lib deployment_runtime`.
+
+For a complete authenticated `.to` artifact, `musubi --format json artifact --config
+<explicit-client.toml> --journal <fresh-owner-private-directory> prepare --artifact
+<artifact.to> --alias <exact-alias> --fee-payment <native-intent.json>` prepares and
+persists the native signed lifecycle without dispatch. Its output includes native-decoded
+`intended_transactions` for an independent execution-output owner to retain before
+submission. `inspect` authenticates those exact existing intents without signing or
+dispatch; `resume` executes or recovers only that retained journal. Recovery cannot
+take replacement artifact, alias or fee inputs. Entrypoint grants and activation calls
+are independently selected operations after artifact deployment.

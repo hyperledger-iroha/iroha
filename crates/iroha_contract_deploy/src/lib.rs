@@ -212,6 +212,60 @@ impl PreparedDeployment {
     pub const fn preflight(&self) -> &DeploymentPreflight {
         &self.record.preflight
     }
+
+    /// Decode the exact signed native intents for independent pre-submit custody.
+    ///
+    /// # Errors
+    /// Rejects a malformed signature, noncanonical envelope or substituted native hash.
+    pub fn intended_transactions(&self) -> DeploymentResult<Vec<DeploymentIntendedTransaction>> {
+        intended_transactions(&self.record).map_err(DeploymentError::Journal)
+    }
+}
+
+/// Public, native-decoded intended execution retained before any deployment dispatch.
+#[derive(Clone, Debug, norito::derive::JsonSerialize)]
+pub struct DeploymentIntendedTransaction {
+    /// Exact retained lifecycle stage.
+    pub name: String,
+    /// Native signed envelope hash as lowercase hexadecimal bytes.
+    pub transaction_hash: String,
+    /// The native external entrypoint kind.
+    pub entrypoint_kind: String,
+    /// Exact signing authority.
+    pub authority: AccountId,
+    /// Native signatory key bytes as lowercase hexadecimal.
+    pub signer_public_key_hex: String,
+    /// Signature-bound executable decoded using the native model.
+    pub executable: iroha::data_model::transaction::Executable,
+    /// Signature-bound native metadata.
+    pub metadata: Metadata,
+    /// Exact signed fee payment after the SDK quote.
+    pub fee_payment: FeePaymentIntent,
+}
+
+fn intended_transactions(record: &PlanRecord) -> Result<Vec<DeploymentIntendedTransaction>> {
+    record
+        .transactions
+        .iter()
+        .map(|step| {
+            let transaction = decode_transaction(step)?;
+            let key = transaction
+                .authority()
+                .try_signatory()
+                .ok_or_else(|| eyre!("deployment intent requires its exact native signatory"))?;
+            let (_, bytes) = key.try_to_bytes()?;
+            Ok(DeploymentIntendedTransaction {
+                name: step.name.clone(),
+                transaction_hash: hex::encode(transaction.hash().as_ref()),
+                entrypoint_kind: "External".to_owned(),
+                authority: transaction.authority().clone(),
+                signer_public_key_hex: hex::encode(bytes),
+                executable: transaction.instructions().clone(),
+                metadata: transaction.metadata().clone(),
+                fee_payment: transaction.fee_payment_intent().clone(),
+            })
+        })
+        .collect()
 }
 #[derive(Clone, Debug, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -472,6 +526,23 @@ impl DeploymentService {
             .map_err(DeploymentError::Journal)?;
         self.validate_plan(&record)?;
         Ok(record.preflight)
+    }
+
+    /// Authenticate and decode retained signed intents without signing, submission or writes.
+    ///
+    /// # Errors
+    /// Rejects altered plans, unsafe storage or a different native network, authority or key.
+    pub fn retained_intended_transactions(
+        &self,
+        journal_dir: &Path,
+    ) -> DeploymentResult<Vec<DeploymentIntendedTransaction>> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let journal = Journal::open(journal_dir, false).map_err(DeploymentError::Journal)?;
+        let record: PlanRecord = journal
+            .read("plan.json")
+            .map_err(DeploymentError::Journal)?;
+        self.validate_plan(&record)?;
+        intended_transactions(&record).map_err(DeploymentError::Journal)
     }
 
     /// Verify a completed deployment still names its current alias and exact stored artifact.

@@ -209,7 +209,7 @@ def test_native_instruction_round_trip_uses_current_extension() -> None:
 
     wires = _minimal_wires()
     assert NativeInstruction is not None
-    instructions = [wire.to_instruction() for wire in wires.values()]
+    instructions = [wire.to_instruction(chain_discriminant=753) for wire in wires.values()]
     assert [instruction.wire_id() for instruction in instructions] == [
         wire.wire_id for wire in wires.values()
     ]
@@ -246,7 +246,9 @@ def test_commitments_and_nullifiers_accept_exact_canonical_pasta_boundaries(scal
     assert KaigiParticipantNullifierV1(raw).digest == raw
 
 
-@pytest.mark.parametrize("scalar", [_PASTA_FP_MODULUS, _PASTA_FP_MODULUS + 1, (1 << 255), (1 << 256) - 1])
+@pytest.mark.parametrize(
+    "scalar", [_PASTA_FP_MODULUS, _PASTA_FP_MODULUS + 1, (1 << 255), (1 << 256) - 1]
+)
 def test_scalar_outputs_reject_out_of_field_values_without_reduction(scalar: int) -> None:
     raw = bytearray(scalar.to_bytes(32, "little"))
     original = bytes(raw)
@@ -325,7 +327,9 @@ def test_usage_scalar_preserves_raw_pasta_bytes_without_hash_marker_conversion()
     assert scalar == raw
 
 
-def test_private_leave_builder_preserves_the_complete_wire_quartet(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_private_leave_builder_preserves_the_complete_wire_quartet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     artifacts = {
         "call_id": KaigiIdV1(**_FIXTURE["call_id"]),
         "participant": _FIXTURE["accounts"][0],
@@ -337,8 +341,8 @@ def test_private_leave_builder_preserves_the_complete_wire_quartet(monkeypatch: 
     expected = encode_leave_kaigi_instruction_v1(**artifacts)
     # Check the wrapper hands the complete wire to the native boundary; native
     # proof acceptance remains the Core verifier's responsibility.
-    monkeypatch.setattr(KaigiInstructionWireV1, "to_instruction", lambda wire: wire)
-    assert build_leave_kaigi_instruction(**artifacts) == expected
+    monkeypatch.setattr(KaigiInstructionWireV1, "to_instruction", lambda wire, *, chain_discriminant: wire if chain_discriminant == 753 else pytest.fail("wrong selected chain"))
+    assert build_leave_kaigi_instruction(**artifacts, chain_discriminant=753) == expected
 
 
 def test_privacy_artifacts_are_complete_nonempty_and_mode_safe() -> None:
@@ -495,7 +499,9 @@ def test_identity_codec_preserves_every_rust_controller_fixture() -> None:
         wire = encode_create_kaigi_instruction_v1(
             call_id=KaigiIdV1(**_FIXTURE["call_id"]), host=literal
         )
-        assert wire.to_instruction().to_norito_bytes() == wire.to_norito_bytes()
+        assert (
+            wire.to_instruction(chain_discriminant=753).to_norito_bytes() == wire.to_norito_bytes()
+        )
 
 
 def test_identity_codec_rejects_degenerate_ed25519() -> None:
@@ -527,7 +533,7 @@ def test_identity_comparison_uses_controllers_across_display_prefixes() -> None:
     wire = encode_create_kaigi_instruction_v1(
         call_id=KaigiIdV1(**_FIXTURE["call_id"]), host=first, billing_account=second
     )
-    assert wire.to_instruction().to_norito_bytes() == wire.to_norito_bytes()
+    assert wire.to_instruction(chain_discriminant=753).to_norito_bytes() == wire.to_norito_bytes()
     with pytest.raises(ValueError, match="duplicate relays"):
         KaigiRelayManifestV1(
             [

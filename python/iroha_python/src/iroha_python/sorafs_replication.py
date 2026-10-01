@@ -21,6 +21,8 @@ _HEX_DIGITS = frozenset("0123456789abcdef")
 _REPLICATION_ORDER_SCHEMA = hashlib.sha256(
     b"norito:v1:type-name\0sorafs_manifest::capacity::ReplicationOrderV1"
 ).digest()[:16]
+
+
 class _NoritoReader:
     def __init__(self, payload: bytes, context: str):
         self.payload = payload
@@ -302,7 +304,7 @@ class IssueReplicationOrderInstruction:
             }
         }
 
-    def to_instruction(self) -> Any:
+    def to_instruction(self, *, chain_discriminant: int) -> Any:
         """Create the SDK's native `Instruction` value."""
 
         from .crypto import _native_issue_replication_order
@@ -313,6 +315,7 @@ class IssueReplicationOrderInstruction:
             self.issued_epoch,
             self.deadline_epoch,
             self.musubi_archive,
+            chain_discriminant=chain_discriminant,
         )
 
     @classmethod
@@ -565,7 +568,7 @@ class CompleteReplicationOrderInstruction:
             }
         }
 
-    def to_instruction(self) -> Any:
+    def to_instruction(self, *, chain_discriminant: int) -> Any:
         """Create the SDK's native `Instruction` value."""
 
         from .crypto import _native_complete_replication_order
@@ -577,6 +580,7 @@ class CompleteReplicationOrderInstruction:
             self.expected_authority.to_payload(),
             self.expected_assignment_revision,
             self.finalized_anchor.to_payload(),
+            chain_discriminant=chain_discriminant,
         )
 
     @classmethod
@@ -648,14 +652,13 @@ class ExpireReplicationOrderInstruction:
             }
         }
 
-    def to_instruction(self) -> Any:
+    def to_instruction(self, *, chain_discriminant: int) -> Any:
         """Create the SDK's native `Instruction` value."""
 
         from .crypto import _native_expire_replication_order
 
         return _native_expire_replication_order(
-            self.order_id,
-            self.expiration_epoch,
+            self.order_id, self.expiration_epoch, chain_discriminant=chain_discriminant
         )
 
     @classmethod
@@ -713,6 +716,8 @@ def build_issue_replication_order_instruction(
     issued_epoch: int,
     deadline_epoch: int,
     musubi_archive: str | None = None,
+    *,
+    chain_discriminant: int,
 ) -> Any:
     """Build a native `IssueReplicationOrder` instruction."""
 
@@ -722,7 +727,7 @@ def build_issue_replication_order_instruction(
         issued_epoch,
         deadline_epoch,
         musubi_archive,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_complete_replication_order_instruction(
@@ -732,6 +737,8 @@ def build_complete_replication_order_instruction(
     expected_authority: ProviderIngestCompletionAuthorityV1,
     expected_assignment_revision: int,
     finalized_anchor: ProviderIngestFinalizedAnchorV1,
+    *,
+    chain_discriminant: int,
 ) -> Any:
     """Build the native six-field provider-specific completion instruction."""
 
@@ -742,19 +749,18 @@ def build_complete_replication_order_instruction(
         expected_authority,
         expected_assignment_revision,
         finalized_anchor,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 def build_expire_replication_order_instruction(
-    order_id: str,
-    expiration_epoch: int,
+    order_id: str, expiration_epoch: int, *, chain_discriminant: int
 ) -> Any:
     """Build a native `ExpireReplicationOrder` instruction."""
 
     return ExpireReplicationOrderInstruction(
         order_id,
         expiration_epoch,
-    ).to_instruction()
+    ).to_instruction(chain_discriminant=chain_discriminant)
 
 
 __all__ = [

@@ -82,7 +82,7 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
     }
     let cancelled = Arc::new(AtomicBool::new(false));
     let readiness_cancelled = Arc::clone(&cancelled);
-    let prepared = retained.prepared;
+    let prepared = retained.prepared.clone();
     let readiness_prepared = prepared.clone();
     let progress = Arc::new(readiness::Progress::default());
     let readiness_progress = Arc::clone(&progress);
@@ -107,6 +107,21 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                 match request.action.as_str() {
                     "status" => {
                         let _ = connection.reply(&status);
+                    }
+                    action if action.starts_with("startup_receipt:") => {
+                        if status.phase == ManagedPhase::Ready
+                            && !processes.any_exited()?
+                            && let Some(challenge) = action.strip_prefix("startup_receipt:")
+                            && let Ok(receipt) = startup_receipt::capture(
+                                store.root(),
+                                &directory,
+                                &retained,
+                                challenge,
+                                &processes.live_children()?,
+                            )
+                        {
+                            let _ = connection.reply(&receipt);
+                        }
                     }
                     "attachment_start" => {
                         if status.phase == ManagedPhase::Ready
@@ -249,6 +264,7 @@ fn same_token(left: &str, right: &str) -> bool {
 #[derive(Default)]
 struct PeerProcesses {
     children: Vec<Child>,
+    launch_argv: Vec<Vec<String>>,
 }
 
 impl PeerProcesses {
@@ -269,8 +285,17 @@ impl PeerProcesses {
                 .stdin(Stdio::from(ownership.try_clone()?))
                 .stdout(log.try_clone()?)
                 .stderr(log);
-            self.children
-                .push(spawn_with_launch_fence(directory, index, &mut command)?);
+            let child = spawn_with_launch_fence(directory, index, &mut command)?;
+            self.children.push(child);
+            let argv = std::iter::once(command.get_program())
+                .chain(command.get_args())
+                .map(|part| {
+                    part.to_str().map(str::to_owned).ok_or_else(|| {
+                        Error::Invalid("managed startup argv is not canonical UTF-8".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            self.launch_argv.push(argv);
         }
         Ok(())
     }
@@ -282,6 +307,20 @@ impl PeerProcesses {
             }
         }
         Ok(false)
+    }
+
+    fn live_children(&mut self) -> Result<Vec<(u32, Vec<String>)>> {
+        if self.children.len() != 4 || self.launch_argv.len() != 4 || self.any_exited()? {
+            return Err(Error::Invalid(
+                "startup receipt requires four live owned child handles".into(),
+            ));
+        }
+        Ok(self
+            .children
+            .iter()
+            .zip(&self.launch_argv)
+            .map(|(child, argv)| (child.id(), argv.clone()))
+            .collect())
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -318,6 +357,7 @@ impl PeerProcesses {
             child.wait()?;
         }
         self.children.clear();
+        self.launch_argv.clear();
         Ok(())
     }
 }
@@ -519,9 +559,11 @@ mod tests {
         let other = Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let mut owned = PeerProcesses {
             children: vec![child],
+            launch_argv: vec![],
         };
         let mut sentinel = PeerProcesses {
             children: vec![other],
+            launch_argv: vec![],
         };
         drop(ownership);
         assert!(matches!(

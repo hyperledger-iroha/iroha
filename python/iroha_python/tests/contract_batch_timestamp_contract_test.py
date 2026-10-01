@@ -98,6 +98,7 @@ def boundary(monkeypatch):
     }})
     client = client_module.ToriiClient()
     network_id = object()
+    client._chain_discriminant = 753
     client._native_transaction_account_id = lambda value, context: value
     client._require_local_signing_context = lambda context: types.SimpleNamespace(network_id=network_id)
     client._envelope_hash_hex = lambda signed: signed.hash
@@ -133,6 +134,7 @@ def test_contract_batch_stages_timestamp_before_actual_submission(boundary, crea
     assert signed["creation_time_ms"] == (1_700_000_001_125 if creation_time_ms is None else creation_time_ms)
     assert len(boundary.clock_calls) == (1 if creation_time_ms is None else 0)
     assert signed["nonce"] is None
+    assert signed["chain_discriminant"] == boundary.client._chain_discriminant
     assert signed["ttl_ms"] == 60_000
     assert signed["entries"] == [boundary.instruction]
     assert signed["metadata"]["contract_batch_binding_v1"]["binding"] == boundary.binding

@@ -317,7 +317,8 @@ pub(super) fn build_runtime_package(
             }
             archive_transport = Some(transport.clone());
         }
-        let cache_root = platform_cache_root_v1().map_err(cache_maintenance_diagnostic_ref)?;
+        let cache_root =
+            platform_cache_root_v1().map_err(|error| cache_maintenance_diagnostic(&error))?;
         let resolver_cache = ResolverIndexCacheV1::open(&cache_root)
             .map_err(|error| Diagnostic::new(ErrorCode::CacheCorrupt, error.to_string()))?;
         let cached = if previous.is_some() {

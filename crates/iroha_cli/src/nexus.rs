@@ -35,6 +35,9 @@ use self::private_settlement_online_auditor::{
 };
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Prepare, inspect, dispatch and recover an exact owner-bound catalog transition.
+    #[command(subcommand)]
+    CatalogTransition(CatalogTransitionCommand),
     /// Show governance manifest status per lane
     LaneReport(LaneReportArgs),
     /// Inspect public-lane validator lifecycle and stake state
@@ -43,6 +46,22 @@ pub enum Command {
     /// Coordinate and inspect atomic private cross-dataspace settlement
     #[command(subcommand)]
     PrivateSettlement(PrivateSettlementCommand),
+}
+#[derive(clap::Subcommand, Debug)]
+pub enum CatalogTransitionCommand {
+    Prepare(CatalogTransitionArgs),
+    Inspect(CatalogTransitionArgs),
+    Submit(CatalogTransitionArgs),
+    Resume(CatalogTransitionArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CatalogTransitionArgs {
+    /// Closed current native NexusCatalogTransitionV1 request with all expected roots/owners.
+    #[arg(long, value_name = "PATH")]
+    pub transition: PathBuf,
+    #[command(flatten)]
+    pub bounds: crate::parameter_prepared::Bounds,
 }
 #[derive(clap::Args, Debug, Default)]
 pub struct LaneReportArgs {
@@ -292,6 +311,21 @@ pub struct PublicLaneStakeArgs {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Command::CatalogTransition(command) => {
+                use crate::parameter_prepared::{Action, read_json, run_parameter};
+                let (action, args) = match command {
+                    CatalogTransitionCommand::Prepare(args) => (Action::Prepare, args),
+                    CatalogTransitionCommand::Inspect(args) => (Action::Inspect, args),
+                    CatalogTransitionCommand::Submit(args) => (Action::Submit, args),
+                    CatalogTransitionCommand::Resume(args) => (Action::Resume, args),
+                };
+                let transition: iroha::data_model::nexus::NexusCatalogTransitionV1 =
+                    read_json(&args.transition, "original native catalog transition")?;
+                let parameter = iroha::data_model::parameter::Parameter::Custom(
+                    transition.into_custom_parameter()?,
+                );
+                run_parameter(context, action, parameter, &args.bounds)
+            }
             Command::LaneReport(args) => lane_report(context, &args),
             Command::PublicLane(cmd) => match cmd {
                 PublicLaneCommand::Validators(args) => public_lane_validators(context, &args),

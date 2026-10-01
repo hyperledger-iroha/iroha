@@ -1725,6 +1725,8 @@ fn catalog_fixture(
         lanes,
     )?;
     let runtime = NexusRuntimeCatalogV1 {
+        retired_dataspaces: Vec::new(),
+        retired_lanes: Vec::new(),
         version: NexusRuntimeCatalogV1::VERSION,
         baseline_dataspaces_hash: dataspace_catalog_hash(&first.configured_dataspace_catalog),
         baseline_manifests_hash: manifests_hash,

@@ -101,9 +101,31 @@ async fn handle(
                     norito::canonical_frame_len(tip.block().as_ref()).map(|tip_len| (len, tip_len))
                 })
                 .map_err(|_| unavailable())?;
+            let genesis_committee = &genesis.commitment().schedule.current.committee;
+            let tip_committee = &tip.commitment().schedule.current.committee;
+            let genesis_storage = native_committee_original_bytes(
+                genesis_committee.len(),
+                genesis_committee.iter().map(|member| {
+                    (
+                        member.validator.public_key(),
+                        member.proof_of_possession.as_slice(),
+                    )
+                }),
+            )?;
+            let tip_storage = native_committee_original_bytes(
+                tip_committee.len(),
+                tip_committee.iter().map(|member| {
+                    (
+                        member.validator.public_key(),
+                        member.proof_of_possession.as_slice(),
+                    )
+                }),
+            )?;
             let proof_bytes = proof_bytes
                 .0
                 .checked_add(proof_bytes.1)
+                .and_then(|len| len.checked_add(genesis_storage))
+                .and_then(|len| len.checked_add(tip_storage))
                 .and_then(|len| len.checked_add(16 * 1024))
                 .ok_or_else(capacity)?;
             let _proof_charge = budget
@@ -175,12 +197,31 @@ pub(super) fn capacity() -> Error {
         iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
     ))
 }
-
 use iroha_torii_shared::resource_names_state::{
     NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1, NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1,
     NativeAssetAliasBindingOriginalRefV1, NativeDataspaceSnsOriginalRefV1,
     NativeResourceNamesStateRefV1,
 };
+
+/// Exact preallocated backing for retained native alias originals.
+struct AliasOriginalWriter(iroha_allocation::ChargedBuffer<u8>);
+impl std::io::Write for AliasOriginalWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.0.capacity().saturating_sub(self.0.as_slice().len()) {
+            return Err(std::io::Error::other(
+                "native alias original length changed",
+            ));
+        }
+        for byte in bytes {
+            self.0.push_reserved(*byte);
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 const RESOURCE_NAMES_ROUTE: &str = "/v1/ledger/resource-names/{challenge}";
 
 /// Full-original carrier requires real native signed read authority; API-token access alone never suffices.
@@ -331,18 +372,15 @@ async fn handle_resource_names_inner(
                             if length > 1024 * 1024 {
                                 return Err("native alias original exceeds bound".into());
                             }
-                            let wire = encode(
-                                *value,
-                                ResponseFormat::Norito,
-                                1024 * 1024,
-                                &budget,
-                                unavailable,
-                            )
-                            .map_err(|error| error.to_string())?;
-                            if wire.as_ref().len() != length {
+                            let buffer = iroha_allocation::ChargedBuffer::new(length, &budget)
+                                .map_err(|error| error.to_string())?;
+                            let mut writer = AliasOriginalWriter(buffer);
+                            norito::core::write_canonical_to_writer(*value, &mut writer)
+                                .map_err(|e| e.to_string())?;
+                            if writer.0.as_slice().len() != length {
                                 return Err("native alias original length changed".into());
                             }
-                            wires.push_reserved(wire);
+                            wires.push_reserved(writer.0);
                         }
                         let mut aliases =
                             iroha_allocation::ChargedBuffer::new(originals.len(), &budget)
@@ -350,7 +388,7 @@ async fn handle_resource_names_inner(
                         for ((key, _), wire) in originals.iter().zip(wires.as_slice()) {
                             aliases.push_reserved(NativeAssetAliasBindingOriginalRefV1::new(
                                 key,
-                                wire.as_ref(),
+                                wire.as_slice(),
                             ));
                         }
                         let mut sns = iroha_allocation::ChargedBuffer::new(names.len(), &budget)
@@ -475,6 +513,19 @@ pub(super) fn native_committee_original_bytes<'a>(
 #[cfg(test)]
 mod resource_names_route_tests {
     use super::*;
+    #[test]
+    fn alias_original_writer_refuses_growth_and_keeps_exact_budget_charge() {
+        use std::io::Write as _;
+        let budget = AllocationBudget::new(3);
+        let mut writer =
+            AliasOriginalWriter(iroha_allocation::ChargedBuffer::new(3, &budget).unwrap());
+        writer.write_all(b"abc").unwrap();
+        assert!(writer.write_all(b"d").is_err());
+        assert_eq!(writer.0.as_slice(), b"abc");
+        assert_eq!(budget.reserved_bytes(), 3);
+        drop(writer);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
     #[test]
     fn outer_names_success_and_error_responses_keep_private_no_store() {
         for response in [

@@ -16226,12 +16226,24 @@ pub mod isi {
         if definition.balance_scope_policy() == AssetBalancePolicy::Global {
             return Ok(());
         }
-        // TODO: Carry balance scope through sponsor vault keys, queue reservations, relay leases,
-        // and settlement accounting before permitting DataspaceRestricted sponsorship.
+        // Cross-dataspace relay allocation still admits only global assets. Private-root
+        // vaults use direct execution in their own World and never create parent relay leases.
         Err(invalid_fee_sponsor_program(format!(
             "{operation} requires global-balance fee assets; `{}` is DataspaceRestricted",
             definition.id()
         )))
+    }
+    fn ensure_local_fee_sponsor_asset(
+        definition: &AssetDefinition,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        crate::executor::private_fees::sponsor_asset_scope(
+            &state_transaction.world,
+            definition.id(),
+            state_transaction.current_dataspace_id,
+        )
+        .map_err(|error| invalid_fee_sponsor_program(error.reason()))?;
+        Ok(())
     }
     fn ensure_fee_sponsor_program_owner(
         authority: &AccountId,
@@ -16442,7 +16454,7 @@ pub mod isi {
                         budget.asset_definition_id
                     ))
                 })?;
-            ensure_global_fee_sponsor_asset(definition, "fee sponsor program revision")?;
+            ensure_local_fee_sponsor_asset(definition, state_transaction)?;
             if budget.per_transaction.is_zero()
                 || budget.per_block.is_zero()
                 || budget.per_program_epoch.is_zero()
@@ -16933,7 +16945,7 @@ pub mod isi {
                 .get(self.asset_definition_id())
                 .cloned()
                 .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor vault asset not found"))?;
-            ensure_global_fee_sponsor_asset(&definition, "fee sponsor vault funding")?;
+            ensure_local_fee_sponsor_asset(&definition, state_transaction)?;
             if state_transaction
                 .world
                 .accounts
@@ -17045,6 +17057,7 @@ pub mod isi {
                 .get(self.asset_definition_id())
                 .cloned()
                 .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor vault asset not found"))?;
+            ensure_local_fee_sponsor_asset(&definition, state_transaction)?;
             let key = FeeSponsorVaultKey {
                 program_id: program_id.clone(),
                 asset_definition_id: self.asset_definition_id().clone(),
@@ -18385,7 +18398,7 @@ pub mod isi {
                     custom,
                 ) {
                     Ok(Some(payload)) => state_transaction
-                        .stage_consensus_catalog_transition(&payload)
+                        .stage_consensus_catalog_transition(_authority, &payload)
                         .map_err(|err| {
                             InstructionExecutionError::InvalidParameter(
                                 InvalidParameterError::SmartContract(format!(
@@ -18420,6 +18433,7 @@ pub mod isi {
                                     policy.autoscale.iter().map(|autoscale| autoscale.dataspace),
                                 ),
                             )?;
+                            crate::sumeragi::private_dataspace::ensure_native_policy_preserves_retired_storage(&state_transaction.world, &policy)?;
                             crate::sumeragi::lanes::step::validate_policy(&policy)
                         })
                         .map_err(|error| {

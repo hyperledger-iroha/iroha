@@ -5,7 +5,8 @@
 //! native pre-tail cut and output keeps the aggregate finite pool through egress.
 
 use super::*;
-use crate::kagemusha_state::{capacity, encode, native_committee_original_bytes};
+use crate::kagemusha_state::{capacity, native_committee_original_bytes};
+use crate::native_projection_response::encode;
 use iroha_core::{
     state::{AllocationBudget, StateReadOnly},
     sumeragi::certified_chain::{CertifiedChain, QcVerification},
@@ -297,9 +298,9 @@ async fn handle(
                                 snapshot,
                                 family,
                             );
-                            encode(&payload, format, max_response, &budget).map_err(|_| {
-                                "native authority account serialization refused".to_owned()
-                            })
+                            encode(&payload, format, max_response, &budget, unavailable).map_err(
+                                |_| "native authority account serialization refused".to_owned(),
+                            )
                         },
                     )
                     .map_err(|_| unavailable())?,
@@ -353,9 +354,9 @@ async fn handle(
                                 snapshot,
                                 family,
                             );
-                            encode(&payload, format, max_response, &budget).map_err(|_| {
-                                "native authority fee serialization refused".to_owned()
-                            })
+                            encode(&payload, format, max_response, &budget, unavailable).map_err(
+                                |_| "native authority fee serialization refused".to_owned(),
+                            )
                         },
                     )
                     .map_err(|_| unavailable())?,
