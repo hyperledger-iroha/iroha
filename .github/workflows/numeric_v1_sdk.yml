@@ -160,6 +160,7 @@ jobs:
         run: >-
           ./gradlew :core-jvm:test
           --tests org.hyperledger.iroha.sdk.client.ContractManifestTest
+          --tests org.hyperledger.iroha.sdk.client.ContractManifestJavaConsumerTest
           --tests org.hyperledger.iroha.sdk.numeric.NumericV1Test
           --tests org.hyperledger.iroha.sdk.core.model.instructions.InstructionQuantityTest
           --tests org.hyperledger.iroha.sdk.nexus.UaidJsonParserQuantityTest
@@ -183,7 +184,7 @@ jobs:
       - run: chmod +x ./gradlew
       - name: Verify Java Numeric V1, quantity builders, and manifest policies
         env:
-          ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.client.ContractManifestTests,org.hyperledger.iroha.android.client.HttpClientTransportTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.nexus.UaidJsonParserTests,org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests
+          ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.client.HttpClientTransportTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.nexus.UaidJsonParserTests,org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests
         run: >-
           ./gradlew :core:test
           --tests org.hyperledger.iroha.android.GradleHarnessTests

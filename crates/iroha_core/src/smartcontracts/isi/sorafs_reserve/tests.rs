@@ -168,12 +168,21 @@ fn transact(
     now_unix: u64,
     operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
 ) -> Result<(), InstructionExecutionError> {
+    let invocation = Hash::new([height.to_le_bytes(), now_unix.to_le_bytes()].concat());
+    transact_at_original_invocation(state, height, now_unix, invocation, operation)
+}
+// The original local component invocation must enter the finite pool before
+// State is borrowed. This World-only fixture does not publish a Network carrier.
+fn transact_at_original_invocation(
+    state: &mut State,
+    height: u64,
+    now_unix: u64,
+    invocation: Hash,
+    operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
+) -> Result<(), InstructionExecutionError> {
     let header = block_header_at(height, now_unix);
     let mut block = state.block(header.clone());
-    let mut transaction = block.transaction();
-    transaction.tx_call_hash = Some(Hash::new(
-        [height.to_le_bytes(), now_unix.to_le_bytes()].concat(),
-    ));
+    let mut transaction = block.transaction_for_fastpq_testing(invocation);
     operation(&mut transaction)?;
     transaction.apply();
     block
@@ -194,6 +203,81 @@ fn reserve_asset_balance(state: &State, owner: &AccountId) -> XorQuantity {
         })
 }
 #[test]
+fn reserve_component_funding_refuses_an_unretained_original_invocation() {
+    let governance = account(&keypair(0xE1));
+    let provider = account(&keypair(0xE2));
+    let custody = account(&keypair(0xE3));
+    let treasury = account(&keypair(0xE4));
+    let mut state = state_fixture(&governance, &provider, &custody, &treasury);
+    let configured = policy(1, None, custody.clone(), treasury, &governance);
+    let policy_digest = configured.digest().expect("original reserve policy");
+    let invocation = Hash::prehashed([0xE5; Hash::LENGTH]);
+    let request_id = [0xE6; 32];
+    let prepare = |transaction: &mut StateTransaction<'_, '_>| {
+        SetSorafsReservePolicy::new(configured.clone()).execute(&governance, transaction)?;
+        RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
+            .execute(&governance, transaction)?;
+        RequestSorafsReserveMovement::new(
+            request_id,
+            PROVIDER_ID,
+            ReserveMovementKindV1::TopUp,
+            xor_micro(1),
+            1,
+            policy_digest,
+        )
+        .execute(&provider, transaction)
+    };
+    let decision = DecideSorafsReserveMovement::new(
+        request_id,
+        2,
+        policy_digest,
+        true,
+        "fund the original component invocation".to_owned(),
+    );
+    {
+        let mut block = state.block(block_header_at(1, NOW));
+        let mut transaction = block.transaction();
+        transaction.tx_call_hash = Some(invocation);
+        prepare(&mut transaction).expect("prepare the unchanged movement");
+        let provider_before =
+            read_provider(transaction.world(), PROVIDER_ID).expect("read original provider");
+        let movement_before =
+            read_movement(transaction.world(), request_id).expect("read original movement");
+        let error = decision
+            .clone()
+            .execute(&governance, &mut transaction)
+            .expect_err("assigning a hash cannot invent its finite source owner");
+        assert!(
+            error
+                .to_string()
+                .contains("FASTPQ source has no retained producer invocation")
+        );
+        assert_eq!(
+            read_provider(transaction.world(), PROVIDER_ID).expect("read refused provider"),
+            provider_before
+        );
+        assert_eq!(
+            read_movement(transaction.world(), request_id).expect("read refused movement"),
+            movement_before
+        );
+    }
+    assert_eq!(
+        reserve_asset_balance(&state, &provider),
+        xor_micro(100_000_000)
+    );
+    assert!(reserve_asset_balance(&state, &custody).is_zero());
+    transact_at_original_invocation(&mut state, 1, NOW, invocation, |transaction| {
+        prepare(transaction)?;
+        decision.execute(&governance, transaction)
+    })
+    .expect("the same original invocation funds native reserve custody");
+    assert_eq!(
+        reserve_asset_balance(&state, &provider),
+        xor_micro(99_999_999)
+    );
+    assert_eq!(reserve_asset_balance(&state, &custody), xor_micro(1));
+}
+#[test]
 fn domain_retirement_rejects_active_sorafs_reserve_backing_atomically() {
     let governance = account(&keypair(0x71));
     let provider = account(&keypair(0x72));
@@ -201,9 +285,38 @@ fn domain_retirement_rejects_active_sorafs_reserve_backing_atomically() {
     let treasury = account(&keypair(0x74));
     let mut state = state_fixture(&governance, &provider, &custody, &treasury);
     transact(&mut state, 1, NOW, |transaction| {
+        let domain_id = DomainId::try_new("reserve", "universal").expect("reserve asset domain");
+        // The hashed definition identity does not establish domain ownership.
+        // This teardown fixture explicitly owns the backing definition in the
+        // domain and uses the canonical World mutator to retain both indexes.
+        let definition_id = asset_definition();
+        transaction.world.insert_asset_definition_entry(
+            definition_id.clone(),
+            AssetDefinition::numeric(
+                definition_id.clone(),
+                "XOR".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            )
+            .build(&governance),
+        );
+        assert_eq!(
+            transaction
+                .world
+                .asset_definition_domains
+                .get(&definition_id),
+            Some(&domain_id)
+        );
+        assert!(
+            transaction
+                .world
+                .domain_asset_definitions
+                .get(&domain_id)
+                .expect("original domain definition index")
+                .contains(&definition_id)
+        );
         let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
         SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
-        let domain_id = DomainId::try_new("reserve", "universal").expect("reserve asset domain");
         let error = Unregister::domain(domain_id.clone())
             .execute(&governance, transaction)
             .expect_err("active SoraFS reserve backing must survive domain retirement");
@@ -238,100 +351,109 @@ fn reserve_custody_rejects_user_debits_but_allows_exact_approved_withdrawal() {
     let top_up = xor_micro(300_000_000);
     let slash_lien = xor_micro(10_000_000);
     let withdrawal = xor_micro(1);
-    transact(&mut state, 1, NOW, |transaction| {
-        transaction.tx_call_hash = Some(Hash::prehashed([0x52; Hash::LENGTH]));
-        let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
-        let policy_digest = configured.digest().expect("reserve policy digest");
-        SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
-        let persisted = read_reserve_state(transaction.world())?.expect("installed reserve state");
-        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
-            &persisted,
-            "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1",
-        );
-        let frame = encode_state(&persisted, "reserve state")?;
-        assert_eq!(decode_reserve_state(&frame)?, persisted);
+    transact_at_original_invocation(
+        &mut state,
+        1,
+        NOW,
+        Hash::prehashed([0x52; Hash::LENGTH]),
+        |transaction| {
+            let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
+            let policy_digest = configured.digest().expect("reserve policy digest");
+            SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
+            let persisted =
+                read_reserve_state(transaction.world())?.expect("installed reserve state");
+            crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+                &persisted,
+                "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1",
+            );
+            let frame = encode_state(&persisted, "reserve state")?;
+            assert_eq!(decode_reserve_state(&frame)?, persisted);
 
-        RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
+            RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
+                .execute(&governance, transaction)?;
+            RequestSorafsReserveMovement::new(
+                [0x53; 32],
+                PROVIDER_ID,
+                ReserveMovementKindV1::TopUp,
+                top_up.clone(),
+                1,
+                policy_digest,
+            )
+            .execute(&provider, transaction)?;
+            DecideSorafsReserveMovement::new(
+                [0x53; 32],
+                2,
+                policy_digest,
+                true,
+                "fund native reserve custody".to_owned(),
+            )
             .execute(&governance, transaction)?;
-        RequestSorafsReserveMovement::new(
-            [0x53; 32],
-            PROVIDER_ID,
-            ReserveMovementKindV1::TopUp,
-            top_up.clone(),
-            1,
-            policy_digest,
-        )
-        .execute(&provider, transaction)?;
-        DecideSorafsReserveMovement::new(
-            [0x53; 32],
-            2,
-            policy_digest,
-            true,
-            "fund native reserve custody".to_owned(),
-        )
-        .execute(&governance, transaction)?;
-        let custody_asset = AssetId::of(asset_definition(), custody.clone());
-        let transfer_error =
-            Transfer::asset_quantity(custody_asset.clone(), quantity_micro(1), provider.clone())
-                .execute(&custody, transaction)
-                .expect_err("ordinary transfer must not debit reserve custody");
-        assert!(
-            transfer_error
-                .to_string()
-                .contains("SoraFS reserve custody")
-        );
-        let burn_error = Burn::asset_quantity(quantity_micro(1), custody_asset)
+            let custody_asset = AssetId::of(asset_definition(), custody.clone());
+            let transfer_error = Transfer::asset_quantity(
+                custody_asset.clone(),
+                quantity_micro(1),
+                provider.clone(),
+            )
             .execute(&custody, transaction)
-            .expect_err("ordinary burn must not debit reserve custody");
-        assert!(burn_error.to_string().contains("SoraFS reserve custody"));
-        let account_error = Unregister::account(custody.clone())
-            .execute(&governance, transaction)
-            .expect_err("active reserve custody account must remain registered");
-        assert!(account_error.to_string().contains("SoraFS reserve custody"));
-        let definition_error = Unregister::asset_definition(asset_definition())
-            .execute(&governance, transaction)
-            .expect_err("active reserve asset definition must remain registered");
-        assert!(
-            definition_error
-                .to_string()
-                .contains("SoraFS reserve custody")
-        );
-        let mut credit = ProviderCreditRecord::new(
-            PROVIDER_ID,
-            Quantity::zero(),
-            top_up.clone().into_quantity(),
-            Quantity::zero(),
-            Quantity::zero(),
-            0,
-            0,
-            iroha_model_base::metadata::Metadata::default(),
-        );
-        credit
-            .apply_penalty(&slash_lien.clone().into_quantity(), 1)
-            .expect("apply custody-backed slash lien");
-        transaction
-            .world
-            .provider_credit_ledger
-            .insert(PROVIDER_ID, credit);
-        RequestSorafsReserveMovement::new(
-            [0x54; 32],
-            PROVIDER_ID,
-            ReserveMovementKindV1::Withdrawal,
-            withdrawal.clone(),
-            3,
-            policy_digest,
-        )
-        .execute(&provider, transaction)?;
-        DecideSorafsReserveMovement::new(
-            [0x54; 32],
-            4,
-            policy_digest,
-            true,
-            "release exact approved withdrawal".to_owned(),
-        )
-        .execute(&governance, transaction)?;
-        Ok(())
-    })
+            .expect_err("ordinary transfer must not debit reserve custody");
+            assert!(
+                transfer_error
+                    .to_string()
+                    .contains("SoraFS reserve custody")
+            );
+            let burn_error = Burn::asset_quantity(quantity_micro(1), custody_asset)
+                .execute(&custody, transaction)
+                .expect_err("ordinary burn must not debit reserve custody");
+            assert!(burn_error.to_string().contains("SoraFS reserve custody"));
+            let account_error = Unregister::account(custody.clone())
+                .execute(&governance, transaction)
+                .expect_err("active reserve custody account must remain registered");
+            assert!(account_error.to_string().contains("SoraFS reserve custody"));
+            let definition_error = Unregister::asset_definition(asset_definition())
+                .execute(&governance, transaction)
+                .expect_err("active reserve asset definition must remain registered");
+            assert!(
+                definition_error
+                    .to_string()
+                    .contains("SoraFS reserve custody")
+            );
+            let mut credit = ProviderCreditRecord::new(
+                PROVIDER_ID,
+                Quantity::zero(),
+                top_up.clone().into_quantity(),
+                Quantity::zero(),
+                Quantity::zero(),
+                0,
+                0,
+                iroha_model_base::metadata::Metadata::default(),
+            );
+            credit
+                .apply_penalty(&slash_lien.clone().into_quantity(), 1)
+                .expect("apply custody-backed slash lien");
+            transaction
+                .world
+                .provider_credit_ledger
+                .insert(PROVIDER_ID, credit);
+            RequestSorafsReserveMovement::new(
+                [0x54; 32],
+                PROVIDER_ID,
+                ReserveMovementKindV1::Withdrawal,
+                withdrawal.clone(),
+                3,
+                policy_digest,
+            )
+            .execute(&provider, transaction)?;
+            DecideSorafsReserveMovement::new(
+                [0x54; 32],
+                4,
+                policy_digest,
+                true,
+                "release exact approved withdrawal".to_owned(),
+            )
+            .execute(&governance, transaction)?;
+            Ok(())
+        },
+    )
     .expect("reserve custody flow");
     assert_eq!(
         reserve_asset_balance(&state, &custody),
@@ -368,8 +490,7 @@ fn pending_operations_survive_concurrency_and_policy_rotation() {
     let state = state_fixture(&governance, &provider, &custody, &treasury);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, NOW * 1_000, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    stx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
     let first_digest = first.digest().expect("first policy digest");
     assert!(
@@ -1884,8 +2005,8 @@ fn exact_service_authorities_and_decision_cas_fail_without_mutation() {
     let state = state_fixture(&governance, &provider, &decision, &operations);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, NOW * 1_000, 0);
     let mut block = state.block(header);
-    let mut transaction = block.transaction();
-    transaction.tx_call_hash = Some(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let mut transaction =
+        block.transaction_for_fastpq_testing(Hash::prehashed([0xA5; Hash::LENGTH]));
     let mut first = policy(1, None, decision.clone(), operations.clone(), &governance);
     first.operations_authority = operations.clone();
     first.decision_authority = decision.clone();

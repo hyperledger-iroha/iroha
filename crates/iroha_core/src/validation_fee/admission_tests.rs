@@ -361,23 +361,18 @@ fn parliament_attempt_and_transition_instructions_are_balance_neutral() {
 fn active_policy_exempts_only_private_parliament_control_transactions() {
     let deployer_key = key_pair(55);
     let deployer = AccountId::new(deployer_key.public_key().clone());
-    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        validation_fee_payout_world(&deployer),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-        "generic-testnet".parse().expect("chain id"),
-        validation_fee_test_network_id(),
+    let state = original_validation_fee_state(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        ),
     );
-    let header = BlockHeader::new(
-        std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
-            .expect("test policy effective height is non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = original_validation_fee_header(&state, TEST_POLICY_EFFECTIVE_HEIGHT);
     let mut block = state.block(header);
-    let mut state_tx = block.transaction();
+    let mut state_tx = block.transaction_for_callback_testing();
     let policy =
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
     assert!(
@@ -570,24 +565,43 @@ fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps
             .parse()
             .expect("contract address");
     let instructions: Vec<InstructionBox> = vec![
-        RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+        RegisterSmartContractBytes {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             code: Vec::new(),
         }
         .into(),
-        UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+        UploadSmartContractCodeChunk {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             total_size: 1,
             chunk_index: 0,
             chunk_count: 1,
             chunk: vec![0],
         }
         .into(),
-        FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+        FinalizeSmartContractCodeUpload {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             total_size: 1,
             chunk_count: 1,
         }
         .into(),
-        CancelSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)}.into(),
-        { let scoped_manifest = ContractManifest {
+        CancelSmartContractCodeUpload {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+        }
+        .into(),
+        {
+            let scoped_manifest = ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: None,
@@ -600,7 +614,17 @@ fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps
                 error_messages: None,
                 error_types: None,
                 provenance: None,
-            }; RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }
+            };
+            RegisterSmartContractCode {
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    scoped_manifest
+                        .code_hash
+                        .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+                ),
+                manifest: scoped_manifest,
+            }
+        }
         .into(),
         ActivateContractInstance {
             contract_address: contract_address.clone(),
@@ -648,7 +672,11 @@ fn active_policy_rejects_contract_rebinding_and_artifact_removal_steps() {
             reason: Some("attempted policy-era rebind".to_owned()),
         }
         .into(),
-        RemoveSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+        RemoveSmartContractBytes {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
             reason: Some("attempted policy-era removal".to_owned()),
         }
         .into(),
@@ -2238,22 +2266,18 @@ fn active_policy_admits_privacy_control_effects_without_granting_authority() {
 
     let deployer_key = key_pair(55);
     let deployer = account(55);
-    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        validation_fee_payout_world(&deployer),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-        "generic-testnet".parse().expect("chain id"),
-        validation_fee_test_network_id(),
+    let state = original_validation_fee_state(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        ),
     );
-    let header = BlockHeader::new(
-        std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT).expect("non-zero height"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = original_validation_fee_header(&state, TEST_POLICY_EFFECTIVE_HEIGHT);
     let mut block = state.block(header);
-    let mut state_tx = block.transaction();
+    let mut state_tx = block.transaction_for_callback_testing();
     let policy =
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
     assert!(active_policy(&state_tx).expect("active policy").is_some());
@@ -2364,22 +2388,18 @@ fn active_policy_rejects_privacy_proof_and_unreviewed_effects() {
 
     let deployer_key = key_pair(55);
     let deployer = account(55);
-    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        validation_fee_payout_world(&deployer),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-        "generic-testnet".parse().expect("chain id"),
-        validation_fee_test_network_id(),
+    let state = original_validation_fee_state(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        ),
     );
-    let header = BlockHeader::new(
-        std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT).expect("non-zero height"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = original_validation_fee_header(&state, TEST_POLICY_EFFECTIVE_HEIGHT);
     let mut block = state.block(header);
-    let mut state_tx = block.transaction();
+    let mut state_tx = block.transaction_for_callback_testing();
     let policy =
         install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
     assert!(active_policy(&state_tx).expect("active policy").is_some());

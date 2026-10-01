@@ -562,6 +562,35 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 )
             self.assertIn("Optional canonical target authentication", descriptors[name]["description"])
 
+    def test_contract_artifacts_require_exact_dataspace_and_hash(self) -> None:
+        descriptors = {record["name"]: record for record in _parse_asset(self.asset)["descriptors"]}
+        for name, suffix in (("iroha.contracts.code.get", ""), ("iroha.contracts.code.bytes.get", "/bytes")):
+            with self.subTest(name=name):
+                record = descriptors[name]
+                self.assertEqual(record["method"], "GET")
+                self.assertEqual(record["effect"], "read")
+                self.assertEqual(record["path_template"], "/v1/contracts/artifacts/{dataspace_id}/{code_hash}" + suffix)
+                schema = record["input_schema"]
+                self.assertEqual(schema["required"], ["path"])
+                self.assertIs(schema["additionalProperties"], False)
+                path = schema["properties"]["path"]
+                self.assertEqual(path["required"], ["dataspace_id", "code_hash"])
+                self.assertIs(path["additionalProperties"], False)
+                self.assertEqual(path["properties"], {
+                    "dataspace_id": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$"},
+                    "code_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                })
+        for old, new in (
+            (b'/v1/contracts/artifacts/{dataspace_id}/{code_hash}', b'/v1/contracts/code/{code_hash}'),
+            (b'"dataspace_id",', b''),
+            (b'^(0|[1-9][0-9]{0,19})$', b'^[0-9]+$'),
+            (b'^[0-9a-f]{64}$', b'^[0-9a-fA-F]{64}$'),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, self.asset)
+                with self.assertRaises(GuardError):
+                    validate(self.source, self.asset.replace(old, new, 1))
+
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (
             (
@@ -600,6 +629,7 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
         )
         for mutated in mutations:
             with self.subTest(digest=hashlib.sha256(mutated).hexdigest()):
+                self.assertNotEqual(mutated, self.asset)
                 with self.assertRaises(GuardError):
                     validate(self.source, mutated)
 

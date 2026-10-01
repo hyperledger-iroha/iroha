@@ -22,13 +22,26 @@ non-shipping adapter, gated by `iroha-core-tests`, still serves the protected
 `integration_tests/tests/sumeragi_npos_committee_transition.rs` consumer. Its
 source TODO records the remaining direct-owner migration.
 
-Scoped continuation runs passed the IVM/surface/toolchain library suites,
-timed-OVN owner tests, P2P and moved compiler/model tests, and the source/fixture and
-dependency-boundary guards. These results belong to their recorded source
-snapshots. Concurrent consensus/schema changes and the final CLI manifest
-refinement require current-source checks; earlier passes do not qualify a
-merged release candidate. Exact commands, exit codes and logs belong in the
-PR's Testing section or CI artifacts.
+Scoped continuation runs cover the IVM/surface/toolchain, timed-OVN, P2P,
+moved compiler/model and all six Norito grouped harnesses. A fresh privacy-owner
+harness passes 39 targeted repair and production controls; its registry preserves
+all 2,075 original test names and their 40 ignored cases. Core authority and
+bridge controls retain their recorded passes and source bindings.
+
+Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
+The native consumers use the state-free owners without Core/P2P in their normal
+graphs. The target inventory admits 98 declared binaries and 23 defaults;
+certificate and raw-attestation encoders require explicit `dev-tools`. Recorded
+IVM-only, feature-hygiene and dependency-boundary guards pass, as does the
+retired-codec pattern check. The merged all-targets check stopped when a new
+ordinary Guard composition source was unavailable during compilation. Subsequent
+Core ZK and metadata checks exposed issuer-type and API/fixture compilation
+errors. Source repairs are applied; fresh compiler and focused-test validation
+remain pending. The resolved SDK merge remains externally owned. A merge-free
+workspace retry, executable metadata freshness and observational warm timings
+remain pending. Foreign source and HEAD changes qualify each result; workspace lint
+and panic-inventory closure remain separate.
+Exact commands, exit codes and logs belong in PR Testing or CI artifacts.
 
 Final moved-model controls must enable `transparent_api`, because several
 preserved block assertions are feature-gated. Reuse the warm `finish` lane
@@ -37,10 +50,13 @@ sequentially:
 ```sh
 scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p iroha_data_model --features transparent_api --lib block::tests
 scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p iroha_data_model --features transparent_api --lib proof::tests
-scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p norito --lib --test norito_group_01 --test norito_group_02 --test norito_group_03
+scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p norito --lib \
+  --test norito_group_01 --test norito_group_02 --test norito_group_03 \
+  --test norito_group_04 --test norito_group_05 --test norito_group_06
 ```
 
-Norito disables automatic integration-test discovery. The grouped harnesses
+Norito disables automatic integration-test discovery, so validation names all
+six ordinary grouped harnesses explicitly. The grouped harnesses
 cover adaptive/default flags, flag-state restoration, derive codecs, header
 rejection and bare/current-payload framing. Preserve source negative controls
 when validating their source readers.
@@ -48,7 +64,9 @@ when validating their source readers.
 Compiler-memory limits remain the pinned-runner qualification in roadmap A5.
 Include newly extracted owners and libraries in that measurement. Dependency
 inventory costs describe the selected source graph without speculative growth
-headroom; working-tree observations do not qualify a staged subset. Warm
-timings must identify source, toolchain and competing build load before they
-can establish improvement over the recovered baseline. The executable metadata
-freshness measurement and final merged validation remain pending.
+headroom; working-tree observations do not qualify a staged subset. Compare
+warm timings with the recovered baseline while recording source, toolchain and
+competing build load. Comparisons across changing source or load are
+observational; attribute improvement only to measurements that isolate the
+optimization. Executable metadata freshness, observational warm timings and final merged
+validation remain under qualification.

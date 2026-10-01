@@ -4,7 +4,6 @@
 use super::tests::cache_canonical_test_transaction_set;
 use super::*;
 use crate::{
-    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::{
@@ -16,13 +15,13 @@ use crate::{
     },
     state::{
         ExecutionOutputSealMetadata, GovernanceLockCustody, GovernanceLockRecord,
-        GovernanceLocksForReferendum, State, TransactionsBlockError,
+        GovernanceLocksForReferendum, State, StateReadOnly, TransactionsBlockError, World,
     },
 };
 use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
 use iroha_data_model::{
     NetworkId,
-    account::Account,
+    account::{Account, AccountId},
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
@@ -62,25 +61,14 @@ fn fixture_with_effects(
     pipeline_transfer: bool,
     fee_and_protocol: bool,
 ) -> (State, SignedBlock, TriggerId, TriggerId) {
-    // Producer inputs need committed root authority before native routing.
-    // The explicit component genesis fixture keeps missing metadata fail-closed.
+    // The maintained signed-genesis owner establishes the original native root.
+    // Callback fixtures are registered only after genesis, so their exact once
+    // actions belong to this successor rather than the bootstrap carrier.
     let mut state = State::new_for_testing(
-        crate::sumeragi::lanes::routing::test_support::world(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ),
+        World::new(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let nexus = state.nexus_snapshot();
-    let manifests = Arc::new(LaneManifestRegistry::from_config(
-        &nexus.lane_catalog,
-        &nexus.governance,
-        &nexus.registry,
-    ));
-    manifests
-        .validate_materialized_authority_for_catalog(&nexus.lane_catalog, &nexus.governance)
-        .expect("fixture manifest authority retains its frozen source");
-    state.install_lane_manifests_for_testing(&manifests);
     {
         let mut parameters = state.world.parameters.block();
         let mut policy = ExecutionOutputPolicyV1::bootstrap();
@@ -125,10 +113,70 @@ fn fixture_with_effects(
             volatility: GasVolatility::Stable,
         }];
     }
+    let nexus = state.nexus_snapshot();
+    let genesis_parameters = {
+        let parameters = state.world.parameters.view();
+        vec![
+            Parameter::Block(BlockParameter::ExecutionOutput(
+                parameters.get().block().execution_output(),
+            )),
+            Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+                parameters.get().block().max_time_trigger_invocations(),
+            )),
+        ]
+    };
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(state.world, 0);
+    config.chain_id = state.chain_id;
+    config.pipeline = state.pipeline;
+    config.governance = Some(state.gov);
+    config.nexus = Some(nexus);
+    config.genesis_parameters = genesis_parameters;
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = crate::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+        .expect("prepare original inventory genesis");
+    let state = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished inventory State is unique"));
+    crate::sumeragi::startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        mode.into(),
+        None,
+    )
+    .expect("apply original inventory signed genesis");
+    let parent = state
+        .view()
+        .latest_block_hash()
+        .expect("original inventory genesis");
+    let genesis_time = state
+        .view()
+        .latest_block()
+        .unwrap()
+        .header()
+        .creation_time();
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state.network_id,
+        NetworkId::from_genesis_hash(prepared.genesis.block().hash())
+    );
+    assert!(crate::sumeragi::lanes::routing::committed_root_scope(&state.view().world).is_some());
     let pipeline: TriggerId = "owned_inventory_pipeline".parse().unwrap();
     let time: TriggerId = "owned_inventory_time".parse().unwrap();
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut tx = setup.transaction();
+    // Keep component registration at the actual retained parent height. The
+    // height-2 carrier below observes these scheduled actions without publishing
+    // a second block or inventing a parent for the setup overlay.
+    let setup_header = state
+        .view()
+        .latest_block()
+        .expect("original inventory registration parent")
+        .header();
+    assert_eq!(
+        setup_header.height().get(),
+        u64::try_from(state.committed_height()).unwrap()
+    );
+    let mut setup = state.block(setup_header);
+    let mut tx = setup.transaction_for_callback_testing();
     Register::account(Account::new(ALICE_ID.clone()))
         .execute(&ALICE_ID, &mut tx)
         .unwrap();
@@ -234,7 +282,13 @@ fn fixture_with_effects(
     }
     tx.apply();
     setup.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    let header = BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        Some(parent),
+        None,
+        u64::try_from(genesis_time.as_millis()).unwrap() + 2,
+        0,
+    );
     let mut builder = BlockBuilder::new(header);
     let mut contexts = Vec::new();
     // A successful and an actually rejected Network input both remain sources.

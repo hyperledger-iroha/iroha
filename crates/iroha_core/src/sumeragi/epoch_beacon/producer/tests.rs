@@ -981,3 +981,112 @@ fn readiness_no_demand_does_not_require_a_beacon_session() {
 
 #[path = "execution_tests.rs"]
 mod execution_tests;
+
+#[test]
+fn control_retries_use_original_tip_without_decoding_history_again() {
+    let chain = prefix();
+    let context = context(&chain);
+    let state = chain.state();
+    let view = state.view();
+    let generation = state.state_view_generation();
+    let mut producer = NativeBeaconProducer::new(chain.instance(), None, None);
+    let report = producer
+        .attach_readiness(&state.ivm_execution_budget())
+        .unwrap();
+    let (_, observed) = crate::sumeragi::certified_chain::relation_counts::measure(|| {
+        for _ in 0..3 {
+            producer
+                .refresh_readiness(&view, &context, (8, context.parent_hash), generation)
+                .unwrap();
+            assert!(report.read(generation, 9, 8).unwrap().1);
+            assert!(
+                producer
+                    .drive(&view, &context, (8, context.parent_hash))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    });
+    assert!(
+        observed.frames.is_empty(),
+        "current-tip control redecoded durable history: {observed:?}"
+    );
+    assert!(
+        observed.qcs.is_empty(),
+        "current-tip control consulted a local quorum"
+    );
+}
+
+#[test]
+fn control_requires_original_tip_and_matching_published_hash_journal() {
+    let chain = prefix();
+    let context = context(&chain);
+    let state = chain.state();
+    let mut producer = NativeBeaconProducer::new(chain.instance(), None, None);
+    let report = producer
+        .attach_readiness(&state.ivm_execution_budget())
+        .unwrap();
+    let generation = state.state_view_generation();
+    let applied = (8, context.parent_hash);
+    producer
+        .refresh_readiness(&state.view(), &context, applied, generation)
+        .unwrap();
+    assert!(report.read(generation, 9, 8).unwrap().1);
+
+    // A matching journal is still only a claim without its original execution tip.
+    let unanchored = crate::state::State::new_for_testing(
+        World::new(),
+        crate::kura::Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    let mut hashes = unanchored.block_hashes.block();
+    for hash in state.view().block_hashes().iter() {
+        hashes.push_for_tests(*hash);
+    }
+    hashes.commit_for_tests();
+    assert_eq!(unanchored.view().height(), 8);
+    assert!(unanchored.view().native_execution_tip().is_none());
+    assert!(
+        producer
+            .drive(&unanchored.view(), &context, applied)
+            .is_err()
+    );
+    assert!(
+        producer
+            .refresh_readiness(&unanchored.view(), &context, applied, generation)
+            .is_err()
+    );
+    assert!(report.read(generation, 9, 8).is_none());
+
+    producer
+        .refresh_readiness(&state.view(), &context, applied, generation)
+        .unwrap();
+    assert!(report.read(generation, 9, 8).unwrap().1);
+
+    // Keep the real tip and height, but replace the journal's last hash. Neither
+    // control production nor readiness may combine different publication cuts.
+    let original_tip = state.view().native_execution_tip().unwrap();
+    let mut hashes = state.block_hashes.block_and_revert();
+    hashes.push_for_tests(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+        b"foreign control parent",
+    )));
+    hashes.commit_for_tests();
+    let view = state.view();
+    assert_eq!(view.height(), 8);
+    assert_eq!(view.native_execution_tip(), Some(original_tip));
+    assert_ne!(view.block_hashes().last(), Some(&original_tip.iroha_hash()));
+    assert!(matches!(
+        producer.drive(&view, &context, applied),
+        Err(NativeBeaconError::Source(_))
+    ));
+    assert!(
+        producer
+            .refresh_readiness(&view, &context, applied, generation)
+            .is_err()
+    );
+    assert!(report.read(generation, 9, 8).is_none());
+    assert!(
+        producer.active.is_none(),
+        "a rejected source cannot begin signing"
+    );
+}

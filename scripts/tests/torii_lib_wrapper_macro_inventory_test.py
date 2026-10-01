@@ -166,11 +166,18 @@ FAMILIES = {
                         "v1/accounts/recovery/finalize",
                         "handle_post_account_recovery_finalize",
                     ),
+                    (
+                        "handler_post_account_recovery_cancel",
+                        "crate::routing::AccountRecoveryCancelDto",
+                        "account_recovery_cancel",
+                        "v1/accounts/recovery/cancel",
+                        "handle_post_account_recovery_cancel",
+                    ),
                 )
             ),
         ),
         definition_sha256="5eb1270d79d4a81f2b47e50bf2d9604f40b55709dbe7044ad8ec73e5cf9b4c35",
-        expanded_preimage_sha256="ec2b277f4c7d4925fca1ffa64727b1bc6e423015196d1e1a727a0eeef846acbf",
+        expanded_preimage_sha256="6f37bf1e8be7867c0d8817ef1e09c24923e678140e50972c8322651dba47ffae",
     ),
     "iso_payment_submission_handlers": WrapperFamily(
         parameters=(
@@ -261,8 +268,8 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 566
-ROUTE_TUPLE_SHA256 = "fb4a3cea2b230523966403c6c72d7fc4dbd70fdca9fa8cb1c23f03bd51385123"
+ROUTE_ROW_COUNT = 569
+ROUTE_TUPLE_SHA256 = "3fa65bc2f86f7f68fe9228727323fa141b1457dc8f5a060aae5e6881401b0a83"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -1197,6 +1204,28 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 mutated = self.source.replace(old, new, 1)
                 with self.assertRaises(GuardError):
                     validate_source(mutated)
+
+    def test_recovery_cancel_requires_exact_authenticated_limited_route(self) -> None:
+        expected = (
+            'feature="app_api"',
+            "POST",
+            "route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_CANCEL_POST",
+            "handler_post_account_recovery_cancel",
+            "layer(contracts_body_limit.clone());auth(transaction_max_content_len)",
+            "canonical-account(app_state.clone())",
+        )
+        self.assertEqual(_route_table_rows(self.source).count(expected), 1)
+        for old, new in (
+            ("handler_post_account_recovery_cancel", "handler_post_account_recovery_finalize"),
+            ("crate::routing::AccountRecoveryCancelDto", "crate::routing::AccountRecoveryFinalizeDto"),
+            ('"v1/accounts/recovery/cancel"', '"v1/accounts/recovery/finalize"'),
+            ("handle_post_account_recovery_cancel", "handle_post_account_recovery_finalize"),
+            ("ACCOUNT_RECOVERY_CANCEL_POST", "ACCOUNT_RECOVERY_FINALIZE_POST"),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, self.source)
+                with self.assertRaises(GuardError):
+                    validate_source(self.source.replace(old, new, 1))
 
     def test_route_policy_inventory_and_cfg_mutations_fail(self) -> None:
         mutations = (

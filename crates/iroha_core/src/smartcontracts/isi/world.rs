@@ -20146,12 +20146,17 @@ pub mod isi {
                     "/../../fixtures/governance/kagemusha_verifier_release_install_v1.bin"
                 )))
                 .expect("canonical authenticated release fixture");
-            let state = blank_test_state();
+            let state = State::new_with_chain_and_network_id_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                "generic-testnet".parse().expect("fixture chain"),
+                fixture.proposal.network_id,
+            );
             let mut block = state.block(first_test_block_header());
             let mut transaction = block.transaction();
             let mut payload = fixture.proposal;
             payload.proposal_operator = ALICE_ID.clone();
-            payload.network_id = transaction.network_id;
             *transaction.world.kagemusha_verifier_registry.get_mut() =
                 payload.expected_predecessor.clone();
             let propose = |proposal| gov::ProposeKagemushaVerifierReleaseInstallV1 { proposal };
@@ -22420,6 +22425,120 @@ pub mod isi {
                 LiveQueryStore::start_test(),
             )
         }
+
+        // Ordinary executor cases own a signed original root before H2 dispatch.
+        // Pristine component/genesis-refusal macros below deliberately remain unchanged.
+        fn original_world_config(component: State) -> crate::sumeragi::test_chain::TestChainConfig {
+            use crate::sumeragi::test_chain::TestChainConfig;
+            let nexus = component.nexus_snapshot();
+            let crypto = component.crypto.read().as_ref().clone();
+            let mut config = TestChainConfig::new(component.world, 0);
+            config.chain_id = component.chain_id;
+            config.pipeline = component.pipeline;
+            config.nexus = Some(nexus);
+            config.zk = Some(component.zk);
+            config.governance = Some(component.gov);
+            config.crypto = Some(crypto);
+            config.fraud_monitoring = component.fraud_monitoring;
+            config
+        }
+        fn original_world_state(component: State) -> State {
+            use crate::sumeragi::{startup, test_chain::CertifiedTestChain};
+            let config = original_world_config(component);
+            let account = AccountId::new(config.genesis_key.public_key().clone());
+            let mode = config.consensus_mode;
+            let prepared =
+                CertifiedTestChain::prepare(config).expect("original signed World genesis");
+            let state = std::sync::Arc::try_unwrap(prepared.state)
+                .unwrap_or_else(|_| panic!("unpublished World State is unique"));
+            startup::apply_genesis(
+                &state,
+                prepared.genesis.block().clone(),
+                &account,
+                mode.into(),
+                None,
+            )
+            .expect("apply original authenticated World genesis");
+            state
+        }
+        fn original_world_header(state: &State) -> BlockHeader {
+            use crate::state::StateReadOnly as _;
+            let parent = state.view().latest_block().expect("original signed parent");
+            let time_ms = u64::try_from(parent.header().creation_time().as_millis())
+                .expect("original parent timestamp fits")
+                .checked_add(1)
+                .expect("ordinary fixture follows its parent");
+            BlockHeader::new(
+                NonZeroU64::new(2).unwrap(),
+                state.view().latest_block_hash(),
+                None,
+                time_ms,
+                0,
+            )
+        }
+        macro_rules! original_blank_state_transaction {
+            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
+                let $state = original_world_state(blank_state());
+                let $block = original_world_header(&$state);
+                let mut $state_block = $state.block($block.clone());
+                #[allow(unused_mut)]
+                let mut $stx = $state_block.transaction_for_callback_testing();
+            };
+        }
+        macro_rules! original_alice_state_transaction {
+            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
+                original_blank_state_transaction!($state, $block, $state_block, $stx);
+                bootstrap_alice_account(&mut $stx);
+            };
+        }
+        macro_rules! original_proof_verification_fixture {
+            ($state:ident, $block:ident) => {
+                let $state = original_world_state(blank_state());
+                let header = original_world_header(&$state);
+                let mut $block = $state.block(header);
+            };
+        }
+        #[test]
+        fn world_initial_fixture_owns_original_root_and_refuses_header_only_genesis() {
+            use crate::state::StateReadOnly as _;
+            let state = original_world_state(blank_test_state());
+            let parent = state
+                .view()
+                .latest_block_hash()
+                .expect("committed original genesis");
+            assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+            let header = original_world_header(&state);
+            assert_eq!(header.prev_block_hash(), Some(parent));
+            let original_parent = state.view().latest_block().expect("original signed parent");
+            assert_eq!(
+                header.creation_time(),
+                original_parent.header().creation_time() + std::time::Duration::from_millis(1),
+                "the ordinary fixture clock follows its actual signed parent"
+            );
+            let mut block = state.block(header);
+            let stx = block.transaction_for_callback_testing();
+            assert!(crate::executor::root_scope::execution_root_scope(&stx).is_ok());
+            drop(stx);
+            let component = blank_test_state();
+            let mut block = component.block(first_test_block_header());
+            let mut stx = block.transaction_for_callback_testing();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            let id = VerifyingKeyId::new("halo2/ipa", "unauthenticated-genesis");
+            let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record: test_halo2_vk_record(1, canonical_test_halo2_vk_box()),
+            }
+            .into();
+            let error = Executor::Initial
+                .execute_instruction(&mut stx, &ALICE_ID, instruction)
+                .expect_err("header-shaped genesis cannot grant native instruction authority");
+            assert!(
+                smart_contract_error_message(error).contains("authenticated source capability")
+            );
+            assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
         macro_rules! world_test {
             ($name:ident $body:block) => {
                 #[test]
@@ -22759,7 +22878,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            let mut validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            let mut validator_keys = (0..4).map(|_| checked_keypair_with_algorithm(Algorithm::BlsNormal)).collect::<Vec<_>>();
             validator_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let ordered_roster = validator_keys
                 .iter()
@@ -22769,7 +22888,7 @@ pub mod isi {
             let authorization_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster);
             let mut successor_validator_keys =
-                (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+                (0..4).map(|_| checked_keypair_with_algorithm(Algorithm::BlsNormal)).collect::<Vec<_>>();
             successor_validator_keys
                 .sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let successor_roster = successor_validator_keys
@@ -24618,7 +24737,10 @@ pub mod isi {
             }
         });
         world_test!(zero_minimum_governance_bond_still_escrows_positive_exact_deltas {
-            second_height_transaction!(state, block, state_transaction);
+            let state = blank_test_state();
+            let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction_for_fastpq_protocol_testing();
             state_transaction.gov.min_bond_amount = Quantity::zero();
             state_transaction.gov.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
             state_transaction.gov.slash_receiver_account =
@@ -31010,10 +31132,10 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(register_vk_accepts_canonical_soracloud_bootstrap_record {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = soracloud_bootstrap_vk_id();
             let record = soracloud_bootstrap_vk_record(u32::from(
@@ -31062,10 +31184,10 @@ seiyaku GovernanceLifecycle {
             ] {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-                let block = new_dummy_block();
-                let mut state_block = state.block(block.as_ref().header());
-                let mut stx = state_block.transaction();
+                let state = original_world_state(State::new(World::default(), kura, query_handle));
+                let block = original_world_header(&state);
+                let mut state_block = state.block(block.clone());
+                let mut stx = state_block.transaction_for_callback_testing();
                 bootstrap_alice_account(&mut stx);
                 grant_manage_verifying_keys(&mut stx);
                 stx.apply();
@@ -31080,7 +31202,7 @@ seiyaku GovernanceLifecycle {
                     Tamper::Version => record.version += 1,
                     Tamper::GasSchedule => record.gas_schedule_id = Some("stark_default".into()),
                 }
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let exec = Executor::default();
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record }.into();
@@ -31092,10 +31214,10 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(register_vk_rejects_active_soracloud_bootstrap_without_inline_key {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = soracloud_bootstrap_vk_id();
             let mut record = soracloud_bootstrap_vk_record(u32::from(
@@ -31110,12 +31232,12 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "active verifying key bytes missing");
         });
         world_test!(update_vk_rejects_soracloud_bootstrap_metadata_drift {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let id = soracloud_bootstrap_vk_id();
             let old_record = soracloud_bootstrap_vk_record(0);
-            let mut seed_stx = state_block.transaction();
+            let mut seed_stx = state_block.transaction_for_callback_testing();
             seed_stx
                 .world
                 .verifying_keys
@@ -31129,7 +31251,7 @@ seiyaku GovernanceLifecycle {
                 SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
             ));
             new_record.public_inputs_schema_hash = [0x93; 32];
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let instr: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
@@ -31144,10 +31266,10 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-stark")]
         world_test!(register_vk_accepts_soracloud_fhe_stark_verifier_payload_at_production_floor {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             for profile in soracloud_fhe_stark_vk_test_profiles() {
                 let id = soracloud_fhe_stark_vk_id(profile);
@@ -31216,10 +31338,10 @@ seiyaku GovernanceLifecycle {
                 validate_soracloud_fhe_stark_verifying_key_payload(verifier_profile, &alternate_vk)
                     .expect_err("Soracloud validation must reject alternate-layout key bytes");
             assert_err!(format!("{direct_error:?}"), "invalid STARK payload", "unexpected Soracloud alternate-layout rejection: {direct_error:?}");
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let id = soracloud_fhe_stark_vk_id(test_profile);
             let mut record =
                 soracloud_fhe_stark_vk_record(test_profile, u32::from(test_profile.version));
@@ -31234,10 +31356,10 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-stark")]
         world_test!(register_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             for profile in soracloud_fhe_stark_vk_test_profiles() {
                 let id = soracloud_fhe_stark_vk_id(profile);
@@ -31265,13 +31387,13 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-stark")]
         world_test!(update_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let profile = soracloud_fhe_stark_vk_test_profiles()[2];
             let id = soracloud_fhe_stark_vk_id(profile);
             let old_record = soracloud_fhe_stark_vk_record(profile, 0);
-            let mut seed_stx = state_block.transaction();
+            let mut seed_stx = state_block.transaction_for_callback_testing();
             seed_stx
                 .world
                 .verifying_keys
@@ -31290,7 +31412,7 @@ seiyaku GovernanceLifecycle {
                 crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             );
             attach_soracloud_fhe_stark_vk_box(&mut new_record, vk_box);
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let instr: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
@@ -31305,13 +31427,13 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-halo2-ipa")]
         world_test!(register_vk_accepts_and_stores_canonical_compiled_halo2_key {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "canonical-ivm-vk");
             let vk_box = canonical_test_halo2_vk_box();
             let record = test_halo2_vk_record(1, vk_box.clone());
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             Executor::default()
                 .execute_instruction(
                     &mut stx,
@@ -31336,14 +31458,14 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-halo2-ipa")]
         world_test!(register_vk_rejects_parseable_halo2_key_relabelled_as_confidential_transfer {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "relabelled-demo-vk");
             let vk_box = crate::zk::confidential_v2::confidential_unshield_v2_vk_box()
                 .expect("generate parseable key for another circuit");
             let record = test_halo2_vk_record(1, vk_box);
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let error = Executor::default()
                 .execute_instruction(
                     &mut stx,
@@ -31361,12 +31483,12 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-halo2-ipa")]
         world_test!(update_vk_rejects_parseable_halo2_key_relabelled_as_same_circuit {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "updated-relabelled-demo-vk");
             let current = test_halo2_vk_record(1, canonical_test_halo2_vk_box());
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             Executor::default()
                 .execute_instruction(
                     &mut stx,
@@ -31382,7 +31504,7 @@ seiyaku GovernanceLifecycle {
             let relabelled = crate::zk::confidential_v2::confidential_unshield_v2_vk_box()
                 .expect("generate parseable key for another circuit");
             let replacement = test_halo2_vk_record(2, relabelled);
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let error = Executor::default()
                 .execute_instruction(
                     &mut stx,
@@ -31400,7 +31522,7 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-halo2-ipa")]
         world_test!(register_vk_rejects_noncanonical_fixed_halo2_parameter_degree {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "wrong-fixed-k-vk");
@@ -31413,7 +31535,7 @@ seiyaku GovernanceLifecycle {
             vk_box.bytes[ipa_offset + 8..ipa_offset + 12]
                 .copy_from_slice(&(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K + 1).to_le_bytes());
             let record = test_halo2_vk_record(1, vk_box);
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let error = Executor::default()
                 .execute_instruction(
                     &mut stx,
@@ -31431,7 +31553,7 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-stark")]
         world_test!(register_vk_rejects_tiny_stark_key_with_huge_declared_inner_length {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
@@ -31461,7 +31583,7 @@ seiyaku GovernanceLifecycle {
             let vk_box = VerifyingKeyBox::new(backend.to_owned(), bytes);
             vk_record!(record, 1, circuit_id, BackendTag::Stark, "goldilocks", [0x51; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".to_owned()));
             let id = VerifyingKeyId::new(backend, "huge-inner-length-vk");
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let error = Executor::default()
                 .execute_instruction(
                     &mut stx,
@@ -31479,10 +31601,10 @@ seiyaku GovernanceLifecycle {
             assert!(stx.world.verifying_keys.get(&id).is_none());
         });
         world_test!(register_vk_requires_gas_schedule {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_missing_gas");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -31496,10 +31618,10 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "gas_schedule_id", "unexpected msg: {msg}");
         });
         world_test!(register_vk_rejects_empty_lifecycle_window_without_mutating_state {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -31517,10 +31639,10 @@ seiyaku GovernanceLifecycle {
             assert!(stx.world.verifying_keys.get(&id).is_none());
         });
         world_test!(register_vk_rejects_inline_key_length_mismatch {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -31534,10 +31656,10 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "vk_len", "unexpected msg: {msg}");
         });
         world_test!(register_vk_rejects_cross_engine_backend_tag {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_backend");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -31631,7 +31753,7 @@ seiyaku GovernanceLifecycle {
             }
         }
         world_test!(register_vk_rejects_protocol_names_as_backend_labels {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             assert_registration_rejects_backend_family(
@@ -31646,7 +31768,7 @@ seiyaku GovernanceLifecycle {
                 vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 record
             }
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let exec = Executor::default();
@@ -31664,7 +31786,7 @@ seiyaku GovernanceLifecycle {
                 .into_iter()
                 .enumerate()
                 {
-                    let mut stx = state_block.transaction();
+                    let mut stx = state_block.transaction_for_callback_testing();
                     let id = VerifyingKeyId::new(
                         "halo2/ipa",
                         format!("vk_privacy_reserved_{label_index}_{variant_index}"),
@@ -31689,7 +31811,7 @@ seiyaku GovernanceLifecycle {
                 .into_iter()
                 .enumerate()
                 {
-                    let mut stx = state_block.transaction();
+                    let mut stx = state_block.transaction_for_callback_testing();
                     let id = VerifyingKeyId::new(
                         "halo2/ipa",
                         format!("vk_privacy_non_portable_{label_index}_{variant_index}"),
@@ -31711,7 +31833,7 @@ seiyaku GovernanceLifecycle {
                         .into_iter()
                         .enumerate()
                 {
-                    let mut stx = state_block.transaction();
+                    let mut stx = state_block.transaction_for_callback_testing();
                     let id = VerifyingKeyId::new(
                         "halo2/ipa",
                         format!("vk_privacy_near_miss_{label_index}_{variant_index}"),
@@ -31731,7 +31853,7 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(register_vk_rejects_production_claim_backend_labels {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             assert_registration_rejects_backend_family(
@@ -31741,7 +31863,7 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(register_vk_rejects_trusted_setup_halo2_backend_labels {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
@@ -31756,7 +31878,7 @@ seiyaku GovernanceLifecycle {
                 "halo2/pasta/kzg/tiny-add",
                 "halo2/bls12_381/tiny-add",
             ] {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_label");
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
@@ -31770,7 +31892,7 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(register_vk_rejects_developer_only_backend_labels {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             assert_registration_rejects_backend_family(
@@ -31789,7 +31911,7 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(register_vk_rejects_unsupported_backend_labels {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             assert_registration_rejects_backend_family(
@@ -31813,7 +31935,7 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(register_vk_rejects_trusted_setup_stark_backend_labels {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
@@ -31825,7 +31947,7 @@ seiyaku GovernanceLifecycle {
                 "stark/fri/BN254",
                 "stark/fri/bls12_381",
             ] {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_stark_label");
                 vk_record!(rec, 1, "stark/fri:trusted-setup-circuit", BackendTag::Stark, "goldilocks", [0x73; 32], [0x74; 32]; status = ConfidentialStatus::Active, gas_schedule_id = Some("stark_default".into()));
                 let instr: InstructionBox =
@@ -31838,10 +31960,10 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(register_vk_rejects_mixed_case_stark_curve {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let id = VerifyingKeyId::new(backend, "vk_stark_mixed_case_curve");
@@ -31856,11 +31978,11 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "verifying key curve must be \"goldilocks\"", "unexpected msg: {msg}");
         });
         world_test!(register_consensus_key_enforces_policy {
-            let state = blank_state();
-            let block = new_dummy_block_non_genesis();
-            let mut state_block = state.block(block.as_ref().header());
+            let state = original_world_state(blank_state());
+            let block = original_world_header(&state);
+            let mut state_block = state.block(block.clone());
             let params = {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 grant_alice_typed_permission(
                     &mut stx,
                     CanManageConsensusKeys,
@@ -31888,7 +32010,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             // Lead-time violation should be rejected.
             {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let bad_record = make_record(stx.block_height());
                 let bad_instr: InstructionBox = consensus_keys::RegisterConsensusKey {
                     id: id.clone(),
@@ -31903,7 +32025,7 @@ seiyaku GovernanceLifecycle {
             }
             // Valid registration succeeds.
             {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let ok_record = make_record(
                     stx.block_height()
                         .saturating_add(params.key_activation_lead_blocks),
@@ -31930,11 +32052,11 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(register_consensus_key_rejects_disallowed_algorithm {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
+            let state = original_world_state(blank_state());
+            let block = original_world_header(&state);
+            let mut state_block = state.block(block.clone());
             let params = consensus_test_parameters!(state_block);
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-ed25519");
             let record = ConsensusKeyRecord {
@@ -31964,11 +32086,11 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(register_consensus_key_persists_in_authoritative_world_state {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
+            let state = original_world_state(blank_state());
+            let block = original_world_header(&state);
+            let mut state_block = state.block(block.clone());
             let params = consensus_test_parameters!(state_block);
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop =
                 iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
@@ -32000,7 +32122,7 @@ seiyaku GovernanceLifecycle {
         });
         #[test]
         fn register_consensus_key_respects_algorithm_allowlist() {
-            let mut state = blank_state();
+            let mut state = original_world_state(blank_state());
             let sumeragi_cfg = SumeragiPolicyConfig {
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
@@ -32011,13 +32133,13 @@ seiyaku GovernanceLifecycle {
                 key_allowed_algorithms: [Algorithm::BlsNormal].into_iter().collect(),
             };
             state.set_sumeragi_parameters(sumeragi_cfg.clone());
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
+            let block = original_world_header(&state);
+            let mut state_block = state.block(block.clone());
             let params = consensus_test_parameters!(state_block);
             let exec = Executor::default();
             // BLS is admitted by the configured algorithm allowlist.
             {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
                 let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
                     .expect("pop for validator");
@@ -32043,7 +32165,7 @@ seiyaku GovernanceLifecycle {
             }
             // Ed25519 is filtered out by the config allowlist.
             {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
                 let id =
                     ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-ed25519-reject");
@@ -32075,7 +32197,7 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn register_consensus_key_rejects_empty_algorithm_allowlist() {
-            let mut state = blank_state();
+            let mut state = original_world_state(blank_state());
             state.set_sumeragi_parameters(SumeragiPolicyConfig {
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
@@ -32085,10 +32207,10 @@ seiyaku GovernanceLifecycle {
                     iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
                 key_allowed_algorithms: BTreeSet::new(),
             });
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
+            let block = original_world_header(&state);
+            let mut state_block = state.block(block.clone());
             let params = {
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 grant_alice_typed_permission(
                     &mut stx,
                     CanManageConsensusKeys,
@@ -32098,7 +32220,7 @@ seiyaku GovernanceLifecycle {
                 stx.apply();
                 params
             };
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop =
                 iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
@@ -32124,11 +32246,11 @@ seiyaku GovernanceLifecycle {
             );
         }
         world_test!(rotate_consensus_key_marks_previous_retiring {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
+            let state = original_world_state(blank_state());
+            let block = original_world_header(&state);
+            let mut state_block = state.block(block.clone());
             let params = consensus_test_parameters!(state_block);
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_a =
                 iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
@@ -32153,7 +32275,7 @@ seiyaku GovernanceLifecycle {
             exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr_a)
                 .expect("register initial key");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_b =
                 iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
@@ -32974,7 +33096,7 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(malformed_manage_verifying_keys_payload_does_not_authorize_registration {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             let malformed = Permission::new(
                 "CanManageVerifyingKeys".parse().unwrap(),
                 iroha_primitives::json::Json::from("circuit_identity_v1"),
@@ -32985,7 +33107,7 @@ seiyaku GovernanceLifecycle {
             let id = VerifyingKeyId::new("halo2/ipa", "vk_payload_confusion");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
             vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let err = Executor::default()
                 .execute_instruction(
                     &mut stx,
@@ -33060,14 +33182,14 @@ seiyaku GovernanceLifecycle {
                 .expect("canonical role token must authorize confidential-parameter management");
         });
         world_test!(update_vk_rejects_circuit_identity_change_without_rewriting_index {
-            alice_state_transaction!(state, block, state_block, stx);
+            original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
             let vk_box = canonical_test_halo2_vk_box();
             vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let exec = Executor::default();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             exec.execute_instruction(
                 &mut stx,
                 &ALICE_ID.clone(),
@@ -33082,7 +33204,7 @@ seiyaku GovernanceLifecycle {
             let mut replacement = current.clone();
             replacement.version = 2;
             replacement.circuit_id = TEST_OTHER_HALO2_CIRCUIT_ID.to_owned();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let err = exec
                 .execute_instruction(
                     &mut stx,
@@ -33111,11 +33233,11 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(update_vk_rejects_non_ipa_backend {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             // Seed registry with a valid record
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
             let vk_box = canonical_test_halo2_vk_box();
@@ -33129,7 +33251,7 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             // Attempt to update with a different supported engine tag.
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Stark, "goldilocks", [0x52; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(VerifyingKeyBox::new("stark/fri".into(), vec![4, 5, 6])), gas_schedule_id = Some("stark_default".into()));
             let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id: id.clone(),
@@ -33143,7 +33265,7 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "backend cannot change", "unexpected msg: {msg}");
         });
         world_test!(update_vk_rejects_non_production_existing_backend_labels {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let exec = Executor::default();
@@ -33239,7 +33361,7 @@ seiyaku GovernanceLifecycle {
                 let name = format!("vk_update_non_production_{idx}");
                 let id = VerifyingKeyId::new(backend, name.clone());
                 vk_record!(old_rec, 1, format!("{backend}:old-circuit"), tag, curve, [0x75; 32], [0x76; 32]; status = ConfidentialStatus::Active, gas_schedule_id = Some(schedule.into()));
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 stx.world.verifying_keys.insert(id.clone(), old_rec.clone());
                 stx.world
                     .verifying_keys_by_circuit
@@ -33251,7 +33373,7 @@ seiyaku GovernanceLifecycle {
                     record: new_rec,
                 }
                 .into();
-                let mut stx = state_block.transaction();
+                let mut stx = state_block.transaction_for_callback_testing();
                 let err = exec
                     .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
                     .expect_err("non-registry verifier label must be rejected on update");
@@ -33260,10 +33382,10 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(update_vk_rejects_inline_key_length_mismatch {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
             let vk_box = canonical_test_halo2_vk_box();
@@ -33276,7 +33398,7 @@ seiyaku GovernanceLifecycle {
             exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let update_instruction: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
@@ -33291,10 +33413,10 @@ seiyaku GovernanceLifecycle {
         });
         #[cfg(feature = "zk-stark")]
         world_test!(update_vk_rejects_mixed_case_stark_curve {
-            blank_state_transaction!(state, block, state_block, stx);
+            original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             let exec = Executor::default();
             let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let id = VerifyingKeyId::new(backend, "vk_stark_update_curve");
@@ -33321,7 +33443,7 @@ seiyaku GovernanceLifecycle {
             exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
-            let mut stx = state_block.transaction();
+            let mut stx = state_block.transaction_for_callback_testing();
             vk_record!(new_rec, 2, circuit_id, BackendTag::Stark, "GoLdIlOcKs", [0x52; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".into()));
             let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id: id.clone(),
@@ -33335,16 +33457,16 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "verifying key curve must be \"goldilocks\"", "unexpected msg: {msg}");
         });
         world_test!(verify_proof_rejects_missing_circuit_index {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
             let exec = Executor::default();
             // Grant permission to manage verifying keys
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             // Register a verifying key
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             let circuit = TEST_HALO2_CIRCUIT_ID;
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
             let vk_box = canonical_test_halo2_vk_box();
@@ -33359,7 +33481,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             // Remove circuit index entry to simulate missing mapping
             {
-                let mut stx_remove = block.transaction();
+                let mut stx_remove = block.transaction_for_callback_testing();
                 stx_remove
                     .world
                     .verifying_keys_by_circuit
@@ -33378,7 +33500,7 @@ seiyaku GovernanceLifecycle {
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
             let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33391,14 +33513,14 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(verify_proof_requires_open_verify_envelope {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
             let exec = Executor::default();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
@@ -33413,7 +33535,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let proof_box = ProofBox::new("halo2/ipa".into(), vec![0xAA]);
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33427,8 +33549,8 @@ seiyaku GovernanceLifecycle {
                 .copied()
                 .enumerate()
             {
-                proof_verification_fixture!(state, block);
-                let mut stx = block.transaction();
+                original_proof_verification_fixture!(state, block);
+                let mut stx = block.transaction_for_callback_testing();
                 bootstrap_alice_account(&mut stx);
                 stx.apply();
                 let proof_box = ProofBox::new(backend.into(), vec![u8::try_from(idx).unwrap()]);
@@ -33437,7 +33559,7 @@ seiyaku GovernanceLifecycle {
                     proof_box,
                     VerifyingKeyId::new(backend, format!("vk_pending_proof_label_{idx}")),
                 );
-                let mut stx_verify = block.transaction();
+                let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33453,8 +33575,8 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(verify_proof_rejects_production_claim_backend_labels_before_registry_lookup {
             for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
-                proof_verification_fixture!(state, block);
-                let mut stx = block.transaction();
+                original_proof_verification_fixture!(state, block);
+                let mut stx = block.transaction_for_callback_testing();
                 bootstrap_alice_account(&mut stx);
                 stx.apply();
                 let proof_box = ProofBox::new(backend.into(), vec![u8::try_from(idx).unwrap()]);
@@ -33463,7 +33585,7 @@ seiyaku GovernanceLifecycle {
                     proof_box,
                     VerifyingKeyId::new(backend, format!("vk_production_claim_proof_{idx}")),
                 );
-                let mut stx_verify = block.transaction();
+                let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33476,7 +33598,7 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(verify_proof_rejects_cross_engine_record_tag {
             for (idx, backend_tag) in [BackendTag::Stark].into_iter().enumerate() {
-                proof_verification_fixture!(state, block);
+                original_proof_verification_fixture!(state, block);
                 let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
                 let vk_commitment = hash_vk(&vk_box);
@@ -33502,14 +33624,14 @@ seiyaku GovernanceLifecycle {
                 );
                 let attachment =
                     ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-                let mut stx = block.transaction();
+                let mut stx = block.transaction_for_callback_testing();
                 bootstrap_alice_account(&mut stx);
                 stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
                 stx.world
                     .verifying_keys_by_circuit
                     .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
                 stx.apply();
-                let mut stx_verify = block.transaction();
+                let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33519,10 +33641,10 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(verify_proof_rejects_inline_verifying_key {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             bootstrap_alice_account(&mut stx);
             stx.apply();
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3]);
@@ -33543,7 +33665,7 @@ seiyaku GovernanceLifecycle {
                 proof_box,
                 VerifyingKeyId::new("halo2/ipa", "missing"),
             );
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33552,14 +33674,14 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "registered verifying key reference", "unexpected msg: {msg}");
         });
         world_test!(verify_proof_rejects_missing_verifying_key_bytes {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
             let exec = Executor::default();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
@@ -33575,7 +33697,7 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             {
-                let mut stx_mut = block.transaction();
+                let mut stx_mut = block.transaction_for_callback_testing();
                 if let Some(stored) = stx_mut.world.verifying_keys.get_mut(&vk_id) {
                     stored.key = None;
                 }
@@ -33592,7 +33714,7 @@ seiyaku GovernanceLifecycle {
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
             let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33601,14 +33723,14 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "verifying key bytes missing", "unexpected msg: {msg}");
         });
         world_test!(verify_proof_records_invalid_cryptographic_proof_as_rejected {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
             let exec = Executor::default();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
@@ -33640,7 +33762,7 @@ seiyaku GovernanceLifecycle {
                 backend: attachment.backend.clone(),
                 proof_hash: crate::zk::hash_proof(&attachment.proof),
             };
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33657,14 +33779,14 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(verify_proof_rejects_wrong_envelope_backend_tag {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
             let exec = Executor::default();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
@@ -33692,7 +33814,7 @@ seiyaku GovernanceLifecycle {
                 norito::to_bytes(&envelope).expect("encode envelope"),
             );
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33736,16 +33858,16 @@ seiyaku GovernanceLifecycle {
                     "verifying key is not active",
                 ),
             ] {
-                proof_verification_fixture!(state, block);
+                original_proof_verification_fixture!(state, block);
                 let exec = Executor::default();
-                let mut stx = block.transaction();
+                let mut stx = block.transaction_for_callback_testing();
                 grant_alice_account_permission(
                     &mut stx,
                     "CanManageVerifyingKeys",
                     "grant manage vk",
                 );
                 stx.apply();
-                let mut stx = block.transaction();
+                let mut stx = block.transaction_for_callback_testing();
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 let vk_id = VerifyingKeyId::new(
                     "halo2/ipa",
@@ -33790,7 +33912,7 @@ seiyaku GovernanceLifecycle {
                 );
                 let attachment =
                     ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-                let mut stx_verify = block.transaction();
+                let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33800,8 +33922,8 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(verify_proof_rejects_existing_proof_record {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_existing");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
@@ -33826,7 +33948,7 @@ seiyaku GovernanceLifecycle {
                 backend: attachment.backend.clone(),
                 proof_hash: crate::zk::hash_proof(&attachment.proof),
             };
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             bootstrap_alice_account(&mut stx);
             stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
             stx.world
@@ -33844,7 +33966,7 @@ seiyaku GovernanceLifecycle {
                 },
             );
             stx.apply();
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33875,7 +33997,7 @@ seiyaku GovernanceLifecycle {
                     "verifying-key payload backend does not match registry id",
                 ),
             ] {
-                proof_verification_fixture!(state, block);
+                original_proof_verification_fixture!(state, block);
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 let vk_id = VerifyingKeyId::new(
                     "halo2/ipa",
@@ -33907,7 +34029,7 @@ seiyaku GovernanceLifecycle {
                 );
                 let attachment =
                     ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-                let mut stx = block.transaction();
+                let mut stx = block.transaction_for_callback_testing();
                 bootstrap_alice_account(&mut stx);
                 stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
                 if matches!(tamper, Tamper::StoredKeyBackend) {
@@ -33916,7 +34038,7 @@ seiyaku GovernanceLifecycle {
                         .insert((rec.circuit_id.clone(), rec.version), vk_id);
                 }
                 stx.apply();
-                let mut stx_verify = block.transaction();
+                let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
@@ -33926,15 +34048,15 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(verify_proof_rejects_missing_gas_schedule {
-            let state = blank_state();
-            let header = first_test_block_header();
+            let state = original_world_state(blank_state());
+            let header = original_world_header(&state);
             let mut block = state.block(header);
             let exec = Executor::default();
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             // Register verifying key
-            let mut stx = block.transaction();
+            let mut stx = block.transaction_for_callback_testing();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
             let vk_box = canonical_test_halo2_vk_box();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
@@ -33948,7 +34070,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             // Corrupt stored record by removing gas schedule
             {
-                let mut stx_mut = block.transaction();
+                let mut stx_mut = block.transaction_for_callback_testing();
                 if let Some(stored) = stx_mut.world.verifying_keys.get_mut(&vk_id) {
                     stored.gas_schedule_id = None;
                 }
@@ -33965,7 +34087,7 @@ seiyaku GovernanceLifecycle {
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
             let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
-            let mut stx_verify = block.transaction();
+            let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
             let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)

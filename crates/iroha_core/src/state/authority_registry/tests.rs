@@ -54,11 +54,11 @@ fn check_schema(schema: Schema) {
 fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     // The declaration macro also emits a no-`..` typed destructure. Adding an
     // actual field without a role fails Rust compilation before this test runs.
-    assert_eq!(WORLD_FIELDS.len(), 313);
+    assert_eq!(WORLD_FIELDS.len(), 314);
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
-        62 + usize::from(cfg!(feature = "telemetry"))
+        63 + usize::from(cfg!(feature = "telemetry"))
     );
     assert_eq!(
         crate::smartcontracts::isi::triggers::set::AUTHORITY_FIELDS.len(),

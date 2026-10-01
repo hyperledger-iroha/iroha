@@ -58,25 +58,23 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-The latest pinned Taira observation on September 30 found four d431 validators
-at height 10 with matching CommitQCs and empty queues. Health, liveness, faucet
-policy and MCP responded, but every validator returned readiness HTTP 503. The
-beacon install resolved to Applied; its proof and signer-provider activation
-remained unfinished. The deployed recovery CLI loses the Canary operator key,
-and its source-bound forward lease has expired. See the
-[readiness incident](docs/incidents/2026-09-30-taira-readiness.md).
+Taira runs the signed e35c10ba release with fresh validator keys and signed genesis.
+All four validators return readiness HTTP 200, have three peers, and converged
+at height 3 after an ordinary signed transaction resolved to StateApplied.
+The public endpoint at `https://taira.sora.org` has verified TLS, and the
+same-revision basic doctor reports healthy public routes and curated MCP tools.
+The previous live ledger and twenty obsolete validator releases were deleted.
 
-Current source fixes recovery arguments, checks readiness and initializes fresh
-safety records. Authenticated Linux qualification and the authorized fresh
-current-protocol cutover remain pending. Current codecs cannot authenticate the
-retired runtime. The [reset runbook](specs/runbooks/sumeragi_taira_reset.md) requires
-fresh four-validator readiness, write and restart evidence. On-chain governance
-owns deployment policy; a fixed-duration fault soak is not a cutover prerequisite.
+Current source fixes deployment recovery and initializes fresh safety records
+before first startup. Deployment preparation, transfer and the routine updater
+accept an authenticated build-only candidate without a full regression gate.
+On-chain governance owns deployment policy; no fixed 24-hour fault test is a
+deployment prerequisite for testnet or production.
 
-The retained height-3598 ledger remains a separate recovery obligation. Physical
-DPN, paid `dpn`/`admin@dpn`, clean-client completion and production beacon custody
-are not qualified by fresh bootstrap. Validators run in a Linux guest on
-MacStadium in Dublin; use the approved deployment tooling.
+Beacon custody activation, physical DPN, paid `dpn`/`admin@dpn` and clean-client
+completion remain open. Validators run in a Linux guest on MacStadium in Dublin;
+use the approved deployment tooling. Retained incident records describe the
+[previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
 
 BPNG retained-history qualification, validator catch-up, additive catalog
 activation and API22/FE17 application commissioning remain open. Basic acceptance
@@ -85,17 +83,16 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-The last fixed-source normal build passes workspace all-targets checking,
-Core/Kagami, Torii/bridge, CLI/daemon and both network-test targets. The Kagami JSON
-fixture correction also passes genuine finalized-execution production and the
-public SDK bridge. All 1,145 default Core controls, eight optimized AXT controls
-and both four-validator component tests pass on that source. Current SDK
-consumers remain outstanding. The current private-terminal/quotient-mask
-repair candidate needs genuine profile regeneration and normal native validation;
-previous-source passes do not qualify it. Full workspace tests, physical-device
+Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
+Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
+checks cover normal native/JS/Python frontends and dependency/codec guards.
+These results qualify their recorded source. The combined candidate still needs
+fresh compiler and focused-test validation, a merge-free workspace check, genuine
+private-terminal/quotient-mask profile regeneration, current native/SDK consumers
+and executable-metadata freshness. Full workspace tests, physical-device
 qualification and same-candidate release validation remain incomplete.
-Dependency ownership and measured compiler memory remain gates; see the
-[architecture plan](specs/first_release_architecture_redesign.md) and
+Dependency ownership and pinned compiler-memory measurements remain gates; see
+the [architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
 Memory qualification retains a 25% model-baseline reduction, measured limits for

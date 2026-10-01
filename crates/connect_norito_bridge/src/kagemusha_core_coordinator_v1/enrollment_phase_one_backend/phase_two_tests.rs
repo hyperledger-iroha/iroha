@@ -360,6 +360,15 @@ fn phase_two_persists_one_checked_challenge_then_replays_exact_bytes() {
 
 #[test]
 fn consuming_kernel_delegate_completes_the_durable_phase_adapter_and_revokes_with_ticket() {
+    consuming_kernel_admission(false);
+}
+
+#[test]
+fn transferred_kernel_admission_survives_ui_close_but_not_original_ticket_expiry() {
+    consuming_kernel_admission(true);
+}
+
+fn consuming_kernel_admission(close_after_transfer: bool) {
     let (mut backend, fake_delegate, challenge, _) =
         selected_backend_with_store(DelegateResult::Valid, true);
     backend.qualified_enrollment = Some(Arc::new(KagemushaKernelEnrollmentDelegateV1::new(
@@ -433,9 +442,25 @@ fn consuming_kernel_delegate_completes_the_durable_phase_adapter_and_revokes_wit
     assert_eq!(fake_delegate.challenges.load(Ordering::SeqCst), 0);
     assert_eq!(fake_delegate.proofs.load(Ordering::SeqCst), 0);
 
-    let cancel = cancel_request(&backend);
-    backend.invoke_initial_enrollment(7, &cancel).unwrap();
-    assert!(admission.require_live().is_err());
+    if close_after_transfer {
+        backend.close(7).unwrap();
+        assert!(admission.require_live().is_ok());
+        assert_eq!(
+            backend.open("/durable/enrollment"),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(
+            backend.invoke_initial_enrollment(7, &finish),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert!(admission.require_live().is_ok());
+        backend.journal.expire_ticket_for_test(selection.ticket);
+        assert!(admission.require_live().is_err());
+    } else {
+        let cancel = cancel_request(&backend);
+        backend.invoke_initial_enrollment(7, &cancel).unwrap();
+        assert!(admission.require_live().is_err());
+    }
 }
 
 #[test]

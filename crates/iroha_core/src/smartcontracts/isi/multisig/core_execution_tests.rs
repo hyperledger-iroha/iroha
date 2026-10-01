@@ -84,9 +84,7 @@ fn install_trigger_contract(
     let code_hash = ivm::contract_code_hash(&code);
     let bytecode = IvmBytecode::from_compiled(code.clone());
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+        state_transaction.network_id(),
         authority,
         nonce,
         DataSpaceId::UNIVERSAL,
@@ -102,14 +100,23 @@ fn install_trigger_contract(
     Grant::account_permission(deployment_permission, authority.clone())
         .execute(authority, state_transaction)
         .expect("grant trigger contract deployment permission");
-    let registered_hash =
-        crate::smartcontracts::code::register_code_bytes(authority,contract_address.dataspace_id().expect("test contract dataspace"), code, state_transaction)
-            .expect("register trigger contract bytecode");
+    let registered_hash = crate::smartcontracts::code::register_code_bytes(
+        authority,
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        code,
+        state_transaction,
+    )
+    .expect("register trigger contract bytecode");
     assert_eq!(registered_hash, code_hash);
     manifest.code_hash = Some(code_hash);
     crate::smartcontracts::code::register_manifest(
         authority,
-contract_address.dataspace_id().expect("test contract dataspace"), manifest.signed(signing_keypair),
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        manifest.signed(signing_keypair),
         state_transaction,
     )
     .expect("register trigger contract manifest");
@@ -376,43 +383,12 @@ fn register_domain_with_name_lease(
 }
 #[test]
 fn initial_executor_runs_multisig_flow() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_with_chain(
-        World::new(),
-        kura,
-        query_handle,
-        ChainId::from("multisig-test-chain"),
-    );
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(block_header);
-    let mut state_transaction = block.transaction();
     let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("acme", "universal").unwrap();
     let signer1 = checked_keypair();
     let signer2 = checked_keypair();
     let signer1_id = new_account_id(&signer1);
     let signer2_id = new_account_id(&signer2);
-    register_domain_with_name_lease(
-        &mut state_transaction,
-        &signer1_id,
-        &domain_id,
-        "domain registration",
-    );
-    register_account_in_domain(
-        &mut state_transaction,
-        &signer1_id,
-        &domain_id,
-        &signer1_id,
-        "register signer1",
-    );
-    register_account_in_domain(
-        &mut state_transaction,
-        &signer1_id,
-        &domain_id,
-        &signer2_id,
-        "register signer2",
-    );
     let spec = MultisigSpec {
         signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
         quorum: NonZeroU16::new(2).unwrap(),
@@ -422,13 +398,40 @@ fn initial_executor_runs_multisig_flow() {
     let multisig_id = new_account_id(&multisig_account_key);
     let register =
         MultisigRegister::with_account(multisig_id.clone(), domain_id.clone(), spec.clone());
+    let instruction: InstructionBox = register.into();
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(
+        World::with(
+            [Domain::new(domain_id).build(&signer1_id)],
+            [&signer1_id, &signer2_id]
+                .map(|account| Account::new(account.clone()).build(&signer1_id)),
+            [],
+        ),
+        0,
+    );
+    config.chain_id = ChainId::from("multisig-test-chain");
+    config.genesis_key = signer1;
+    config.genesis_instructions.push(instruction.clone());
+    let prepared = crate::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+        .expect("prepare exact signed multisig registration genesis");
+    let source = prepared.genesis.block();
+    let index = source
+        .external_transactions()
+        .position(|signed| {
+            matches!(signed.instructions(),
+            Executable::Instructions(instructions)
+                if instructions.iter().eq(core::iter::once(&instruction)))
+        })
+        .expect("original singleton multisig registration input");
+    let mut block = prepared
+        .state
+        .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
+        .expect("capture original multisig bootstrap carrier");
+    let mut state_transaction = block
+        .transaction_for_original_genesis_testing(source, index, &signer1_id, &instruction)
+        .expect("authenticate original multisig bootstrap instruction");
     let executor = Executor::Initial;
     executor
-        .execute_instruction(
-            &mut state_transaction,
-            &signer1_id,
-            InstructionBox::from(register),
-        )
+        .execute_instruction(&mut state_transaction, &signer1_id, instruction)
         .expect("multisig register");
     let policy = multisig_policy_from_spec(&spec).expect("policy");
     let expected_id = AccountId::new_multisig(policy);

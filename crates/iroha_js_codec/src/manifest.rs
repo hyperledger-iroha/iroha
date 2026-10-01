@@ -199,9 +199,12 @@ mod tests {
         )
     }
 
+    fn artifact_json() -> Value {
+        crate::lifecycle_instructions::render_artifact_id(&artifact_id()).expect("artifact JSON")
+    }
+
     fn instruction_json(manifest: &ContractManifest) -> String {
-        let artifact = crate::lifecycle_instructions::render_artifact_id(&artifact_id())
-            .expect("artifact JSON");
+        let artifact = artifact_json();
         json::to_json(&norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact, "manifest": manifest } }))
             .expect("manifest instruction JSON")
     }

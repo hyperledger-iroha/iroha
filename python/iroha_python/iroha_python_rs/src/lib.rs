@@ -2172,16 +2172,21 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         1
     };
+    let expiry_epoch_default = || {
+        bound_at.checked_add(100).ok_or_else(|| {
+            PyValueError::new_err("bound_at_epoch overflows the default alias expiry")
+        })
+    };
     let expiry_epoch = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expiry_epoch")? {
             value
                 .extract::<u64>()
                 .map_err(|_| PyValueError::new_err("expiry_epoch must be a non-negative integer"))?
         } else {
-            bound_at + 100
+            expiry_epoch_default()?
         }
     } else {
-        bound_at + 100
+        expiry_epoch_default()?
     };
     let binding = AliasBindingV1 {
         alias: alias.clone(),
@@ -6905,6 +6910,57 @@ mod tests {
                 };
                 assert!(error.is_instance_of::<PyValueError>(py));
             }
+        });
+    }
+    #[test]
+    fn alias_fixture_defaults_are_canonical_and_reject_overflow() {
+        ensure_python();
+        Python::attach(|py| {
+            let decode_fixture = |fixture: Py<PyDict>| {
+                let encoded: String = fixture
+                    .bind(py)
+                    .get_item("proof_b64")
+                    .unwrap()
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                let bytes = BASE64.decode(encoded).unwrap();
+                decode_alias_proof_untrusted_signers(&bytes).unwrap()
+            };
+            let default = decode_fixture(sorafs_alias_proof_fixture_py(py, None).unwrap());
+            assert_eq!(
+                default.binding.manifest_cid,
+                sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
+            );
+            assert_eq!(default.binding.bound_at, 1);
+            assert_eq!(default.binding.expiry_epoch, 101);
+            assert_eq!(
+                default.expires_at_unix - default.generated_at_unix,
+                sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS
+            );
+
+            for (field, diagnostic) in [
+                ("generated_at_unix", "generated_at_unix overflows"),
+                ("bound_at_epoch", "bound_at_epoch overflows"),
+            ] {
+                let options = PyDict::new(py);
+                options.set_item(field, u64::MAX).unwrap();
+                let error = sorafs_alias_proof_fixture_py(py, Some(&options)).unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+                assert!(error.to_string().contains(diagnostic));
+            }
+
+            let options = PyDict::new(py);
+            options.set_item("generated_at_unix", u64::MAX - 1).unwrap();
+            options.set_item("expires_at_unix", u64::MAX).unwrap();
+            options.set_item("bound_at_epoch", u64::MAX - 1).unwrap();
+            options.set_item("expiry_epoch", u64::MAX).unwrap();
+            let explicit =
+                decode_fixture(sorafs_alias_proof_fixture_py(py, Some(&options)).unwrap());
+            assert_eq!(explicit.generated_at_unix, u64::MAX - 1);
+            assert_eq!(explicit.expires_at_unix, u64::MAX);
+            assert_eq!(explicit.binding.bound_at, u64::MAX - 1);
+            assert_eq!(explicit.binding.expiry_epoch, u64::MAX);
         });
     }
     #[test]

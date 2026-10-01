@@ -6169,15 +6169,9 @@ fn invalid_transport_geometry(message: impl Into<String>) -> Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into()).into()
 }
 
-const QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON: &str = "network.quic_datagrams_enabled=true is unavailable with locked quinn-proto 0.11.15: \
-its receive queue charges only DATAGRAM payload bytes, so zero-length frames consume no configured \
-budget and can grow the private VecDeque before application polling; upgrade quinn-proto to \
-0.11.17 or later before re-enabling DATAGRAM";
+const QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON: &str = "network.quic_datagrams_enabled=true is unavailable pending DATAGRAM transport requalification of locked quinn-proto 0.11.18; fixed per-entry accounting bounds zero-length frames but does not qualify the complete transport";
 
-const QUIC_DEPENDENCY_BLOCK_REASON: &str = "network.quic_enabled=true is unavailable with locked quinn-proto 0.11.15: \
-released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly and \
-connection-ID retirement in addition to DATAGRAM accounting; upgrade the lockfile to 0.11.17 or \
-later and requalify QUIC before re-enabling it";
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "network.quic_enabled=true is unavailable pending transport requalification of locked quinn-proto 0.11.18; dependency memory and panic fixes alone do not establish authenticated transport, resource, or interoperability qualification";
 
 fn validate_shipping_quic_policy(configured: bool) -> Result<bool, Error> {
     if configured {
@@ -6208,7 +6202,7 @@ fn validate_quic_configuration(
         ));
     }
     if quic_datagrams_enabled {
-        // The dormant quinn-proto 0.11.17 requalification path charges
+        // The locked quinn-proto 0.11.18 requalification path charges
         // `size_of::<Datagram>()`; that private frame contains exactly one
         // `Bytes`, so mirror the fixed entry charge without depending on a
         // private Quinn type.
@@ -9190,22 +9184,22 @@ mod accept_stream_tests {
         };
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         let reason = error.to_string();
-        assert!(reason.contains("quinn-proto 0.11.15"));
+        assert!(reason.contains("quinn-proto 0.11.18"));
         assert!(reason.contains("zero-length frames"));
-        assert!(reason.contains("0.11.17"));
+        assert!(reason.contains("requalification"));
     }
     #[test]
-    fn shipped_quic_policy_rejects_vulnerable_locked_dependency() {
+    fn shipped_quic_policy_rejects_unqualified_locked_dependency() {
         let error = validate_shipping_quic_policy(true)
-            .expect_err("vulnerable Quinn must fail before binding sockets");
+            .expect_err("unqualified Quinn must fail before binding sockets");
         let Error::Io(error) = error else {
             panic!("unexpected error: {error:?}");
         };
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         let reason = error.to_string();
-        assert!(reason.contains("quinn-proto 0.11.15"));
-        assert!(reason.contains("remote memory exhaustion"));
-        assert!(reason.contains("0.11.17"));
+        assert!(reason.contains("quinn-proto 0.11.18"));
+        assert!(reason.contains("transport requalification"));
+        assert!(reason.contains("requalification"));
         assert!(!validate_shipping_quic_policy(false).unwrap());
     }
     #[test]
@@ -9585,7 +9579,7 @@ mod accept_stream_tests {
         let started = start_test_network(test_node_key_pair(), cfg, shutdown).await;
         assert!(
             matches!(started, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput),
-            "vulnerable Quinn must be rejected before reaching the occupied UDP listener"
+            "unqualified Quinn must be rejected before reaching the occupied UDP listener"
         );
     }
     #[tokio::test(flavor = "current_thread")]

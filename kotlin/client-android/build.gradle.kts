@@ -1674,6 +1674,7 @@ publishing {
 dependencies {
     api(project(":core-jvm"))
     implementation(libs.play.services.nearby)
+    implementation(libs.play.integrity)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))
     testImplementation(libs.bcprov)
@@ -1682,6 +1683,7 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.okhttp)
     androidTestImplementation(libs.bcprov)
     // This library's self-targeted instrumentation APK needs its compiled Android
     // classes at runtime; the AGP test classpath alone does not package them.

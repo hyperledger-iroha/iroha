@@ -125,7 +125,7 @@ const STRICT_CONSTANT_RATE_TICK: Duration = Duration::from_millis(5);
 #[cfg(test)]
 const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
 #[cfg(any(target_os = "linux", test))]
-const QUIC_DEPENDENCY_BLOCK_REASON: &str = "Sora VPN helper QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "Sora VPN helper QUIC is unavailable pending transport requalification of locked quinn-proto 0.11.18; dependency memory and panic fixes alone do not establish authenticated transport, resource, or interoperability qualification";
 #[cfg(target_os = "linux")]
 const VPN_STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
 const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -4752,7 +4752,7 @@ async fn network_worker_control_loop(
 async fn connect_and_handshake(
     payload: &ConnectPayload,
 ) -> Result<(Endpoint, Connection, Arc<RecordLayer>), ControllerError> {
-    // Reject before constructing the endpoint so vulnerable Quinn cannot bind
+    // Reject before constructing the endpoint so unqualified Quinn cannot bind
     // a socket or process unauthenticated traffic.
     validate_shipping_quinn_dependency()?;
     let helper_ticket = WipeBytes(decode_hex(payload.helper_ticket_hex.as_str())?);
@@ -4998,9 +4998,9 @@ fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, 
     transport.max_concurrent_uni_streams(VarInt::from_u32(8));
     transport.max_concurrent_bidi_streams(VarInt::from_u32(8));
     // The production helper uses only authenticated QUIC streams while strict
-    // mode is gated. Quinn 0.11.9 / quinn-proto 0.11.15 does not charge a
-    // fixed cost per queued DATAGRAM entry, so explicitly advertise no receive
-    // support and allocate no unused outgoing DATAGRAM queue.
+    // mode is gated pending end-to-end qualification of locked Quinn 0.11.12 /
+    // quinn-proto 0.11.18. Advertise no unused DATAGRAM receive support and
+    // allocate no outgoing DATAGRAM queue.
     transport
         .datagram_receive_buffer_size(None)
         .datagram_send_buffer_size(0);
@@ -14787,14 +14787,14 @@ mod tests {
     }
 
     #[test]
-    fn production_helper_rejects_vulnerable_quinn_dependency() {
+    fn production_helper_rejects_unqualified_quinn_dependency() {
         let error = validate_shipping_quinn_dependency()
-            .expect_err("locked vulnerable Quinn must remain fail-closed");
+            .expect_err("locked unqualified Quinn must remain fail-closed");
         let ControllerError::State(reason) = error else {
             panic!("unexpected error: {error:?}");
         };
-        assert!(reason.contains("quinn-proto 0.11.15"));
-        assert!(reason.contains("remote memory exhaustion"));
-        assert!(reason.contains("0.11.17"));
+        assert!(reason.contains("quinn-proto 0.11.18"));
+        assert!(reason.contains("transport requalification"));
+        assert!(reason.contains("requalification"));
     }
 }

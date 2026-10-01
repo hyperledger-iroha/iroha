@@ -28,6 +28,7 @@ use crate::kagemusha_device_bridge_v1::{
     ObservationWalletContextV1, QualificationProjectionV1, qualification_projection_v1,
     sender_payload::hardware_authorization_key_reference_v1,
     validate_coordinator_observation_binding_v1, verify_observation_reply_v1,
+    wallet_recovery_snapshot_projection_v1,
 };
 
 /// Closed native observation failures; none grants an empty-wallet or bootstrap decision.
@@ -173,7 +174,10 @@ impl NativeStartupQualificationOwnerV1 {
             .map_err(|_| ObservationErrorV1::Authentication)?;
         let checkpoint = selected.checkpoint().clone();
         let enrollment = selected.enrollment_binding().clone();
-        let accepted = selected.accepted_credential_floor().credential;
+        let accepted = *selected
+            .accepted_credential_floor()
+            .oem_original()
+            .map_err(|_| ObservationErrorV1::InvalidQualification)?;
         let epoch = selected.hardware_epoch();
         let binding = selected.device_policy_binding();
         let release = core
@@ -199,7 +203,60 @@ impl NativeStartupQualificationOwnerV1 {
             .map_err(|_| ObservationErrorV1::Authentication)?;
         if current.checkpoint() != &checkpoint
             || current.enrollment_binding() != &enrollment
-            || current.accepted_credential_floor().credential != accepted
+            || *current
+                .accepted_credential_floor()
+                .oem_original()
+                .map_err(|_| ObservationErrorV1::InvalidQualification)?
+                != accepted
+        {
+            return Err(ObservationErrorV1::Conflict);
+        }
+        Ok(observer)
+    }
+
+    pub(super) fn from_original_work_owner(
+        core: &super::native_core_work::NativeCoreWorkOwnerV1,
+        native_key: &KagemushaDevicePublicKeyV1,
+    ) -> Result<Self> {
+        let selected = core
+            .current_recovery_selection()
+            .map_err(|_| ObservationErrorV1::Authentication)?;
+        let checkpoint = selected.checkpoint().clone();
+        let enrollment = selected.enrollment_binding().clone();
+        let accepted = *selected
+            .accepted_credential_floor()
+            .oem_original()
+            .map_err(|_| ObservationErrorV1::InvalidQualification)?;
+        let epoch = selected.hardware_epoch();
+        let binding = selected.device_policy_binding();
+        let release = core
+            .authenticated_release()
+            .map_err(|_| ObservationErrorV1::Authentication)?;
+        if release.purpose() != iroha_data_model::kagemusha::KagemushaReleasePurposeV1::Production
+            || release.network_id() != enrollment.owner.runtime.network_id
+        {
+            return Err(ObservationErrorV1::InvalidQualification);
+        }
+        let mut observer = Self::new(&release, enrollment.clone(), native_key)?;
+        observer.advance_validated_core_floor(
+            &enrollment,
+            CoreEpochFloorV1 {
+                generation: epoch.generation,
+                epoch_id: epoch.epoch_id,
+                key_reference: binding.device_key_reference,
+            },
+            accepted,
+        )?;
+        let current = core
+            .current_recovery_selection()
+            .map_err(|_| ObservationErrorV1::Authentication)?;
+        if current.checkpoint() != &checkpoint
+            || current.enrollment_binding() != &enrollment
+            || *current
+                .accepted_credential_floor()
+                .oem_original()
+                .map_err(|_| ObservationErrorV1::InvalidQualification)?
+                != accepted
         {
             return Err(ObservationErrorV1::Conflict);
         }
@@ -256,6 +313,11 @@ impl NativeStartupQualificationOwnerV1 {
         native_authorization_public_key
             .validate()
             .map_err(|_| ObservationErrorV1::InvalidQualification)?;
+        if enrollment.core_authorization_key_reference
+            != hardware_authorization_key_reference_v1(native_authorization_public_key)
+        {
+            return Err(ObservationErrorV1::InvalidQualification);
+        }
         let wallet = Self::enrolled_wallet_context(&enrollment)?;
         Ok(Self {
             catalog: CatalogBindingsV1 {
@@ -280,10 +342,11 @@ impl NativeStartupQualificationOwnerV1 {
         enrollment: &KagemushaRecoveryEnrollmentBindingV1,
     ) -> Result<ObservationWalletContextV1> {
         let owner = &enrollment.owner;
-        if owner
-            .enrollment_id()
-            .map_err(|_| ObservationErrorV1::InvalidQualification)?
-            != enrollment.enrollment_id
+        if enrollment.core_authorization_key_reference == [0; 32]
+            || owner
+                .enrollment_id()
+                .map_err(|_| ObservationErrorV1::InvalidQualification)?
+                != enrollment.enrollment_id
         {
             return Err(ObservationErrorV1::InvalidQualification);
         }
@@ -547,6 +610,7 @@ impl NativeStartupQualificationOwnerV1 {
             authenticator,
             &qualification,
             &self.catalog.wallet,
+            &self.catalog.provider_policy_root,
         ) {
             return Err(ObservationErrorV1::Authentication);
         }
@@ -603,6 +667,57 @@ impl NativeStartupQualificationOwnerV1 {
         self.current = None;
     }
 
+    /// Lend only the already accepted original operation-21 result under its original
+    /// suspend-inclusive deadline and current qualification. This cannot begin a new
+    /// read, refresh a lease or admit an absent enrolled aggregate.
+    pub(super) fn authenticated_wallet_snapshot(
+        &self,
+        exact_canonical_reply: &[u8],
+    ) -> Result<(Vec<u8>, u128, u128, u128)> {
+        let pending = self
+            .pending
+            .get(&21)
+            .ok_or(ObservationErrorV1::MissingChallenge)?;
+        pending
+            .deadline
+            .check()
+            .map_err(|_| ObservationErrorV1::Expired)?;
+        let original = pending
+            .accepted
+            .as_ref()
+            .ok_or(ObservationErrorV1::Authentication)?;
+        if original.operation != 21
+            || original.nonce != pending.nonce
+            || original.canonical_command != pending.command
+            || original.canonical_reply != exact_canonical_reply
+            || self.current.as_ref() != Some(&original.qualification)
+        {
+            return Err(ObservationErrorV1::Conflict);
+        }
+        self.catalog.validate(&original.qualification)?;
+        if !verify_observation_reply_v1(
+            21,
+            original.nonce,
+            &original.canonical_command,
+            &original.canonical_reply,
+            &original.authenticator,
+            &original.qualification,
+            &self.catalog.wallet,
+            &self.catalog.provider_policy_root,
+        ) {
+            return Err(ObservationErrorV1::Authentication);
+        }
+        let (aggregate, revision, pending_count, retry_count) =
+            wallet_recovery_snapshot_projection_v1(&original.canonical_reply)
+                .ok_or(ObservationErrorV1::Authentication)?;
+        let aggregate = aggregate.ok_or(ObservationErrorV1::Authentication)?;
+        pending
+            .deadline
+            .check()
+            .map_err(|_| ObservationErrorV1::Expired)?;
+        Ok((aggregate, revision, pending_count, retry_count))
+    }
+
     fn decode_qualification_fields(&self, fields: &[Vec<u8>]) -> Result<QualificationProjectionV1> {
         if fields.len() != 5
             || fields[0] != 1_u32.to_le_bytes()
@@ -635,6 +750,19 @@ impl NativeStartupQualificationOwnerV1 {
         };
         self.catalog.validate(&result)?;
         Ok(result)
+    }
+
+    // A sender signature is checked under the exact already accepted operation-1 credential.
+    // This read supplies no new-work permit, clock, hardware state or recursive proof authority.
+    pub(super) fn sender_qualification(
+        &self,
+        fields: &[Vec<u8>],
+    ) -> Result<QualificationProjectionV1> {
+        let candidate = self.decode_qualification_fields(fields)?;
+        if self.current.as_ref() != Some(&candidate) {
+            return Err(ObservationErrorV1::InvalidQualification);
+        }
+        Ok(candidate)
     }
 }
 

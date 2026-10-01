@@ -613,7 +613,7 @@ fn fixture_output_opening_owns_success_error_mismatch_and_unwind_slots() {
 #[test]
 fn fixture_output_opening_source_stays_owned_until_borrowed_constructor() {
     let source = include_str!("../prover.rs");
-    source_has!(source; "#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_output_u64_secret_owners_v1<T>(", "#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_output_opening_v1(");
+    source_has!(source; "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_output_u64_secret_owners_v1<T>(", "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_output_opening_v1(");
     let owner_scope = source_part!(source; "fn with_fcmp_fixture_output_u64_secret_owners_v1<T>(" => "fn fcmp_fixture_output_opening_v1(");
     source_counts!(owner_scope; "ProverSecretCopyValueV1<u64>" => 4, ".expose_ref()" => 4);
     source_has!(owner_scope; "operation: impl FnOnce(&u64, &u64, &u64, &u64) -> T");
@@ -855,7 +855,7 @@ fn rerandomization_constructor_direct_handoff_covers_every_exit() {
 #[test]
 fn fixture_rerandomization_source_keeps_feature_secret_owners_in_order() {
     let source = include_str!("../prover.rs");
-    source_has!(source; "#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_rerandomization_u64_secret_owners_v1<T>(", "#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_rerandomization_v1(");
+    source_has!(source; "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_rerandomization_u64_secret_owners_v1<T>(", "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_rerandomization_v1(");
     let owner_scope = source_part!(source; "fn with_fcmp_fixture_rerandomization_u64_secret_owners_v1<T>(" => "fn fcmp_fixture_rerandomization_v1(");
     source_counts!(owner_scope; "ProverSecretCopyValueV1<u64>" => 4, ".expose_ref()" => 4);
     source_has!(owner_scope; "operation: impl FnOnce(&u64, &u64, &u64, &u64) -> T");

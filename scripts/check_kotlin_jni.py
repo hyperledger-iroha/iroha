@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Check compiled Kotlin declarations against the native bridge's export table.
 
-Requires Python 3.10+, compiled main class directories for all three SDK modules,
-and nm/llvm-nm (or Windows export tooling) for a freshly built bridge. No JVM
-classes or native code are loaded. No environment variables are required.
+Requires Python 3.10+ and compiled main class directories for all three SDK
+modules. Host checks use nm/llvm-nm (or Windows export tooling). Android checks
+require an explicit canonical llvm-nm executable, its SHA-256 and byte size, an
+ABI, and a fresh original-inspection output directory. No JVM classes or native
+code are loaded. No environment variables are required or accepted by the
+pinned Android subprocess.
 
 This checks declaration ownership, JDK 8 bytecode, release API constraints, and
 exact JNI export ownership. Export names alone cannot attest native argument
@@ -17,13 +20,20 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import re
+import selectors
+import stat
+import subprocess
 import sys
 import tempfile
+import time
 from typing import Sequence
 
 
@@ -42,10 +52,189 @@ ARTIFACT = _load_sibling("check_native_sdk_artifact")
 MODULES = ("core-jvm", "client-android", "kagemusha-wallet-android")
 SDK_PACKAGE = "org/hyperledger/iroha/sdk/"
 MAX_CLASS_FILES = 20_000
+ANDROID_MACHINES = {"arm64-v8a": 183, "x86_64": 62}
+ANDROID_SYMBOL_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "TMPDIR": "/tmp",
+                              "LANG": "C", "LC_ALL": "C", "TZ": "UTC"}
+ANDROID_SYMBOL_ARGUMENTS = ("--dynamic", "--defined-only", "--extern-only", "--format=just-symbols")
+MAX_PINNED_TOOL_BYTES = 128 * 1024 * 1024
+MAX_ANDROID_LIBRARY_BYTES = 1024 * 1024 * 1024
 
 
 class AuditError(ValueError):
     """The compiled SDK and the library do not form the canonical JNI boundary."""
+
+
+def _file_metadata(value: os.stat_result) -> dict[str, int]:
+    """Record identity and mutation counters from one actual file observation."""
+    return {name: getattr(value, "st_" + name) for name in
+            ("dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtime_ns", "ctime_ns")}
+
+
+@contextmanager
+def _sealed_input(path: Path, *, label: str, maximum: int,
+                  expected_sha256: str | None = None, expected_size: int | None = None,
+                  executable: bool = False):
+    """Hold and seal a canonical single-link file; never follow a substituted link."""
+    if not path.is_absolute() or str(path) != str(path.resolve(strict=True)):
+        raise AuditError(f"{label} must be an absolute canonical path without symlinks")
+    original = path.lstat()
+    if (not stat.S_ISREG(original.st_mode) or original.st_nlink != 1
+            or original.st_mode & 0o022
+            or (executable and not original.st_mode & 0o111)
+            or not 0 < original.st_size <= maximum):
+        raise AuditError(f"{label} must be a bounded regular single-link file with safe permissions")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = _file_metadata(original)
+
+        def observe():
+            if (str(path) != str(path.resolve(strict=True))
+                    or _file_metadata(os.fstat(stream.fileno())) != metadata
+                    or _file_metadata(path.lstat()) != metadata):
+                raise AuditError(f"{label} changed during inspection")
+            stream.seek(0)
+            digest, count, prefix = hashlib.sha256(), 0, b""
+            while chunk := stream.read(min(1024 * 1024, maximum - count + 1)):
+                if not prefix:
+                    prefix = chunk[:64]
+                count += len(chunk)
+                if count > maximum:
+                    raise AuditError(f"{label} exceeded its byte limit")
+                digest.update(chunk)
+            if (count != original.st_size or _file_metadata(os.fstat(stream.fileno())) != metadata
+                    or _file_metadata(path.lstat()) != metadata):
+                raise AuditError(f"{label} changed during inspection")
+            return digest.hexdigest(), count, prefix
+
+        digest, size, prefix = observe()
+        if ((expected_sha256 is not None and digest != expected_sha256)
+                or (expected_size is not None and size != expected_size)):
+            raise AuditError(f"{label} does not match its explicit SHA-256 and size pin")
+        record = {"path": str(path), "sha256": digest, "size_bytes": size, "identity": metadata}
+
+        def recheck():
+            if observe()[:2] != (digest, size):
+                raise AuditError(f"{label} changed during inspection")
+
+        yield record, prefix, recheck
+
+
+def _write_original(directory: Path, name: str, raw: bytes) -> dict[str, object]:
+    """Retain exact owned bytes exclusively, with no overwrite or symlink follow."""
+    path = directory / name
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
+
+
+def _json_original(directory: Path, name: str, value: object) -> dict[str, object]:
+    """Retain a producer-authored record separately from actual child streams."""
+    return _write_original(directory, name, (json.dumps(value, sort_keys=True, indent=2) + "\n").encode())
+
+
+def _collect_symbol_probe(command: Sequence[str], *, timeout_seconds: float = 30) -> tuple[bytes, bytes, dict[str, object]]:
+    """Collect a POSIX symbol-tool child within finite stream and wall limits."""
+    if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 30:
+        raise AuditError("invalid bounded symbol-tool deadline")
+    buffers = [bytearray(), bytearray()]
+    limits = (ARTIFACT.MAX_SYMBOL_TOOL_OUTPUT_BYTES, ARTIFACT.MAX_PROBE_STDERR_BYTES)
+    outcome = {"started_at": datetime.now(timezone.utc).isoformat(), "exit_code": None,
+               "transport_error": None, "streams_complete": False}
+    process = None
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        process = subprocess.Popen(list(command), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, env=dict(ANDROID_SYMBOL_ENVIRONMENT),
+                                   close_fds=True, bufsize=0)
+        with selectors.DefaultSelector() as selector:
+            for index, stream in enumerate((process.stdout, process.stderr)):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, index)
+            while selector.get_map() or process.poll() is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"symbol-tool probe exceeded its {timeout_seconds} second deadline")
+                for key, _ in selector.select(min(remaining, 0.1)):
+                    index = key.data
+                    try:
+                        raw = os.read(key.fd, min(65536, limits[index] - len(buffers[index]) + 1))
+                    except BlockingIOError:
+                        continue
+                    if not raw:
+                        selector.unregister(key.fileobj)
+                        continue
+                    buffers[index].extend(raw)
+                    if len(buffers[index]) > limits[index]:
+                        raise AuditError("symbol-tool " + ("stdout" if index == 0 else "stderr")
+                                         + " exceeded its byte limit; retained stream is incomplete")
+            outcome["exit_code"] = process.wait(timeout=0)
+            outcome["streams_complete"] = True
+    except (OSError, subprocess.SubprocessError, AuditError) as error:
+        outcome["transport_error"] = {"kind": type(error).__name__, "message": str(error)}
+    finally:
+        if process is not None:
+            ARTIFACT._stop_owned_probe(process)
+            outcome["exit_code"] = process.returncode
+            process.stdout.close()
+            process.stderr.close()
+        outcome["completed_at"] = datetime.now(timezone.utc).isoformat()
+    return bytes(buffers[0]), bytes(buffers[1]), outcome
+
+
+def inspect_pinned_android_symbols(library: Path, *, abi: str, tool: Path,
+                                   tool_sha256: str, tool_size_bytes: int,
+                                   output: Path) -> tuple[tuple[str, ...], dict[str, object]]:
+    """Inspect an Android ELF using only the explicit tool and preserve originals."""
+    if (os.name != "posix" or abi not in ANDROID_MACHINES
+            or type(tool_sha256) is not str or not re.fullmatch(r"[0-9a-f]{64}", tool_sha256)
+            or tool_sha256 == "0" * 64 or type(tool_size_bytes) is not int
+            or not 0 < tool_size_bytes <= MAX_PINNED_TOOL_BYTES):
+        raise AuditError("pinned Android inspection requires a POSIX host, exact ABI and nonzero tool SHA-256/size")
+    if (not output.is_absolute() or output.exists() or output.is_symlink()
+            or not output.parent.is_dir() or str(output.parent) != str(output.parent.resolve(strict=True))):
+        raise AuditError("inspection output must be fresh beneath an absolute canonical existing directory")
+    with _sealed_input(tool, label="symbol tool", maximum=MAX_PINNED_TOOL_BYTES,
+                       expected_sha256=tool_sha256, expected_size=tool_size_bytes, executable=True) as tool_input:
+        with _sealed_input(library, label="Android library", maximum=MAX_ANDROID_LIBRARY_BYTES) as library_input:
+            tool_record, _, recheck_tool = tool_input
+            library_record, header, recheck_library = library_input
+            if (len(header) < 64 or header[:7] != b"\x7fELF\x02\x01\x01"
+                    or int.from_bytes(header[16:18], "little") != 3
+                    or int.from_bytes(header[18:20], "little") != ANDROID_MACHINES[abi]):
+                raise AuditError("Android library must be an ELF64 little-endian ET_DYN for the exact ABI")
+            command = [str(tool), *ANDROID_SYMBOL_ARGUMENTS, str(library)]
+            invocation = {"schema": "iroha.android.jni-symbol-inspection.v1", "android_abi": abi,
+                          "tool": tool_record, "library": library_record, "argv": command,
+                          "environment": dict(ANDROID_SYMBOL_ENVIRONMENT)}
+            output.mkdir(mode=0o700)
+            originals = {"invocation": _json_original(output, "invocation.json", invocation)}
+            recheck_tool()
+            recheck_library()
+            stdout, stderr, outcome = _collect_symbol_probe(command)
+            originals["stdout"] = _write_original(output, "stdout.bin", stdout)
+            originals["stderr"] = _write_original(output, "stderr.bin", stderr)
+            originals["result"] = _json_original(output, "result.json", outcome)
+            try:
+                recheck_tool()
+                recheck_library()
+            except (AuditError, OSError) as error:
+                _json_original(output, "input-guards.json", {"valid": False, "error": str(error)})
+                raise
+            originals["input_guards"] = _json_original(output, "input-guards.json", {"valid": True})
+            if (outcome["transport_error"] is not None or not outcome["streams_complete"]
+                    or outcome["exit_code"] != 0 or stderr):
+                raise AuditError(f"pinned Android symbol inspection failed; original streams/results retained in {output}")
+            try:
+                symbols = tuple(stdout.decode("ascii").splitlines())
+            except UnicodeDecodeError as error:
+                raise AuditError("pinned Android symbol inventory is not ASCII") from error
+            if (not symbols or len(symbols) > 100_000
+                    or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", symbol) for symbol in symbols)):
+                raise AuditError("pinned Android symbol inventory contains empty, decorated or malformed symbols")
+            return symbols, {**invocation, "originals": originals, "tool_pinned": True}
 
 
 def jni_escape(value: str) -> str:
@@ -303,12 +492,33 @@ def validate_exports(operations: Sequence[dict[str, object]], symbols: Sequence[
         raise AuditError("; ".join(details))
 
 
-def audit(roots: dict[str, Sequence[Path]], library: Path) -> dict[str, object]:
+def audit(roots: dict[str, Sequence[Path]], library: Path, *, platform: str = "host",
+          android_abi: str | None = None, symbol_tool: Path | None = None,
+          symbol_tool_sha256: str | None = None, symbol_tool_size_bytes: int | None = None,
+          inspection_output: Path | None = None) -> dict[str, object]:
     """Seal the inspected inputs around a complete compiled declaration/export check."""
+    pinned_arguments = (android_abi, symbol_tool, symbol_tool_sha256, symbol_tool_size_bytes, inspection_output)
+    if platform not in ("host", "android") or (platform == "host" and any(value is not None for value in pinned_arguments)):
+        raise AuditError("explicit pinned symbol-tool arguments belong only to --platform android")
+    if platform == "android" and any(value is None for value in pinned_arguments):
+        raise AuditError("Android inspection requires explicit ABI, symbol-tool SHA-256/size/path and original output")
+    if inspection_output is not None and any(
+        inspection_output.resolve().is_relative_to(root.resolve()) for paths in roots.values() for root in paths
+    ):
+        raise AuditError("inspection output must be outside compiled class inputs")
     _, records = scan_classes(roots)
-    library = library.resolve(strict=True)
+    if platform == "host":
+        library = library.resolve(strict=True)
     digest, size = ARTIFACT.stable_artifact_identity(library)
-    symbols = ARTIFACT.inspect_exported_symbols(library, required=True)
+    if platform == "android":
+        symbols, inspection = inspect_pinned_android_symbols(
+            library, abi=android_abi, tool=symbol_tool, tool_sha256=symbol_tool_sha256,
+            tool_size_bytes=symbol_tool_size_bytes, output=inspection_output)
+        if (inspection["library"]["sha256"], inspection["library"]["size_bytes"]) != (digest, size):
+            raise AuditError("native library changed before pinned inspection")
+    else:
+        symbols = ARTIFACT.inspect_exported_symbols(library, required=True)
+        inspection = {"tool_pinned": False, "scope": "host_platform_tool_discovery"}
     operations = [dict(operation, module=record["module"]) for record in records
                   for operation in record["operations"]]
     validate_exports(operations, symbols)
@@ -322,6 +532,8 @@ def audit(roots: dict[str, Sequence[Path]], library: Path) -> dict[str, object]:
         "schema_version": 1,
         "valid": True,
         "scope": "compiled_kotlin_declarations_and_exact_jni_export_ownership",
+        "platform": platform,
+        "symbol_inspection": inspection,
         "native_signatures_qualified": False,
         "native_execution_qualified": False,
         "source_build_provenance_qualified": False,
@@ -342,6 +554,8 @@ def write_report(path: Path, result: dict[str, object]) -> None:
     if path.exists():
         inputs = [Path(result["library"]["path"]),
                   *(Path(record["path"]) for record in result["classes"])]
+        if result.get("symbol_inspection", {}).get("tool_pinned"):
+            inputs.append(Path(result["symbol_inspection"]["tool"]["path"]))
         if any(path.samefile(source) for source in inputs):
             raise AuditError("report must not alias an inspected build input")
     temporary = None
@@ -363,6 +577,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--classes", action="append", required=True, metavar="MODULE=DIR",
                         help="main class output for each SDK module; repeat for multiple outputs")
     parser.add_argument("--library", type=Path, required=True, help="fresh connect_norito_bridge library")
+    parser.add_argument("--platform", choices=("host", "android"), default="host",
+                        help="Android requires an explicit pinned llvm-nm; host discovery is unpinned")
+    parser.add_argument("--android-abi", choices=tuple(ANDROID_MACHINES), help="exact Android ELF ABI")
+    parser.add_argument("--symbol-tool", type=Path, help="absolute canonical reviewed NDK llvm-nm executable")
+    parser.add_argument("--symbol-tool-sha256", help="exact lowercase SHA-256 of the reviewed executable")
+    parser.add_argument("--symbol-tool-size-bytes", type=int, help="exact executable byte size")
+    parser.add_argument("--inspection-output", type=Path, help="fresh directory for actual pinned child originals")
     parser.add_argument("--report", type=Path, help="optional JSON evidence destination")
     arguments = parser.parse_args(argv)
     roots = {module: [] for module in MODULES}
@@ -374,11 +595,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.report:
             report = arguments.report.resolve()
-            if report == arguments.library.resolve() or any(
+            if (report == arguments.library.resolve()
+                or (arguments.symbol_tool is not None and report == arguments.symbol_tool.resolve())
+                or (arguments.inspection_output is not None and report.is_relative_to(arguments.inspection_output.resolve()))
+                or any(
                 report.is_relative_to(root.resolve()) for paths in roots.values() for root in paths
-            ):
+            )):
                 raise AuditError("report must not overwrite an inspected build input")
-        result = audit(roots, arguments.library)
+        result = audit(roots, arguments.library, platform=arguments.platform,
+                       android_abi=arguments.android_abi, symbol_tool=arguments.symbol_tool,
+                       symbol_tool_sha256=arguments.symbol_tool_sha256,
+                       symbol_tool_size_bytes=arguments.symbol_tool_size_bytes,
+                       inspection_output=arguments.inspection_output)
         if arguments.report:
             write_report(arguments.report, result)
     except (AuditError, JVM.ClassFileError, ARTIFACT.ArtifactContractError, OSError) as error:

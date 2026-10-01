@@ -2568,21 +2568,37 @@ fn gov_audit_deploy_reports_results_against_mock() {
         .collect::<Vec<_>>();
     assert_eq!(public_entrypoints, ["inspect"]);
     let code_hash_hex = hex::encode(code_hash.as_ref());
+    let parsed_contract_address = contract_address
+        .parse::<iroha_data_model::smart_contract::ContractAddress>()
+        .expect("canonical contract address");
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+        &parsed_contract_address,
+        code_hash,
+    )
+    .expect("contract address artifact identity");
+    let artifact_key = format!("{}/{code_hash_hex}", artifact_id.dataspace_id.as_u64());
+    let network_id = MOCK_NETWORK_ID
+        .parse::<iroha_data_model::NetworkId>()
+        .expect("mock network identity");
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let mut code_arr = [0u8; 32];
     code_arr.copy_from_slice(code_hash.as_ref());
     let mut abi_arr = [0u8; 32];
     abi_arr.copy_from_slice(abi_hash.as_ref());
     let proposal_hex = proposal_id_hex(contract_address, &code_arr, &abi_arr);
-    let manifest_body = norito::json!({"manifest": manifest});
-    let code_bytes_body = {
-        let mut root = json::Map::new();
-        root.insert(
-            "code_b64".to_string(),
-            json::Value::String(BASE64.encode(&code_bytes)),
-        );
-        json::Value::Object(root)
-    };
+    let manifest_body = norito::json!({
+        "network_id": network_id,
+        "artifact_id": artifact_id,
+        "manifest": manifest,
+        "code_hash": null,
+        "abi_hash": null,
+        "code_bytes": null
+    });
+    let code_bytes_body = norito::json!({
+        "network_id": network_id,
+        "artifact_id": artifact_id,
+        "code_b64": (BASE64.encode(&code_bytes))
+    });
     let proposal_body = {
         let mut deploy = json::Map::new();
         deploy.insert(
@@ -2636,9 +2652,9 @@ fn gov_audit_deploy_reports_results_against_mock() {
         }),
     );
     let mut manifests = json::Map::new();
-    manifests.insert(code_hash_hex.clone(), manifest_body);
+    manifests.insert(artifact_key.clone(), manifest_body);
     let mut code_bytes_map = json::Map::new();
-    code_bytes_map.insert(code_hash_hex.clone(), code_bytes_body);
+    code_bytes_map.insert(artifact_key.clone(), code_bytes_body);
     let mut proposals = json::Map::new();
     proposals.insert(proposal_hex.clone(), proposal_body);
     let mut root = json::Map::new();
@@ -2692,7 +2708,8 @@ fn gov_audit_deploy_reports_results_against_mock() {
         value
             .get("issue_count")
             .and_then(norito::json::Value::as_u64),
-        Some(0)
+        Some(0),
+        "unexpected deploy audit report: {value:?}"
     );
     assert_eq!(
         value
@@ -2742,7 +2759,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
     tampered_config
         .get_mut("code_bytes")
         .and_then(Value::as_object_mut)
-        .and_then(|entries| entries.get_mut(&code_hash_hex))
+        .and_then(|entries| entries.get_mut(&artifact_key))
         .and_then(Value::as_object_mut)
         .expect("configured artifact response")
         .insert(

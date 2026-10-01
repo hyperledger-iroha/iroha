@@ -25,6 +25,12 @@ class KagemushaNativeRecoveredEnrollmentV1 internal constructor(
                 KagemushaEnrolledOpenSelectorV1(1, value.owner, value.enrollmentId()), value.nonce(),
                 value.releaseId(), value.hardwarePolicyDigest(), value.coreAuthorizationKeyReference())
             require(message.contentEquals(original[2])) { "Native recovery signing message differs from its exact account challenge" }
+            require(value.nonce().contentEquals(original[4])) { "Native recovery device nonce differs from its account challenge" }
+            val command = KagemushaDeviceOperationCodecV1.encodeControlCommand(
+                KagemushaDeviceControlCommandV1.ReadActiveHardwareCredential)
+            require(command.contentEquals(original[3])) {
+                "Native recovery command is not the original operation-1 read"
+            }
         }
         fun attemptId(): ByteArray = original[0].copyOf()
         fun canonicalAccountChallenge(): ByteArray = original[1].copyOf()
@@ -83,7 +89,10 @@ class KagemushaNativeRecoveredEnrollmentV1 internal constructor(
     fun cancel(challenge: Challenge) {
         check(!revoked && original === challenge) { "Recovered enrollment challenge belongs to another owner" }
         revoked = true
-        bridge.invoke(METHOD, listOf(u32(11), challenge.attemptId()))
+        // Phase11 cancels only an outstanding challenge. A completed observation lease
+        // is retired through its original owning handle, never a new cancellation ticket.
+        if (authenticated) bridge.close()
+        else bridge.invoke(METHOD, listOf(u32(11), challenge.attemptId()))
     }
 
     @Synchronized

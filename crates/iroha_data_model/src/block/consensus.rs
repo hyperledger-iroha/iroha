@@ -785,12 +785,14 @@ pub struct LaneSettlementReceipt {
     /// UTC timestamp in milliseconds when the receipt was generated.
     pub timestamp_ms: u64,
 }
-/// Deterministic Nexus fee schedule inputs captured for asynchronous settlement.
+/// Exact deterministic inputs used by the actual Nexus settlement.
 #[derive(
     Clone,
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     IntoSchema,
@@ -816,12 +818,41 @@ pub struct NexusFeeScheduleInputs {
     /// Per-gas-unit fee from `nexus.fees.per_gas_unit_fee`.
     pub per_gas_unit_fee: Quantity,
 }
+/// Actual native settlement performed for one Nexus charge.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NexusFeeSettlementV1")]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum NexusFeeSettlementV1 {
+    /// The charged global fee asset and its total supply were actually burned.
+    Burn,
+}
 /// Versioned Nexus fee receipt committed by a finalized lane block.
 #[derive(
     Clone,
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     IntoSchema,
@@ -852,8 +883,10 @@ pub struct NexusFeeReceipt {
     /// Proof-bound cross-lane spend lease, when relay settlement is used.
     #[norito(required)]
     pub lease_id: Option<Hash>,
-    /// Computed fee amount to burn on Nexus.
+    /// Exact nonzero fee amount actually settled by this execution output.
     pub fee_amount: Quantity,
+    /// Native balance/supply effect that completed before receipt publication.
+    pub settlement: NexusFeeSettlementV1,
     /// Fee schedule inputs needed to recompute [`Self::fee_amount`].
     pub schedule: NexusFeeScheduleInputs,
 }
@@ -861,6 +894,9 @@ impl NexusFeeReceipt {
     /// Clean-break receipt version carrying typed debit sources and canonical assets.
     pub const VERSION: u16 = 2;
 }
+#[path = "nexus_fee_receipt.rs"]
+mod nexus_fee_receipt;
+pub use nexus_fee_receipt::MAX_NEXUS_FEE_RECEIPT_BYTES;
 /// Liquidity profile applied when computing XOR conversions.
 #[derive(
     Clone,

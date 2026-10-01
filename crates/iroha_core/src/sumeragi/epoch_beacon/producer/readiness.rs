@@ -77,19 +77,10 @@ impl NativeBeaconProducer {
             .0
             .lock()
             .map_err(|_| NativeBeaconError::Source("readiness lock poisoned".into()))? = None;
-        if context.instance != self.instance
-            || applied.0.checked_add(1) != Some(context.height)
-            || applied.1 != context.parent_hash
-            || u64::try_from(state.height()).ok() != Some(applied.0)
-            || generation % 2 != 0
-        {
+        if generation % 2 != 0 {
             return Err(NativeBeaconError::Context);
         }
-        let parent = committed_block(state, applied.0)
-            .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
-        if parent.core_hash() != context.parent_hash || parent.result() != context.parent_result {
-            return Err(NativeBeaconError::Context);
-        }
+        self.parent_source(state, context, applied)?;
         let retained = state.world().consensus_schedule();
         let current = &retained
             .ready(context.height)

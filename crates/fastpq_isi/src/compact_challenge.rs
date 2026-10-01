@@ -195,8 +195,9 @@ impl RawTapeV1 {
                 if candidate >= limit {
                     continue;
                 }
+                // The fixed 2^23 domain bounds every remainder to a u32.
                 let position = u32::try_from(candidate % LDE_ROWS as u64)
-                    .expect("fixed LDE query domain fits u32");
+                    .map_err(|_| RawTapeErrorV1::Exhausted)?;
                 if let Err(at) = queries.binary_search(&position) {
                     queries.insert(at, position);
                 }

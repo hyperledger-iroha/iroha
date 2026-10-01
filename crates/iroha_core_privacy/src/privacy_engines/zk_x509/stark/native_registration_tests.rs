@@ -936,7 +936,7 @@ fn p256_role_registrations_are_exact_minimal_and_bucketed_by_native_log() {
             super::super::p256_cross_trace_bus::P256_CROSS_TRACE_SINK_AUX_WIDTH_V1,
             P256_BINDING_SINK_FIXED_WIDTH_V1,
             P256_BINDING_SINK_REGISTERED_CONSTRAINT_COUNT_V1,
-            3, // A fixed last-row selector multiplies the quadratic sink product relation.
+            3,
             1,
         ),
         (

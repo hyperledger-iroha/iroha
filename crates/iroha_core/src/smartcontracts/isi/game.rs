@@ -1599,6 +1599,12 @@ mod tests {
             redirect,
         )
     }
+    /// Retain the original bounded claim invocation before borrowing fixture State.
+    pub(super) fn payout_transaction<'block, 'state>(
+        block: &'block mut crate::state::StateBlock<'state>,
+    ) -> StateTransaction<'block, 'state> {
+        block.transaction_for_fastpq_testing(Hash::new(b"native-game-claim-fixture"))
+    }
     pub(super) fn fund_payout_fixture(
         st: &mut StateTransaction<'_, '_>,
         session: &mut GameSessionRecordV1,
@@ -1695,7 +1701,7 @@ mod tests {
             payout_state_with_domain(Quantity::one(), Some(domain.clone()));
         session.phase = GamePhaseV1::Playing;
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         assert_domain_cannot_consume_game_reserve(&mut st, &session, &domain);
     }
@@ -1705,7 +1711,7 @@ mod tests {
         let huge: Quantity = format!("1{}", "0".repeat(153)).parse().unwrap();
         let (state, mut session, relayer) = payout_state_with_domain(huge, Some(domain.clone()));
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         fix_test_awards(&mut st, &mut session);
         let retained = get(&st, &session.session_id).unwrap();
@@ -1744,13 +1750,21 @@ mod tests {
         use iroha_primitives::time::TimeSource;
 
         let huge: Quantity = format!("1{}", "0".repeat(153)).parse().unwrap();
-        let (state, mut session, relayer) = payout_state(huge);
-        let mut block = state.block(header());
+        let (pristine, mut session, relayer) = payout_state(huge);
+        let state = crate::pipeline::overlay::test_support::state_after_genesis(pristine.world);
+        let next_header = BlockHeader::new(
+            nonzero_ext::nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(next_header);
         {
             // Construct an existing backed award after the proof stage. The
             // transaction below exercises real claim admission and execution;
             // this fixture is not a proof-to-funded-settlement qualification.
-            let mut st = block.transaction();
+            let mut st = payout_transaction(&mut block);
             fund_payout_fixture(&mut st, &mut session);
             fix_test_awards(&mut st, &mut session);
             st.apply();
@@ -1901,7 +1915,7 @@ mod tests {
         );
         let (state, mut session, redirect) = payout_state(huge.clone());
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         fix_test_awards(&mut st, &mut session);
         let settled = get(&st, &session.session_id).unwrap();
@@ -1995,7 +2009,7 @@ mod tests {
         };
         let (state, mut session, relayer) = payout_state(Quantity::one());
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         let issuer = session.participants[0].account.clone();
         let second = session.participants[1].account.clone();
@@ -2328,7 +2342,7 @@ mod tests {
         session.liability = session.stake.clone();
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         st.world.take_external_events();
         let balances = st
@@ -2596,7 +2610,7 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = block.transaction_for_fastpq_testing(Hash::new(b"native-game-refund-call"));
         session.network_id = *st.network_id();
         session.custody = game_custody_account_v1(
             &session.network_id,
@@ -3258,7 +3272,7 @@ mod tests {
         session.phase = GamePhaseV1::Lobby;
         let owner = session.participants[0].account.clone();
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         let source = AssetId::of(session.asset_definition.clone(), owner.clone());
         let custody_asset = AssetId::of(session.asset_definition.clone(), session.custody.clone());

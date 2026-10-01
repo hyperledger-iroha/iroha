@@ -278,7 +278,7 @@ def remote_entry(e, stream):
         with self.assertRaisesRegex(transfer.TransferError, "byte closure"):
             transfer.load_signed_modules({"taira_retry": b""}, self.root)
 
-    def preparation_fixture(self):
+    def preparation_fixture(self, scope="basic"):
         import taira_release as release
         output = self.root / "preparation"
         output.mkdir(mode=0o700)
@@ -296,7 +296,7 @@ def remote_entry(e, stream):
         (attempt / "bin").chmod(0o500)
         base = dict.fromkeys(transfer.BASE_FIELDS, "fixture")
         base.update(commit="a" * 40, tree="b" * 40, signer_fingerprint="C" * 40,
-            target="aarch64-unknown-linux-gnu", profile="release", jobs=6, native_check_scope="basic",
+            target="aarch64-unknown-linux-gnu", profile="release", jobs=6, native_check_scope=scope,
             source_unchanged=True, toolchain_unchanged=True, release_qualified=False, deployed=False,
             source_snapshot_sha256=transfer.sha(release.canonical_json_bytes([])),
             source_root=str(self.root / "source"))
@@ -305,7 +305,7 @@ def remote_entry(e, stream):
         result = dict(base, artifacts=rows, timings_seconds={}, attempt="attempts/000001")
         raw = release.canonical_json_bytes(result)
         for path, value in ((output / "request.json", request),
-                            (output / "checks.json", {"request": request, "passed": True}),
+                            (output / "checks.json", {"request": request, "passed": scope != "build-only"}),
                             (attempt / "capture.json", result), (output / "result.json", result)):
             transfer.write_new(path, release.canonical_json_bytes(value))
         attempt.chmod(0o500)
@@ -332,6 +332,48 @@ def remote_entry(e, stream):
             with self.assertRaisesRegex(transfer.TransferError, "qualification checkpoint"):
                 transfer.admit_preparation(plan, {"taira_release": release}, "b" * 40)
 
+    def test_checks_require_exact_scope_boolean_and_request(self):
+        for scope in ("basic", "full", "build-only"):
+            request = {"native_check_scope": scope, "commit": "a" * 40}
+            passed = scope != "build-only"
+            self.assertTrue(transfer.preparation_checks_match(request,
+                            {"request": request, "passed": passed}))
+            self.assertTrue(transfer.preparation_checks_match(request,
+                            {"request": request, "passed": not passed}))
+            for invalid in (0, 1, None, "false"):
+                self.assertFalse(transfer.preparation_checks_match(request,
+                                 {"request": request, "passed": invalid}))
+            self.assertFalse(transfer.preparation_checks_match(request,
+                             {"request": dict(request, commit="b" * 40), "passed": passed}))
+            self.assertFalse(transfer.preparation_checks_match(request,
+                             {"request": request, "passed": passed, "extra": True}))
+        request = {"native_check_scope": "unknown"}
+        self.assertFalse(transfer.preparation_checks_match(request,
+                         {"request": request, "passed": False}))
+
+    def test_build_only_transfer_preserves_boolean_evidence_without_a_pass_gate(self):
+        release, plan, expected, output = self.preparation_fixture("build-only")
+        with patch.object(release, "commit_entries", return_value=b""), \
+             patch.object(release, "frozen_snapshot", return_value=[]):
+            self.assertEqual(transfer.admit_preparation(plan, {"taira_release": release}, "b" * 40), expected)
+            payloads = transfer.preparation_payloads(plan, expected)
+            checkpoint = output / "checks.json"
+            self.assertEqual(payloads[2][1], checkpoint)
+            self.assertIs(release.read_record(checkpoint)["passed"], False)
+            checkpoint.chmod(0o600)
+            checkpoint.write_bytes(release.canonical_json_bytes(
+                {"request": release.read_record(output / "request.json"), "passed": True}))
+            checkpoint.chmod(0o400)
+            self.assertEqual(transfer.admit_preparation(plan, {"taira_release": release}, "b" * 40), expected)
+            transfer.preparation_payloads(plan, expected)
+            checkpoint.chmod(0o600)
+            checkpoint.write_bytes(release.canonical_json_bytes(
+                {"request": release.read_record(output / "request.json"), "passed": 0}))
+            checkpoint.chmod(0o400)
+            with self.assertRaisesRegex(transfer.TransferError, "qualification checkpoint"):
+                transfer.admit_preparation(plan, {"taira_release": release}, "b" * 40)
+            with self.assertRaisesRegex(transfer.TransferError, "checkpoint changed"):
+                transfer.preparation_payloads(plan, expected)
     def test_preparation_refuses_foreign_identity_capture_record_and_frozen_source(self):
         release, plan, expected, output = self.preparation_fixture()
         with patch.object(release, "commit_entries", return_value=b""), \
@@ -360,7 +402,7 @@ def remote_entry(e, stream):
             self.assertEqual((row["size"], row["sha256"]), (path.stat().st_size, transfer.sha(path.read_bytes())))
         checkpoint = output / "checks.json"
         checkpoint.chmod(0o600)
-        checkpoint.write_bytes(release.canonical_json_bytes({"request": release.read_record(output / "request.json"), "passed": False}))
+        checkpoint.write_bytes(release.canonical_json_bytes({"request": release.read_record(output / "request.json"), "passed": 0}))
         checkpoint.chmod(0o400)
         with self.assertRaisesRegex(transfer.TransferError, "checkpoint changed"):
             transfer.preparation_payloads(plan, build)
@@ -384,7 +426,8 @@ class NativeInvocationTests(unittest.TestCase):
         self.root, self.runtime = self.fixture.root, self.fixture.runtime
         self.addCleanup(patch.stopall)
         patch.object(transfer, "NATIVE_RUNTIME", str(self.runtime)).start()
-        release, preparation, self.build, output = self.fixture.preparation_fixture()
+        release, preparation, self.build, output = self.fixture.preparation_fixture(
+            getattr(self, "preparation_scope", "basic"))
         self.preparation = preparation
         if sys.platform == "linux":
             image = Path(sys.executable).resolve().read_bytes()
@@ -455,6 +498,16 @@ class NativeInvocationTests(unittest.TestCase):
                 completed["binary"]["destination"] = str(self.runtime / "foreign/bin")
             with self.subTest(part=part), self.assertRaises(transfer.TransferError):
                 transfer.admit_native_records(self.plan, "b" * 40, build, request, completed)
+
+    def test_build_only_native_invocation_still_binds_actual_import_and_roles(self):
+        case = NativeInvocationTests(methodName="runTest")
+        case.preparation_scope = "build-only"
+        try:
+            case.setUp()
+            self.assertEqual(case.build["native_check_scope"], "build-only")
+            case.test_receipts_bind_preparation_exact_roles_and_completed_import()
+        finally:
+            case.doCleanups()
 
     def test_runtime_descriptors_reject_links_permissions_and_unsafe_ancestry_without_reading(self):
         path = self.runtime / "key"
@@ -638,7 +691,8 @@ class SignedTransferIntegrationTests(unittest.TestCase):
                                 "size": len(raw), "sha256": transfer.sha(raw)})
         from release_artifact_contract import canonical_json_bytes
         base = dict.fromkeys(transfer.BASE_FIELDS, "fixture")
-        base.update(commit=self.fixture.commit, tree=self.fixture.tree, signer_fingerprint=self.fixture.fingerprint)
+        base.update(commit=self.fixture.commit, tree=self.fixture.tree, signer_fingerprint=self.fixture.fingerprint,
+                    native_check_scope="build-only")
         build = dict(base, artifacts=binary_rows, timings_seconds={}, attempt="attempts/000001")
         preparation = self.fixture.case / "preparation"
         attempt = preparation / "attempts/000001"

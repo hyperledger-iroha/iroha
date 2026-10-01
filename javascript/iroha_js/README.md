@@ -1587,9 +1587,10 @@ prints the top contributors to stdout:
 
 Pass `-- --out /tmp/report.json` to control the output path or
 `-- --keep-tarball` to retain the generated `.tgz` for manual inspection. The
-JSON artifact stores the same metadata used in release reviews, so attaching it
-to roadmap evidence or a PR comment satisfies the “bundle-size impact report”
-gate without requiring a full publish.
+JSON artifact stores the same metadata used in release reviews. Bundle sizes
+are informational; code growth has no byte ceiling or percentage gate.
+`npm run bundle:check` verifies the declared eager/deferred module boundaries,
+complete output inventory, and browser isolation.
 
 // Build a fresh RegisterDomain transaction using the native builder helper
 const built = buildRegisterDomainTransaction({

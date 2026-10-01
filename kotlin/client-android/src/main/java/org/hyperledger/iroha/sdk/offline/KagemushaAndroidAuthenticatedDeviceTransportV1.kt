@@ -55,6 +55,7 @@ class KagemushaAndroidAuthenticatedDeviceTransportV1(
             status,
             result.payload(),
             result.authenticator(),
+            result.canonicalResponseFrame(),
         )
     }
 }

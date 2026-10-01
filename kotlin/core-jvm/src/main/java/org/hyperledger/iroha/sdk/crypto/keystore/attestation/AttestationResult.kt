@@ -7,6 +7,8 @@ class AttestationResult(
     /** Alias associated with the generated key. */
     @JvmField val alias: String,
     certificateChain: List<X509Certificate>,
+    /** Root-nearest original Android KeyDescription certificate, verified against the leaf key. */
+    @JvmField val attestationCertificate: X509Certificate,
     /** Security level encoded in the attestation extension. */
     @JvmField val attestationSecurityLevel: SecurityLevel,
     /** Keymaster security level reported in the attestation extension. */
@@ -24,7 +26,7 @@ class AttestationResult(
     private val _attestationChallenge: ByteArray = attestationChallenge?.copyOf() ?: ByteArray(0)
     private val _uniqueId: ByteArray = uniqueId?.copyOf() ?: ByteArray(0)
 
-    /** Leaf certificate that carries the attestation extension. */
+    /** Actual alias-held leaf key certificate; its optional extension is not an authority source. */
     @JvmField
     val leafCertificate: X509Certificate
 

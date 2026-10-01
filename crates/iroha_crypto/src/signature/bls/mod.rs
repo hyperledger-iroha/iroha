@@ -45,6 +45,7 @@ pub use small::SmallBls as BlsSmall;
 pub use small::SmallPrivateKey as BlsSmallPrivateKey;
 /// Compact BLS public key (smaller signatures).
 pub use small::SmallPublicKey as BlsSmallPublicKey;
+pub(crate) mod aggregate_custody;
 pub(crate) mod canonical;
 #[cfg(test)]
 mod consolidation_tests;
@@ -96,6 +97,31 @@ mod small {
 }
 #[cfg(test)]
 mod tests;
+/// Parse the already PoP-verified normal key without allocating a diagnostic.
+pub(crate) fn parsed_normal_key_borrowed(
+    payload: &[u8],
+) -> Result<blstrs::G1Affine, uncached::Rejection> {
+    match uncached::public_key(uncached::Orientation::Normal, payload)? {
+        uncached::PublicKey::Normal(key) => Ok(key),
+        uncached::PublicKey::Small(_) => Err(uncached::Rejection::Verification),
+    }
+}
+
+/// Retain the original parsed normal key after the typed canonical relation.
+pub(crate) fn verified_normal_key_borrowed(
+    payload: &[u8],
+    proof: &[u8],
+    message: &[u8],
+) -> Result<blstrs::G1Affine, uncached::Rejection> {
+    let key = uncached::public_key(uncached::Orientation::Normal, payload)?;
+    let proof = uncached::signature(uncached::Orientation::Normal, proof)?;
+    uncached::verify_parsed(&key, &proof, message)?;
+    match key {
+        uncached::PublicKey::Normal(key) => Ok(key),
+        uncached::PublicKey::Small(_) => Err(uncached::Rejection::Verification),
+    }
+}
+
 // Crate-local helpers let the PoP-enforcing public wrappers share the
 // aggregate implementations without exposing raw-key same-message checks.
 pub(crate) fn verify_aggregate_same_message_normal(
@@ -157,6 +183,7 @@ pub fn aggregate_same_message_normal(signatures: &[&[u8]]) -> Result<Vec<u8>, cr
 /// Verify one pre-aggregated signature over distinct messages signed by groups of parsed keys
 /// (normal variant). The caller has verified every key's proof of possession, the distinctness
 /// of the messages and the uniqueness of the keys inside each group.
+#[cfg(test)]
 pub(crate) fn verify_preaggregated_multi_message_normal(
     groups: &[(&[&BlsNormalPublicKey], &[u8])],
     aggregated_signature: &[u8],

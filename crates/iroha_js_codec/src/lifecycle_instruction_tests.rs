@@ -178,12 +178,15 @@ fn deployment(name: &'static str) -> Value {
     if name == "CommitContractDeployment" {
         fields(&mut payload).insert("code_hash".into(), hash());
     } else {
+        let address = parse_model(contract_address(), "fixture contract address").unwrap();
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &address,
+            Hash::new(b"lifecycle-codec-test"),
+        )
+        .expect("same deployment address and code hash");
         fields(&mut payload).insert(
             "artifact_id".into(),
-            object([
-                ("dataspace_id", Value::String(u64::MAX.to_string())),
-                ("code_hash", hash()),
-            ]),
+            render_artifact_id(&artifact_id).unwrap(),
         );
     }
     named(name, payload)

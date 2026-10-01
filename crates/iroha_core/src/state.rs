@@ -13862,6 +13862,9 @@ pub struct StateTransaction<'block, 'state> {
     pub network_id: iroha_data_model::NetworkId,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::status::NexusFeeEvent>,
+    /// Actual charge awaiting its bounded, source-owned consensus result leaf.
+    pub(crate) pending_nexus_fee_receipt:
+        Option<iroha_data_model::block::consensus::NexusFeeReceipt>,
     /// Parent block's slash-observability buffer.
     block_pending_public_lane_slash_observability:
         &'block mut Vec<PendingPublicLaneSlashObservability>,
@@ -37090,6 +37093,62 @@ impl<'state> StateBlock<'state> {
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.try_transaction().expect("test State child admission")
     }
+    /// Open a native bootstrap component child for one exact authenticated genesis input.
+    ///
+    /// The caller must have captured this same signed carrier before any start effects.
+    /// This retains the production source/index/header/signature and physical-route checks;
+    /// it does not authenticate substituted instructions or grant publication authority.
+    #[cfg(test)]
+    pub(crate) fn transaction_for_original_genesis_testing(
+        &mut self,
+        source: &SignedBlock,
+        index: usize,
+        configured_account: &AccountId,
+        tested_instruction: &InstructionBox,
+    ) -> Result<StateTransaction<'_, 'state>, String> {
+        let authenticated =
+            crate::block::authenticate_genesis_block_intents(source, configured_account)
+                .map_err(|error| error.to_string())?;
+        let original = authenticated.transaction_for(source, index)?;
+        if self.network_id != NetworkId::from_genesis_hash(source.hash()) {
+            return Err("original genesis component belongs to another State network".into());
+        }
+        if self._curr_block != source.header() {
+            return Err("original genesis component belongs to another block header".into());
+        }
+        if !self.block_hashes.is_empty() {
+            return Err("committed history cannot regain original genesis component scope".into());
+        }
+        let (_, route) = self
+            .network_policy_routes
+            .as_ref()
+            .ok_or("original genesis has no captured physical policy owner")?
+            .get(source, index)
+            .map_err(str::to_owned)?;
+        let Some(TransactionEntrypoint::External(signed)) = source.network_entrypoint_at(index)
+        else {
+            return Err("original genesis input is not an external signed transaction".into());
+        };
+        let Executable::Instructions(instructions) = signed.instructions() else {
+            return Err("original genesis component input is not native instructions".into());
+        };
+        if !instructions.iter().eq(core::iter::once(tested_instruction)) {
+            return Err(
+                "component instruction differs from its exact original genesis input".into(),
+            );
+        }
+        let mut transaction = self.try_transaction().map_err(|error| error.to_string())?;
+        transaction.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
+        transaction.current_entrypoint_index =
+            Some(u64::try_from(index).map_err(|_| "original genesis input index exceeds u64")?);
+        transaction.genesis_execution_scope = Some(
+            route
+                .genesis_execution_scope(signed, &transaction, Some(&original))
+                .map_err(|error| error.to_string())?
+                .ok_or("original input has no authenticated genesis execution scope")?,
+        );
+        Ok(transaction)
+    }
     /// Open an isolated callback component fixture with an explicit root owner.
     ///
     /// The root identifies this block's direct execution slot. This does not
@@ -37257,6 +37316,7 @@ impl<'state> StateBlock<'state> {
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,
             pending_nexus_fee_event: None,
+            pending_nexus_fee_receipt: None,
             block_pending_public_lane_slash_observability: &mut fields
                 .pending_public_lane_slash_observability,
             pending_public_lane_slash_observability: Vec::new(),
@@ -39235,8 +39295,27 @@ mod tiered_snapshot_diff_tests {
     }
     #[tokio::test]
     async fn restored_snapshot_publishes_to_new_frontier_waiters() {
-        let state =
-            decode_world_snapshot(World::default()).expect("restore a canonical State snapshot");
+        use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+        let config = || {
+            let mut config = TestChainConfig::new(World::default(), 1_000);
+            config.chain_id = ChainId::from(SNAPSHOT_CHAIN_ID);
+            config
+        };
+        let mut source = CertifiedTestChain::start(config()).expect("original signed genesis");
+        source.commit(Vec::new());
+        assert!(matches!(
+            decode_state_snapshot_value(norito::json::to_value(source.state().as_ref()).unwrap()),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
+        let mut replay = CertifiedTestChain::start(config()).expect("same signed genesis");
+        replay
+            .replay_from(&source)
+            .expect("replay original certified carrier");
+        let state = Arc::clone(replay.state());
+        assert_eq!(
+            state.view().latest_block_hash(),
+            source.state().view().latest_block_hash()
+        );
         let restored_height = u64::try_from(state.committed_height()).unwrap();
         let required_height = restored_height.checked_add(1).unwrap();
         let wait = state.wait_for_committed_height(required_height);
@@ -39245,13 +39324,14 @@ mod tiered_snapshot_diff_tests {
         // Finish the read statement before the append takes the write lock.
         let previous_hash = state.block_hashes.view().last().copied();
         assert!(state.block_hashes.writer_available());
-        state.append_committed_block_header_for_tests(BlockHeader::new(
-            NonZeroU64::new(required_height).unwrap(),
+        assert_eq!(
             previous_hash,
-            None,
-            1_700_000_000_001,
-            0,
-        ));
+            Some(replay.committed(restored_height).block().hash())
+        );
+        // The original replayed owner publishes a real successor, including its
+        // signed input and certified result, to the new process-local frontier.
+        replay.commit(Vec::new());
+        assert_eq!(replay.height(), required_height);
         tokio::time::timeout(Duration::from_secs(1), wait)
             .await
             .expect("restored State must initialize a fresh process-local publication owner");
@@ -39279,14 +39359,19 @@ mod tiered_snapshot_diff_tests {
         world
             .contract_code_upload_chunks
             .insert(chunk_key.clone(), vec![7, 8, 9]);
-        let decoded = decode_world_snapshot(world).expect("decode pending upload snapshot");
+        let decoded = deserialize::decode_world_component_for_testing(&world)
+            .expect("decode pending upload projection");
+        assert!(matches!(
+            decode_world_snapshot(world),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
         let view = decoded.view();
         assert_eq!(
-            view.world.contract_code_uploads.get(&upload_key),
+            view.contract_code_uploads.get(&upload_key),
             Some(&descriptor)
         );
         assert_eq!(
-            view.world.contract_code_upload_chunks.get(&chunk_key),
+            view.contract_code_upload_chunks.get(&chunk_key),
             Some(&vec![7, 8, 9])
         );
         for field in ["contract_code_uploads", "contract_code_upload_chunks"] {
@@ -39323,11 +39408,15 @@ mod tiered_snapshot_diff_tests {
         world
             .provider_ingest_completion_authorities
             .insert(provider_id, authority.clone());
-        let decoded = decode_world_snapshot(world).expect("decode completion-authority snapshot");
+        let decoded = deserialize::decode_world_component_for_testing(&world)
+            .expect("decode completion-authority projection");
+        assert!(matches!(
+            decode_world_snapshot(world),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
         assert_eq!(
             decoded
                 .view()
-                .world
                 .provider_ingest_completion_authorities
                 .get(&provider_id),
             Some(&authority)
@@ -39687,8 +39776,7 @@ mod fastpq_tx_set_hash_tests {
             )),
         };
         {
-            let mut tx = state_block.transaction();
-            tx.tx_call_hash = Some(batch_hash);
+            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
             tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
             tx.apply();
         }
@@ -39828,8 +39916,7 @@ mod fastpq_tx_set_hash_tests {
             )),
         };
         {
-            let mut tx = state_block.transaction();
-            tx.tx_call_hash = Some(batch_hash);
+            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
             tx.current_dataspace_id = Some(DataSpaceId::new(7));
             tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
             tx.apply();
@@ -39907,8 +39994,7 @@ mod fastpq_tx_set_hash_tests {
             )),
         };
         {
-            let mut tx = state_block.transaction();
-            tx.tx_call_hash = Some(batch_hash);
+            let mut tx = state_block.transaction_for_fastpq_testing(batch_hash);
             tx.record_test_transfer_transcripts(&ALICE_ID, batch_hash, transcript.deltas.clone());
             tx.apply();
         }
@@ -41320,6 +41406,7 @@ impl StateTransaction<'_, '_> {
             execution_effects: _,
             execution_deferral: _,
             pending_nexus_fee_event,
+            pending_nexus_fee_receipt: _,
             block_pending_public_lane_slash_observability,
             mut pending_public_lane_slash_observability,
             #[cfg(feature = "telemetry")]
@@ -43489,33 +43576,34 @@ pub(crate) use telemetry_status::{
 };
 
 #[cfg(test)]
-/// Execute all canonical phases with no Network inputs for component tests.
-pub(crate) fn run_empty_network_owner_fixture(
-    block: &mut crate::state::StateBlock<'_>,
-    source: Option<&SignedBlock>,
-) -> Vec<iroha_data_model::block::execution_output::ExecutionOutputV1> {
-    let source = source.map_or_else(
-        || {
-            iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
-                .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key())
-        },
-        |source| {
-            source
-                .canonical_resultless_proposal()
-                .expect("valid fixture proposal projection")
-        },
-    );
+/// Execute canonical phases from an original recorder acquired before block creation.
+/// The caller retains the recorder for the entire component block lifetime;
+/// neither the component carrier nor this helper grants publication authority.
+pub(crate) fn run_empty_network_owner_fixture<'state>(
+    state: &'state State,
+    source: &SignedBlock,
+) -> (
+    Box<StateBlock<'state>>,
+    crate::exec_witness::ExecWitnessGuard,
+    Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+    usize,
+) {
     assert_eq!(
         source.network_entrypoint_count(),
         0,
         "empty Network fixture source"
     );
-    let _guard = crate::exec_witness::exec_witness_guard();
-    crate::exec_witness::start_block();
-    block.reserve_ordinary_execution_outputs(&source).unwrap();
-    block.execute_ordinary_output_plan(&source, None).unwrap();
-    block
+    let (mut block, recorder) = crate::block::ValidBlock::start_component_execution(source, state)
+        .expect("record original pristine component before any effects");
+    let fragments_before = block.committed_fragment_count();
+    block.reserve_ordinary_execution_outputs(source).unwrap();
+    block.execute_ordinary_output_plan(source, None).unwrap();
+    let outputs = block
         .retained_execution_outputs_for_test()
         .unwrap()
-        .to_vec()
+        .to_vec();
+    (block, recorder, outputs, fragments_before)
 }
+
+#[path = "state/nexus_fee_receipt.rs"]
+mod nexus_fee_receipt;

@@ -65,7 +65,7 @@ lists preserve provider authority, completion revision and finalized anchors;
 future/conflicting anchors and unknown chunker profiles are rejected. Full-width
 integer parsing and pagination follow native bounds. One immutable chunker
 catalog serves archive and response validation, which loads through the existing
-optional module without increasing any bundle ceiling.
+optional module with its audited graph and browser isolation checks.
 
 A subsequent source audit found a separate unfinished ZK-AMS RNS-native qPCS/FRI
 owner with 32-byte Keccak proof roots and transcript state. Its composite and
@@ -88,14 +88,14 @@ execution profile/export checks pass on the same compiled Core harness, covering
 RACE/Touring exports, fixed geometry and fail-closed registration. They do not
 qualify proof soundness or hardware/deployment parity.
 All 62 changed JavaScript files pass ESLint. Pin/alias/replication projection and
-declaration checks pass 37 tests; bundle/report checks pass 21 tests with their
-existing ceilings and exact measured closure assertions. The current measured
-Torii bundle is 813,099 bytes across 125 modules, with 3,029 bytes of headroom
-under its unchanged ceiling. Exact measurement assertions are regenerated from
-the pinned bundler; lazy-chunk and growth limits remain unchanged.
+declaration checks retain their focused validation. Bundle/report checks enforce
+the pinned bundler, exact module graphs and literal counts, split-output integrity,
+independent output-byte accounting, and browser Node/Buffer isolation. Compiled
+byte sizes are informational; absolute byte ceilings and growth limits are removed.
+Wire-format and runtime-resource limits remain enforced.
 
 - JavaScript: 103 focused tests plus one packaging regression pass, zero skipped;
-  distribution generation and targeted ESLint pass. Bundle ceilings are unchanged.
+  distribution generation and targeted ESLint pass. Compiled byte sizes are informational.
 - Policy guard: `python3 -m pytest -q pytests/scripts/ivm_only_guard_test.py`
   passes 47 cases; an independent root-agent replay and current-tree check pass.
 - The IVM-removal native Rust checkpoint passes 1,138 tests: 26 compute/schema, 881 config,

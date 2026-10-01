@@ -1617,7 +1617,14 @@ async fn post_appeal_finance_report(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_REPORTS);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_appeal_finance_report(State(app), headers, method, uri, body).await
 }
 async fn post_privacy_aggregate_source_event(
@@ -1627,7 +1634,14 @@ async fn post_privacy_aggregate_source_event(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(TRANSPARENCY_PRIVACY_AGGREGATE_SOURCE_EVENTS_ROUTE);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_transparency_privacy_aggregate_source_event(
         State(app),
         headers,
@@ -1644,7 +1658,14 @@ async fn post_privacy_aggregate_publish_due(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(TRANSPARENCY_PRIVACY_AGGREGATE_PUBLISH_DUE_ROUTE);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_transparency_privacy_aggregate_publish_due(
         State(app),
         headers,
@@ -1661,7 +1682,14 @@ async fn post_transparency_proof_token_issuance(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(TRANSPARENCY_PROOF_TOKEN_ISSUANCES_ROUTE);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_transparency_token_issuance(State(app), headers, method, uri, body).await
 }
 async fn post_appeal_finance_deposit(
@@ -1671,7 +1699,14 @@ async fn post_appeal_finance_deposit(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSITS);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_appeal_finance_deposit(State(app), headers, method, uri, body).await
 }
 async fn post_appeal_finance_deposit_confirm(
@@ -1681,7 +1716,14 @@ async fn post_appeal_finance_deposit_confirm(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_CONFIRM);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_appeal_finance_deposit_confirm(State(app), headers, method, uri, body).await
 }
 async fn post_appeal_finance_deposit_settle(
@@ -1691,7 +1733,14 @@ async fn post_appeal_finance_deposit_settle(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_SETTLE);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_appeal_finance_deposit_settle(State(app), headers, method, uri, body).await
 }
 async fn post_appeal_finance_deposit_submit_settlement(
@@ -1701,7 +1750,14 @@ async fn post_appeal_finance_deposit_submit_settlement(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_SUBMIT_SETTLEMENT);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_appeal_finance_deposit_submit_settlement(
         State(app),
         headers,
@@ -1718,7 +1774,14 @@ async fn post_appeal_finance_deposit_reconcile(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_DEPOSIT_RECONCILE);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_appeal_finance_deposit_reconcile(State(app), headers, method, uri, body)
         .await
 }
@@ -1731,7 +1794,14 @@ async fn get_appeal_finance_deposit(
     let uri = format!("{APPEAL_FINANCE_ROUTE_DEPOSITS}/{escrow_id_hex}")
         .parse()
         .expect("deposit status uri");
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &[],
+    );
     handle_get_sorafs_appeal_finance_deposit(
         State(app),
         headers,
@@ -1748,6 +1818,13 @@ async fn post_appeal_finance_weekly_rollup(
 ) -> Response {
     let method = Method::POST;
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_WEEKLY_ROLLUPS);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &signer.account,
+        &signer.keypair,
+        &method,
+        &uri,
+        &body,
+    );
     handle_post_sorafs_appeal_finance_weekly_rollup(State(app), headers, method, uri, body).await
 }

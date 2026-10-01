@@ -2420,6 +2420,49 @@ fn account_recovery_policy_summary_mentions_alias_and_quorum() {
         "detail `{detail}` should summarize the recovery policy"
     );
 }
+#[test]
+fn account_recovery_cancellation_approval_summary_preserves_pending_guardian_vote() {
+    let alias = iroha_data_model::account::AccountAlias::domainless(
+        "primary".parse().expect("valid alias label"),
+        iroha_model_base::topology::DataSpaceId::new(7),
+    );
+    let mut request = iroha_data_model::account::AccountRecoveryRequest::new(
+        alias.clone(),
+        std::num::NonZeroU64::new(3).expect("non-zero request generation"),
+        ALICE_ID.clone(),
+        iroha_data_model::account::AccountController::single(BOB_KEYPAIR.public_key().clone()),
+        BOB_ID.clone(),
+        60_000,
+    );
+    request.approve(&BOB_ID);
+    request.approve_cancellation(&BOB_ID);
+    assert!(request.approvals.is_empty());
+    assert!(request.is_pending());
+    let event_box = EventBox::Data(
+        DataEvent::from(AccountEvent::Recovery(
+            AccountRecoveryEvent::CancellationApproved(
+                iroha_data_model::events::data::prelude::AccountRecoveryCancellationApproved {
+                    account: ALICE_ID.clone(),
+                    alias,
+                    approver: BOB_ID.clone(),
+                    request,
+                },
+            ),
+        ))
+        .into(),
+    );
+    let summary = EventSummary::from_event(&event_box);
+    assert_eq!(summary.category, EventCategory::Data);
+    assert_eq!(summary.label, "Account recovery cancellation approved");
+    let detail = summary.detail.expect("cancellation vote detail");
+    assert_eq!(
+        detail,
+        format!(
+            "account={} alias=label=primary domain=- dataspace=7 approver={} cancellation_approvals=1 status=Pending",
+            *ALICE_ID, *BOB_ID,
+        ),
+    );
+}
 fn empty_metrics_snapshot() -> ToriiMetricsSnapshot {
     ToriiMetricsSnapshot {
         timestamp: Instant::now(),

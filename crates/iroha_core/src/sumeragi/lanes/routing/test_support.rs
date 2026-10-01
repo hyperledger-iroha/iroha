@@ -40,7 +40,7 @@ pub(crate) fn metadata(scope: SumeragiRootScope) -> Parameter {
     ))
 }
 
-/// Component World whose committed metadata explicitly authorizes the requested scope.
+/// Component World with explicit structural root metadata for the requested scope.
 pub(crate) fn world(scope: SumeragiRootScope) -> World {
     let world = World::new();
     let mut parameters = world.parameters.block();

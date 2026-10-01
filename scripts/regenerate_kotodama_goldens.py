@@ -2,7 +2,9 @@
 """Build, validate, and publish the canonical Kotodama V1 goldens.
 
 Prerequisites are freshly built ``koto`` and ``iroha`` binaries. The script
-never invokes Cargo or accepts signing material. Scratch files are confined to
+never invokes Cargo or accepts signing material. Tool children create private files;
+compiler staging stays mode 0600 and reviewed public outputs publish as 0644.
+Scratch files are confined to
 the selected staging root. ``--write`` requires an absent absolute output root
 outside the source workspace and can only create one sealed publication there.
 The checked-in ``ivm_artifacts.tsv`` file is the authoritative ownership and
@@ -419,7 +421,7 @@ def unique_builds(rows: Sequence[Golden]) -> list[Golden]:
 
 
 def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
-    """Run one non-secret tool command and return its UTF-8 stdout."""
+    """Run a tool with private child outputs without changing the parent umask."""
 
     rendered = [os.fspath(part) for part in command]
     result = subprocess.run(
@@ -429,6 +431,7 @@ def run(command: Sequence[os.PathLike[str] | str], root: Path) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        umask=0o077,
     )
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip()

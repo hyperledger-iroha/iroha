@@ -110,9 +110,9 @@ impl QuicDatagramIngress {
         let (terminal_tx, terminal) = watch::channel(None::<Arc<str>>);
         let (activation_tx, mut activation_rx) = oneshot::channel::<QuicDatagramActivation>();
         let task_connection = connection.clone();
-        // TODO: Upgrade quinn-proto to 0.11.17 or later. The locked 0.11.15
-        // release charges only `data.len()`, so empty frames cost zero and can
-        // grow its private `VecDeque` before `read_datagram()` is polled.
+        // Locked quinn-proto 0.11.18 charges fixed per-entry overhead before
+        // this pump polls. TODO: Complete transport qualification before
+        // enabling the shipping QUIC endpoint constructors.
         let task = tokio::spawn(async move {
             let mut frames_since_yield = 0_u8;
             let mut byte_budget: Option<InboundSourceByteBudget> = None;

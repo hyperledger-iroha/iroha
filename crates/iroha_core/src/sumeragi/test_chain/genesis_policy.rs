@@ -125,6 +125,7 @@ pub(crate) fn signed_genesis_fixture_for_state(
         npos_genesis_parameters(npos),
         mode.into(),
         genesis_time_ms,
+        std::num::NonZeroU64::MIN,
     )?;
     let account = AccountId::new(genesis_key.public_key().clone());
     let topology = Topology::new(

@@ -1,7 +1,11 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+
 package org.hyperledger.iroha.sdk.offline.probe
+
+import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidOriginalJournalIoV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidOriginalJournalIoV1
 
 import android.content.Context
 import android.content.pm.PackageManager
@@ -324,7 +328,7 @@ private class AndroidPixel6StrongBoxDeviceV1(private val context: Context) :
 /** App-private persistence is only a local accident guard; it is not hardware rollback protection. */
 internal class FilePixel6TestnetObservationStoreV1(
     private val directory: File,
-    private val io: SelectionJournalIoV1 = AndroidSelectionJournalIoV1,
+    private val io: KagemushaAndroidOriginalJournalIoV1 = AndroidOriginalJournalIoV1,
 ) : Pixel6TestnetObservationStoreV1 {
     override fun <T> withSlotLock(slot: String, action: () -> T): T =
         io.withLock(file(slot, ".lock"), action)

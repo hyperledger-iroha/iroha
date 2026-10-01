@@ -462,6 +462,7 @@ mod tests {
         let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.admit_fastpq_source_for_testing(Hash::prehashed([0xA1; Hash::LENGTH]));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA1);
         let dest = random_account_id();
@@ -540,6 +541,7 @@ mod tests {
         let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.admit_fastpq_source_for_testing(Hash::prehashed([0xA2; Hash::LENGTH]));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA2);
         let dest = random_account_id();
@@ -945,7 +947,8 @@ mod tests {
         let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block
+            .transaction_for_fastpq_testing(Hash::new(b"implicit-account-creation-fee-fixture"));
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         Mint::asset_quantity(10_u32, dest_asset_id.clone())

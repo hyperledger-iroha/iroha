@@ -501,6 +501,18 @@ impl VerifiedWorldStateSnapshotV1 {
         self.verify_native_table_keys_complete("world.asset_definition_alias_bindings", keys)
     }
 
+    /// Prove one exact native asset-definition alias binding is absent at this complete certified cut.
+    /// A query-materialized `alias=None` and a failed query cannot establish this fact.
+    /// Callers must independently enforce the selected native registry schema before interpreting it.
+    /// # Errors
+    /// The exact definition key is present, has invalid encoding, or the fixed native field is not a table.
+    pub fn verify_asset_definition_alias_binding_absent(
+        &self,
+        definition: &crate::asset::AssetDefinitionId,
+    ) -> Result<(), FinalityError> {
+        self.verify_native_table_key_absent("world.asset_definition_alias_bindings", definition)
+    }
+
     /// Authenticate every canonical key original of `world.account_aliases`.
     /// Account rows, rekey bindings and current SNS leases require their separate
     /// exact native preimages; this proves no derived resolver result by itself.

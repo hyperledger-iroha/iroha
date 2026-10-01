@@ -46,13 +46,33 @@ final class KagemushaAppAttestFileIntentStoreV1Tests: XCTestCase {
       selectionDigest: selection, rawAssertion: rawAssertion)
     let afterCrash = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directory)
     XCTAssertEqual(try afterCrash.load(keyID: "enrolled-key"),
-      .complete(counter: 1, selectionDigest: selection, rawAssertion: rawAssertion))
+      .complete(previousCounter: 0, counter: 1, selectionDigest: selection, rawAssertion: rawAssertion))
     XCTAssertThrowsError(try afterCrash.reserve(keyID: "enrolled-key", previousCounter: 1,
       selectionDigest: Data(repeating: 0x22, count: 32)))
     XCTAssertEqual(try afterCrash.load(keyID: "enrolled-key"),
-      .complete(counter: 1, selectionDigest: selection, rawAssertion: rawAssertion))
+      .complete(previousCounter: 0, counter: 1, selectionDigest: selection, rawAssertion: rawAssertion))
     XCTAssertThrowsError(try KagemushaAppAttestFileIntentStoreV1.bootstrapNew(
       directoryURL: directory, keyID: "another-key"))
+  }
+
+  func testCounterGapRetainsExactOriginalFloorAndRejectsNonAdvance() throws {
+    let directory = try privateDirectory()
+    let digest = Data(repeating: 0x22, count: 32)
+    let store = try KagemushaAppAttestFileIntentStoreV1.bootstrapNew(
+      directoryURL: directory, keyID: "key")
+    try store.reserve(keyID: "key", previousCounter: 0, selectionDigest: digest)
+    XCTAssertThrowsError(try store.complete(keyID: "key", counter: 0,
+      selectionDigest: digest, rawAssertion: Data([1])))
+    XCTAssertEqual(try store.load(keyID: "key"),
+      .pending(previousCounter: 0, selectionDigest: digest))
+    try store.complete(keyID: "key", counter: 9,
+      selectionDigest: digest, rawAssertion: Data([1, 2]))
+    let reopened = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directory)
+    XCTAssertEqual(try reopened.load(keyID: "key"),
+      .complete(previousCounter: 0, counter: 9,
+        selectionDigest: digest, rawAssertion: Data([1, 2])))
+    XCTAssertThrowsError(try reopened.reserve(keyID: "key", previousCounter: 9,
+      selectionDigest: Data(repeating: 0x23, count: 32)))
   }
 
   func testPendingNeverClearsOnRecreationOrConflict() throws {

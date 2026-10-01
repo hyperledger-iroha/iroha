@@ -9724,14 +9724,22 @@ mod tests {
                     .unwrap()
                     .begin_proposal(candidate, iroha_sumeragi::types::ControlWitness::default())
                     .expect("original unpublished execution");
-                let unsigned = pending.inspect(|view| view.block.as_ref().clone()).unwrap();
-                let external_count = unsigned.external_transactions().len() as u64;
+                assert!(pending.inspect_prepared(|_| ()).is_err());
+                // Durability requires the genuine certificate, while State and
+                // its classified telemetry remain at the original publication.
+                pending
+                    .prepare(crate::sumeragi::test_chain::Signers::Quorum)
+                    .expect("certify the original execution before storing its body");
+                let certified = pending
+                    .inspect_prepared(|view| view.block.as_ref().clone())
+                    .expect("retain the exact unpublished certified carrier");
+                let external_count = certified.external_transactions().len() as u64;
                 sut.kura
-                    .store_block(unsigned.clone())
+                    .store_block(certified.clone())
                     .expect("unpublished exact Kura body");
                 sut.mock_time_handle.advance(Duration::from_millis(100));
                 if report_before_publication {
-                    sut.report_commit_block(&unsigned.header()).await;
+                    sut.report_commit_block(&certified.header()).await;
                 }
                 sut.force_sync().await;
                 assert_eq!(sut.state.committed_height() as u64, old_height);

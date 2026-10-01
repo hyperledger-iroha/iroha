@@ -7897,8 +7897,7 @@ mod sorafs_tests {
     ) {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -8392,8 +8391,7 @@ mod sorafs_tests {
     fn register_capacity_dispute_inserts_record() {
         let state = make_state();
         let mut block = state.block(capacity_dispute_block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration.clone())
             .expect("register declaration");
@@ -8438,8 +8436,7 @@ mod sorafs_tests {
     fn register_capacity_dispute_rejects_noncanonical_and_resource_bomb_payloads() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register declaration");
@@ -8484,8 +8481,7 @@ mod sorafs_tests {
     fn capacity_declaration_is_permissionless_for_governed_bonded_provider_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
             perms.clear();
         }
@@ -8511,8 +8507,8 @@ mod sorafs_tests {
                 0,
             );
             let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx);
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
             seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
             RegisterCapacityDeclaration::new(record.declaration.clone())
                 .execute(&alice(), &mut stx)
@@ -8539,8 +8535,7 @@ mod sorafs_tests {
     fn capacity_telemetry_is_permissionless_for_provider_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         remove_permission(&mut stx, "CanSubmitSorafsTelemetry");
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
@@ -8562,8 +8557,7 @@ mod sorafs_tests {
     fn capacity_dispute_requires_permission() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         remove_permission(&mut stx, "CanFileSorafsCapacityDispute");
         let record = CapacityDisputeRecord::new_pending(
             CapacityDisputeId::new([0x11; 32]),
@@ -8596,8 +8590,7 @@ mod sorafs_tests {
     fn capacity_declaration_requires_governed_owner_and_does_not_create_binding() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = capacity_record_with_owner(&alice());
         let error = RegisterCapacityDeclaration {
             declaration: declaration.declaration,
@@ -8625,10 +8618,9 @@ mod sorafs_tests {
     }
     #[test]
     fn instruction_box_dispatches_capacity_declaration() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let state = make_initial_sorafs_state();
+        let mut block = state.block(initial_sorafs_block_header(&state));
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let instruction = InstructionBox::from(RegisterCapacityDeclaration {
@@ -8648,8 +8640,7 @@ mod sorafs_tests {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, _declaration) = capacity_record_with_owner(&alice());
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let (_provider, second) = capacity_record_with_owner(&bob());
@@ -8672,8 +8663,7 @@ mod sorafs_tests {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let error = RegisterCapacityDeclaration {
@@ -8694,8 +8684,7 @@ mod sorafs_tests {
     fn capacity_declaration_rejects_unbonded_governed_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_governed_capacity_provider(
             &mut stx,
             ProviderId::new([0xE8; 32]),
@@ -8742,8 +8731,7 @@ mod sorafs_tests {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register declaration");
@@ -8776,8 +8764,7 @@ mod sorafs_tests {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(capacity_dispute_block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register declaration");
@@ -8798,8 +8785,7 @@ mod sorafs_tests {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, _declaration) = sample_capacity_record();
         seed_provider_owners(&mut stx, &[provider], &alice());
         let credit = ProviderCreditRecord::new(
@@ -8826,8 +8812,7 @@ mod sorafs_tests {
     fn capacity_declaration_enforces_owner_metadata_when_present() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, mut declaration) = sample_capacity_record();
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let mut payload = decode_capacity_declaration_payload(&declaration.declaration).unwrap();
@@ -8867,8 +8852,7 @@ mod sorafs_tests {
     fn register_capacity_dispute_exact_replay_is_idempotent() {
         let state = make_state();
         let mut block = state.block(capacity_dispute_block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration.clone())
             .expect("register declaration");
@@ -8888,8 +8872,7 @@ mod sorafs_tests {
     fn register_capacity_dispute_rejects_unknown_replication_order() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration.clone())
             .expect("register declaration");
@@ -8944,8 +8927,7 @@ mod sorafs_tests {
     fn register_manifest_activates_record_immediately() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let instruction = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -8969,8 +8951,7 @@ mod sorafs_tests {
     fn governed_registration_stays_pending_until_verified_approval() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         stx.gov.sorafs_pin_policy.require_council_signatures = true;
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_provider_owners(&mut stx, &[provider], &alice());
@@ -9073,8 +9054,8 @@ mod sorafs_tests {
         {
             let state = make_state();
             let mut block = state.block(block_header());
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx);
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
             insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
             let digest_only = ApprovePinManifest {
                 digest: default_digest(),
@@ -9099,8 +9080,8 @@ mod sorafs_tests {
         ] {
             let state = make_state();
             let mut block = state.block(block_header_at_epoch(consensus_epoch));
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx);
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
             insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
             let record = stx
                 .world
@@ -9136,8 +9117,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_unknown_chunker_profile() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -9169,8 +9149,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_inert_commitments_and_expired_retention_before_fee() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -9221,8 +9200,8 @@ mod sorafs_tests {
         let expired_state = make_state();
         let mut expired_block =
             expired_state.block(block_header_at_epoch(default_policy().retention_epoch));
-        let mut expired_stx = expired_block.transaction();
-        seed_test_call_hash(&mut expired_stx);
+        let mut expired_stx =
+            expired_block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let error = base
             .execute(&alice(), &mut expired_stx)
             .expect_err("consensus-time submission at retention expiry must fail closed");
@@ -9242,8 +9221,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_malformed_noncanonical_and_oversized_payloads_atomically() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -9309,8 +9287,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_invalid_policy() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -9342,8 +9319,7 @@ mod sorafs_tests {
     fn register_manifest_with_alias_persists_binding() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let instruction = RegisterPinManifest {
@@ -9374,8 +9350,7 @@ mod sorafs_tests {
     fn approve_manifest_with_alias_records_council_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let register = RegisterPinManifest {
@@ -9426,8 +9401,7 @@ mod sorafs_tests {
     fn register_manifest_auto_issues_replication_order_for_matching_capacity() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_provider_owners(&mut stx, &[provider], &alice());
         stx.world
@@ -9487,8 +9461,7 @@ mod sorafs_tests {
     fn automatic_replication_requires_full_deadline_and_exact_profile_capacity() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let mut pin = PinManifestRecord::new(
             default_digest(),
             default_root_cid(),
@@ -9554,8 +9527,7 @@ mod sorafs_tests {
     fn automatic_replication_enforces_aggregate_active_profile_capacity() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_eligible_auto_replication_providers_for_test(
             &mut stx,
             &alice(),
@@ -9690,8 +9662,7 @@ mod sorafs_tests {
     fn automatic_replication_rejects_missing_completion_authority_atomically() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = capacity_record_with_owner(&alice());
         stx.world.provider_owners.insert(provider, alice());
         stx.world
@@ -9767,8 +9738,7 @@ mod sorafs_tests {
         let state = make_state();
         let approval_epoch = 5;
         let mut block = state.block(block_header_at_epoch(approval_epoch));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alias = default_alias_binding();
         let mut policy = default_policy();
         policy.min_replicas = 1;
@@ -9828,8 +9798,7 @@ mod sorafs_tests {
     fn approval_never_overwrites_an_automatic_order_collision() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alias = default_alias_binding();
         let mut policy = default_policy();
         policy.min_replicas = 1;
@@ -9901,8 +9870,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_duplicate_alias_binding() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let alias = default_alias_binding();
         let duplicate_alias = alias_binding_for(
@@ -9955,8 +9923,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_duplicate_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -10066,8 +10033,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_stale_alias_record_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let requested_alias = default_alias_binding();
         let stale_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
         let stale_record =
@@ -10110,8 +10076,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_alias_proof_manifest_mismatch() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -10153,8 +10118,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_invalid_alias_characters() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -10192,8 +10156,7 @@ mod sorafs_tests {
     fn register_manifest_with_approved_predecessor_persists_successor_of() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         RegisterPinManifest {
             manifest_payload: manifest_payload_for_seed(0xBB),
@@ -10221,8 +10184,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_self_successor_reference() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -10255,8 +10217,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_unregistered_predecessor() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
@@ -10294,8 +10255,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_pending_predecessor() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_pending_manifest(&mut stx, second_digest(), [0xEE; 32]);
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
@@ -10342,8 +10302,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_retired_predecessor() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             second_digest(),
@@ -10383,8 +10342,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_predecessor_without_lineage_summary() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             second_digest(),
@@ -10425,8 +10383,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_successor_fanout_limit() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_successor_fanout = 1;
         insert_manifest_with_status(
@@ -10475,8 +10432,7 @@ mod sorafs_tests {
     fn retired_successor_does_not_reopen_the_parent_fanout_ceiling() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         stx.gov.sorafs_pin_policy.max_successor_fanout = 1;
         insert_manifest_with_status(
@@ -10532,8 +10488,7 @@ mod sorafs_tests {
     fn register_manifest_rejects_lineage_beyond_consensus_depth_limit() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         stx.gov.sorafs_pin_policy.max_lineage_depth = 1;
         insert_manifest_with_status_at_epoch(
             &mut stx,
@@ -10576,8 +10531,7 @@ mod sorafs_tests {
     fn approve_manifest_records_council_digest_for_auto_approved_manifest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -10621,8 +10575,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_mismatched_manifest_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (envelope, _, _) = registered_manifest_approval_envelope(&mut stx);
         let mut invalid_json =
             String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
@@ -10644,8 +10597,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_invalid_signature() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
         let mut modified_signature =
             hex::decode(&signature_hex).expect("signature hex decodes cleanly");
@@ -10670,8 +10622,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_all_zero_signature_material() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
         let pending = stx
             .world
@@ -10713,8 +10664,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_inert_or_malformed_ed25519_signer_key() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (envelope, _, signer_hex) = registered_manifest_approval_envelope(&mut stx);
         for (label, malformed_signer) in [
             ("all-zero", [0_u8; 32]),
@@ -10741,8 +10691,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_malformed_ed25519_signature_r() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
@@ -10775,8 +10724,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_self_selected_signer_and_below_quorum() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let record = stx
             .world
@@ -10841,8 +10789,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_not_yet_active_governed_signer() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let record = stx
             .world
@@ -10888,8 +10835,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_revoked_signer_despite_backdated_approval_epoch() {
         let state = make_state();
         let mut block = state.block(repair_block_header(10, 0));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let record = PinManifestRecord::new(
             default_digest(),
             default_root_cid(),
@@ -10942,8 +10888,7 @@ mod sorafs_tests {
     fn council_envelope_rejects_resource_and_canonicalization_attacks() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let record = stx
             .world
@@ -11100,8 +11045,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_digest_mismatch() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (envelope, _, _) = registered_manifest_approval_envelope(&mut stx);
         let message = rejected_manifest_approval_message(
             &mut stx,
@@ -11118,8 +11062,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_provided_digest_mismatch_with_envelope() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (envelope, _, _) = registered_manifest_approval_envelope(&mut stx);
         let message = rejected_manifest_approval_message(
             &mut stx,
@@ -11136,8 +11079,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_unknown_manifest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let approve = ApprovePinManifest {
             digest: default_digest(),
             council_envelope: None,
@@ -11159,8 +11101,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_different_epoch_for_auto_approved_manifest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11175,8 +11116,7 @@ mod sorafs_tests {
             .commit_world_overlay_for_testing()
             .expect("commit automatic approval fixture");
         let mut block = state.block(block_header_at_epoch(6));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let approve = ApprovePinManifest {
             digest: default_digest(),
             council_envelope: None,
@@ -11198,8 +11138,7 @@ mod sorafs_tests {
     fn approve_manifest_reapproval_accepts_stored_digest_without_payload() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let expected_digest = stx
             .world
@@ -11228,8 +11167,7 @@ mod sorafs_tests {
     fn approve_manifest_reapproval_accepts_matching_stored_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let expected_digest = stx
             .world
@@ -11258,8 +11196,7 @@ mod sorafs_tests {
     fn approve_manifest_reapproval_rejects_valid_replacement_envelope() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let record = stx
             .world
@@ -11306,8 +11243,7 @@ mod sorafs_tests {
     fn approve_manifest_reapproval_rejects_mismatched_stored_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -11332,8 +11268,7 @@ mod sorafs_tests {
     fn approve_manifest_reapproval_requires_payload_without_stored_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11366,8 +11301,7 @@ mod sorafs_tests {
     fn approve_pending_manifest_rejects_provided_digest_without_envelope() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -11395,8 +11329,7 @@ mod sorafs_tests {
     fn approve_pending_manifest_requires_envelope_or_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -11421,8 +11354,7 @@ mod sorafs_tests {
     fn approve_pending_manifest_rejects_invalid_signature_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alias = default_alias_binding();
         let record = insert_pending_manifest_with_alias(
             &mut stx,
@@ -11477,8 +11409,7 @@ mod sorafs_tests {
     fn approve_pending_manifest_rejects_alias_collision_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alias = default_alias_binding();
         let record = insert_pending_manifest_with_alias(
             &mut stx,
@@ -11531,8 +11462,7 @@ mod sorafs_tests {
     fn approve_pending_manifest_rejects_digest_mismatch_with_envelope_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let alias = default_alias_binding();
         let record = insert_pending_manifest_with_alias(
             &mut stx,
@@ -11579,8 +11509,7 @@ mod sorafs_tests {
     fn approve_manifest_reapproval_rejects_digest_without_stored_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11613,8 +11542,7 @@ mod sorafs_tests {
     fn approve_manifest_rejects_retired_manifest() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11650,8 +11578,7 @@ mod sorafs_tests {
     fn retire_manifest_marks_record() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let register = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
@@ -11729,8 +11656,8 @@ mod sorafs_tests {
         ] {
             let state = make_state();
             let mut block = state.block(block_header_at_epoch(consensus_epoch));
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx);
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
             insert_manifest_with_status(
                 &mut stx,
                 default_digest(),
@@ -11753,8 +11680,7 @@ mod sorafs_tests {
         }
         let state = make_state();
         let mut block = state.block(block_header_at_epoch(9));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             default_digest(),
@@ -11793,8 +11719,7 @@ mod sorafs_tests {
     fn retire_manifest_rejects_conflicting_repeat_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let binding = sample_alias_binding();
         BindManifestAlias {
@@ -11842,10 +11767,9 @@ mod sorafs_tests {
     }
     #[test]
     fn bind_manifest_alias_registers_record() {
-        let state = make_state();
-        let mut block = state.block(initial_sorafs_block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let state = make_initial_sorafs_state();
+        let mut block = state.block(initial_sorafs_block_header(&state));
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let binding = sample_alias_binding();
         let bind = BindManifestAlias {
@@ -11876,8 +11800,7 @@ mod sorafs_tests {
     fn bind_manifest_alias_rejects_duplicates() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         register_and_approve_manifest(&mut stx, second_digest(), chunk_digest_for_seed(0xBB));
         let binding = sample_alias_binding();
@@ -11930,8 +11853,7 @@ mod sorafs_tests {
     fn bind_manifest_alias_rejects_expiry_before_bound_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let binding = alias_binding_for(default_digest(), "sora", "docs", 8, 7);
         let err = BindManifestAlias {
@@ -11970,8 +11892,7 @@ mod sorafs_tests {
     fn bind_manifest_alias_rejects_pending_manifest_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
         let binding = sample_alias_binding();
         let err = BindManifestAlias {
@@ -12009,8 +11930,7 @@ mod sorafs_tests {
     fn bind_manifest_alias_rejects_expiry_past_retention_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let expiry_epoch = default_policy().retention_epoch + 1;
         let binding = alias_binding_for(default_digest(), "sora", "docs", 8, expiry_epoch);
@@ -12050,8 +11970,7 @@ mod sorafs_tests {
     fn bind_manifest_alias_rejects_bound_before_approval_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let binding = alias_binding_for(default_digest(), "sora", "docs", 4, 16);
         let err = BindManifestAlias {
@@ -12091,8 +12010,7 @@ mod sorafs_tests {
     fn bind_manifest_alias_rejects_unknown_manifest_without_side_effects() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let binding = sample_alias_binding();
         let err = BindManifestAlias {
             digest: default_digest(),
@@ -12126,8 +12044,7 @@ mod sorafs_tests {
     fn bind_manifest_alias_rejects_proof_epoch_mismatch() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let mismatched_binding = alias_binding_for(default_digest(), "sora", "docs", 4, 12);
         let bind = BindManifestAlias {
@@ -12154,8 +12071,7 @@ mod sorafs_tests {
     fn issue_replication_order_requires_permission() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         remove_permission(&mut stx, "CanIssueSorafsReplicationOrder");
         let issue = IssueReplicationOrder {
             order_id: ReplicationOrderId::new([0x44; 32]),
@@ -12178,8 +12094,7 @@ mod sorafs_tests {
     fn generic_replication_instructions_reject_reserved_automatic_ids() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let order_id = derive_sorafs_auto_replication_order_id_v1(&default_digest());
         let issue_error = IssueReplicationOrder {
             order_id,
@@ -12220,8 +12135,7 @@ mod sorafs_tests {
     fn complete_replication_order_requires_permission() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         remove_permission(&mut stx, "CanCompleteSorafsReplicationOrder");
         let complete = completion_instruction(
             ReplicationOrderId::new([0x55; 32]),
@@ -12243,8 +12157,7 @@ mod sorafs_tests {
     fn pricing_schedule_requires_permission() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         remove_permission(&mut stx, "CanSetSorafsPricing");
         let schedule = PricingScheduleRecord::launch_default();
         let err = SetPricingSchedule { schedule }
@@ -12261,8 +12174,7 @@ mod sorafs_tests {
     fn provider_credit_requires_permission() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         remove_permission(&mut stx, "CanUpsertSorafsProviderCredit");
         let credit = ProviderCreditRecord::new(
             ProviderId::new([0x77; 32]),
@@ -12288,8 +12200,7 @@ mod sorafs_tests {
     fn issue_replication_order_stores_record() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x44; 32]);
         let providers = vec![
@@ -12359,8 +12270,7 @@ mod sorafs_tests {
     fn issue_replication_order_requires_one_unix_second_window_and_live_pin_horizon() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let providers = vec![
             ProviderId::new([0x91; 32]),
@@ -12413,8 +12323,7 @@ mod sorafs_tests {
     fn issue_replication_order_rejects_musubi_commitment_mismatch_without_partial_state() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let canonical_pin = registry_grade_musubi_pin();
         let archive = musubi_archive_for_pin(&canonical_pin, 0x71);
         let archive_id = archive.archive_id;
@@ -12458,10 +12367,9 @@ mod sorafs_tests {
     }
     #[test]
     fn instruction_box_dispatches_replication_order_issue() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let state = make_initial_sorafs_state();
+        let mut block = state.block(initial_sorafs_block_header(&state));
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x54; 32]);
         let providers = vec![
@@ -12491,8 +12399,7 @@ mod sorafs_tests {
     fn issue_replication_order_rejects_target_below_policy() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x66; 32]);
         let providers = vec![
@@ -12528,8 +12435,7 @@ mod sorafs_tests {
     fn issue_replication_order_rejects_chunker_mismatch() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x67; 32]);
         let providers = vec![
@@ -12565,8 +12471,7 @@ mod sorafs_tests {
     fn issue_replication_order_rejects_noncanonical_unbound_and_oversized_payloads() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let providers = vec![
             ProviderId::new([0x50; 32]),
@@ -12668,8 +12573,7 @@ mod sorafs_tests {
     fn issue_replication_order_rejects_zero_length_epoch_window() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let error = IssueReplicationOrder {
             order_id: ReplicationOrderId::new([0x6B; 32]),
             order_payload: vec![1],
@@ -12690,8 +12594,7 @@ mod sorafs_tests {
     fn issue_replication_order_requires_permission_after_manifest_setup() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         remove_permission(&mut stx, "CanIssueSorafsReplicationOrder");
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x47; 32]);
@@ -12718,8 +12621,7 @@ mod sorafs_tests {
     fn issue_replication_order_allows_registered_provider_owned_by_another_account() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x45; 32]);
         let providers = vec![
@@ -12753,8 +12655,7 @@ mod sorafs_tests {
     fn issue_replication_order_rejects_missing_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x46; 32]);
         let providers = vec![ProviderId::new([0x25; 32])];
@@ -12779,8 +12680,7 @@ mod sorafs_tests {
     fn completion_after_deadline_fails_without_changing_pending_order() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header_at_epoch(16));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             default_digest(),
@@ -12850,8 +12750,7 @@ mod sorafs_tests {
     fn expire_replication_order_is_deadline_bound_and_idempotent() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header_at_epoch(16));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             default_digest(),
@@ -12956,8 +12855,7 @@ mod sorafs_tests {
     fn expire_replication_order_rejects_completed_order_and_missing_permission() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header_at_epoch(15));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             default_digest(),
@@ -13019,8 +12917,7 @@ mod sorafs_tests {
     fn retiring_manifest_at_order_deadline_cancels_pending_replication() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header_at_epoch(15));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             default_digest(),
@@ -13076,8 +12973,7 @@ mod sorafs_tests {
     fn retiring_manifest_after_order_deadline_expires_pending_replication() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header_at_epoch(16));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             default_digest(),
@@ -13126,8 +13022,7 @@ mod sorafs_tests {
     fn complete_replication_order_requires_permission_after_manifest_setup() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x7A; 32]);
         let providers = vec![
@@ -13162,8 +13057,7 @@ mod sorafs_tests {
         let mut state = make_state_with_completion_anchor();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
         let order_id = ReplicationOrderId::new([0x78; 32]);
         let providers = vec![
@@ -13207,8 +13101,7 @@ mod sorafs_tests {
         let mut state = make_state_with_completion_anchor();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header_at_epoch(12));
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         insert_manifest_with_status(
             &mut stx,
             default_digest(),
@@ -13269,8 +13162,7 @@ mod sorafs_tests {
     fn register_capacity_declaration_accepts_governed_owner_with_native_reserve_bond() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, record) = sample_capacity_record();
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let instruction = RegisterCapacityDeclaration {
@@ -13300,8 +13192,7 @@ mod sorafs_tests {
     fn capacity_declaration_accepts_i105_owner_literal_with_governed_registry() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let mut declaration = sample_capacity_declaration();
         declaration.metadata = vec![
             CapacityMetadataEntry {
@@ -13331,8 +13222,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_updates_pricing_and_credit() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, record) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), record)
             .expect("register capacity declaration");
@@ -13428,8 +13318,7 @@ mod sorafs_tests {
         // is rejected atomically rather than clamped into a partial charge.
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, record) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), record)
             .expect("register capacity declaration");
@@ -13504,8 +13393,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_rejects_quantity_overflow_without_partial_mutation() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, record) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), record)
             .expect("register capacity declaration");
@@ -13581,8 +13469,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_rejects_overcommit_and_zero_capacity() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
@@ -13619,8 +13506,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_rejects_overlap_gap_and_replay() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
@@ -13675,8 +13561,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_rejects_replay_when_nonce_optional() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
@@ -13707,8 +13592,7 @@ mod sorafs_tests {
         let bob = bob();
         seed_sorafs_permissions(&mut state, &bob);
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
@@ -13737,8 +13621,7 @@ mod sorafs_tests {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = capacity_record_with_owner(&bob());
         register_governed_capacity_declaration(&mut stx, &bob(), declaration)
             .expect("register capacity declaration");
@@ -13765,8 +13648,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_provider_override_blocks_owner_not_listed() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
@@ -13795,8 +13677,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_penalises_persistent_under_delivery() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 9_500,
             uptime_floor_bps: 9_500,
@@ -13952,8 +13833,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_respects_cooldown_between_penalties() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
             utilisation_floor_bps: 9_500,
             uptime_floor_bps: 9_500,
@@ -14114,8 +13994,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_forces_penalty_on_pdp_failure() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
@@ -14158,8 +14037,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_penalises_pdp_failures_without_challenge_count() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
@@ -14201,8 +14079,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_does_not_mutate_capacity_disputes() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         let proof = ProofWindowCounters {
@@ -14224,8 +14101,7 @@ mod sorafs_tests {
     fn duplicate_proof_failure_telemetry_remains_dispute_free() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         let telemetry = CapacityTelemetryRecord::new(
@@ -14249,8 +14125,8 @@ mod sorafs_tests {
         fn run_once() -> (CapacityFeeLedgerEntry, ProviderCreditRecord) {
             let state = make_state();
             let mut block = state.block(block_header());
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx);
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
             let provider =
                 ProofHealthFixture::all_proofs(3, 5_000, 1).install(&mut stx, 6_000_000_000);
             let window = SECONDS_PER_BILLING_MONTH;
@@ -14300,8 +14176,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_emits_proof_health_event() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProofHealthFixture::all_proofs(2, 5_000, 0).install(&mut stx, 5_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
@@ -14345,8 +14220,7 @@ mod sorafs_tests {
     fn proof_health_alert_emitted_for_potr_failures() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProofHealthFixture::potr(1, 4_000, 0).install(&mut stx, 3_500_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
@@ -14389,8 +14263,7 @@ mod sorafs_tests {
     fn proof_health_alert_reports_cooldown_state() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProofHealthFixture::pdp(1, 5_000, 2).install(&mut stx, 4_000_000_000);
         let window = SECONDS_PER_BILLING_MONTH;
         record_capacity_window_with_proofs(
@@ -14448,8 +14321,7 @@ mod sorafs_tests {
     fn capacity_fee_ledger_30_day_soak_deterministic() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         stx.gov.sorafs_penalty.penalty_bond_bps = 0;
         stx.gov.sorafs_penalty.strike_threshold = u32::MAX;
         let mut schedule = PricingScheduleRecord::launch_default();
@@ -14641,8 +14513,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_charges_egress() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, record) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), record)
             .expect("register capacity declaration");
@@ -14728,8 +14599,7 @@ mod sorafs_tests {
     fn record_capacity_telemetry_uses_declaration_storage_class() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let mut declaration = sample_capacity_declaration();
         set_capacity_storage_class(&mut declaration, "cold");
         let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
@@ -14832,8 +14702,8 @@ mod sorafs_tests {
         for case in ["payload_storage", "record_storage", "payload_owner"] {
             let state = make_state();
             let mut block = state.block(block_header());
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx);
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
             let (provider, mut record) = capacity_record_with_owner(&alice());
             seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
             let mut declaration =
@@ -14882,8 +14752,7 @@ mod sorafs_tests {
     fn register_capacity_declaration_requires_explicit_storage_class() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, mut record) = capacity_record_with_owner(&alice());
         let mut declaration =
             decode_capacity_declaration_payload(&record.declaration).expect("decode declaration");
@@ -14909,8 +14778,7 @@ mod sorafs_tests {
     fn register_capacity_declaration_requires_owner_in_canonical_payload() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, mut record) = capacity_record_with_owner(&alice());
         let mut declaration =
             decode_capacity_declaration_payload(&record.declaration).expect("decode declaration");
@@ -14990,8 +14858,7 @@ mod sorafs_tests {
     fn upsert_provider_credit_requires_registered_provider() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let record = provider_credit_nanos(ProviderId::new([0x55; 32]), 1_000, 0);
         let err = UpsertProviderCredit { record }
             .execute(&alice(), &mut stx)
@@ -15011,8 +14878,7 @@ mod sorafs_tests {
     fn upsert_provider_credit_cannot_mint_bonded_stake() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         seed_governed_capacity_provider(
             &mut stx,
             ProviderId::new([0xE8; 32]),
@@ -15046,8 +14912,7 @@ mod sorafs_tests {
     fn upsert_provider_credit_cannot_diverge_from_native_reserve() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProviderId::new([0x57; 32]);
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let forged = ProviderCreditRecord::new(
@@ -15082,8 +14947,7 @@ mod sorafs_tests {
     fn upsert_provider_credit_cannot_release_a_custody_backed_slash_lien() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProviderId::new([0x58; 32]);
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(2_u32));
         let mut penalized = stx
@@ -15148,8 +15012,7 @@ mod sorafs_tests {
     fn register_capacity_declaration_rejects_noncanonical_and_resource_bomb_payloads() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let (provider, base_record) = sample_capacity_record();
         let alternate = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
@@ -15200,8 +15063,7 @@ mod sorafs_tests {
     fn direct_provider_owner_instructions_are_retired_even_for_permission_holder() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProviderId::new([0xA1; 32]);
         let register_error = RegisterProviderOwner {
             provider_id: provider,
@@ -15233,8 +15095,7 @@ mod sorafs_tests {
     fn governed_provider_owner_actions_enforce_compare_and_set() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProviderId::new([0xA2; 32]);
         assert!(
             apply_governed_provider_owner_action(
@@ -15297,8 +15158,7 @@ mod sorafs_tests {
     fn pending_replication_blocks_authority_revocation_and_owner_change_atomically() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let providers = seed_eligible_auto_replication_providers_for_test(
             &mut stx,
             &alice(),
@@ -15365,8 +15225,7 @@ mod sorafs_tests {
     fn provider_ingest_completion_authority_requires_exact_predecessor_chain() {
         let state = make_state();
         let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let provider = ProviderId::new([0xA6; 32]);
         stx.world.provider_owners.insert(provider, alice());
         let revision_one = completion_authority(&alice(), 1);

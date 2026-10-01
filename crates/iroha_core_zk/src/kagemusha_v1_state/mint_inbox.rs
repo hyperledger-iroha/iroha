@@ -154,7 +154,6 @@ impl MintInboxReservationV1 {
             .and_then(|n| n.checked_add(FIXED_STAGE_FRAMING_RESERVATION_BYTES))
             .ok_or(KagemushaStateErrorV1::ArithmeticOverflow)
     }
-    #[cfg(test)]
     pub(super) fn credit_opening(&self) -> &KagemushaCreditOpeningV1 {
         &self.credit_opening
     }
@@ -545,6 +544,24 @@ fn verify_mint_stage_v1(
     })
 }
 
+/// Authenticate exact recipient authorization and native finality under the held production
+/// verifier. The result must still match the hardware-selected original local reservation.
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub(super) fn verify_governed_mint_stage_v1(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    artifacts: KagemushaRecursionArtifactsV1,
+    reservation: &MintInboxReservationV1,
+    credit: &KagemushaMintCreditV1,
+) -> Result<VerifiedMintStageV1, KagemushaStateErrorV1> {
+    verify_mint_stage_v1(
+        verifier,
+        artifacts,
+        reservation,
+        credit,
+        KagemushaAuthenticatedRecursiveVerifierV1::verify_mint_authorization,
+    )
+}
+
 /// Match the finalized request's complete authorization to the pre-debit native reservation.
 pub(super) fn require_exact_top_up_reservation_v1(
     reservation: &MintInboxReservationV1,
@@ -763,7 +780,6 @@ impl KagemushaMintInboxV1 {
     pub fn accepted(&self) -> &BTreeMap<CreditIdV1, AcceptedMintReceiptV1> {
         &self.accepted
     }
-    #[cfg(test)]
     /// Whether any live or historical mint record already owns this credit identity.
     pub fn contains_credit_id(&self, id: CreditIdV1) -> bool {
         self.reservations.contains_key(&id)
@@ -774,12 +790,10 @@ impl KagemushaMintInboxV1 {
     pub fn reservation(&self, id: CreditIdV1) -> Option<&MintInboxReservationV1> {
         self.reservations.get(&id)
     }
-    #[cfg(test)]
     /// Borrow one pending mint.
     pub fn pending_credit(&self, id: CreditIdV1) -> Option<&StagedMintCreditV1> {
         self.pending.get(&id)
     }
-    #[cfg(test)]
     /// Borrow one consumed-mint receipt.
     pub fn accepted_receipt(&self, id: CreditIdV1) -> Option<&AcceptedMintReceiptV1> {
         self.accepted.get(&id)
@@ -845,7 +859,7 @@ impl KagemushaMintInboxV1 {
         Ok(total)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Compute a reservation successor only; the caller must certify it before installation.
     pub fn reserve_successor(
         &self,
@@ -875,7 +889,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Compute nonauthorizing staging projection before hardware supplies the final certificate.
     /// Its placeholder certificate cannot be installed via `staged_successor` or recovered.
     pub fn preview_staged_successor(
@@ -915,7 +929,7 @@ impl KagemushaMintInboxV1 {
         self.stage_projection(verified, &certificate)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Compute the final checked staging successor; hardware/physical-ledger verification remains
     /// mandatory in the state-machine operation before publishing it.
     pub fn staged_successor(
@@ -933,7 +947,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn stage_projection(
         &self,
         verified: &VerifiedMintStageV1,
@@ -977,7 +991,7 @@ impl KagemushaMintInboxV1 {
         Ok(next)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Require the exact pending bytes before a monetary fold may consume them.
     pub fn validate_fold(
         &self,
@@ -1001,7 +1015,7 @@ impl KagemushaMintInboxV1 {
         Err(KagemushaStateErrorV1::CreditNotStaged(id))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Prepare pending removal/compact receipt installation before the irreversible replay CAS.
     pub fn folded_successor(
         &self,
@@ -1086,7 +1100,6 @@ impl KagemushaMintInboxV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     fn ensure_unique_operation_key(
         &self,
         operation: DigestV1,

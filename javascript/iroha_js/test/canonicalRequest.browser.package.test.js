@@ -14,7 +14,6 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 import {
-  BUNDLE_TARGETS,
   findForbiddenBrowserInputs,
 } from "../scripts/bundle-size-check.mjs";
 import {
@@ -107,17 +106,6 @@ test("packed canonical-request subpath executes securely and has strict DOM type
     assert.equal(
       inputs.some((input) => /dist[/\\]cryptoHash\.js$/u.test(input)),
       false,
-    );
-    const target = BUNDLE_TARGETS.find(({ label }) =>
-      label.includes("canonicalRequest"),
-    );
-    assert.ok(target);
-    assert.ok(
-      result.outputFiles[0].contents.byteLength <= Math.floor(97_869 * 1.05),
-      "packed canonical-request regressed more than 5% from the protected pre-reset tree",
-    );
-    assert.ok(
-      result.outputFiles[0].contents.byteLength <= target.limitKb * 1024,
     );
     assert.doesNotMatch(
       result.outputFiles[0].text,

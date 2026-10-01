@@ -418,9 +418,22 @@ def run(
     else:
         invocation = executable
         canonical = executable
+    arguments = args
+    if canonical == pathlib.Path("/usr/bin/git").resolve(strict=True):
+        # Git repository-local settings and persistent replacement refs are
+        # outside the authenticated source bytes. Read-only seal operations
+        # must neither reinterpret those bytes nor execute a local monitor.
+        arguments = [
+            "--no-replace-objects",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            *args,
+        ]
     try:
         result = subprocess.run(
-            [str(invocation), *args],
+            [str(invocation), *arguments],
             executable=str(canonical),
             cwd=root,
             env=environment,

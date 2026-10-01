@@ -177,6 +177,50 @@ impl PendingEnrolledOpenV1 {
         Ok(pending)
     }
 
+    pub(super) fn from_original_work_owner(
+        core: &super::native_core_work::NativeCoreWorkOwnerV1,
+        native_key: &KagemushaDevicePublicKeyV1,
+        deadline: NativeDeadlineV1,
+    ) -> Result<Self> {
+        deadline.check().map_err(|_| EnrolledOpenErrorV1::Expired)?;
+        let observer =
+            NativeStartupQualificationOwnerV1::from_original_work_owner(core, native_key)?;
+        let selected = core
+            .current_recovery_selection()
+            .map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        let source = authenticated_recovery_source(&selected)?;
+        let enrollment = selected.enrollment_binding().clone();
+        let epoch = selected.hardware_epoch();
+        let binding = selected.device_policy_binding();
+        let release = core
+            .authenticated_release()
+            .map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        let pending = Self::begin(
+            observer,
+            enrollment.clone(),
+            source.clone(),
+            RequiredCredentialV1::Recovered {
+                generation: epoch.generation,
+                epoch_id: epoch.epoch_id,
+                key_reference: binding.device_key_reference,
+            },
+            release.release_id(),
+            release.hardware_policy_digest(),
+            hardware_authorization_key_reference_v1(native_key),
+            deadline,
+        )?;
+        let current = core
+            .current_recovery_selection()
+            .map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        if authenticated_recovery_source(&current)? != source
+            || current.enrollment_binding() != &enrollment
+        {
+            return Err(EnrolledOpenErrorV1::DeviceBinding);
+        }
+        pending.require_unexpired()?;
+        Ok(pending)
+    }
+
     /// Consume the fresh nonce-bound issuer admission before initial device possession.
     /// This preserves its original deadline and exact evidence; it supplies no hardware
     /// commit clock or monetary bootstrap authority. Existing Core owners require recovery.
@@ -219,6 +263,9 @@ impl PendingEnrolledOpenV1 {
         deadline: NativeDeadlineV1,
     ) -> Result<Self> {
         deadline.check().map_err(|_| EnrolledOpenErrorV1::Expired)?;
+        if enrollment.core_authorization_key_reference != core_authorization_key_reference {
+            return Err(EnrolledOpenErrorV1::DeviceBinding);
+        }
         let account_key = enrollment
             .owner
             .account_id
@@ -280,6 +327,7 @@ impl PendingEnrolledOpenV1 {
     pub(super) fn enrollment_binding(&self) -> KagemushaRecoveryEnrollmentBindingV1 {
         KagemushaRecoveryEnrollmentBindingV1 {
             enrollment_id: self.challenge.enrollment_id,
+            core_authorization_key_reference: self.challenge.core_authorization_key_reference,
             owner: self.challenge.owner.clone(),
         }
     }
@@ -432,6 +480,7 @@ impl VerifiedEnrolledOpenEvidenceV1 {
     pub(super) fn enrollment_binding(&self) -> KagemushaRecoveryEnrollmentBindingV1 {
         KagemushaRecoveryEnrollmentBindingV1 {
             enrollment_id: self.challenge.enrollment_id,
+            core_authorization_key_reference: self.challenge.core_authorization_key_reference,
             owner: self.challenge.owner.clone(),
         }
     }

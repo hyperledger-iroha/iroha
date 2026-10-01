@@ -3,6 +3,11 @@
 
 package org.hyperledger.iroha.android.offline;
 
+import org.hyperledger.iroha.sdk.offline.KagemushaAuthenticatedHardwarePolicyV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaIncomingFoldEvidenceV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaIncomingStageKindV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaNativeIncomingFoldPreparationV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaPendingCreditSelectorV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaDeviceSenderPublicInputsV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaDeviceSenderTerminalReceiptV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaHardwareQualificationV1;
@@ -34,16 +39,34 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1 implements KagemushaN
         org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath));
   }
 
+  @Override public KagemushaAuthenticatedHardwarePolicyV1 authenticatedHardwarePolicy() {
+    return delegate.authenticatedHardwarePolicy();
+  }
+  @Override public byte[] stageIncomingOriginal(final KagemushaIncomingStageKindV1 kind,
+      final byte[] creditId) {
+    return delegate.stageIncomingOriginal(kind, creditId);
+  }
+  @Override public KagemushaNativeIncomingFoldPreparationV1 prepareIncomingFold(
+      final KagemushaPendingCreditSelectorV1 selector) {
+    return delegate.prepareIncomingFold(selector);
+  }
+  @Override public byte[] completeIncomingFold(final KagemushaNativeIncomingFoldPreparationV1 preparation,
+      final KagemushaIncomingFoldEvidenceV1 evidence) {
+    return delegate.completeIncomingFold(preparation, evidence);
+  }
+
   @Override public byte[] reserveOperationId(final int operation, final byte[] operationId, final byte[] publicBinding) {
     return delegate.reserveOperationId(operation, operationId, publicBinding);
   }
   @Override public void acceptQualification(final KagemushaHardwareQualificationV1 qualification, final byte[] hardwarePolicyDigest) {
     delegate.acceptQualification(qualification, hardwarePolicyDigest);
   }
+  /** Forward the complete original signed response to Kotlin's native acceptance owner. */
   @Override public void acceptAuthenticatedDeviceReply(final int operation, final byte[] requestId,
       final byte[] canonicalCommand, final byte[] canonicalReply, final byte[] responseAuthenticator,
-      final KagemushaHardwareQualificationV1 qualification) {
-    delegate.acceptAuthenticatedDeviceReply(operation, requestId, canonicalCommand, canonicalReply, responseAuthenticator, qualification);
+      final KagemushaHardwareQualificationV1 qualification, final byte[] originalResponse) {
+    delegate.acceptAuthenticatedDeviceReply(operation, requestId, canonicalCommand, canonicalReply,
+        responseAuthenticator, qualification, originalResponse);
   }
   @Override public KagemushaNativeSenderPreparationV1 beginSenderTransition(final byte[] operationId,
       final KagemushaDeviceSenderPublicInputsV1 inputs, final KagemushaHardwareQualificationV1 qualification) {

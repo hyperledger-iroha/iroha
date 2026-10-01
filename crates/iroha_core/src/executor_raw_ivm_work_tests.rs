@@ -9,10 +9,21 @@ mod raw_ivm_work {
     const CYCLES: u64 = 1_000;
 
     fn fixture() -> State {
-        state_for_testing(World::with(
+        state_after_genesis(World::with(
             [],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
+        ))
+    }
+
+    fn next_block(state: &State) -> crate::state::StateBlock<'_> {
+        state.block(BlockHeader::new(
+            core::num::NonZeroU64::new(state.committed_height() as u64 + 1)
+                .expect("post-genesis fixture height"),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
         ))
     }
 
@@ -113,12 +124,14 @@ mod raw_ivm_work {
             assert!((1..=effective).contains(&expected_gas));
             let state = fixture();
             let transaction = signed(&state, &program, signed_limit);
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             block.gas_limit_per_block = block_limit;
             block.gas_used_in_block = already_used;
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             let error = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
                 .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -160,30 +173,53 @@ seiyaku RawMeteredFailure {
             ExecutableProgramSummary::Contract(_)
         ));
         let code_hash = ivm::contract_code_hash(&program);
-        let address = ContractAddress::derive(
-            &executor_test_network_id(b"raw-ivm-completed-work"),
-            &ALICE_ID,
-            150,
-            DataSpaceId::UNIVERSAL,
-        )
-        .unwrap();
-        let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-        world.contract_code.insert(
+        let state = fixture();
+        let address =
+            ContractAddress::derive(&state.network_id, &ALICE_ID, 150, DataSpaceId::UNIVERSAL)
+                .unwrap();
+        let mut block = next_block(&state);
+        let mut setup = block.transaction();
+        setup.world.contract_code.insert(
             iroha_data_model::smart_contract::ContractArtifactId::new(
                 address.dataspace_id().unwrap(),
                 code_hash,
             ),
             program.clone(),
         );
-        world.contract_manifests.insert(
+        setup.world.contract_manifests.insert(
             iroha_data_model::smart_contract::ContractArtifactId::new(
                 address.dataspace_id().unwrap(),
                 code_hash,
             ),
             manifest.signed(&ALICE_KEYPAIR),
         );
-        bind_executor_test_contract(&mut world, &address, &ALICE_ID, code_hash);
-        let state = state_for_testing(world);
+        setup.world.accounts.insert(
+            address.subject_id(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        setup
+            .world
+            .contract_instances
+            .insert(address.clone(), code_hash);
+        setup
+            .world
+            .contract_subject_addresses
+            .insert(address.subject_id(), address.clone());
+        setup.world.contract_subject_bindings.insert(
+            address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &address,
+                ALICE_ID.clone(),
+            )
+            .with_active_code_hash(code_hash),
+        );
+        setup.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("bound contract fixture World setup");
+
         let mut metadata = Metadata::default();
         for (key, value) in [
             ("contract_address", address.to_string()),
@@ -200,7 +236,7 @@ seiyaku RawMeteredFailure {
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = next_block(&state);
         let mut setup = block.transaction();
         let permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
@@ -215,6 +251,8 @@ seiyaku RawMeteredFailure {
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut cache)
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -262,30 +300,53 @@ seiyaku UnverifiedBallot {
             )
             .unwrap();
         let code_hash = ivm::contract_code_hash(&program);
-        let address = ContractAddress::derive(
-            &executor_test_network_id(b"raw-ivm-artifact-validation"),
-            &ALICE_ID,
-            151,
-            DataSpaceId::UNIVERSAL,
-        )
-        .unwrap();
-        let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-        world.contract_code.insert(
+        let state = fixture();
+        let address =
+            ContractAddress::derive(&state.network_id, &ALICE_ID, 151, DataSpaceId::UNIVERSAL)
+                .unwrap();
+        let mut block = next_block(&state);
+        let mut setup = block.transaction();
+        setup.world.contract_code.insert(
             iroha_data_model::smart_contract::ContractArtifactId::new(
                 address.dataspace_id().unwrap(),
                 code_hash,
             ),
             program.clone(),
         );
-        world.contract_manifests.insert(
+        setup.world.contract_manifests.insert(
             iroha_data_model::smart_contract::ContractArtifactId::new(
                 address.dataspace_id().unwrap(),
                 code_hash,
             ),
             manifest.signed(&ALICE_KEYPAIR),
         );
-        bind_executor_test_contract(&mut world, &address, &ALICE_ID, code_hash);
-        let state = state_for_testing(world);
+        setup.world.accounts.insert(
+            address.subject_id(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        setup
+            .world
+            .contract_instances
+            .insert(address.clone(), code_hash);
+        setup
+            .world
+            .contract_subject_addresses
+            .insert(address.subject_id(), address.clone());
+        setup.world.contract_subject_bindings.insert(
+            address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &address,
+                ALICE_ID.clone(),
+            )
+            .with_active_code_hash(code_hash),
+        );
+        setup.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("bound contract fixture World setup");
+
         let mut metadata = Metadata::default();
         for (key, value) in [
             ("contract_address", address.to_string()),
@@ -302,7 +363,7 @@ seiyaku UnverifiedBallot {
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = next_block(&state);
         let mut setup = block.transaction();
         let permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
@@ -317,6 +378,8 @@ seiyaku UnverifiedBallot {
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -380,10 +443,18 @@ seiyaku UnverifiedBallot {
         assert_eq!(artifacts.queued_instructions().len(), 2);
         let state = fixture();
         let transaction = signed(&state, &program, GAS);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = next_block(&state);
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        // Authorize the real role instruction so its missing target, not permission admission,
+        // tests rollback after the preceding account write.
+        tx.world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([executor_permission::role::CanManageRoles.into()]),
+        );
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -425,10 +496,12 @@ seiyaku UnverifiedBallot {
         assert!(expected_gas > 0);
         let state = fixture();
         let transaction = signed(&state, &program, GAS);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = next_block(&state);
         let fragments = block.committed_fragment_count();
         let mut tx =
             block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .map_err(crate::execution_attempt::expect_completed_rejection)
@@ -479,10 +552,18 @@ seiyaku UnverifiedBallot {
         ] {
             let state = fixture();
             let source = signed(&state, &program, GAS);
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            // Authorize the real role instruction so its missing target, not permission admission,
+            // tests rollback after the preceding account write.
+            tx.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([executor_permission::role::CanManageRoles.into()]),
+            );
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.overlay_max_instructions = count_cap;
             tx.pipeline.overlay_max_bytes = byte_cap;
             let error = Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache).map_err(crate::execution_attempt::expect_completed_rejection)
@@ -575,10 +656,12 @@ seiyaku UnverifiedBallot {
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
             .sign(ALICE_KEYPAIR.private_key());
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
+            tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             tx.pipeline.quarantine_tx_max_cycles = cap;
             let result = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)

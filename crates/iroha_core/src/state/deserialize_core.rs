@@ -481,11 +481,12 @@ impl KuraSeed {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, true, Some(configured_nexus))
     }
-    /// Construct the deliberately minimal State authenticated by a compact emergency manifest.
+    /// Construct an empty State bound to an exact empty emergency manifest boundary.
     ///
-    /// The caller has already authenticated the manifest signature. This constructor binds its
-    /// exact height and terminal hash to Kura, maps the matching hash prefix read-only, and leaves
-    /// World, transaction history, consensus topology, and runtime Nexus state unopened.
+    /// The caller has already authenticated the manifest signature, which authenticates an
+    /// identity rather than executed World. A nonzero height therefore requires original
+    /// signed-genesis and certified-history replay. At height zero, the exact empty Kura
+    /// boundary retains empty World, transaction history, topology, and runtime Nexus state.
     pub(crate) fn into_state_from_emergency_fast_manifest(
         self,
         chain_id: ChainId,
@@ -1119,6 +1120,15 @@ impl KuraSeed {
         Ok(state)
     }
 }
+/// Exercise exact durable Fast boundary admission without constructing native State.
+#[cfg(test)]
+pub(crate) fn emergency_fast_block_hashes_for_testing(
+    kura: &Kura,
+    snapshot_height: usize,
+    snapshot_tip: Option<HashOf<BlockHeader>>,
+) -> Result<BlockHashes, json::Error> {
+    emergency_fast_block_hashes(kura, snapshot_height, snapshot_tip)
+}
 fn emergency_fast_block_hashes(
     kura: &Kura,
     snapshot_height: usize,
@@ -1434,6 +1444,236 @@ fn restore_snapshot_nexus_owner_policy(
     nexus.autoscale.enabled = policy.autoscale_enabled;
     Ok(())
 }
+/// Decode typed World and external lane projection fields against an independently
+/// supplied reference prefix. This test-only component validator grants no State,
+/// authenticated native tip, committed root or snapshot restoration authority.
+#[cfg(test)]
+pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
+    value: json::Value,
+    reference_block_hashes: &[HashOf<BlockHeader>],
+) -> Result<World, StateRestoreError> {
+    let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+    let operation_index_refusal = std::cell::RefCell::new(None);
+    let execution_budget = &iroha_allocation::AllocationBudget::new(
+        iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+    );
+    let result = (|| {
+        let json::Value::Object(fields) = value else {
+            return Err(json::Error::Message(
+                "World projection requires its exact State envelope".into(),
+            )
+            .into());
+        };
+        let mut map = SnapshotJsonMap::from_owned(fields);
+        let world_map = map
+            .remove("world")
+            .ok_or_else(|| json::Error::missing_field("world"))?
+            .into_object("world")?;
+        let ivm = IVM::try_new(0).map_err(StateRestoreError::VmInitialization)?;
+        let seed = IvmSeed {
+            operation_index_budget: &operation_index_budget,
+            operation_index_refusal: &operation_index_refusal,
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+        let mut world = parse_world(execution_budget, world_map, &seed)?;
+        world.public_lane_validators =
+            take_required::<snapshot_storage::SnapshotStorage>(&mut map, "public_lane_validators")?
+                .decode(
+                    "public_lane_validators",
+                    public_lane_validator_record_matches_key,
+                )?;
+        world.public_lane_stake_shares = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_stake_shares",
+        )?
+        .decode(
+            "public_lane_stake_shares",
+            public_lane_stake_share_matches_key,
+        )?;
+        world.public_lane_rewards =
+            take_required::<snapshot_storage::SnapshotStorage>(&mut map, "public_lane_rewards")?
+                .decode("public_lane_rewards", public_lane_reward_record_matches_key)?;
+        world.public_lane_reward_claims = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_reward_claims",
+        )?
+        .decode(
+            "public_lane_reward_claims",
+            |_: &(LaneId, AccountId), value: &PublicLaneRewardClaimStateV1| {
+                value.through_epoch.is_some()
+            },
+        )?;
+        world.public_lane_reward_accruals = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_reward_accruals",
+        )?
+        .decode(
+            "public_lane_reward_accruals",
+            |_: &(LaneId, AccountId, AssetId), value: &Quantity| !value.is_zero(),
+        )?;
+        world.public_lane_reward_reserves = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_reward_reserves",
+        )?
+        .decode(
+            "public_lane_reward_reserves",
+            |_: &AssetId, value: &Quantity| !value.is_zero(),
+        )?;
+        world.public_lane_stake_custody = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_stake_custody",
+        )?
+        .decode(
+            "public_lane_stake_custody",
+            |_: &(LaneId, AccountId), value: &(AssetId, Quantity)| !value.1.is_zero(),
+        )?;
+        world.public_lane_stake_reserves = take_required::<snapshot_storage::SnapshotStorage>(
+            &mut map,
+            "public_lane_stake_reserves",
+        )?
+        .decode(
+            "public_lane_stake_reserves",
+            |_: &AssetId, value: &Quantity| !value.is_zero(),
+        )?;
+        validate_public_lane_reward_reserves(&world.view()).map_err(|message| {
+            json::Error::InvalidField {
+                field: "public_lane_reward_reserves.blocks".to_owned(),
+                message,
+            }
+        })?;
+        {
+            let previous_world = world.try_block_and_revert(execution_budget)?;
+            validate_public_lane_reward_reserves(&previous_world).map_err(|message| {
+                json::Error::InvalidField {
+                    field: "public_lane_reward_reserves.revert".to_owned(),
+                    message,
+                }
+            })?;
+        }
+
+        validate_public_lane_stake_reserves(&world.view()).map_err(|message| {
+            json::Error::InvalidField {
+                field: "public_lane_stake_reserves.blocks".to_owned(),
+                message,
+            }
+        })?;
+        {
+            let previous_world = world.try_block_and_revert(execution_budget)?;
+            validate_public_lane_stake_reserves(&previous_world).map_err(|message| {
+                json::Error::InvalidField {
+                    field: "public_lane_stake_reserves.revert".to_owned(),
+                    message,
+                }
+            })?;
+        }
+
+        validate_replication_order_completion_anchors(&world, reference_block_hashes)?;
+        validate_musubi_resolver_checkpoint_anchors(&world, reference_block_hashes)?;
+        Ok(world)
+    })();
+    match operation_index_refusal.into_inner() {
+        Some(error) => Err(error.into()),
+        None => result,
+    }
+}
+
+/// Decode and validate both Nexus runtime component cuts without constructing
+/// a State or granting an authenticated native execution tip. The supplied
+/// original hash prefix and World remain independently owned by the test.
+#[cfg(test)]
+pub(in crate::state) fn decode_nexus_runtime_component_for_testing(
+    value: json::Value,
+    committed_block_hashes: &[HashOf<BlockHeader>],
+    world: &World,
+    execution_budget: &iroha_allocation::AllocationBudget,
+    baseline_manifests_hash: Hash,
+    configured: Option<&iroha_config::parameters::actual::Nexus>,
+) -> Result<
+    (
+        Cell<SnapshotNexusRuntime>,
+        iroha_config::parameters::actual::Nexus,
+    ),
+    StateRestoreError,
+> {
+    let runtime: Cell<SnapshotNexusRuntime> = json::from_value(value)?;
+    let (mut nexus, _, _, _, _) = nexus_from_snapshot_runtime(
+        runtime.view().get().clone(),
+        committed_block_hashes,
+        configured,
+    )?;
+    let invalid = |field: &str, message: String| json::Error::InvalidField {
+        field: field.to_owned(),
+        message,
+    };
+    let catalog = runtime_catalog_from_world(&world.view())
+        .map_err(|error| invalid("nexus_runtime.blocks", error.to_string()))?;
+    if catalog
+        .as_ref()
+        .is_some_and(|catalog| catalog.baseline_manifests_hash != baseline_manifests_hash)
+    {
+        return Err(invalid(
+            "state.lane_manifests",
+            "manifest baseline differs from canonical World catalog".to_owned(),
+        )
+        .into());
+    }
+    nexus.configured_dataspace_catalog = match configured {
+        Some(configured) => configured.configured_dataspace_catalog.clone(),
+        None if catalog.is_some() => return Err(invalid("nexus_runtime.blocks.owner_policy",
+            "committed runtime catalog requires the complete configured dataspace baseline at snapshot restore".to_owned()).into()),
+        None => nexus.dataspace_catalog.clone(),
+    };
+    let physical_policy = SnapshotNexusOwnerPolicy::from_nexus(&nexus).dataspaces;
+    nexus.dataspace_catalog =
+        runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, catalog.as_ref())
+            .map_err(|error| invalid("nexus_runtime.blocks.owner_policy", error.to_string()))?;
+    if SnapshotNexusOwnerPolicy::from_nexus(&nexus).dataspaces != physical_policy {
+        return Err(invalid(
+            "nexus_runtime.blocks.owner_policy",
+            "physical ownership differs from canonical World catalog".to_owned(),
+        )
+        .into());
+    }
+    let previous = runtime.predecessor_view();
+    if committed_block_hashes.is_empty() && previous.get().is_some() {
+        return Err(invalid(
+            "nexus_runtime.revert",
+            "height-zero runtime cannot retain predecessor undo".to_owned(),
+        )
+        .into());
+    }
+    if !committed_block_hashes.is_empty() && previous.get().is_none() {
+        return Err(invalid(
+            "nexus_runtime.revert",
+            "committed runtime must retain its predecessor record".to_owned(),
+        )
+        .into());
+    }
+    if let Some(prior) = previous.get() {
+        let prefix = &committed_block_hashes[..committed_block_hashes.len() - 1];
+        let (mut prior_nexus, _, _, _, _) =
+            nexus_from_snapshot_runtime(prior.clone(), prefix, configured)?;
+        let prior_world = world.try_block_and_revert(execution_budget)?;
+        let prior_catalog = runtime_catalog_from_world(&prior_world)
+            .map_err(|error| invalid("nexus_runtime.revert.owner_policy", error.to_string()))?;
+        prior_nexus.dataspace_catalog =
+            runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, prior_catalog.as_ref())
+                .map_err(|error| invalid("nexus_runtime.revert.owner_policy", error.to_string()))?;
+        if SnapshotNexusOwnerPolicy::from_nexus(&prior_nexus).dataspaces
+            != prior.owner_policy.dataspaces
+        {
+            return Err(invalid(
+                "nexus_runtime.revert.owner_policy",
+                "predecessor physical ownership differs from reverted World catalog".to_owned(),
+            )
+            .into());
+        }
+    }
+    drop(previous);
+    Ok((runtime, nexus))
+}
+
 fn validate_snapshot_autoscale_sample_history(
     runtime: &SnapshotNexusRuntime,
     committed_block_hashes: &(impl crate::state::BlockHashRead + ?Sized),

@@ -611,7 +611,7 @@ def require_block_start_construction(state: str) -> None:
     if not code.endswith("#[inline(never)]fnfinish_state_block_construction<R>(finish:implFnOnce()->R)->R{finish()}"):
         raise RuntimeError(f"{path}: start construction must retain its bounded borrowed finish")
     for owner in (
-        "impl<'state>StateBlock<'state>{fnfrom_fields(fields:StateBlockFields<'state>)->Self{Self{fields:Some(fields),publication:None,}}",
+        "impl<'state>StateBlock<'state>{fnfrom_fields(fields:StateBlockFields<'state>)->Self{Self{fields:Some(fields),world_cut_capture:None,publication:None,}}",
         (
             "implDropforStateBlock<'_>{fndrop(&mutself){"
             "letSome(fields)=self.fields.as_ref()else{return;};"
@@ -622,7 +622,7 @@ def require_block_start_construction(state: str) -> None:
             "membership.with_deferred_refund_notifications(|_|{"
             "hashes.with_deferred_refund_notifications(|_|{"
             "mv::BlockRetirement::release_writers(self);"
-            "drop(self.fields.take());drop(self.publication.take());})})});}}"
+            "drop(self.world_cut_capture.take());drop(self.fields.take());drop(self.publication.take());})})});}}"
         ),
     ):
         if state_code.count(owner) != 1:
@@ -1027,21 +1027,49 @@ NATIVE_HEADER_SOURCE_PATH = "crates/iroha_core/src/block/native_header_source.rs
 
 
 def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
-    """One exact committed demand gates follower admission and local production."""
+    """Authenticated root ownership and exact committed demand gate both consumers."""
     path = EPOCH_BEACON_PATH
+    ownership = compact_rust(rust_item(beacon, "fn owns_global_control(", path))
+    expected_ownership = compact_rust("""
+        fn owns_global_control(
+            scope: SumeragiRootScope,
+            world: &impl WorldReadOnly,
+            current: &ValidatorEpochContextV1,
+        ) -> Result<bool, String> {
+            scope.validate().map_err(|error| error.to_string())?;
+            if matches!(scope, SumeragiRootScope::Global) {
+                return Ok(true);
+            }
+            if current.mode != ConsensusMode::Permissioned
+                || current.authorization.beacon != BeaconEpochBindingV1::Bootstrap
+                || world.parliament_required_beacon_pulse_slots().iter().next().is_some()
+                || world.active_global_beacon_key_session().is_some()
+                || world.global_beacon_pulses().iter().next().is_some()
+            {
+                return Err("private root cannot own global epoch, Parliament, or beacon control".into());
+            }
+            Ok(false)
+        }
+    """)
+    if ownership != expected_ownership:
+        raise RuntimeError(f"{path}: private roots must refuse global control custody")
     requirement = compact_rust(rust_item(beacon, "pub(crate) fn required(", path))
     expected = compact_rust("""
         pub(crate) fn required(
+            scope: SumeragiRootScope,
             world: &impl WorldReadOnly,
             current: &ValidatorEpochContextV1,
             height: u64,
-        ) -> bool {
-            (current.mode == ConsensusMode::Npos
+        ) -> Result<bool, String> {
+            if !owns_global_control(scope, world, current)? {
+                return Ok(false);
+            }
+            Ok((current.mode == ConsensusMode::Npos
                 && height.checked_add(1) == Some(current.authorization.last_height))
                 || world
                     .parliament_required_beacon_pulse_slots()
                     .get(&(BeaconSessionId::for_network_v1(&current.network_id), height))
-                    .is_some_and(|attempts| !attempts.is_empty())
+                    .is_some_and(|attempts| !attempts.is_empty()))
         }
     """)
     if requirement != expected:
@@ -1054,7 +1082,43 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
     admission = compact_rust(rust_item(beacon, "pub(crate) fn capture(", path))
     admission_order = (
         "current.validate()?;",
-        "letdemanded=required(world,current,height);",
+        compact_rust("""
+            match (height, expected_context.as_ref()) {
+                (1, None) if supplied.is_none() => {}
+                (1, _) => {
+                    return Err(
+                        "signed genesis cannot contain a native pulse or native parent context".into(),
+                    );
+                }
+                (_, Some(context)) => {
+                    context.validate().map_err(str::to_owned)?;
+                    if context.epoch != current.authorization.epoch
+                        || context.epoch_context_id != current.context_id()?
+                    {
+                        return Err(
+                            "native beacon expected context differs from the authenticated epoch".into(),
+                        );
+                    }
+                }
+                (_, None) => {
+                    return Err(
+                        "native beacon admission lacks its independently checked native context".into(),
+                    );
+                }
+            }
+        """),
+        compact_rust("""
+            if height < current.authorization.first_height
+                || height > current.authorization.last_height
+                || u64::try_from(hashes.hash_count())
+                    .ok()
+                    .and_then(|height| height.checked_add(1))
+                    != Some(height)
+            {
+                return Err("native beacon witness is outside its exact committed prestate".into());
+            }
+        """),
+        "letdemanded=required(scope,world,current,height)?;",
         compact_rust("""
             let Some(pulse) = supplied else {
                 return if demanded {
@@ -1071,6 +1135,25 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
             if !demanded {
                 return Err("native beacon control witness was not requested".into());
             }
+        """),
+        compact_rust("""
+            if pulse.network_id != current.network_id
+                || pulse.height != height
+                || pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1
+            {
+                return Err("native beacon witness changes its network, height or round".into());
+            }
+            let parent = height
+                .checked_sub(1)
+                .filter(|height| *height > 0)
+                .ok_or("native beacon witness lacks finalized parent")?;
+            let index = usize::try_from(parent - 1).map_err(|_| "native beacon parent index overflows")?;
+            let anchor = GlobalThresholdBeaconChainAnchorV1 {
+                height: parent,
+                block_hash: *hashes
+                    .hash_at(index)
+                    .ok_or("native beacon parent is absent")?,
+            };
         """),
         "validate_pending_slot(world,current,height)?;",
         "letpeers=current.committee.iter().map(|seat|seat.validator.clone()).collect::<Vec<_>>();",
@@ -1107,7 +1190,7 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
         )
     source = compact_rust(rust_item(producer, "    fn ensure_source(", producer_path))
     activation = compact_rust("""
-        let active = if super::required(state.world(), current, context.height) {
+        let active = if required {
             super::validate_pending_slot(state.world(), current, context.height)
                 .map_err(NativeBeaconError::Source)?;
             Some(ActiveRound::open(
@@ -1123,6 +1206,14 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
         "letretained=state.world().consensus_schedule();",
         ".ready(context.height)",
         "ifcurrent.network_id!=*state.network_id()||schedule::core_epoch(current)",
+        compact_rust("""
+            let root_scope = crate::sumeragi::lanes::routing::committed_root_scope(state.world())
+                .ok_or_else(|| {
+                    NativeBeaconError::Source("native control requires immutable root scope".into())
+                })?;
+            let required = super::required(root_scope, state.world(), current, context.height)
+                .map_err(NativeBeaconError::Source)?;
+        """),
         "ifself.prepared.as_ref()==Some(context){returnOk(());}",
         activation,
         "GlobalThresholdBeaconChainAnchorV1{height:applied.0,block_hash:parent.block_hash(),}",
@@ -1219,7 +1310,7 @@ def require_native_beacon_pulse_application(
         "authenticate_successor_context(self,&self._curr_block,expected)?;",
     ))
     capture = (
-        "epoch_beacon::capture(&self.world,self.block_hashes(),{epoch},height,"
+        "epoch_beacon::capture(root_scope,&self.world,self.block_hashes(),{epoch},height,"
         "supplied_pulse,expected_context,).map_err(ScheduleError::Epoch)?;"
     )
     application = compact_rust("""
@@ -1245,6 +1336,18 @@ def require_native_beacon_pulse_application(
         }
     """)
     request_order = (
+        compact_rust("""
+            let root_scope = if height == genesis_height {
+                iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
+                    .map_err(ScheduleError::Epoch)?
+                    .sumeragi_context
+                    .root_scope
+            } else {
+                crate::sumeragi::lanes::routing::committed_root_scope(&self.world).ok_or_else(|| {
+                    ScheduleError::Epoch("native control requires immutable root scope".into())
+                })?
+            };
+        """),
         capture.format(epoch="&epoch"),
         "letcurrent=&schedule.ready(height)?.epoch;",
         capture.format(epoch="current"),

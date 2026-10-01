@@ -165,6 +165,135 @@ fn disk_history_store_reopens_prepare_and_dual_commit_with_exact_retries() {
     );
 }
 
+#[cfg(feature = "zk-halo2-ipa")]
+#[test]
+fn pending_incoming_prefix_is_actual_signed_wal_and_unwraps_only_exact_original_cas() {
+    let (_parent, path) = location();
+    let mut store = create(&path);
+    let previous_roots = store.committed_roots();
+    let previous_commitment = store.recovery_commitment().unwrap();
+    let tx = transaction(b"incoming-original", previous_roots);
+    let selected = certificate(&tx, 1);
+    store.prepare_cas(tx.clone()).unwrap();
+    store.commit_prepared(selected).unwrap();
+    let actual_roots = store.committed_roots();
+    drop(store);
+    let mut store = reopen(&path);
+    let durable_bytes = fs::read(path.join(JOURNAL_FILE)).unwrap();
+    store
+        .select_pending_incoming_predecessor(
+            binding(),
+            &tx,
+            selected.certificate,
+            previous_roots,
+            previous_commitment,
+        )
+        .unwrap();
+    assert_eq!(store.committed_roots(), previous_roots);
+    assert!(store.require_actual_incoming_history().is_err());
+    store.require_prepared(&tx).unwrap();
+    assert_eq!(
+        store.prepare_cas(tx.clone()).unwrap(),
+        KagemushaHistoryPrepareOutcomeV1::AlreadyPrepared
+    );
+    assert!(store.abort_prepared(tx.transaction_id()).is_err());
+    assert!(store.recover_prepared(certificate(&tx, 2)).is_err());
+    assert_eq!(store.committed_roots(), previous_roots);
+    assert_eq!(
+        store.recover_prepared(selected).unwrap(),
+        KagemushaHistoryRecoveryOutcomeV1::AlreadyCommitted {
+            committed_roots: actual_roots
+        }
+    );
+    assert_eq!(store.committed_roots(), actual_roots);
+    store.require_actual_incoming_history().unwrap();
+    assert_eq!(fs::read(path.join(JOURNAL_FILE)).unwrap(), durable_bytes);
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[test]
+fn pending_incoming_prefix_refuses_substituted_original_and_later_unrelated_commit() {
+    let (_parent, path) = location();
+    let mut store = create(&path);
+    let before = store.committed_roots();
+    let commitment = store.recovery_commitment().unwrap();
+    let tx = transaction(b"first-incoming", before);
+    let original = certificate(&tx, 1);
+    store.prepare_cas(tx.clone()).unwrap();
+    store.commit_prepared(original).unwrap();
+    assert!(
+        store
+            .select_pending_incoming_predecessor(
+                binding(),
+                &tx,
+                certificate(&tx, 2).certificate,
+                before,
+                commitment
+            )
+            .is_err()
+    );
+    assert!(store.pending_incoming.is_none());
+    // A genuine signed second insertion cannot be mistaken for this original's successor.
+    let next = match prepare_history_identity_pair_v1(
+        &mut store,
+        digest(b"second-replay"),
+        digest(b"second-envelope"),
+        digest(b"second-decision"),
+        digest(b"second-result"),
+        digest(b"second-attempt"),
+    )
+    .unwrap()
+    {
+        KagemushaHistoryDualInsertPreparationV1::Prepared { transaction, .. } => transaction,
+        other => panic!("expected fresh native insertion: {other:?}"),
+    };
+    store.commit_prepared(certificate(&next, 2)).unwrap();
+    let actual = store.committed_roots();
+    assert!(
+        store
+            .select_pending_incoming_predecessor(
+                binding(),
+                &tx,
+                original.certificate,
+                before,
+                commitment
+            )
+            .is_err()
+    );
+    assert_eq!(store.committed_roots(), actual);
+    assert!(store.pending_incoming.is_none());
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[test]
+fn pending_incoming_key_selection_uses_original_provisioned_epoch_and_reference() {
+    let (_parent, path) = location();
+    let store = create(&path);
+    let public = public_key(&key());
+    let reference = iroha_data_model::kagemusha::kagemusha_device_key_reference_v1(&public);
+    assert_eq!(
+        store
+            .current_device_key(digest(b"disk-profile"), 7, reference)
+            .unwrap(),
+        public
+    );
+    assert!(
+        store
+            .current_device_key(digest(b"foreign-profile"), 7, reference)
+            .is_err()
+    );
+    assert!(
+        store
+            .current_device_key(digest(b"disk-profile"), 8, reference)
+            .is_err()
+    );
+    assert!(
+        store
+            .current_device_key(digest(b"disk-profile"), 7, digest(b"foreign-key"))
+            .is_err()
+    );
+}
+
 #[test]
 fn disk_history_store_retains_abort_tombstones_and_stale_cas() {
     let (_parent, path) = location();

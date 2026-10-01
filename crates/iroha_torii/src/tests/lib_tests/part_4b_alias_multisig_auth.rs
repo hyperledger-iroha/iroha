@@ -660,7 +660,7 @@ async fn alias_resolve_index_returns_on_chain_alias_record() {
     assert_eq!(dto.index, 0);
     assert_eq!(dto.alias, "banking@centralbank.universal");
     assert_eq!(dto.account_id, authority.to_string());
-    assert_eq!(dto.source.as_deref(), Some("on_chain"));
+    assert_eq!(dto.source.as_deref(), Some("active_sns"));
 }
 #[tokio::test]
 async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspace() {

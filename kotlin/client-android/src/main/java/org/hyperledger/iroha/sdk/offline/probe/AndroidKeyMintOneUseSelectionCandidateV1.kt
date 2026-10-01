@@ -1,20 +1,18 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+
 package org.hyperledger.iroha.sdk.offline.probe
 
+import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidOriginalJournalIoV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidOriginalJournalIoV1
+
 import android.content.Context
-import android.system.ErrnoException
-import android.system.Os
-import android.system.OsConstants
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.io.FileDescriptor
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaKeyMintRawSelectionEvidenceV1
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.preparedChallengeV1
@@ -176,110 +174,6 @@ internal interface SelectionIntentStoreV1 {
     fun persist(slot: String, frameDigest: ByteArray, evidence: KeyMintOneUseSelectionResultV1.Evidence)
 }
 
-/** Platform file operations use no-follow opens, create-new, fsync, and a process-shared lock. */
-internal interface SelectionJournalIoV1 {
-    fun exists(file: File): Boolean
-    fun read(file: File, maximum: Int): ByteArray
-    fun writeNew(file: File, bytes: ByteArray)
-    fun <T> withLock(file: File, action: () -> T): T
-}
-
-internal object AndroidSelectionJournalIoV1 : SelectionJournalIoV1 {
-    private val processLocks = Array(256) { Any() }
-
-    private fun closeAfterFailure(descriptor: FileDescriptor) {
-        try { Os.close(descriptor) } catch (_: Exception) { /* The stream may have closed it. */ }
-    }
-
-    override fun exists(file: File): Boolean = try {
-        val stat = Os.lstat(file.absolutePath)
-        require(OsConstants.S_ISREG(stat.st_mode)) { "selection journal entry is not regular" }
-        true
-    } catch (error: ErrnoException) {
-        if (error.errno == OsConstants.ENOENT) false else throw error
-    }
-
-    override fun read(file: File, maximum: Int): ByteArray {
-        val descriptor = Os.open(
-            file.absolutePath,
-            OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC,
-            0,
-        )
-        try {
-            val stat = Os.fstat(descriptor)
-            require(OsConstants.S_ISREG(stat.st_mode) && stat.st_size in 1L..maximum.toLong()) {
-                "selection journal entry is not a bounded regular file"
-            }
-            return FileInputStream(descriptor).use { stream ->
-                val bytes = ByteArrayOutputStream()
-                val buffer = ByteArray(4096)
-                while (true) {
-                    val count = stream.read(buffer)
-                    if (count < 0) break
-                    bytes.write(buffer, 0, count)
-                    require(bytes.size() <= maximum) { "selection journal entry grew during read" }
-                }
-                bytes.toByteArray()
-            }
-        } catch (error: Throwable) {
-            closeAfterFailure(descriptor)
-            throw error
-        }
-    }
-
-    override fun writeNew(file: File, bytes: ByteArray) {
-        val descriptor = Os.open(
-            file.absolutePath,
-            OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or
-                OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC,
-            384,
-        )
-        try {
-            FileOutputStream(descriptor).use { stream ->
-                stream.write(bytes)
-                stream.fd.sync()
-            }
-        } catch (error: Throwable) {
-            closeAfterFailure(descriptor)
-            throw error
-        }
-        val directory = checkNotNull(file.parentFile)
-        val directoryDescriptor = Os.open(
-            directory.absolutePath,
-            OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC,
-            0,
-        )
-        try {
-            Os.fsync(directoryDescriptor)
-        } finally {
-            Os.close(directoryDescriptor)
-        }
-    }
-
-    override fun <T> withLock(file: File, action: () -> T): T {
-        val monitor = processLocks[(file.absolutePath.hashCode() and Int.MAX_VALUE) % processLocks.size]
-        return synchronized(monitor) {
-            val descriptor = Os.open(
-                file.absolutePath,
-                OsConstants.O_RDWR or OsConstants.O_CREAT or OsConstants.O_NOFOLLOW or
-                    OsConstants.O_CLOEXEC,
-                384,
-            )
-            try {
-                require(OsConstants.S_ISREG(Os.fstat(descriptor).st_mode)) {
-                    "selection lock entry is not regular"
-                }
-                FileOutputStream(descriptor).use { stream ->
-                    stream.channel.lock().use { action() }
-                }
-            } catch (error: Throwable) {
-                closeAfterFailure(descriptor)
-                throw error
-            }
-        }
-    }
-}
-
 internal sealed interface PreparationLookupV1 {
     object Empty : PreparationLookupV1
     object Frozen : PreparationLookupV1
@@ -305,7 +199,7 @@ internal fun keyMintPreparedChallengeV1(
 /** Durable per-lane/predecessor records. Existing or torn intents are never retried. */
 internal class FileSelectionIntentStoreV1(
     private val directory: File,
-    private val io: SelectionJournalIoV1 = AndroidSelectionJournalIoV1,
+    private val io: KagemushaAndroidOriginalJournalIoV1 = AndroidOriginalJournalIoV1,
 ) : SelectionIntentStoreV1 {
     override fun <T> withSlotLock(slot: String, action: () -> T): T =
         io.withLock(file(slot, ".lock"), action)

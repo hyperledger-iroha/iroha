@@ -7,10 +7,7 @@ use crate::streaming::{
 use eyre::{Result as EyreResult, eyre};
 use iroha_core::streaming::StreamingProcessError;
 use iroha_data_model::peer::Peer;
-use iroha_p2p::streaming::{
-    StreamingClient, StreamingServer,
-    quic::{Error as QuicError, TransportConfigSettings},
-};
+use iroha_p2p::streaming::{StreamingClient, StreamingServer, quic::TransportConfigSettings};
 use norito::streaming::{
     CapabilityReport, CapabilityRole, ChunkAcknowledgeFrame, ControlFrame, TransportCapabilities,
 };
@@ -21,7 +18,7 @@ use std::{
 use tokio::time::{sleep, timeout};
 const ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(15);
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "dormant until quinn-proto 0.11.17 per-entry DATAGRAM accounting is in the lockfile"]
+#[ignore = "shipping QUIC endpoint admission remains unavailable pending complete transport qualification"]
 async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
     let vector = baseline_test_vector();
     let snapshot = vector
@@ -36,14 +33,9 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
     );
     let settings = TransportConfigSettings::default();
     let server_addr = StdSocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-    let server = match StreamingServer::bind(server_addr, settings).await {
-        Ok(server) => server,
-        Err(QuicError::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            eprintln!("streaming end-to-end test skipped: {err}");
-            return Ok(());
-        }
-        Err(err) => return Err(eyre!(err)),
-    };
+    let server = StreamingServer::bind(server_addr, settings)
+        .await
+        .map_err(|err| eyre!(err))?;
     let listen_addr = server.local_addr().map_err(|err| eyre!(err))?;
     let server_certificate_fingerprint = server.certificate_fingerprint();
     let (publisher_keys, viewer_keys) = test_keypairs();
@@ -72,8 +64,7 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
     let (manifest_wire_bytes, (received_manifest, received_chunks)) = match join_outcome {
         Err(_) => {
             server.shutdown().await;
-            eprintln!("streaming end-to-end test skipped: roundtrip timed out");
-            return Ok(());
+            return Err(eyre!("streaming end-to-end roundtrip timed out"));
         }
         Ok(Err(err)) => {
             server.shutdown().await;

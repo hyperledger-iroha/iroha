@@ -2445,7 +2445,9 @@ impl<'tx> AcceptedTransaction<'tx> {
             .entrypoint_hash
             .get_or_init(|| self.entrypoint().hash())
     }
-    /// Return the exact encoded size used by queue and transaction-size budgeting.
+    /// Return the framed size of the signed transaction or sealed variant for admission limits.
+    /// The canonical entrypoint frame includes its enum envelope; queue retention accounts
+    /// for those complete bytes through `entrypoint_bytes`.
     #[must_use]
     pub fn encoded_len(&self) -> usize {
         *self
@@ -5327,6 +5329,7 @@ pub mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
         runtime::RuntimeUpgradeManifest,
+        smart_contract::ContractArtifactId,
         transaction::{TransactionBuilder, executable::ContractInvocation},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -9599,7 +9602,8 @@ pub mod tests {
             metadata: Option<Metadata>,
             prepare_block: impl FnOnce(&mut StateBlock<'_>),
         ) -> Result<(), TransactionRejectionReason> {
-            // Ordinary component execution follows genesis; height one requires signed genesis custody.
+            // Use a height-two component overlay with synthetic Global scope metadata.
+            // This fixture does not apply signed genesis or establish Network finality.
             let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
             let mut block = self.state.block(header);
             prepare_block(&mut block);
@@ -9713,7 +9717,8 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
-        // This stored-manifest fixture belongs to an explicitly committed global root.
+        // Seed synthetic Global scope in this component World/height overlay;
+        // the fixture does not authenticate committed genesis or Network finality.
         tx1.world.parameters.get_mut().set_parameter(
             crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -9723,10 +9728,7 @@ pub mod tests {
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         tx1.world.contract_manifests.insert(
-            iroha_data_model::smart_contract::ContractArtifactId::new(
-                DataSpaceId::UNIVERSAL,
-                code_hash,
-            ),
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -9939,7 +9941,8 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
-        // This stored-manifest fixture belongs to an explicitly committed global root.
+        // Seed synthetic Global scope in this component World/height overlay;
+        // the fixture does not authenticate committed genesis or Network finality.
         tx1.world.parameters.get_mut().set_parameter(
             crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -9951,10 +9954,7 @@ pub mod tests {
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x5A;
         tx1.world.contract_manifests.insert(
-            iroha_data_model::smart_contract::ContractArtifactId::new(
-                DataSpaceId::UNIVERSAL,
-                code_hash,
-            ),
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             ContractManifest {
                 seiyaku_name: None,
                 code_hash: Some(code_hash),
@@ -10145,7 +10145,8 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
-        // This stored-manifest fixture belongs to an explicitly committed global root.
+        // Seed synthetic Global scope in this component World/height overlay;
+        // the fixture does not authenticate committed genesis or Network finality.
         tx1.world.parameters.get_mut().set_parameter(
             crate::sumeragi::lanes::routing::test_support::metadata(
                 iroha_data_model::block::consensus::SumeragiRootScope::Global,
@@ -10171,10 +10172,7 @@ pub mod tests {
         }
         .signed(&fixture.keypair);
         tx1.world.contract_manifests.insert(
-            iroha_data_model::smart_contract::ContractArtifactId::new(
-                DataSpaceId::UNIVERSAL,
-                code_hash,
-            ),
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
             manifest.clone(),
         );
         tx1.apply();

@@ -524,19 +524,20 @@ pub const SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT: u32 = 0x01_0201;
 pub const SYSCALL_SET_ASSET_HOLDING_LIMIT: u32 = 0x01_0202;
 /// Propose native alias-based account recovery with a replacement controller.
 ///
-/// Args: `r10 = &Blob(alias literal)`, `r11 = &AccountId(replacement controller)`.
+/// Args: `r10 = &Blob(alias literal)`, `r11 = &AccountId(replacement controller)`,
+/// `r12 = request_generation` (the exact nonzero next request generation).
 pub const SYSCALL_ACCOUNT_RECOVERY_PROPOSE: u32 = 0x01_0210;
 /// Approve the pending native recovery request for an alias.
 ///
-/// Args: `r10 = &Blob(alias literal)`.
+/// Args: `r10 = &Blob(alias literal)`, `r11 = request_generation` (nonzero).
 pub const SYSCALL_ACCOUNT_RECOVERY_APPROVE: u32 = 0x01_0211;
 /// Cancel the pending native recovery request for an alias.
 ///
-/// Args: `r10 = &Blob(alias literal)`.
+/// Args: `r10 = &Blob(alias literal)`, `r11 = request_generation` (nonzero).
 pub const SYSCALL_ACCOUNT_RECOVERY_CANCEL: u32 = 0x01_0212;
 /// Finalize the pending native recovery request for an alias.
 ///
-/// Args: `r10 = &Blob(alias literal)`.
+/// Args: `r10 = &Blob(alias literal)`, `r11 = request_generation` (nonzero).
 pub const SYSCALL_ACCOUNT_RECOVERY_FINALIZE: u32 = 0x01_0213;
 // Kotodama V1 exact numeric families. These numbers are deliberately grouped
 // by value domain so admission, host dispatch, and generated SDK tables can

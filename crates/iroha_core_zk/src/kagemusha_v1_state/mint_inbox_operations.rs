@@ -2,10 +2,10 @@
 
 use super::*;
 use crate::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 use iroha_data_model::kagemusha::KagemushaMintAuthorizationV1;
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 const MINT_CAPACITY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-inbox-capacity";
 
 #[cfg(test)]
@@ -175,7 +175,7 @@ fn required_pending_fold_prefix(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 /// Durable result of mint delivery; every retry retains the original certificate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MintCreditStageOutcomeV1 {
@@ -329,13 +329,13 @@ where
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Preview the pre-debit allocation and sealed local recipient binding.
     ///
     /// The resulting statement is not authorization to expose the mint authorization. The
     /// qualified service must atomically seal it, including the original credential, opening
     /// and key handle, and return a certificate accepted by [`Self::reserve_mint_credit`].
-    pub fn preview_mint_reservation(
+    pub(crate) fn preview_mint_reservation(
         &self,
         reservation: &MintInboxReservationV1,
     ) -> Result<MintReservationStatementV1, KagemushaStateErrorV1> {
@@ -364,12 +364,12 @@ where
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Install one hardware-certified allocation before its authorization can debit online funds.
     ///
     /// Exact retries are idempotent. No monetary sequence or balance is modified. A failed
     /// certificate or capacity check leaves the original allocation and counters untouched.
-    pub fn reserve_mint_credit(
+    pub(crate) fn reserve_mint_credit(
         &mut self,
         reservation: &MintInboxReservationV1,
         certificate: &MintReservationCertificateV1,
@@ -420,12 +420,12 @@ where
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Preview staging an authenticated finalized mint into its existing durable allocation.
     ///
     /// The proof capability alone does not establish local ownership: it must match the exact
     /// pre-debit record already sealed into this hardware lane, including retained old-epoch keys.
-    pub fn preview_stage_mint_credit(
+    pub(crate) fn preview_stage_mint_credit(
         &self,
         verified: &VerifiedMintStageV1,
         staged_at_ms: u64,
@@ -483,7 +483,7 @@ where
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Stage exact finalized bytes, or recover their original durable receipt without refolding.
     ///
     /// A first delivery requires both the concrete native proof-verification capability and a
@@ -557,7 +557,7 @@ where
         Ok(MintCreditStageOutcomeV1::Staged(certificate.clone()))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn validate_new_mint_reservation(
         &self,
         reservation: &MintInboxReservationV1,
@@ -609,7 +609,7 @@ where
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Select the exact authenticated pending record used by `MintFold`.
     ///
     /// A detached decoded credit never supplies private witness authority. Recovery may permit

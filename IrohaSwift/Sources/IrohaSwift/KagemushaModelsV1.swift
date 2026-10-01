@@ -245,7 +245,9 @@ public struct KagemushaPairedProofV1: Equatable, Sendable {
       epProof.count <= KagemushaWireV1.maximumParityProofBytes,
       eqProof.count + epProof.count <= KagemushaWireV1.maximumCurrentProofsBytes,
       eqHistory.count == KagemushaWireV1.historyAccumulatorBytes,
-      epHistory.count == KagemushaWireV1.historyAccumulatorBytes
+      epHistory.count == KagemushaWireV1.historyAccumulatorBytes,
+      eqHistory.contains(where: { $0 != 0 }),
+      epHistory.contains(where: { $0 != 0 })
     else { throw kagemushaInvalid("pairedProof") }
     self.version = version
     self.eqProtocolDigest = try kagemushaDigest(eqProtocolDigest, "eqProtocolDigest")

@@ -238,7 +238,7 @@ fn resign(mut credential: KagemushaHardwareCredentialV1) -> KagemushaHardwareCre
 }
 
 fn renewal(machine: &Machine, issued_at_ms: u64) -> KagemushaHardwareCredentialV1 {
-    let mut credential = machine.accepted_credential_floor().credential.clone();
+    let mut credential = *machine.accepted_credential_floor().oem_original().unwrap();
     credential.issued_at_ms = issued_at_ms;
     resign(credential)
 }
@@ -356,7 +356,10 @@ fn credential_is_not_installed_before_signed_cas_and_fresh_material_selection() 
     let anchor = machine
         .install_recovery_checkpoint(&candidate, certificate.clone())
         .unwrap();
-    assert_eq!(machine.accepted_credential_floor().credential, next);
+    assert_eq!(
+        *machine.accepted_credential_floor().oem_original().unwrap(),
+        next
+    );
     assert_eq!(machine.recovery_metadata.revision, 2);
     assert_eq!(
         machine
@@ -407,7 +410,7 @@ fn signed_same_epoch_issuance_rollback_and_equal_time_changes_are_rejected() {
         ),
         Err(KagemushaStateErrorV1::SnapshotRollback)
     ));
-    let mut changed = machine.accepted_credential_floor().credential.clone();
+    let mut changed = *machine.accepted_credential_floor().oem_original().unwrap();
     changed.expires_at_ms -= 1;
     let changed = resign(changed);
     assert!(matches!(
@@ -422,7 +425,7 @@ fn signed_same_epoch_issuance_rollback_and_equal_time_changes_are_rejected() {
         .prepare_credential_checkpoint(
             [36; 32],
             machine.recovery_metadata.journals.clone(),
-            machine.accepted_credential_floor().credential.clone(),
+            *machine.accepted_credential_floor().oem_original().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -723,7 +726,7 @@ type BootstrapStage = KagemushaBootstrapJournalStageV1<
 fn bootstrap_stage(hardware: SimulatedHardware, change: usize) -> BootstrapStage {
     let original = coordinator_operation_store_tests::machine().0;
     let mut enrollment = original.enrollment_binding().clone();
-    let mut credential = original.accepted_credential_floor().credential;
+    let mut credential = *original.accepted_credential_floor().oem_original().unwrap();
     if change == 1 {
         enrollment.owner.account_id = AccountId::new(
             iroha_crypto::KeyPair::from_seed(vec![212; 32], iroha_crypto::Algorithm::Ed25519)
@@ -751,10 +754,14 @@ fn bootstrap_stage(hardware: SimulatedHardware, change: usize) -> BootstrapStage
         ExactConsumedCreditIndex::empty().root(),
     )
     .unwrap();
+    let initial_credential = KagemushaAcceptedCredentialFloorV1::Oem {
+        credential,
+        release_id: original.accepted_credential_floor().release_id(),
+    };
     KagemushaBootstrapJournalStageV1::new(
         state,
         original.proof_release,
-        credential,
+        initial_credential,
         enrollment,
         KagemushaDurableCapacityV1 {
             inbox_bytes: 32 * 1024 * 1024,
@@ -940,7 +947,9 @@ fn bootstrap_manifest_tamper_before_first_cas_consumes_pending_without_authority
 #[test]
 fn restore_rejects_different_retail_account_fi_and_authentication_namespace() {
     let (machine, _) = fixture();
-    for field in 0..3 {
+    // Core authorization is immutable enrollment ownership too; it must not be
+    // replaced with a caller key or silently omitted after restart.
+    for field in 0..5 {
         let mut expected = machine.enrollment_binding().clone();
         match field {
             0 => {
@@ -955,6 +964,8 @@ fn restore_rejects_different_retail_account_fi_and_authentication_namespace() {
             }
             1 => expected.owner.runtime.fi_id = "other-fi".parse().unwrap(),
             2 => expected.owner.runtime.authentication_namespace = "other-auth".parse().unwrap(),
+            3 => expected.core_authorization_key_reference = [0xf1; 32],
+            4 => expected.core_authorization_key_reference = [0; 32],
             _ => unreachable!(),
         }
         expected.enrollment_id = expected.owner.enrollment_id().unwrap();
@@ -1217,7 +1228,11 @@ fn checkpointed_pre_index_operations_require_the_selected_wal_and_allow_valid_su
             context: KagemushaOutgoingOperationContextV1 {
                 lane: machine.state.lane.clone(),
                 release: machine.state.context(),
-                credential_id: machine.accepted_credential_floor().credential.credential_id,
+                credential_id: machine
+                    .accepted_credential_floor()
+                    .oem_original()
+                    .unwrap()
+                    .credential_id,
                 hardware_epoch: machine.state.hardware_epoch,
                 device_policy_binding: machine.state.device_policy_binding,
                 core_authorization_key_reference: [192; 32],
@@ -1376,4 +1391,47 @@ fn checkpointed_pre_index_operations_require_the_selected_wal_and_allow_valid_su
             Ok(KagemushaCoordinatorSenderIntentRecoveryV1::Intent(original))
         );
     }
+}
+
+#[test]
+fn bootstrap_publication_retains_same_initialized_owner_for_exact_hardware_retry() {
+    let (_temp, bundle, hardware) = bootstrap_location();
+    let pending = bootstrap_stage(hardware.clone(), 0)
+        .initialize_journals(&bundle, BOOTSTRAP_CAPACITY, [201; 32])
+        .unwrap();
+    let original_statement = pending.statement().clone();
+    let original_snapshot = norito::encode_canonical(pending.snapshot()).unwrap();
+    let original_manifest = std::fs::read(bundle.join("bootstrap/bootstrap.norito.wal")).unwrap();
+    let original_guard = hardware.commit(&pending.candidate).unwrap();
+    hardware.material_available.set(false);
+    let (pending, _) = pending
+        .finish_or_retain(original_guard.clone())
+        .err()
+        .unwrap();
+    assert_eq!(pending.statement(), &original_statement);
+    assert_eq!(
+        norito::encode_canonical(pending.snapshot()).unwrap(),
+        original_snapshot
+    );
+    assert_eq!(
+        std::fs::read(bundle.join("bootstrap/bootstrap.norito.wal")).unwrap(),
+        original_manifest
+    );
+    assert!(
+        bootstrap_stage(hardware.clone(), 0)
+            .initialize_journals(&bundle, BOOTSTRAP_CAPACITY, [202; 32])
+            .is_err()
+    );
+    hardware.material_available.set(true);
+    let wallet = pending.finish_or_retain(original_guard).ok().unwrap();
+    let (machine, coordinator, responses) = wallet.into_parts();
+    assert_eq!(
+        machine.recovery_metadata().journals.coordinator,
+        coordinator.recovery_prefix().unwrap()
+    );
+    assert_eq!(
+        machine.recovery_metadata().journals.responses,
+        responses.recovery_prefix().unwrap()
+    );
+    assert_eq!(hardware.register.borrow().terminals.len(), 1);
 }

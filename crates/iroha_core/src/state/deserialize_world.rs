@@ -6987,6 +6987,28 @@ mod validation_fee_registry_restore_tests {
         registry_world_with_policy_network(stored_candidate_seed, network_id())
     }
 
+    // Decode only the World projection. This exercises the actual protected
+    // registry parser; it grants no native execution identity or history.
+    fn restore_policy_projection(world: &World) -> Result<World, StateRestoreError> {
+        let encoded = json::to_json(world).expect("serialize protected registry projection");
+        let ivm = IVM::new(0);
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+        let operation_index_refusal = std::cell::RefCell::new(None);
+        let seed = IvmSeed {
+            operation_index_budget: &operation_index_budget,
+            operation_index_refusal: &operation_index_refusal,
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+        parse_world(
+            &iroha_allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+            ),
+            SnapshotJsonMap::parse(&encoded, "world")?,
+            &seed,
+        )
+    }
+
     fn restore_world_with_network(
         world: World,
         restored_network_id: iroha_data_model::NetworkId,
@@ -7064,10 +7086,29 @@ mod validation_fee_registry_restore_tests {
 
     #[test]
     fn restore_accepts_exact_validation_fee_registry_governance_provenance() {
-        let (world, _) = registry_world(REGISTRY_CANDIDATE_SEED);
+        let (world, registry) = registry_world(REGISTRY_CANDIDATE_SEED);
         crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
             .expect("exact registry proposal and attempt provenance");
-        restore_world(world).expect("exact protected registry provenance restores");
+        let restored = restore_policy_projection(&world)
+            .expect("exact protected registry provenance restores its World projection");
+        crate::validation_fee::validate_persisted_policy_registry_governance_v1(&restored.view())
+            .expect("decoded registry retains the exact proposal and attempt provenance");
+        assert_eq!(
+            restored
+                .parameters
+                .view()
+                .get()
+                .custom()
+                .get(&ValidationFeePolicyRegistryV1::parameter_id()),
+            Some(&registry.into_custom_parameter()),
+        );
+        assert!(
+            matches!(
+                restore_world(world),
+                Err(StateRestoreError::NativeExecutionReplayRequired)
+            ),
+            "decoded policy provenance cannot authorize an unexecuted native history"
+        );
     }
 
     #[test]
@@ -7146,18 +7187,30 @@ mod validation_fee_registry_restore_tests {
         registry
             .validate()
             .expect("foreign-network registry remains intrinsically valid");
-        let error = restore_world(world)
-            .err()
-            .expect("a restored registry cannot target another exact network");
+        let restored = restore_policy_projection(&world)
+            .expect("foreign policy is structurally valid before its runtime network check");
+        let context = State::new_with_chain_and_network_id_for_testing(
+            restored,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            "validation-fee-restore".parse().unwrap(),
+            network_id(),
+        );
+        // This context provides the runtime validator's exact network only;
+        // no fabricated history or execution authority is installed.
+        let error = crate::validation_fee::validate_persisted_policy_registry_runtime_v1(
+            &context.view(),
+            RESTORED_HEIGHT,
+        )
+        .expect_err("a restored registry cannot target another exact network");
         assert!(
-            matches!(
-                &error,
-                StateRestoreError::Serialization(json::Error::InvalidField { field, message })
-                    if field == "state.durable_merge_ledger"
-                        && message.contains("validation-fee policy network mismatch")
-            ),
+            error.contains("validation-fee policy network mismatch"),
             "restore rejection identifies the foreign validation-fee network: {error}"
         );
+        assert!(matches!(
+            restore_world(world),
+            Err(StateRestoreError::NativeExecutionReplayRequired)
+        ));
     }
 
     #[test]
@@ -7841,10 +7894,14 @@ fn decode_world_fields(
         })?;
     let private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> =
         take_required(&mut map, "private_dataspaces")?;
-    private_dataspaces.view().get().validate().map_err(|error| json::Error::InvalidField {
-        field: "world.private_dataspaces".to_owned(),
-        message: error.to_string(),
-    })?;
+    private_dataspaces
+        .view()
+        .get()
+        .validate()
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.private_dataspaces".to_owned(),
+            message: error.to_string(),
+        })?;
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
@@ -11142,18 +11199,24 @@ mod decode_tests {
 
         for required in ["account_aliases", "private_dataspaces"] {
             let mut map = SnapshotJsonMap::parse(&encoded, "world").expect("parse default World");
-            map.remove(required).expect("canonical World contains required field");
+            map.remove(required)
+                .expect("canonical World contains required field");
             let error = match parse_world(
                 &iroha_allocation::AllocationBudget::new(
                     iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
                 ),
                 map,
                 &seed,
-            ).map_err(crate::state::deserialize::snapshot_format_error_for_test) {
+            )
+            .map_err(crate::state::deserialize::snapshot_format_error_for_test)
+            {
                 Ok(_) => panic!("a first-release snapshot cannot default a missing World field"),
                 Err(error) => error,
             };
-            assert!(error.to_string().contains(required), "unexpected missing-field diagnostic: {error}");
+            assert!(
+                error.to_string().contains(required),
+                "unexpected missing-field diagnostic: {error}"
+            );
         }
 
         let encoded_prefix = encoded
@@ -11720,7 +11783,17 @@ mod decode_tests {
             r#"{"musubi_replication_shortfall_releases":{"revert":6,"blocks":9,"blocks":9}}"#,
         ] {
             let budget = iroha_allocation::AllocationBudget::new(demand);
-            let mut map = SnapshotJsonMap::parse(raw, "world").unwrap();
+            let mut map = match SnapshotJsonMap::parse(raw, "world") {
+                Ok(map) => map,
+                Err(error) => {
+                    // The canonical JSON scanner rejects nested duplicate keys
+                    // before a field decoder can acquire any funded shells.
+                    assert!(raw.contains("\"blocks\":9,\"blocks\":9"));
+                    assert!(error.to_string().contains("duplicate field `blocks`"));
+                    assert_eq!(budget.reserved_bytes(), 0);
+                    continue;
+                }
+            };
             let error = take_musubi_replication_shortfall_releases(&mut map, &budget)
                 .err()
                 .unwrap();

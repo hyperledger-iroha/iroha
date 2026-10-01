@@ -6681,11 +6681,11 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             "ledger::asset::set_holding_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
         ),
         Builtin::AccountRecoveryPropose => {
-            M::Static("ledger::account::recovery::propose expects (string, AccountId)")
+            M::Static("ledger::account::recovery::propose expects (string, AccountId, int)")
         }
         Builtin::AccountRecoveryApprove
         | Builtin::AccountRecoveryCancel
-        | Builtin::AccountRecoveryFinalize => M::SourceNameSuffix(" expects (string)"),
+        | Builtin::AccountRecoveryFinalize => M::SourceNameSuffix(" expects (string, int)"),
         Builtin::NftMintAsset => M::Static("nft_mint_asset expects (NftId, AccountId)"),
         Builtin::NftSetMetadata => M::Static("nft_set_metadata expects (NftId, Name, Json)"),
         Builtin::NftBurnAsset => M::Static("nft_burn_asset expects (NftId)"),

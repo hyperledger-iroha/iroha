@@ -425,3 +425,58 @@ fn captured_event_codec_schema_identities() {
         check();
     }
 }
+
+#[test]
+fn cancellation_approval_boundary_preserves_exact_generation_and_independent_votes() {
+    use crate::account::{AccountAlias, AccountController, AccountId, AccountRecoveryRequest};
+    use crate::events::data::events::account::{
+        AccountRecoveryCancellationApproved, AccountRecoveryEvent,
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::topology::DataSpaceId;
+    use std::num::NonZeroU64;
+
+    check::<AccountRecoveryCancellationApproved>(
+        "iroha_data_model::events::data::events::account::model::AccountRecoveryCancellationApproved",
+        "50f8f8df88cb7c3359510ea6c0792ce0",
+        "50f8f8df88cb7c3359510ea6c0792ce0",
+    );
+    let key = |seed: u8| KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
+    let owner = AccountId::new(key(1).public_key().clone());
+    let guardian = AccountId::new(key(2).public_key().clone());
+    let alias = AccountAlias::domainless("cancel-vote".parse().unwrap(), DataSpaceId::UNIVERSAL);
+    let mut request = AccountRecoveryRequest::new(
+        alias.clone(),
+        NonZeroU64::new(7).unwrap(),
+        owner.clone(),
+        AccountController::single(key(3).public_key().clone()),
+        owner.clone(),
+        10,
+    );
+    request.approve(&guardian);
+    request.approve_cancellation(&guardian);
+    let event = AccountRecoveryEvent::CancellationApproved(AccountRecoveryCancellationApproved {
+        account: owner,
+        alias,
+        approver: guardian.clone(),
+        request,
+    });
+    let encoded = norito::to_bytes(&event).unwrap();
+    let decoded: AccountRecoveryEvent = norito::decode_from_bytes(&encoded).unwrap();
+    assert_eq!(decoded, event);
+    let json = norito::json::to_json(&event).unwrap();
+    assert_eq!(
+        norito::json::from_str::<AccountRecoveryEvent>(&json).unwrap(),
+        event
+    );
+    let AccountRecoveryEvent::CancellationApproved(decoded) = decoded else {
+        panic!("pending cancellation approval must retain its distinct event kind")
+    };
+    assert_eq!(decoded.request.request_generation.get(), 7);
+    assert!(decoded.request.is_pending());
+    assert!(decoded.request.approvals.is_empty());
+    assert_eq!(
+        decoded.request.cancellation_approvals,
+        std::collections::BTreeSet::from([guardian.subject_id(),])
+    );
+}

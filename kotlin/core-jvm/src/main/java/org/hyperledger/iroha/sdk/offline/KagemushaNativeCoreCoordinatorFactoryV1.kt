@@ -14,4 +14,7 @@ package org.hyperledger.iroha.sdk.offline
 fun interface KagemushaNativeCoreCoordinatorFactoryV1 {
     /** Create the native coordinator owned by the qualified runtime package. */
     fun create(): KagemushaNativeCoreCoordinatorV1
+
+    /** Return only the qualified physical evidence owner paired with this exact native coordinator. */
+    fun incomingFoldEvidenceProvider(coordinator: KagemushaNativeCoreCoordinatorV1): KagemushaIncomingFoldEvidenceProviderV1? = null
 }

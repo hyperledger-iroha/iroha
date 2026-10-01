@@ -63,10 +63,18 @@ mod tests {
         let production = source
             .split_once("#[cfg(test)]")
             .map_or(source, |(production, _)| production);
-        assert!(
-            production.lines().count() < 50,
-            "wrapper grew substantive logic"
-        );
+        assert_exporter_delegate(production);
+    }
+    #[test]
+    fn wrapper_delegate_accepts_nonsemantic_source_growth() {
+        let source = include_str!("norito_rpc.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let trivia = "// Additional wrapper documentation.\n\n".repeat(1_000);
+        assert_exporter_delegate(&format!("{production}\n{trivia}"));
+    }
+    fn assert_exporter_delegate(production: &str) {
         assert!(production.contains("norito_codegen_exporter"));
         for implementation_marker in [
             "CANONICAL_MANIFEST",

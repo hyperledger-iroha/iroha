@@ -3603,10 +3603,9 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
     }
 }
 #[cfg(test)]
-pub(super) mod test_support {
+pub(crate) mod test_support {
     use super::*;
     use crate::state::State;
-    use nonzero_ext::nonzero;
 
     /// Component fixture with explicit committed global-root metadata.
     pub(crate) fn with_global_root(world: crate::state::World) -> crate::state::World {
@@ -3618,10 +3617,71 @@ pub(super) mod test_support {
         world
     }
 
+    /// Apply the original signed genesis to its uniquely retained fixture State.
+    pub(crate) fn state_after_genesis(world: crate::state::World) -> State {
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+
+        let config = TestChainConfig::new(world, 0);
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        let consensus_mode = config.consensus_mode;
+        let prepared =
+            CertifiedTestChain::prepare(config).expect("prepare signed pipeline genesis");
+        let state = Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished pipeline State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            consensus_mode.into(),
+            None,
+        )
+        .expect("apply signed pipeline genesis");
+        state
+    }
+
     /// Prepare execution against an explicit block time, retaining the large
     /// staged world on the heap while the overlay runs.
     pub(super) fn execution_block(state: &State) -> Box<crate::state::StateBlock<'_>> {
-        Box::new(state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0)))
+        let height = u64::try_from(state.view().height()).expect("fixture height fits u64") + 1;
+        Box::new(state.block(BlockHeader::new(
+            height.try_into().expect("next fixture height is nonzero"),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        )))
+    }
+
+    #[test]
+    fn authenticated_fixture_execution_extends_original_genesis_parent() {
+        let pristine = State::new(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let pristine_block = execution_block(&pristine);
+        assert_eq!(pristine_block._curr_block.height().get(), 1);
+        assert_eq!(pristine_block._curr_block.prev_block_hash(), None);
+        drop(pristine_block);
+
+        let state = state_after_genesis(crate::state::World::default());
+        let view = state.view();
+        assert_eq!(view.height(), 1);
+        assert_eq!(
+            crate::sumeragi::lanes::routing::committed_root_scope(view.world()),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+        );
+        let original_parent = view.latest_block_hash().expect("original genesis parent");
+        drop(view);
+        let next_block = execution_block(&state);
+        assert_eq!(next_block._curr_block.height().get(), 2);
+        assert_eq!(
+            next_block._curr_block.prev_block_hash(),
+            Some(original_parent)
+        );
     }
 
     /// Seed a complete active lifecycle fixture, including its canonical subject and owner.
@@ -3658,7 +3718,7 @@ mod tests_overlay_manifest {
     use super::test_support::{execution_block, seed_active_contract};
     use super::*;
     use crate::state::State;
-    use iroha_data_model::prelude::*;
+    use iroha_data_model::{IntoKeyValue, prelude::*};
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::DataSpaceId;
@@ -4258,8 +4318,18 @@ mod tests_overlay_manifest {
         let summary = cache
             .summarize_program_with_hash(code_hash, &[])
             .expect("warm summary lookup without artifact bytes");
-        enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata)
+        assert!(
+            enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata).is_err(),
+            "a warm summary still rejects an insufficient live cycle ceiling"
+        );
+        enforce_pre_execution_policy(nonzero!(4_u64), &summary.metadata)
             .expect("prepared metadata remains within the live cycle ceiling");
+        assert!(matches!(
+            enforce_pre_execution_policy(nonzero!(3_u64), &summary.metadata),
+            Err(OverlayBuildError::HeaderPolicy(
+                IvmAdmissionError::MaxCyclesExceedsUpperBound(info)
+            )) if info.max_cycles == 4 && info.upper_bound == 3
+        ));
         let warm_stats = cache.stats();
         assert_eq!(warm_stats.metadata_hits, cold_stats.metadata_hits + 1);
         assert_eq!(warm_stats.artifact_hashes, cold_stats.artifact_hashes);
@@ -5125,15 +5195,6 @@ seiyaku ProtectedParameterizedOverlay {
         };
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, keypair) = gen_account_in("wonderland");
-        let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &authority,
-            92,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive guarded contract address");
         let (artifact, manifest) = kotodama_lang::compiler::Compiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -5165,19 +5226,24 @@ seiyaku GuardedOverlay {
             "universal",
         )
         .expect("valid contract alias");
-        let entrypoint_permission = Permission::from(
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: contract_address.clone(),
-                entrypoint: "main".to_owned(),
-            },
-        );
         let make_state = |authorized: bool| {
             let domain = iroha_data_model::domain::Domain::new(
                 DomainId::try_new("wonderland", "universal").expect("valid domain"),
             )
             .build(&authority);
             let account = build_wonderland_account(&authority);
-            let mut world = crate::state::World::with([domain], [account], []);
+            let world = crate::state::World::with([domain], [account], []);
+            let mut state = test_support::state_after_genesis(world);
+            let contract_address =
+                ContractAddress::derive(&state.network_id, &authority, 92, DataSpaceId::UNIVERSAL)
+                    .expect("derive guarded contract address from its signed network");
+            let entrypoint_permission = Permission::from(
+                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract: contract_address.clone(),
+                    entrypoint: "main".to_owned(),
+                },
+            );
+            let world = &mut state.world;
             world.contract_code.insert(
                 ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                 artifact.clone(),
@@ -5186,7 +5252,7 @@ seiyaku GuardedOverlay {
                 ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
                 manifest.clone(),
             );
-            seed_active_contract(&mut world, &contract_address, code_hash, &authority);
+            seed_active_contract(world, &contract_address, code_hash, &authority);
             world
                 .bind_contract_alias(&contract_address, contract_alias.clone(), None, None, 0)
                 .expect("bind guarded contract alias");
@@ -5197,14 +5263,15 @@ seiyaku GuardedOverlay {
                     .account_permissions_mut_for_testing()
                     .insert(authority.clone(), permissions);
             }
-            State::new_with_chain(
-                test_support::with_global_root(world),
-                crate::kura::Kura::blank_kura_for_testing(),
-                crate::query::store::LiveQueryStore::start_test(),
-                ChainId::from("authorization-overlay"),
-            )
+            (state, contract_address)
         };
-        let unauthorized_state = make_state(false);
+        let (unauthorized_state, contract_address) = make_state(false);
+        let entrypoint_permission = Permission::from(
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "main".to_owned(),
+            },
+        );
         let metadata = iroha_model_base::metadata::Metadata::default();
         let transaction = TransactionBuilder::new(
             unauthorized_state.network_id,
@@ -5243,7 +5310,7 @@ seiyaku GuardedOverlayRebound {
             .expect("compile parameterized rebound overlay contract");
         let rebound_code_hash = rebound_manifest.code_hash.expect("rebound code hash");
         assert_ne!(rebound_code_hash, code_hash);
-        let mut rebound_state = make_state(true);
+        let mut rebound_state = make_state(true).0;
         rebound_state.world.contract_code.insert(
             ContractArtifactId::new(DataSpaceId::UNIVERSAL, rebound_code_hash),
             rebound_artifact,
@@ -5277,7 +5344,7 @@ seiyaku GuardedOverlayRebound {
             0,
             "code-hash drift must reject before argument decoding"
         );
-        let authorized_state = make_state(true);
+        let authorized_state = make_state(true).0;
         let mut overlay =
             build_overlay_for_transaction(&transaction, &*execution_block(&authorized_state))
                 .expect("granted caller may prepare the protected call");
@@ -5665,24 +5732,6 @@ seiyaku GuardedOverlayRebound {
         const ROOT_PERMISSION: &str = "CanInvokeRoot";
         const CHILD_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, _) = gen_account_in("wonderland");
-        let root_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &authority,
-            82,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive root contract address");
-        let child_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &authority,
-            83,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive child contract address");
         let root_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
             "root",
             Some("wonderland"),
@@ -5697,33 +5746,39 @@ seiyaku GuardedOverlayRebound {
         .expect("child alias");
         let root_code_hash = Hash::new(b"root-authorization-code");
         let child_code_hash = Hash::new(b"child-authorization-code");
-        let root_contract_subject = root_address.subject_id();
-        let child_contract_subject = child_address.subject_id();
-        let child_entrypoint_permission = Permission::from(
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: child_address.clone(),
-                entrypoint: "child".to_owned(),
-            },
-        );
         let make_state = |grant_root: bool, grant_child: bool, child_active: bool| {
             let domain = iroha_data_model::domain::Domain::new(
                 DomainId::try_new("wonderland", "universal").expect("domain id"),
             )
             .build(&authority);
             let account = build_wonderland_account(&authority);
-            let root_contract_account = build_wonderland_account(&root_contract_subject);
-            let child_contract_account = build_wonderland_account(&child_contract_subject);
-            let mut world = crate::state::World::with(
-                [domain],
-                [account, root_contract_account, child_contract_account],
-                [],
+            let world = crate::state::World::with([domain], [account], []);
+            let mut state = test_support::state_after_genesis(world);
+            let root_address =
+                ContractAddress::derive(&state.network_id, &authority, 82, DataSpaceId::UNIVERSAL)
+                    .expect("derive root contract address from its signed network");
+            let child_address =
+                ContractAddress::derive(&state.network_id, &authority, 83, DataSpaceId::UNIVERSAL)
+                    .expect("derive child contract address from its signed network");
+            let root_contract_subject = root_address.subject_id();
+            let child_contract_subject = child_address.subject_id();
+            let child_entrypoint_permission = Permission::from(
+                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract: child_address.clone(),
+                    entrypoint: "child".to_owned(),
+                },
             );
-            seed_active_contract(&mut world, &root_address, root_code_hash, &authority);
+            let world = &mut state.world;
+            for subject in [&root_contract_subject, &child_contract_subject] {
+                let (id, account) = build_wonderland_account(subject).into_key_value();
+                world.accounts.insert(id, account);
+            }
+            seed_active_contract(world, &root_address, root_code_hash, &authority);
             // The child owns its lifecycle so the self-deactivation case reaches
             // the post-instruction authorization check.
             if child_active {
                 seed_active_contract(
-                    &mut world,
+                    world,
                     &child_address,
                     child_code_hash,
                     &child_contract_subject,
@@ -5772,12 +5827,17 @@ seiyaku GuardedOverlayRebound {
             // Retain fixture states on the heap: this scenario exercises several
             // independent worlds, and their inline storage exhausted the default
             // test thread stack before authorization was reached.
-            Box::new(State::new_for_testing(
-                test_support::with_global_root(world),
-                crate::kura::Kura::blank_kura_for_testing(),
-                crate::query::store::LiveQueryStore::start_test(),
-            ))
+            (Box::new(state), root_address, child_address)
         };
+        let (authorized_state, root_address, child_address) = make_state(true, true, true);
+        let root_contract_subject = root_address.subject_id();
+        let child_contract_subject = child_address.subject_id();
+        let child_entrypoint_permission = Permission::from(
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: child_address.clone(),
+                entrypoint: "child".to_owned(),
+            },
+        );
         let root_authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "root".to_owned(),
@@ -5850,7 +5910,6 @@ seiyaku GuardedOverlayRebound {
             )
             .with_entrypoint_authorization(Some(root_authorization.clone()))
         };
-        let authorized_state = make_state(true, true, true);
         let mut authorized_block = execution_block(&authorized_state);
         let mut authorized_tx = authorized_block.transaction();
         build_overlay(child_authorization.clone())
@@ -5880,7 +5939,7 @@ seiyaku GuardedOverlayRebound {
             ("revoked child", true, false, true),
             ("deactivated child", true, true, false),
         ] {
-            let state = make_state(grant_root, grant_child, child_active);
+            let state = make_state(grant_root, grant_child, child_active).0;
             let mut block = execution_block(&state);
             let mut tx = block.transaction();
             build_overlay(child_authorization.clone())
@@ -5937,7 +5996,7 @@ seiyaku GuardedOverlayRebound {
             },
         )
         .with_parent(Some(root_authorization.clone()));
-        let forged_state = make_state(true, true, true);
+        let forged_state = make_state(true, true, true).0;
         let mut forged_block = execution_block(&forged_state);
         let mut forged_tx = forged_block.transaction();
         let forged_overlay = TxOverlay::from_host_execution(
@@ -5988,7 +6047,7 @@ seiyaku GuardedOverlayRebound {
             )
             .with_entrypoint_authorization(Some(root_authorization.clone()))
         };
-        let self_revoking_state = make_state(true, true, true);
+        let self_revoking_state = make_state(true, true, true).0;
         let mut self_revoking_block = execution_block(&self_revoking_state);
         let mut self_revoking_tx = self_revoking_block.transaction();
         let error = build_single_effect_overlay(
@@ -6031,7 +6090,7 @@ seiyaku GuardedOverlayRebound {
                 .is_none(),
             "a rejected self-revocation must persist no guarded durable write"
         );
-        let self_deactivating_state = make_state(true, true, true);
+        let self_deactivating_state = make_state(true, true, true).0;
         let mut self_deactivating_block = execution_block(&self_deactivating_state);
         let mut self_deactivating_tx = self_deactivating_block.transaction();
         let error = build_single_effect_overlay(

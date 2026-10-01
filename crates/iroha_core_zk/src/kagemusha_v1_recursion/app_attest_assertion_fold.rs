@@ -1,7 +1,8 @@
 //! One bounded call surface ensuring raw CBOR, canonical DER, SHA and ECDSA share cells.
 //!
 //! This staged helper remains unused by the monetary fold. It binds both signed
-//! secure indices to the passed state cells, but does not by itself authenticate
+//! financial logical indexes and the independent Apple counter to their passed
+//! native state cells, but does not by itself authenticate
 //! the remaining Core subject, governed RP, credential, or release policy.
 // TODO: Wire this exact helper into both recursive parities only after Core/Guard,
 // provider-policy and terminal commitment links are fully circuit-derived.
@@ -22,13 +23,13 @@ use crate::{
 
 use super::{
     app_attest_assertion_cbor::constrain_original_apple_assertion_37_v1,
-    constrain_apple_signed_secure_index_v1,
+    constrain_apple_signed_logical_indices_and_counter_v1,
 };
 
 /// Derive DER from `r,s`, prove original CBOR equality, then verify the Apple
 /// assertion with those same `r,s` and authenticator/S cells. The signed
-/// before/after indices and signed Apple counter are copy-bound to the passed
-/// state indices. No host-parsed DER pair or detached counter can be substituted
+/// financial before/after indexes and signed Apple counter are copy-bound to
+/// separate financial state and retained counter cells. No host-parsed DER pair or detached counter can be substituted
 /// between the relations. Production instantiation must use `N = 256`; smaller
 /// windows are only useful for bounded equation tests and reject most signatures.
 #[allow(clippy::too_many_arguments)]
@@ -44,6 +45,8 @@ pub(super) fn constrain_original_apple_assertion_ecdsa_37_v1<
     governed_rp_id_hash: &[AssignedValue<F>; 32],
     previous_secure_index: AssignedValue<F>,
     next_secure_index: AssignedValue<F>,
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
     signature_public_key: &EcPoint<F, ProperCrtUint<F>>,
     enrolled_public_key: &EcPoint<F, ProperCrtUint<F>>,
     enrolled_public_key_sec1: &[AssignedValue<F>; 65],
@@ -52,10 +55,12 @@ pub(super) fn constrain_original_apple_assertion_ecdsa_37_v1<
     z: &ProperCrtUint<F>,
     digest_reduction_quotient: AssignedValue<F>,
 ) -> Result<(), String> {
-    constrain_apple_signed_secure_index_v1(
+    constrain_apple_signed_logical_indices_and_counter_v1(
         builder,
         previous_secure_index,
         next_secure_index,
+        retained_counter_floor,
+        accepted_counter,
         canonical_s,
         authenticator_data,
     );
@@ -83,8 +88,8 @@ pub(super) fn constrain_original_apple_assertion_ecdsa_37_v1<
         authenticator_data,
         governed_rp_id_hash,
         expected_flags,
-        previous_secure_index,
-        next_secure_index,
+        retained_counter_floor,
+        accepted_counter,
         signature_public_key,
         enrolled_public_key,
         enrolled_public_key_sec1,
@@ -285,6 +290,8 @@ mod tests {
         let digest = scalar_chip.load_private(ctx, z);
         let before = ctx.load_witness(F::from(u64::from(mutation == 1)));
         let after = ctx.load_witness(F::from(if mutation == 2 { 2 } else { 1 }));
+        let counter_floor = ctx.load_witness(F::ZERO);
+        let signed_counter = ctx.load_witness(F::ONE);
         let quotient = ctx.load_witness(F::ZERO);
         let mut jobs = PastaSha256JobsV1::default();
         constrain_original_apple_assertion_ecdsa_37_v1::<F, 2>(
@@ -296,6 +303,8 @@ mod tests {
             &governed_rp,
             before,
             after,
+            counter_floor,
+            signed_counter,
             &key,
             &key,
             &sec1,

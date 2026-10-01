@@ -209,6 +209,7 @@ fn native_archive_requests_reject_opaque_wrong_schema_and_trailing_bytes() {
         ),
     ] {
         let mut fields = request_fields(name);
+        fields[0] = b"opaque wrong archive".to_vec();
         assert!(validate_request(method, &frame(&fields)).is_err());
         if method == KagemushaCoreCoordinatorMethodV1::RecoverTerminalEnvelope {
             fields = installed_recovery_fields().0;

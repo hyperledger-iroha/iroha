@@ -262,6 +262,16 @@ def load_signed_modules(modules, root):
     return loaded
 
 
+def preparation_checks_match(request, checks):
+    """Preserve typed check evidence without making regression success deployment authority."""
+    scope = request.get("native_check_scope")
+    return (scope in ("basic", "full", "build-only")
+            and isinstance(checks, dict)
+            and type(checks.get("passed")) is bool
+            and set(checks) == {"request", "passed"}
+            and checks["request"] == request)
+
+
 def admit_preparation(plan, loaded, tree):
     release = loaded["taira_release"]
     path = direct(plan["preparation"]["path"])
@@ -275,14 +285,14 @@ def admit_preparation(plan, loaded, tree):
          and request["schema"] == release.SESSION_SCHEMA, "current exact preparation request required")
     need(Path(request["repo_root"]) == Path(release.__file__).resolve().parents[1],
          "preparation belongs to a different checkout")
-    need(release.read_record(output / "checks.json") == {"request": request, "passed": True},
+    need(preparation_checks_match(request, release.read_record(output / "checks.json")),
          "completed native qualification checkpoint differs")
     base = {key: request[key] for key in BASE_FIELDS}
     need(base["commit"] == plan["expected_commit"] and base["tree"] == tree
          and base["signer_fingerprint"] == plan["expected_signer"]
          and base["target"] == "aarch64-unknown-linux-gnu" and base["profile"] == "release"
          and type(base["jobs"]) is int and base["jobs"] > 0
-         and base["native_check_scope"] in ("basic", "full")
+         and base["native_check_scope"] in ("basic", "full", "build-only")
          and base["source_unchanged"] is True and base["toolchain_unchanged"] is True
          and base["release_qualified"] is False and base["deployed"] is False,
          "successful matching maintained preparation required")
@@ -654,7 +664,7 @@ def remote_call(route, envelope, modules, output, retry, payloads=()):
 
 
 def preparation_payloads(plan, build):
-    """Carry the already-qualified producer evidence, with no separate operator upload."""
+    """Carry exact qualified-check or explicitly unqualified build-only evidence."""
     from release_artifact_contract import canonical_json_bytes
     output = direct(plan["preparation"]["path"]).parent
     private_directory(output, mode=0o500)
@@ -675,7 +685,7 @@ def preparation_payloads(plan, build):
          and request["schema"] == "taira.local-preparation.v1"
          and all(request[key] == build[key] for key in BASE_FIELDS)
          and Path(request["repo_root"]) == Path(__file__).resolve().parents[1]
-         and checks == {"request": request, "passed": True},
+         and preparation_checks_match(request, checks),
          "preparation request/checkpoint changed before transport")
     return [({"name": name, "size": len(value), "sha256": sha(value)}, path)
             for name, value, path in zip(PROOF_NAMES, raw, paths)]
@@ -867,7 +877,7 @@ def admit_native_records(plan, tree, build, request, completed):
          and build["target"] == "aarch64-unknown-linux-gnu" and build["profile"] == "release"
          and build["source_unchanged"] is True and build["toolchain_unchanged"] is True
          and build["release_qualified"] is False and build["deployed"] is False
-         and build["native_check_scope"] in ("basic", "full"), "native preparation identity differs")
+         and build["native_check_scope"] in ("basic", "full", "build-only"), "native preparation identity differs")
     need(isinstance(build["artifacts"], list) and len(build["artifacts"]) == 4,
          "native preparation artifact census differs")
     for artifact, row, package in zip(build["artifacts"], request["rows"], PACKAGES):

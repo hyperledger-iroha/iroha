@@ -2359,7 +2359,8 @@ mod gateway_runtime_config_tests {
         }
     }
     #[derive(Debug)]
-    struct TestComplianceFeedTransport;
+    /// Qualified local fixture transport; no feed request is permitted.
+    pub(super) struct TestComplianceFeedTransport;
     impl sorafs::gateway::GatewayComplianceFeedTransport for TestComplianceFeedTransport {
         fn qualification(
             &self,
@@ -2436,7 +2437,8 @@ mod gateway_runtime_config_tests {
             .expect("test feed transport policy digest"),
         }
     }
-    fn compliance_config(
+    /// Governed gateway policy paired with the local fixture transport.
+    pub(super) fn compliance_config(
         checkpoint_path: PathBuf,
     ) -> iroha_config::parameters::actual::SorafsGatewayCompliance {
         iroha_config::parameters::actual::SorafsGatewayCompliance {

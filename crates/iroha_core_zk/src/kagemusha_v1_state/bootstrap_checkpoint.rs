@@ -1,7 +1,6 @@
 //! Initial recovery material is created only by the opaque, verified bootstrap owner.
 
 use super::*;
-use iroha_data_model::kagemusha::KagemushaHardwareCredentialV1;
 use std::{fs::File, os::unix::fs::MetadataExt as _, path::Path};
 
 const BOOTSTRAP_FORMAT: private_journal::PrivateJournalFormat =
@@ -40,7 +39,7 @@ fn bootstrap_manifest_bytes(
 pub struct KagemushaBootstrapJournalStageV1<R, G, H> {
     state: KagemushaStateV1,
     proof_release: KagemushaStateProofReleaseV1,
-    initial_credential: KagemushaHardwareCredentialV1,
+    initial_credential: KagemushaAcceptedCredentialFloorV1,
     enrollment: KagemushaRecoveryEnrollmentBindingV1,
     durable_capacity: KagemushaDurableCapacityV1,
     authenticated_history: KagemushaStateAuthenticatedHistoryV1<H>,
@@ -59,7 +58,7 @@ where
     pub(super) fn new(
         state: KagemushaStateV1,
         proof_release: KagemushaStateProofReleaseV1,
-        initial_credential: KagemushaHardwareCredentialV1,
+        initial_credential: KagemushaAcceptedCredentialFloorV1,
         enrollment: KagemushaRecoveryEnrollmentBindingV1,
         durable_capacity: KagemushaDurableCapacityV1,
         authenticated_history: KagemushaStateAuthenticatedHistoryV1<H>,
@@ -67,11 +66,7 @@ where
         guard_verifier: G,
     ) -> Result<Self, KagemushaStateErrorV1> {
         enrollment.validate_for_state(&state)?;
-        KagemushaAcceptedCredentialFloorV1 {
-            credential: initial_credential,
-            release_id: proof_release.release_id(),
-        }
-        .validate_current(&state, &proof_release)?;
+        initial_credential.validate_current(&state, &proof_release)?;
         Ok(Self {
             state,
             proof_release,
@@ -368,6 +363,23 @@ where
         mut self,
         guard_bundle: Vec<u8>,
     ) -> Result<KagemushaBootstrappedWalletV1<R, G, H>, KagemushaStateErrorV1> {
+        self.finish_attempt(guard_bundle)?;
+        Ok(self.into_wallet())
+    }
+
+    /// Retain the exact exclusive initialized owner when hardware or fresh selection is lost.
+    /// No previous machine or alternate initialization escapes through this retry path.
+    pub fn finish_or_retain(
+        mut self,
+        original_guard_bundle: Vec<u8>,
+    ) -> Result<KagemushaBootstrappedWalletV1<R, G, H>, (Box<Self>, KagemushaStateErrorV1)> {
+        match self.finish_attempt(original_guard_bundle) {
+            Ok(()) => Ok(self.into_wallet()),
+            Err(error) => Err((Box::new(self), error)),
+        }
+    }
+
+    fn finish_attempt(&mut self, guard_bundle: Vec<u8>) -> Result<(), KagemushaStateErrorV1> {
         self.manifest.check_owned().map_err(material_error)?;
         // Recheck the actual descriptor-owned prefixes immediately before publication verification.
         if self
@@ -390,11 +402,15 @@ where
         }
         self.machine
             .install_recovery_checkpoint(&self.candidate, guard_bundle)?;
-        Ok(KagemushaBootstrappedWalletV1 {
+        Ok(())
+    }
+
+    fn into_wallet(self) -> KagemushaBootstrappedWalletV1<R, G, H> {
+        KagemushaBootstrappedWalletV1 {
             machine: self.machine,
             coordinator: self.coordinator,
             responses: self.responses,
-        })
+        }
     }
 }
 

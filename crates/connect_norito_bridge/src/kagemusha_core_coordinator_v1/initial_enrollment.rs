@@ -316,6 +316,9 @@ impl PendingIssuerEnrollmentV1 {
         Ok((
             KagemushaRecoveryEnrollmentBindingV1 {
                 enrollment_id,
+                core_authorization_key_reference: hardware_authorization_key_reference_v1(
+                    native_authorization_public_key,
+                ),
                 owner: owner.clone(),
             },
             qualification,
@@ -740,6 +743,16 @@ impl FreshIssuerAdmissionV1 {
     /// Rejects expired/revoked native selection, noncurrent certificates, or any original mismatch.
     pub fn into_current_bootstrap_evidence(
         self,
+        trusted_native_now_ms: u64,
+    ) -> Result<(
+        iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentCertificateV1,
+        iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentPossessionV1,
+    )> {
+        self.current_bootstrap_evidence(trusted_native_now_ms)
+    }
+
+    pub(super) fn current_bootstrap_evidence(
+        &self,
         trusted_native_now_ms: u64,
     ) -> Result<(
         iroha_data_model::kagemusha::KagemushaVerifiedRetailEnrollmentCertificateV1,

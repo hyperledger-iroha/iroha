@@ -67,7 +67,6 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use thiserror::Error;
-const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
 const PERMISSION_TABLE_ROOT_DOMAIN: &[u8] = b"fastpq:v1:permission-table:blake2b-256";
 /// Metadata key storing the originating entry hash for a batch.
 pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
@@ -219,14 +218,8 @@ pub enum TranscriptBatchError {
         batch_index: usize,
     },
 }
-/// Compute the canonical authority digest hashed by the host.
-#[must_use]
-pub fn authority_digest(authority: &AccountId) -> Hash {
-    let mut payload = Vec::with_capacity(AUTHORITY_DIGEST_DOMAIN.len() + 96);
-    payload.extend_from_slice(AUTHORITY_DIGEST_DOMAIN);
-    payload.extend_from_slice(&authority.encode());
-    Hash::new(payload)
-}
+/// Canonical model-owned FASTPQ authority preimage, shared with portable readers.
+pub use iroha_data_model::block::proofs::fastpq_authority_digest_v1 as authority_digest;
 /// Compute the Poseidon digest of a transfer delta preimage.
 #[inline(always)]
 #[must_use]

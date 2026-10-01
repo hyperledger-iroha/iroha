@@ -151,6 +151,17 @@ pub struct KagemushaDiskAuthenticatedHistoryStoreV1 {
     wal: PrivateJournal,
     credentials: KagemushaHistoryDeviceCredentialsV1,
     last_commit_position: Option<(u128, u128)>,
+    // An exact earlier prefix replayed from this held WAL, never a caller-selected root.
+    // Only private incoming recovery can enter it; no usable Core escapes before its original
+    // proof/Guard is checked and the actual committed store is selected again.
+    pending_incoming: Option<PendingIncomingHistory>,
+}
+
+struct PendingIncomingHistory {
+    predecessor: KagemushaMemoryAuthenticatedHistoryStoreV1,
+    transaction: KagemushaPreparedHistoryCasV1,
+    certificate: KagemushaHistoryRootSelectionCertificateV1,
+    successor_roots: KagemushaHistoryRootsV1,
 }
 
 impl KagemushaDiskAuthenticatedHistoryStoreV1 {
@@ -170,6 +181,7 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
             wal,
             credentials,
             last_commit_position: None,
+            pending_incoming: None,
         };
         store.persist(&JournalRecordV1::Initialize {
             lane_binding,
@@ -192,6 +204,7 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
             wal,
             credentials,
             last_commit_position: None,
+            pending_incoming: None,
         };
         while let Some((sequence, payload)) = store.wal.replay_next().map_err(journal_error)? {
             let record = norito::decode_canonical::<JournalRecordV1>(&payload)
@@ -212,6 +225,169 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
 
     fn check_owned(&self) -> Result<(), KagemushaHistoryStoreErrorV1> {
         self.wal.check_owned().map_err(journal_error)
+    }
+
+    /// Select the actual credential inventory already authenticated for this held lane.
+    #[cfg(feature = "zk-halo2-ipa")]
+    pub(crate) fn current_device_key(
+        &self,
+        profile: DigestV1,
+        epoch: u128,
+        reference: DigestV1,
+    ) -> Result<KagemushaDevicePublicKeyV1, KagemushaHistoryStoreErrorV1> {
+        self.check_owned()?;
+        self.credentials
+            .require_current_binding(profile, epoch, reference)?;
+        self.credentials
+            .epoch_keys
+            .get(&epoch)
+            .copied()
+            .ok_or(KagemushaHistoryStoreErrorV1::InvalidCertificate)
+    }
+
+    // This is not a historical-root factory. Every prefix is replayed from the held original
+    // journal, all device signatures are rechecked, and the entire actual tail must equal the
+    // sole original incoming CAS successor. A later unrelated commit cannot be adopted.
+    #[cfg(feature = "zk-halo2-ipa")]
+    pub(crate) fn select_pending_incoming_predecessor(
+        &mut self,
+        lane_binding: DigestV1,
+        transaction: &KagemushaPreparedHistoryCasV1,
+        certificate: KagemushaHistoryRootSelectionCertificateV1,
+        predecessor_roots: KagemushaHistoryRootsV1,
+        predecessor_commitment: DigestV1,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        self.check_owned()?;
+        if self.pending_incoming.is_some() {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+        }
+        transaction.validate()?;
+        let verified = self.credentials.verify(certificate)?;
+        if verified.transaction_id() != transaction.transaction_id()
+            || verified.root_selection() != transaction.root_selection()
+        {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidCertificate);
+        }
+        let successor_roots = transaction.successor_roots_from(predecessor_roots)?;
+        if self.state.committed_roots() != successor_roots {
+            return Err(KagemushaHistoryStoreErrorV1::CommittedRootsMismatch {
+                expected: successor_roots,
+                actual: self.state.committed_roots(),
+            });
+        }
+        let mut replay = KagemushaMemoryAuthenticatedHistoryStoreV1::new(u64::MAX);
+        let mut preceding = None;
+        let mut position = None;
+        self.wal
+            .scan_complete(|sequence, bytes| {
+                let record = norito::decode_canonical::<JournalRecordV1>(bytes)
+                    .map_err(|_| PrivateJournalError::Corrupt)?;
+                if norito::encode_canonical(&record).map_err(|_| PrivateJournalError::Corrupt)?
+                    != bytes
+                {
+                    return Err(PrivateJournalError::Corrupt);
+                }
+                let result = (|| -> Result<(), KagemushaHistoryStoreErrorV1> {
+                    if sequence == 0 {
+                        return match record {
+                            JournalRecordV1::Initialize {
+                                lane_binding: bound,
+                                hardware_profile_id,
+                            } if bound == lane_binding
+                                && !digest_is_zero(bound)
+                                && hardware_profile_id == self.credentials.profile_id =>
+                            {
+                                Ok(())
+                            }
+                            _ => Err(KagemushaHistoryStoreErrorV1::JournalCorrupt),
+                        };
+                    }
+                    match record {
+                        JournalRecordV1::Initialize { .. } => {
+                            Err(KagemushaHistoryStoreErrorV1::JournalCorrupt)
+                        }
+                        JournalRecordV1::Prepare(original) => {
+                            let plan = replay.plan_prepare_cas(original)?;
+                            if plan.outcome != KagemushaHistoryPrepareOutcomeV1::Prepared {
+                                return Err(KagemushaHistoryStoreErrorV1::JournalCorrupt);
+                            }
+                            replay.apply_plan(plan);
+                            Ok(())
+                        }
+                        JournalRecordV1::Abort(id) => {
+                            let plan = replay.plan_abort_prepared(id)?;
+                            if plan.outcome != KagemushaHistoryAbortOutcomeV1::Aborted {
+                                return Err(KagemushaHistoryStoreErrorV1::JournalCorrupt);
+                            }
+                            replay.apply_plan(plan);
+                            Ok(())
+                        }
+                        JournalRecordV1::Commit(original) => {
+                            let selected = self.credentials.verify(original)?;
+                            let next = (selected.hardware_epoch(), selected.monotonic_counter());
+                            if position.is_some_and(|old| old >= next) {
+                                return Err(KagemushaHistoryStoreErrorV1::InvalidCertificate);
+                            }
+                            if original == certificate {
+                                if preceding.is_some()
+                                    || replay.committed_roots() != predecessor_roots
+                                {
+                                    return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+                                }
+                                replay.require_prepared(transaction)?;
+                                replay.validate_recovery_checkpoint(predecessor_commitment)?;
+                                preceding = Some(replay.clone());
+                            }
+                            let plan = replay.plan_commit_prepared(selected)?;
+                            if !matches!(
+                                plan.outcome,
+                                KagemushaHistoryCommitOutcomeV1::Committed { .. }
+                            ) {
+                                return Err(KagemushaHistoryStoreErrorV1::JournalCorrupt);
+                            }
+                            replay.apply_plan(plan);
+                            position = Some(next);
+                            Ok(())
+                        }
+                    }
+                })();
+                result.map_err(|_| PrivateJournalError::Corrupt)
+            })
+            .map_err(journal_error)?;
+        if replay.committed_roots() != successor_roots
+            || replay.recovery_commitment()? != self.state.recovery_commitment()?
+            || replay.terminal != self.state.terminal
+            || replay.prepared != self.state.prepared
+        {
+            return Err(KagemushaHistoryStoreErrorV1::JournalCorrupt);
+        }
+        let mut predecessor = preceding.ok_or(KagemushaHistoryStoreErrorV1::InvalidTransaction)?;
+        predecessor.overlay_capacity_bytes = self.state.overlay_capacity_bytes;
+        self.check_owned()?;
+        self.pending_incoming = Some(PendingIncomingHistory {
+            predecessor,
+            transaction: transaction.clone(),
+            certificate,
+            successor_roots,
+        });
+        Ok(())
+    }
+
+    fn selected_state(&self) -> &KagemushaMemoryAuthenticatedHistoryStoreV1 {
+        self.pending_incoming
+            .as_ref()
+            .map_or(&self.state, |pending| &pending.predecessor)
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    pub(crate) fn require_actual_incoming_history(
+        &self,
+    ) -> Result<(), KagemushaHistoryStoreErrorV1> {
+        self.check_owned()?;
+        if self.pending_incoming.is_some() {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+        }
+        validate_committed_history_v1(&self.state).map(|_| ())
     }
 
     fn persist(&mut self, record: &JournalRecordV1) -> Result<(), KagemushaHistoryStoreErrorV1> {
@@ -297,12 +473,12 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
 
 impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryStoreV1 {
     fn committed_roots(&self) -> KagemushaHistoryRootsV1 {
-        self.state.committed_roots()
+        self.selected_state().committed_roots()
     }
 
     fn recovery_commitment(&self) -> Result<DigestV1, KagemushaHistoryStoreErrorV1> {
         self.check_owned()?;
-        self.state.recovery_commitment()
+        self.selected_state().recovery_commitment()
     }
 
     fn validate_recovery_checkpoint(
@@ -310,7 +486,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         expected: DigestV1,
     ) -> Result<(), KagemushaHistoryStoreErrorV1> {
         self.check_owned()?;
-        self.state.validate_recovery_checkpoint(expected)
+        self.selected_state().validate_recovery_checkpoint(expected)
     }
 
     fn validate_tree(
@@ -319,7 +495,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         root: DigestV1,
     ) -> Result<(), KagemushaHistoryStoreErrorV1> {
         self.check_owned()?;
-        self.state.validate_tree(tree, root)
+        self.selected_state().validate_tree(tree, root)
     }
 
     fn require_prepared(
@@ -327,7 +503,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         transaction: &KagemushaPreparedHistoryCasV1,
     ) -> Result<(), KagemushaHistoryStoreErrorV1> {
         self.check_owned()?;
-        self.state.require_prepared(transaction)
+        self.selected_state().require_prepared(transaction)
     }
 
     #[cfg(test)]
@@ -340,7 +516,7 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         address: DigestV1,
     ) -> Result<Option<KagemushaHistoryNodeRecordV1>, KagemushaHistoryStoreErrorV1> {
         self.check_owned()?;
-        self.state.read_node(address)
+        self.selected_state().read_node(address)
     }
 
     #[cfg(test)]
@@ -361,6 +537,13 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         transaction: KagemushaPreparedHistoryCasV1,
     ) -> Result<KagemushaHistoryPrepareOutcomeV1, KagemushaHistoryStoreErrorV1> {
         self.check_owned()?;
+        if let Some(pending) = &self.pending_incoming {
+            if transaction != pending.transaction {
+                return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+            }
+            pending.predecessor.require_prepared(&transaction)?;
+            return Ok(KagemushaHistoryPrepareOutcomeV1::AlreadyPrepared);
+        }
         let plan = self.state.plan_prepare_cas(transaction.clone())?;
         if plan.mutation.is_some() {
             self.persist(&JournalRecordV1::Prepare(transaction))?;
@@ -376,6 +559,17 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         // A caller might have verified the typestate under another key. This concrete lane
         // independently applies its release-pinned credential history, including on retries.
         let certificate = self.credentials.verify(certificate.certificate)?;
+        if let Some(pending) = &self.pending_incoming {
+            if certificate.certificate != pending.certificate
+                || self.state.committed_roots() != pending.successor_roots
+            {
+                return Err(KagemushaHistoryStoreErrorV1::InvalidCertificate);
+            }
+            let committed_roots = pending.successor_roots;
+            self.check_owned()?;
+            self.pending_incoming = None;
+            return Ok(KagemushaHistoryCommitOutcomeV1::AlreadyCommitted { committed_roots });
+        }
         let plan = self.state.plan_commit_prepared(certificate)?;
         if plan.mutation.is_some() {
             self.require_new_commit_position(certificate)?;
@@ -393,6 +587,9 @@ impl KagemushaAuthenticatedHistoryStoreV1 for KagemushaDiskAuthenticatedHistoryS
         transaction_id: DigestV1,
     ) -> Result<KagemushaHistoryAbortOutcomeV1, KagemushaHistoryStoreErrorV1> {
         self.check_owned()?;
+        if self.pending_incoming.is_some() {
+            return Err(KagemushaHistoryStoreErrorV1::InvalidTransaction);
+        }
         let plan = self.state.plan_abort_prepared(transaction_id)?;
         if plan.mutation.is_some() {
             self.persist(&JournalRecordV1::Abort(transaction_id))?;

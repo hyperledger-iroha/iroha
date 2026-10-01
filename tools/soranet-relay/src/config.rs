@@ -2971,7 +2971,7 @@ impl ConstantRateCapabilityConfig {
         }
         if self.enabled && self.strict {
             return Err(ConfigError::ConstantRateCapability(
-                "strict constant-rate mode is unavailable while locked Quinn 0.11.9 / quinn-proto 0.11.15 accounts DATAGRAM receive buffering by payload bytes instead of entries"
+                "strict constant-rate mode is unavailable pending end-to-end transport requalification with locked Quinn 0.11.12 / quinn-proto 0.11.18"
                     .to_owned(),
             ));
         }

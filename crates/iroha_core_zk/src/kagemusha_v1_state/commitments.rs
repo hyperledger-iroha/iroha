@@ -6,7 +6,7 @@
 
 use super::*;
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::MintFoldEffectV1")]
 pub(super) struct MintFoldEffectV1 {

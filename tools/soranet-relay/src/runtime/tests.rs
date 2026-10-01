@@ -33,11 +33,15 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         soranet::{
-            incentives::{BandwidthConfidenceV1, RelayBandwidthProofPayloadV1, RelayBandwidthProofV1},
+            incentives::{
+                BandwidthConfidenceV1, RelayBandwidthProofPayloadV1, RelayBandwidthProofV1,
+            },
             privacy_metrics::{
                 SoranetPowFailureReasonV1, SoranetPrivacyModeV1, SoranetPrivacyThrottleScopeV1,
             },
-            vpn::{VPN_CELL_LEN, VpnCellFlagsV1, VpnCellV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1},
+            vpn::{
+                VPN_CELL_LEN, VpnCellFlagsV1, VpnCellV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
+            },
         },
     };
     use iroha_model_base::metadata::Metadata;
@@ -4630,14 +4634,14 @@ mod tests {
     }
 
     #[test]
-    fn production_relay_rejects_vulnerable_quinn_dependency() {
+    fn production_relay_rejects_unqualified_quinn_dependency() {
         let error = validate_shipping_quinn_dependency()
-            .expect_err("locked vulnerable Quinn must remain fail-closed");
+            .expect_err("locked unqualified Quinn must remain fail-closed");
         let RelayError::Quic(reason) = error else {
             panic!("unexpected error: {error:?}");
         };
-        assert!(reason.contains("quinn-proto 0.11.15"));
-        assert!(reason.contains("remote memory exhaustion"));
-        assert!(reason.contains("0.11.17"));
+        assert!(reason.contains("quinn-proto 0.11.18"));
+        assert!(reason.contains("transport requalification"));
+        assert!(reason.contains("requalification"));
     }
 }

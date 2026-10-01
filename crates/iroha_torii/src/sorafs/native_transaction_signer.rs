@@ -618,7 +618,8 @@ define_qualified_signer!(
     "Qualify one native orderbook signer against its exact expected binding."
 );
 #[cfg(test)]
-mod tests {
+/// Native signer fixtures and adversarial qualification tests.
+pub(crate) mod tests {
     mod payload_authorization;
 
     use super::*;
@@ -640,7 +641,8 @@ mod tests {
         AttachProofSidecar,
         AttachEmptyMultisigSidecar,
     }
-    struct TestProvider {
+    /// Deterministic role-bound signer shared by complete Torii runtime fixtures.
+    pub(crate) struct TestProvider {
         role: SorafsNativeTransactionSignerRoleV1,
         handle: String,
         keypair: KeyPair,
@@ -673,7 +675,8 @@ mod tests {
         probe_calls: AtomicUsize,
     }
     impl TestProvider {
-        fn new(
+        /// Construct one exact signing role with deterministic fixture custody.
+        pub(crate) fn new(
             role: SorafsNativeTransactionSignerRoleV1,
             handle: impl Into<String>,
             seed: u8,
@@ -702,7 +705,8 @@ mod tests {
                 probe_calls: AtomicUsize::new(0),
             }
         }
-        fn expected_binding(&self) -> SorafsNativeTransactionSignerBindingV1 {
+        /// Return the exact public configuration expected by startup qualification.
+        pub(crate) fn expected_binding(&self) -> SorafsNativeTransactionSignerBindingV1 {
             SorafsNativeTransactionSignerBindingV1::try_new(
                 self.role,
                 self.handle.clone(),

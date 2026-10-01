@@ -204,18 +204,10 @@ fn moderation_manager_permission_requires_exact_direct_and_role_tokens() {
                     .account_permissions
                     .insert(manager.clone(), [permission].into_iter().collect());
             }
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            state
-                .block(header(1, 999))
-                .commit_empty_block_for_testing()
-                .expect("commit the stored bootstrap block before checking non-genesis grants");
+            let state = authenticated_moderation_state(world);
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(2).expect("non-genesis height"),
-                None,
+                state.view().latest_block_hash(),
                 None,
                 1_000,
                 0,
@@ -637,7 +629,7 @@ fn encode_alternate_layout<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u
     let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
     norito::to_bytes(value).expect("encode alternate-layout fixture")
 }
-fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
+fn moderation_world(accounts: &[&KeyPair], manager: &AccountId) -> World {
     let voting_asset_id: AssetDefinitionId =
         iroha_config::parameters::defaults::governance::voting_asset_id()
             .parse()
@@ -692,12 +684,46 @@ fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
     world
         .account_permissions
         .insert(manager.clone(), permissions);
-    let state = State::new_for_testing(
+    world
+}
+fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
+    let voting_asset_id: AssetDefinitionId =
+        iroha_config::parameters::defaults::governance::voting_asset_id()
+            .parse()
+            .expect("default governance voting asset");
+    let state = component_moderation_state(moderation_world(accounts, manager));
+    assert_eq!(state.gov.voting_asset_id, voting_asset_id);
+    state
+}
+fn component_moderation_state(world: World) -> State {
+    State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    );
-    assert_eq!(state.gov.voting_asset_id, voting_asset_id);
+    )
+}
+fn authenticated_moderation_state(world: World) -> State {
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    let config = TestChainConfig::new(world, 0);
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let consensus_mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("prepare signed moderation genesis");
+    // Consume the original unpublished State before any executor worker starts.
+    // Applying its validated signed genesis establishes immutable execution authority.
+    let state = std::sync::Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished moderation State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        consensus_mode.into(),
+        None,
+    )
+    .expect("apply signed moderation genesis");
     state
 }
 fn voting_asset_balance(state: &State, account: &AccountId) -> Quantity {
@@ -779,17 +805,24 @@ fn header(height: u64, now: u64) -> BlockHeader {
         0,
     )
 }
+fn fixture_header(state: &State, height: u64, now: u64) -> BlockHeader {
+    let mut result = header(height, now);
+    // Raw overlay histories intentionally retain their component-only headers.
+    // Native executor fixtures must follow their actual committed genesis parent.
+    if crate::state::StateReadOnly::native_execution_tip(&state.view()).is_some() {
+        result.prev_block_hash = state.view().latest_block_hash();
+    }
+    result
+}
 fn transact(
     state: &mut State,
     height: u64,
     now: u64,
     operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
 ) -> Result<(), InstructionExecutionError> {
-    let mut block = state.block(header(height, now));
-    let mut transaction = block.transaction();
-    transaction.tx_call_hash = Some(iroha_crypto::Hash::new(
-        [height.to_le_bytes(), now.to_le_bytes()].concat(),
-    ));
+    let call_hash = iroha_crypto::Hash::new([height.to_le_bytes(), now.to_le_bytes()].concat());
+    let mut block = state.block(fixture_header(state, height, now));
+    let mut transaction = block.transaction_for_fastpq_testing(call_hash);
     operation(&mut transaction)?;
     transaction.apply();
     block
@@ -1034,14 +1067,15 @@ fn pop_batch(issuer: &KeyPair, material: &PopMaterial) -> PopCredentialCommitmen
 }
 fn setup_panel_foundations(state: &mut State, manager: &KeyPair, material: &PopMaterial) {
     let manager_id = account(manager);
-    transact(state, 1, 1_000_000, |transaction| {
+    let height = u64::try_from(state.view().height()).expect("moderation fixture height") + 1;
+    transact(state, height, 1_000_000, |transaction| {
         SetSorafsPopIssuerPolicy::new(pop_policy(manager)).execute(&manager_id, transaction)?;
         CommitSorafsPopCredentialBatch::new(encode(&pop_batch(manager, material)))
             .execute(&manager_id, transaction)?;
         SetSorafsModerationPolicy::new(policy()).execute(&manager_id, transaction)
     })
     .expect("activate PoP registry and moderation policy");
-    retain_moderation_fixture_header(state, header(1, 1_000_000));
+    retain_moderation_fixture_header(state, fixture_header(state, height, 1_000_000));
 }
 fn panel_intake(
     appellant: &KeyPair,
@@ -1088,27 +1122,34 @@ struct PanelFixture {
 }
 impl PanelFixture {
     fn new() -> Self {
+        Self::build(component_moderation_state)
+    }
+    fn with_authenticated_root() -> Self {
+        Self::build(authenticated_moderation_state)
+    }
+    fn build(make_state: fn(World) -> State) -> Self {
         let manager = keypair(0x51);
         let appellant = keypair(0x52);
         let juror = keypair(0x61);
         let outsider = keypair(0x71);
         let manager_id = account(&manager);
         let appellant_id = account(&appellant);
-        let mut state = state(&[&manager, &appellant, &juror, &outsider], &manager_id);
+        let mut world = moderation_world(&[&manager, &appellant, &juror, &outsider], &manager_id);
         let mut appellant_permissions = Permissions::new();
         appellant_permissions.insert(Permission::new(MANAGE_PERMISSION.to_owned(), Json::new(())));
-        state
-            .world
+        world
             .account_permissions
             .insert(appellant_id, appellant_permissions);
+        let mut state = make_state(world);
         setup_panel_foundations(&mut state, &manager, shared_pop_material());
+        let next_height = u64::try_from(state.view().height()).expect("panel fixture height") + 1;
         Self {
             manager,
             appellant,
             juror,
             outsider,
             state,
-            next_height: 2,
+            next_height,
         }
     }
     fn manager_id(&self) -> AccountId {
@@ -1131,7 +1172,8 @@ impl PanelFixture {
         let height = self.next_height;
         let result = transact(&mut self.state, height, now, operation);
         if result.is_ok() {
-            retain_moderation_fixture_header(&mut self.state, header(height, now));
+            let committed_header = fixture_header(&self.state, height, now);
+            retain_moderation_fixture_header(&mut self.state, committed_header);
             self.next_height += 1;
         }
         result
@@ -1393,7 +1435,7 @@ fn moderation_membership_proof_decoder_rejects_alternate_norito_layout() {
 }
 #[test]
 fn moderation_juror_registration_rejects_proof_bound_to_another_account() {
-    let mut fixture = PanelFixture::new();
+    let mut fixture = PanelFixture::with_authenticated_root();
     fixture.submit(1, 0, 1);
     let before = fixture.appeal();
     let proof = proof_for_appeal(&before, &fixture.juror_id());
@@ -1441,7 +1483,7 @@ fn moderation_juror_registration_rejects_proof_bound_to_another_account() {
 fn moderation_initial_executor_preserves_governance_and_signed_participant_gates() {
     use iroha_data_model::isi::InstructionBox;
 
-    let mut fixture = PanelFixture::new();
+    let mut fixture = PanelFixture::with_authenticated_root();
     let outsider = fixture.outsider_id();
     let manager = fixture.manager_id();
     let juror = fixture.juror_id();

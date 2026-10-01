@@ -50,7 +50,7 @@ class TairaPrepareTests(unittest.TestCase):
             tool.chmod(0o755)
         self.args = argparse.Namespace(
             repo_root=SCRIPT.parent.parent, target_dir=self.target,
-            native_check_scope="basic", native_linker="system",
+            native_check_scope="build-only", native_linker="system",
             output_dir=self.out, expected_commit="a" * 40, expected_signer="A" * 40, zig=self.zig,
             zig_sha256=hashlib.sha256(self.zig.read_bytes()).hexdigest(),
             cargo_zigbuild=self.zigbuild,
@@ -143,8 +143,8 @@ class TairaPrepareTests(unittest.TestCase):
             self.binaries()
             log.write_bytes(b"fixture build\n")
         result, gate, compile = self.prepare(check=check, build=build)
-        self.assertEqual(events, ["gate", "build"])
-        self.assertEqual(gate.call_count, 1)
+        self.assertEqual(events, ["build"])
+        gate.assert_not_called()
         self.assertEqual(compile.call_count, 1)
         self.assertEqual(len(result["artifacts"]), 4)
         self.assertFalse(result["release_qualified"])
@@ -158,13 +158,12 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.out.stat().st_mode), 0o500)
         self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), self.target_mode)
 
-    def test_failed_gate_never_starts_linux_build_or_capture(self):
-        with patch.object(release, "run_build") as build:
-            with self.assertRaisesRegex(release.PrepareError, "fixture gate failed"):
-                self.prepare(check=development_gate.CheckError("fixture gate failed"))
-            build.assert_not_called()
-        self.assertFalse(list(self.out.glob("attempts/*/bin")))
-        self.assertFalse((self.out / "result.json").exists())
+    def test_regression_gate_cannot_block_release_build(self):
+        result, gate, build = self.prepare(check=development_gate.CheckError("fixture gate failed"))
+        gate.assert_not_called()
+        build.assert_called_once()
+        self.assertEqual(len(result["artifacts"]), 4)
+        self.assertIs(release.read_record(self.out / "checks.json")["passed"], False)
 
     def test_captured_source_drift_stops_before_linux_build(self):
         snapshots = iter([[], [{"path": "changed"}]])
@@ -173,11 +172,12 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertFalse(list(self.out.glob("attempts/*/cargo.log")))
         self.assertFalse((self.out / "result.json").exists())
 
-    def test_changed_tool_after_gate_stops_before_build(self):
-        def check(*_args, **_kwargs):
+    def test_changed_tool_after_cache_admission_stops_before_build(self):
+        def admit(*_args, **_kwargs):
             self.zig.write_bytes(b"different tool")
+            return []
         with self.assertRaisesRegex(release.PrepareError, "reviewed executable"):
-            self.prepare(check=check)
+            self.prepare(cache_admission=admit)
         self.assertFalse(list(self.out.glob("attempts/*/cargo.log")))
         self.assertFalse((self.out / "result.json").exists())
 
@@ -277,7 +277,7 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertTrue((self.out / "request.json").is_file())
         self.assertFalse((self.out / "attempts").exists())
         result, gate, build = self.prepare()
-        self.assertEqual(gate.call_count, 1)
+        gate.assert_not_called()
         self.assertEqual(build.call_count, 1)
         self.assertEqual(result["attempt"], "attempts/000001")
 
@@ -396,7 +396,7 @@ class TairaPrepareTests(unittest.TestCase):
                     self.prepare(isolate=must_not_resolve)
                 self.assertNotIn("fixture-private-value", str(rejected.exception))
 
-    def test_cache_retirement_cannot_reuse_pass_after_failed_gate_rerun(self):
+    def test_cache_retirement_preserves_false_observation_and_failed_build(self):
         def failed_build(_root, _command, _environment, log):
             log.write_bytes(b"fixture failed build")
             raise release.PrepareError("fixture build failed")
@@ -409,12 +409,12 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertFalse((self.out / "checks.json").exists())
             return ["ivm"]
 
-        with self.assertRaisesRegex(release.PrepareError, "fixture native failure"):
-            self.prepare(cache_admission=retire, check=development_gate.CheckError("fixture native failure"))
-        self.assertFalse((self.out / "checks.json").exists())
+        with self.assertRaisesRegex(release.PrepareError, "fixture build failed"):
+            self.prepare(cache_admission=retire, build=failed_build)
+        self.assertIs(release.read_record(self.out / "checks.json")["passed"], False)
         self.assertEqual((self.out / "attempts/000002/retired-checks.json").read_bytes(), old_checks)
         result, gate, _build = self.prepare()
-        self.assertEqual(gate.call_count, 1)
+        gate.assert_not_called()
         self.assertEqual(result["attempt"], "attempts/000003")
 
     def test_capture_checkpoint_recovers_missing_final_result_without_build(self):
@@ -614,7 +614,7 @@ class TairaPrepareTests(unittest.TestCase):
                     log.write_bytes(b"fixture compiler output\n")
                 with patch.dict(os.environ, {"CARGO_INCREMENTAL": preference}):
                     _, gate, build = self.prepare(check=check, build=build)
-                self.assertEqual(gate.call_count, 1)
+                gate.assert_not_called()
                 self.assertEqual(build.call_count, 1)
                 request = release.read_record(self.out / "request.json")
                 result = release.read_record(self.out / "result.json")
@@ -632,19 +632,81 @@ class TairaPrepareTests(unittest.TestCase):
                         self.prepare()
 
     def test_native_scope_is_bound_to_gate_result_and_resume(self):
+        for scope in ("basic", "full"):
+            self.args.native_check_scope = scope
+            with self.assertRaisesRegex(release.PrepareError, "preparation is build-only"):
+                self.prepare()
+        self.assertFalse(self.out.exists())
+
+    def test_build_only_captures_unqualified_release_without_running_native_checks(self):
+        def forbidden_checks(*_args, **_kwargs):
+            self.fail("build-only must not run regression checks")
+        result, gate, build = self.prepare(check=forbidden_checks)
+        gate.assert_not_called()
+        build.assert_called_once()
+        request = release.read_record(self.out / "request.json")
+        self.assertEqual(request["native_check_scope"], "build-only")
+        self.assertEqual(release.read_record(self.out / "checks.json"),
+                         {"request": request, "passed": False})
+        self.assertFalse(result["release_qualified"])
+        self.assertFalse(result["deployed"])
+        self.assertEqual(result["native_check_scope"], "build-only")
+        self.assertEqual(len(result["artifacts"]), 4)
+        self.assertNotIn("native CLI checks", result["timings_seconds"])
+        for row in result["artifacts"]:
+            self.assertEqual(stat.S_IMODE(Path(row["path"]).stat().st_mode), 0o500)
         self.args.native_check_scope = "basic"
-        result, gate, _ = self.prepare()
-        self.assertEqual(result["native_check_scope"], "basic")
-        self.assertEqual(gate.call_args.kwargs["qualification_scope"], "basic")
-        self.assertEqual(release.read_record(self.out / "request.json")["native_check_scope"], "basic")
-        self.args.native_check_scope = "full"
+        with self.assertRaisesRegex(release.PrepareError, "preparation is build-only"):
+            self.prepare()
+
+    def test_build_only_retains_failed_build_and_retries_without_claiming_native_pass(self):
+        def failed_build(_root, _command, _env, log):
+            log.write_bytes(b"actual failed fixture build\n")
+            raise release.PrepareError("fixture build failed")
+        with self.assertRaisesRegex(release.PrepareError, "fixture build failed"):
+            self.prepare(build=failed_build)
+        request = release.read_record(self.out / "request.json")
+        self.assertEqual(release.read_record(self.out / "checks.json"),
+                         {"request": request, "passed": False})
+        self.assertFalse((self.out / "result.json").exists())
+        result, gate, build = self.prepare()
+        gate.assert_not_called()
+        build.assert_called_once()
+        self.assertEqual(result["attempt"], "attempts/000002")
+        self.assertEqual((self.out / "attempts/000001/cargo.log").read_bytes(),
+                         b"actual failed fixture build\n")
+
+    def test_preparation_cannot_relabel_a_prior_regression_request(self):
+        def failed_build(_root, _command, _env, log):
+            log.write_bytes(b"failed build\n")
+            raise release.PrepareError("failed build")
+        with self.assertRaisesRegex(release.PrepareError, "failed build"):
+            self.prepare(build=failed_build)
+        path = self.out / "request.json"
+        request = release.read_record(path)
+        request["native_check_scope"] = "basic"
+        path.chmod(0o600)
+        path.write_bytes(release.canonical_json_bytes(request))
+        path.chmod(0o400)
         with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
             self.prepare()
-        self.out = self.root / "prepared-full"
-        self.args.output_dir = self.out
-        result, gate, _ = self.prepare()
-        self.assertEqual(result["native_check_scope"], "full")
-        self.assertEqual(gate.call_args.kwargs["qualification_scope"], "full")
+        self.assertEqual(release.read_record(path), request)
+        self.assertFalse((self.out / "result.json").exists())
+
+    def test_prepare_is_always_build_only_and_check_retains_regression_scopes(self):
+        options = ["--expected-commit", self.args.expected_commit,
+                   "--expected-signer", self.args.expected_signer,
+                   "--output-dir", str(self.out), "--zig", str(self.zig),
+                   "--zig-sha256", self.args.zig_sha256,
+                   "--cargo-zigbuild", str(self.zigbuild),
+                   "--cargo-zigbuild-sha256", self.args.cargo_zigbuild_sha256]
+        self.assertEqual(release.parser().parse_args(["prepare", *options]).native_check_scope, "build-only")
+        for scope in ("basic", "full"):
+            self.assertEqual(release.parser().parse_args(["check", "--native-check-scope", scope]).native_check_scope, scope)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                release.parser().parse_args(["prepare", "--native-check-scope", scope, *options])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            release.parser().parse_args(["prepare", "--build-only", *options])
 
     def test_build_command_uses_four_fixed_binaries_six_jobs_and_warm_lane(self):
         command = release.build_command(Path("/frozen"), self.target, "/fixed/cargo")
@@ -899,7 +961,11 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertFalse((root / untracked.name).exists())
             self.assertFalse((root / later_only.name).exists())
         result = self.prepare_controller_fixture(commit, check=check)
-        self.assertEqual(observed, [Path(result["source_root"])])
+        self.assertEqual(observed, [])
+        captured = Path(result["source_root"])
+        self.assertEqual((captured / "source.rs").read_bytes(), files["source.rs"])
+        self.assertFalse((captured / untracked.name).exists())
+        self.assertFalse((captured / later_only.name).exists())
         self.assertEqual(result["commit"], commit)
         self.assertEqual(result["tree"], self.fixture_git("rev-parse", commit + "^{tree}").decode())
         self.assertEqual(self.fixture_git("rev-parse", "HEAD").decode(), advanced)
@@ -932,52 +998,6 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertFalse(self.out.exists())
 
-    def test_prepare_uses_the_signed_gate_despite_divergent_live_gate_and_keeps_failure_fixed(self):
-        self.controller_fixture()
-        relative = "scripts/taira_release_check.py"
-        selected_code = (
-            "import json\nfrom pathlib import Path\n"
-            "class CheckError(RuntimeError): pass\n"
-            "def run_checks(root, **kwargs):\n"
-            "    target = Path(kwargs['environment']['CARGO_TARGET_DIR'])\n"
-            "    (target / 'selected-gate.json').write_text(json.dumps({\n"
-            "        'source': str(root), 'commit': kwargs['source_commit'],\n"
-            "        'scope': kwargs['qualification_scope']}))\n"
-            "    if (target / 'fail-selected-gate').exists():\n"
-            "        raise CheckError('captured native gate refused fixture')\n"
-        ).encode()
-        (self.root / relative).write_bytes(selected_code)
-        self.fixture_git("add", "--", relative)
-        commit = self.commit_controller_fixture("selected native gate fixture")
-        self.args.expected_commit = commit
-        marker = self.root / "live-gate-executed"
-        live_code = (f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
-                     "raise AssertionError('live gate executed')\n").encode()
-        (self.root / relative).write_bytes(live_code)
-        index_before = (self.root / ".git/index").read_bytes()
-        result = self.prepare_controller_fixture(commit, native_gate_from_capture=True)
-        source = Path(result["source_root"])
-        self.assertEqual((source / relative).read_bytes(), selected_code)
-        observed = json.loads((self.target / "selected-gate.json").read_text())
-        self.assertEqual(observed, {"source": str(source), "commit": commit, "scope": "basic"})
-        self.assertFalse(marker.exists())
-        self.assertEqual((self.root / relative).read_bytes(), live_code)
-        self.assertEqual((self.root / ".git/index").read_bytes(), index_before)
-        self.out = self.target / "prepared-failure"
-        self.args.output_dir = self.out
-        (self.target / "fail-selected-gate").touch()
-        self.args.command = "prepare"
-        output = io.StringIO()
-        with patch.object(release, "parser", return_value=types.SimpleNamespace(parse_args=lambda: self.args)), \
-             contextlib.redirect_stderr(output):
-            self.assertEqual(self.prepare_controller_fixture(
-                commit, native_gate_from_capture=True, through_cli=True), 1)
-        self.assertEqual(output.getvalue(), "[taira-release] FAIL: captured native gate refused fixture\n")
-        self.assertFalse((self.out / "checks.json").exists())
-        self.assertFalse((self.out / "result.json").exists())
-        self.assertFalse(list(self.out.glob("attempts/*/bin")))
-        self.assertFalse(marker.exists())
-        self.assertEqual((self.root / relative).read_bytes(), live_code)
 
     def test_missing_signed_native_gate_or_inventory_is_rejected_before_capture(self):
         self.controller_fixture()
@@ -1953,11 +1973,16 @@ class TairaPrepareTests(unittest.TestCase):
         tools = self.llvm_tools()
         self.args.native_linker = "llvm"
         observed = []
-        def check(_root, *, environment, **_kwargs):
-            observed.append(environment["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"))
+        actual_environment = release.preparation_native_environment
+        def observe_environment(environment, linker):
+            value = actual_environment(environment, linker)
+            observed.append(value["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"))
+            return value
         with patch.object(release.sys, "platform", "linux"), \
-             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools):
-            result, _, _ = self.prepare(check=check)
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+             patch.object(release, "preparation_native_environment", side_effect=observe_environment):
+            result, gate, _ = self.prepare()
+            gate.assert_not_called()
             self.assertEqual(observed, [[f"-Clinker={tools[0][2]}", f"-Clink-arg=-fuse-ld={tools[1][1]}"]])
             self.assertEqual(result["native_linker"]["preference"], "llvm")
             tools[1][2].unlink()
@@ -1977,7 +2002,7 @@ class TairaPrepareTests(unittest.TestCase):
                 path.write_bytes(old)
 
     def test_prepare_native_tool_change_during_gate_or_build_never_publishes_success(self):
-        for stage in ("cache", "gate", "build"):
+        for stage in ("cache", "build"):
             with self.subTest(stage=stage):
                 self.out = self.root / ("changed-during-" + stage)
                 self.args.output_dir = self.out

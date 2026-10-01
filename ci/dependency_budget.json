@@ -476,7 +476,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:5f8489fab221a2ed47bdc045be93f4f8fb96e2e076307ff949884f6781125725",
+    "manifest_fingerprint": "sha256:b8f9dcbdf7f5287ea8fd4e01ab1e8e22130d0ae0531097b2d8b12f61686a51e7",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -503,18 +503,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 961,
-        "declared_external_dependency_edges": 601,
-        "declared_external_packages": 177,
-        "declared_local_packages": 73,
+        "declared_dependency_edges": 985,
+        "declared_external_dependency_edges": 614,
+        "declared_external_packages": 178,
+        "declared_local_packages": 74,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 69,
-        "required_dependency_edges": 808,
-        "required_external_dependency_edges": 477,
-        "required_external_packages": 128,
-        "required_local_packages": 69,
+        "declared_workspace_packages": 70,
+        "required_dependency_edges": 832,
+        "required_external_dependency_edges": 490,
+        "required_external_packages": 129,
+        "required_local_packages": 70,
         "required_path_packages": 4,
-        "required_workspace_packages": 65
+        "required_workspace_packages": 66
       },
       "roots": [
         "iroha_cli"
@@ -563,18 +563,18 @@
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 347,
-        "declared_external_dependency_edges": 254,
-        "declared_external_packages": 114,
-        "declared_local_packages": 35,
+        "declared_dependency_edges": 351,
+        "declared_external_dependency_edges": 257,
+        "declared_external_packages": 115,
+        "declared_local_packages": 36,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 32,
-        "required_dependency_edges": 280,
-        "required_external_dependency_edges": 194,
-        "required_external_packages": 83,
-        "required_local_packages": 32,
+        "declared_workspace_packages": 33,
+        "required_dependency_edges": 284,
+        "required_external_dependency_edges": 197,
+        "required_external_packages": 84,
+        "required_local_packages": 33,
         "required_path_packages": 3,
-        "required_workspace_packages": 29
+        "required_workspace_packages": 30
       },
       "roots": [
         "iroha"
@@ -583,18 +583,18 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1032,
-        "declared_external_dependency_edges": 639,
-        "declared_external_packages": 184,
-        "declared_local_packages": 74,
+        "declared_dependency_edges": 1041,
+        "declared_external_dependency_edges": 643,
+        "declared_external_packages": 185,
+        "declared_local_packages": 75,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 70,
-        "required_dependency_edges": 853,
-        "required_external_dependency_edges": 510,
-        "required_external_packages": 135,
-        "required_local_packages": 68,
+        "declared_workspace_packages": 71,
+        "required_dependency_edges": 861,
+        "required_external_dependency_edges": 514,
+        "required_external_packages": 136,
+        "required_local_packages": 69,
         "required_path_packages": 4,
-        "required_workspace_packages": 64
+        "required_workspace_packages": 65
       },
       "roots": [
         "irohad"
@@ -603,18 +603,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 1951,
-        "declared_external_dependency_edges": 1095,
-        "declared_external_packages": 231,
-        "declared_local_packages": 114,
+        "declared_dependency_edges": 1975,
+        "declared_external_dependency_edges": 1102,
+        "declared_external_packages": 230,
+        "declared_local_packages": 115,
         "declared_path_packages": 4,
-        "declared_workspace_packages": 110,
-        "required_dependency_edges": 1782,
-        "required_external_dependency_edges": 963,
+        "declared_workspace_packages": 111,
+        "required_dependency_edges": 1807,
+        "required_external_dependency_edges": 971,
         "required_external_packages": 183,
-        "required_local_packages": 114,
+        "required_local_packages": 115,
         "required_path_packages": 4,
-        "required_workspace_packages": 110
+        "required_workspace_packages": 111
       },
       "roots": [
         "*"

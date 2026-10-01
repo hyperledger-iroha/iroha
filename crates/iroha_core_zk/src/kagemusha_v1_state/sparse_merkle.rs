@@ -40,7 +40,7 @@ pub(super) struct PreparedConsumedCreditInsertV1 {
 }
 
 impl PreparedConsumedCreditInsertV1 {
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     pub(super) fn witness(&self) -> &ConsumedCreditInsertWitnessV1 {
         &self.witness
     }
@@ -127,7 +127,7 @@ impl ExactConsumedCreditIndex {
             .collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     pub(super) fn preview_insert_witness(
         &self,
         credit_id: CreditIdV1,
@@ -166,7 +166,7 @@ impl ExactConsumedCreditIndex {
         self.install_prepared_insert(prepared)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     pub(super) fn insert_with_witness(
         &mut self,
         credit_id: CreditIdV1,

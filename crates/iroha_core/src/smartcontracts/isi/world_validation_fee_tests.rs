@@ -476,13 +476,17 @@ fn verified_fee_sponsor_registration_fixture(
     };
     let source_tx_commitment = Hash::new(b"verified-fee-sponsor-policy-source-tx");
     let claim_digest = fee_sponsor_vault_allocation_claim_digest(&claim);
+    let custody = iroha_config::parameters::actual::Nexus::default()
+        .fees
+        .sponsor_vault_custody_account_id
+        .clone();
     let binding = AxtFastpqBinding {
         parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
         source_dsid: source_dataspace_id.as_u64(),
         source_dataspace: "dataspace-7".to_owned(),
         source_receipt_id: "verified-fee-sponsor-policy-receipt".to_owned(),
         source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
-        claim_type: "authorization".to_owned(),
+        claim_type: "tx_predicate".to_owned(),
         claim_digest: hex::encode(claim_digest.as_ref()),
         witness_commitment: hex::encode(Hash::new(b"verified-fee-sponsor-policy-witness").as_ref()),
         policy_commitment: hex::encode(
@@ -495,12 +499,12 @@ fn verified_fee_sponsor_registration_fixture(
         target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
         effect_binding: Some(AxtEffectBinding {
             destination_domain: None,
-            destination_account_id: Some(ALICE_ID.to_string()),
-            vault_account_id: None,
+            destination_account_id: Some(custody.to_string()),
+            vault_account_id: Some(custody.to_string()),
             issuance_account_id: None,
             source_asset_definition_id: Some(asset_definition_id.to_string()),
             destination_asset_definition_id: None,
-            source_amount_i64: None,
+            source_amount_i64: Some(10),
             destination_amount_i64: None,
         }),
         remote_spend_intent_commitments: Vec::new(),
@@ -518,18 +522,60 @@ fn verified_fee_sponsor_registration_fixture(
             tx_set_hash: claim_digest.into(),
         },
     );
-    batch.push(fastpq_prover::StateTransition::new(
-        b"axt/nexus/fee-sponsor-vault-allocation".to_vec(),
-        lease_id.as_ref().to_vec(),
-        claim_digest.as_ref().to_vec(),
-        fastpq_prover::OperationKind::MetaSet,
-    ));
-    batch.sort();
+    // Prove the real sponsor-to-custody funding transfer. The allocation claim
+    // remains separately bound to the authoritative vault snapshot, policy and
+    // lease; no opaque authorization label can replace a witnessed transfer.
+    let delta = iroha_data_model::fastpq::TransferDeltaTranscript {
+        from_account: ALICE_ID.clone(),
+        to_account: custody,
+        asset_definition: asset_definition_id.clone(),
+        amount: verified_allocation.clone(),
+        from_balance_before: verified_allocation.clone(),
+        from_balance_after: Quantity::zero(),
+        to_balance_before: Quantity::zero(),
+        to_balance_after: verified_allocation.clone(),
+        from_smt_witness: Default::default(),
+        to_smt_witness: Default::default(),
+    };
+    let digest =
+        fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &source_tx_commitment);
+    let mut transcripts = vec![iroha_data_model::fastpq::TransferTranscript {
+        batch_hash: source_tx_commitment,
+        deltas: vec![delta],
+        authority_digest: Hash::new(
+            &norito::encode_canonical(&*ALICE_ID).expect("canonical funding authority"),
+        ),
+        poseidon_preimage_digest: Some(digest),
+    }];
+    use fastpq_prover::gadgets::public_transfer_statement::{
+        PublicTransferLimits, TransferSmtBuildLimits, materialize_quantity_public_transfers,
+        public_claims_from_transcripts,
+    };
+    let limits = PublicTransferLimits::default();
+    let public = public_claims_from_transcripts(&transcripts, limits).expect("exact funding claim");
+    let materialized = materialize_quantity_public_transfers(
+        &public,
+        batch.public_inputs,
+        fastpq_prover::ProofSemantics::AxtTransferClaim,
+        limits,
+        TransferSmtBuildLimits::for_update_limit(2).expect("two exact account updates"),
+    )
+    .expect("canonical funding SMT roots and quantity rows");
+    let (rows, inputs, _, private) = materialized.into_parts();
+    let witnesses = private.pairs();
+    transcripts[0].deltas[0].from_smt_witness = witnesses[0][0].clone();
+    transcripts[0].deltas[0].to_smt_witness = witnesses[0][1].clone();
+    batch.transitions = rows;
+    batch.public_inputs = inputs;
+    batch.metadata.insert(
+        iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+        norito::encode_canonical(&transcripts).expect("canonical funding transfer transcripts"),
+    );
     batch.metadata.insert(
         "entry_hash".to_owned(),
         source_tx_commitment.as_ref().to_vec(),
     );
-    crate::fastpq::quantity_fixture::materialize(&mut batch);
+    batch.sort();
     fastpq_prover::bind_axt_batch_with_proof_metadata(
         &mut batch,
         &binding,
@@ -643,6 +689,29 @@ fn verified_fee_sponsor_registration_accepts_exact_proof_policy_context() {
         None,
         20,
     );
+    let mut wrong_effect = instruction.clone();
+    let mut envelope: iroha_data_model::nexus::AxtProofEnvelope =
+        norito::decode_canonical(&wrong_effect.proof_blob.payload)
+            .expect("canonical funding proof");
+    envelope
+        .fastpq_binding
+        .as_mut()
+        .expect("exact funding binding")
+        .verified_effect_type = "unrelated_effect".to_owned();
+    wrong_effect.proof_blob.payload = norito::encode_canonical(&envelope).unwrap();
+    let error = execute_verified_fee_sponsor_registration(&state, wrong_effect)
+        .expect_err("a genuine transfer proof cannot authorize a different allocation effect");
+    assert!(format!("{error:?}").contains("wrong source or effect type"));
+    let mut wrong_amount = instruction.clone();
+    wrong_amount.verified_allocation = Quantity::from(9_u32);
+    let error = execute_verified_fee_sponsor_registration(&state, wrong_amount)
+        .expect_err("the exact proved allocation digest cannot authorize a different amount");
+    assert!(format!("{error:?}").contains("committed amount mismatch"));
+    let mut wrong_lease = instruction.clone();
+    wrong_lease.lease_id = Hash::new(b"different-allocation-lease");
+    let error = execute_verified_fee_sponsor_registration(&state, wrong_lease)
+        .expect_err("the proved allocation digest cannot authorize a replacement lease");
+    assert!(format!("{error:?}").contains("claim digest mismatch"));
     execute_verified_fee_sponsor_registration(&state, instruction)
         .expect("exact frozen policy and proof metadata must register");
 }
@@ -782,37 +851,70 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
         "genesis_bootstrap".parse().expect("program name"),
     );
 
-    CreateFeeSponsorProgram {
-        program: FeeSponsorProgram::new(program_id.clone(), ALICE_ID.clone()),
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect("initial genesis authority creates sponsor-owned program");
-    StageFeeSponsorProgramRevision {
-        revision: fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect("initial genesis authority stages sponsor revision");
-    EnrollFeeSponsorBeneficiary {
-        program_id: program_id.clone(),
-        beneficiary: ALICE_ID.clone(),
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect("initial genesis authority enrolls exact beneficiary");
-    FundFeeSponsorProgram {
-        program_id: program_id.clone(),
-        asset_definition_id: asset_definition_id.clone(),
-        amount: Quantity::from(10_u32),
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect("initial genesis authority funds from the exact sponsor balance");
-    ActivateFeeSponsorProgramRevision {
-        program_id: program_id.clone(),
-        revision: 1,
-        activate_at_height: 1,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect("initial genesis authority activates ready sponsor revision");
-
+    // Retain the prefunded World, then execute the lifecycle under the original
+    // signed genesis authority instead of a header-shaped component transaction.
+    stx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("retain prefunded component World only");
+    let mut config = original_world_config(state);
+    config.genesis_key = iroha_test_samples::BOB_KEYPAIR.clone();
+    config.genesis_instructions = vec![
+        CreateFeeSponsorProgram {
+            program: FeeSponsorProgram::new(program_id.clone(), ALICE_ID.clone()),
+        }
+        .into(),
+        StageFeeSponsorProgramRevision {
+            revision: fee_sponsor_revision_fixture(
+                program_id.clone(),
+                asset_definition_id.clone(),
+                1,
+            ),
+        }
+        .into(),
+        EnrollFeeSponsorBeneficiary {
+            program_id: program_id.clone(),
+            beneficiary: ALICE_ID.clone(),
+        }
+        .into(),
+        FundFeeSponsorProgram {
+            program_id: program_id.clone(),
+            asset_definition_id: asset_definition_id.clone(),
+            amount: Quantity::from(10_u32),
+        }
+        .into(),
+        ActivateFeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision: 1,
+            activate_at_height: 1,
+        }
+        .into(),
+    ];
+    let prepared = crate::sumeragi::test_chain::CertifiedTestChain::prepare(config)
+        .expect("all five fee sponsor actions form an authenticated signed BOB genesis");
+    let topology = crate::sumeragi::network_topology::Topology::new(
+        prepared
+            .validator_keys
+            .iter()
+            .map(|key| crate::PeerId::new(key.public_key().clone())),
+    );
+    let (valid, mut original) = crate::block::ValidBlock::validate_signed_genesis(
+        prepared.genesis.block().clone(),
+        &topology,
+        &BOB_ID,
+        &iroha_primitives::time::TimeSource::new_system(),
+        &prepared.state,
+        iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+    )
+    .unpack(|_| {})
+    .unwrap_or_else(|(_, error)| panic!("original sponsor genesis executes: {error}"));
+    assert!(valid.as_ref().output_results().all(|result| result.is_ok()));
+    let original_transfer_count = original
+        .drain_transfer_transcripts()
+        .values()
+        .map(Vec::len)
+        .sum::<usize>();
+    let stx = original.transaction();
     let program = stx
         .world
         .fee_sponsor_programs
@@ -833,8 +935,7 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
         Quantity::from(10_u32),
     );
     assert_eq!(
-        stx.pending_transfer_transcript_count_for_testing(),
-        1,
+        original_transfer_count, 1,
         "genesis sponsor funding must retain one auditable transfer transcript",
     );
     assert!(
@@ -883,7 +984,11 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
         vec![
             Register::account(Account::new(authority.clone())).into(),
             Grant::account_permission(permission, authority.clone()).into(),
-            UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, Hash::new(b"prospective publisher code")),
+            UploadSmartContractCodeChunk {
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    Hash::new(b"prospective publisher code"),
+                ),
                 total_size: 4,
                 chunk_index: 0,
                 chunk_count: 1,
@@ -1542,7 +1647,7 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         0,
     );
     let mut block = state.block(header);
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_protocol_testing();
     let custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
     for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
         if stx.world.account(&account).is_err() {

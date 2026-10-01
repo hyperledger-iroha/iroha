@@ -389,6 +389,12 @@ impl HeightReads for Reads<'_> {
     }
 }
 
+// These controls authenticate real debug-build BLS certificates; they do not
+// qualify production latency. The exact replay took 41 seconds including fixture
+// preparation, and concurrent crypto suites can multiply the verification cost.
+// Explicit expired/late/challenge deadline controls below retain their short limits.
+const AUTHENTICATED_FIXTURE_OBSERVATION_ALLOWANCE: Duration = Duration::from_secs(300);
+
 fn poll(
     observer: &mut AuthenticatedHeightObserverV1,
     reads: &Reads<'_>,
@@ -396,7 +402,7 @@ fn poll(
     observer.observe_with(
         reads,
         369,
-        Instant::now() + Duration::from_secs(10),
+        Instant::now() + AUTHENTICATED_FIXTURE_OBSERVATION_ALLOWANCE,
         [1; 32],
         [2; 32],
     )
@@ -683,7 +689,7 @@ fn authenticated_height_repeat_current_preserves_freshness_and_advancing_contrac
         .observe_with_policy(
             &repeat,
             369,
-            Instant::now() + Duration::from_secs(10),
+            Instant::now() + AUTHENTICATED_FIXTURE_OBSERVATION_ALLOWANCE,
             [3; 32],
             [4; 32],
             true,
@@ -719,7 +725,7 @@ fn authenticated_height_repeat_current_preserves_freshness_and_advancing_contrac
                 .observe_with_policy(
                     &Reads::new(&fixture, 1),
                     369,
-                    Instant::now() + Duration::from_secs(10),
+                    Instant::now() + AUTHENTICATED_FIXTURE_OBSERVATION_ALLOWANCE,
                     [5; 32],
                     [6; 32],
                     true
@@ -771,7 +777,7 @@ fn authenticated_height_restart_transport_never_masks_fixed_peer_identity() {
             .observe_with_policy(
                 &reads,
                 369,
-                Instant::now() + Duration::from_secs(10),
+                Instant::now() + AUTHENTICATED_FIXTURE_OBSERVATION_ALLOWANCE,
                 [7; 32],
                 [8; 32],
                 true
@@ -786,7 +792,7 @@ fn authenticated_height_restart_transport_never_masks_fixed_peer_identity() {
             .observe_with_policy(
                 &reads,
                 369,
-                Instant::now() + Duration::from_secs(10),
+                Instant::now() + AUTHENTICATED_FIXTURE_OBSERVATION_ALLOWANCE,
                 [9; 32],
                 [10; 32],
                 true
@@ -800,7 +806,7 @@ fn authenticated_height_restart_transport_never_masks_fixed_peer_identity() {
                 .observe_with_policy(
                     &Reads::new(&fixture, 2),
                     369,
-                    Instant::now() + Duration::from_secs(10),
+                    Instant::now() + AUTHENTICATED_FIXTURE_OBSERVATION_ALLOWANCE,
                     [11; 32],
                     [12; 32],
                     true

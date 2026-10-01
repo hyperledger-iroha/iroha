@@ -46,7 +46,7 @@ fn fixture(
     registrations: Vec<Trigger>,
     network: Vec<InstructionBox>,
 ) -> (State, SignedBlock) {
-    let state = state(row_bytes);
+    let state = authenticated_state(row_bytes);
     {
         let mut parameters = state.world.parameters.block();
         let mut policy = parameters.get().block().execution_output();
@@ -59,19 +59,21 @@ fn fixture(
         ));
         parameters.commit();
     }
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut transaction = setup.transaction();
-    Register::account(Account::new(ALICE_ID.clone()))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-    for trigger in registrations {
-        Register::trigger(trigger)
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut transaction = setup.transaction_for_callback_testing();
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
+        for trigger in registrations {
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+        }
+        transaction.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    transaction.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    let header = output_fixture_header(&state);
     let mut builder = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),
@@ -616,7 +618,11 @@ mod retry_and_periodic {
                     action.retry_state,
                     Some(TimeTriggerRetryState {
                         retries_used: 2,
-                        next_retry_at_ms: 7,
+                        next_retry_at_ms: u64::try_from(
+                            source.header().creation_time().as_millis()
+                        )
+                        .unwrap()
+                            + 5,
                     })
                 );
             }
@@ -874,31 +880,14 @@ mod retry_and_periodic {
         }
     }
 
-    // Reuse genuine four-key exact-wire custody solely as the prior-header
-    // source for create_time_event. These historical fixture outputs are not a
-    // claim of prior economic execution or replay of this independently seeded WSV.
-    fn periodic_fixture() -> (State, SignedBlock, CommittedNetworkProofFixture) {
+    // Reuse the original executed State and its exact-wire custody as the prior
+    // source for create_time_event. Fixture registrations publish World only;
+    // they neither recertify history nor claim a new finalized economic result.
+    fn periodic_fixture() -> (Arc<State>, SignedBlock, CommittedNetworkProofFixture) {
         let history = CommittedNetworkProofFixture::ordinary();
-        // This configured Kura already owns its authenticated physical primary.
-        // Use the same fallible reader construction as the committed-proof
-        // fixtures; a fresh-State test constructor would provision another H0.
         let prior_wire = history.target_disk_bytes();
-        let mut state = State::try_new_with_chain_and_network_id(
-            crate::state::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-            ),
-            crate::sumeragi::lanes::routing::test_support::world(
-                iroha_data_model::block::consensus::SumeragiRootScope::Global,
-            ),
-            Arc::clone(&history.kura),
-            LiveQueryStore::start_test(),
-            history.state.chain_id.clone(),
-            *history.state.network_id_ref(),
-            #[cfg(feature = "telemetry")]
-            Default::default(),
-        )
-        .expect("actual State startup over the original authenticated header source");
-        state.configure_test_runtime_defaults();
+        let state = Arc::clone(&history.state);
+        assert!(Arc::ptr_eq(&state, &history.state));
         {
             let mut parameters = state.world.parameters.block();
             let mut policy = ExecutionOutputPolicyV1::bootstrap();
@@ -914,28 +903,25 @@ mod retry_and_periodic {
             ));
             parameters.commit();
         }
-        let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-        let mut transaction = setup.transaction();
-        Register::account(Account::new(ALICE_ID.clone()))
+        {
+            let (mut setup, _setup_recording) = output_fixture_setup(&state);
+            let mut transaction = setup.transaction_for_callback_testing();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut transaction)
+                .unwrap();
+            Register::trigger(Trigger::new(
+                "periodic_repeat".parse().unwrap(),
+                scheduled_action(
+                    vec![Log::new(Level::INFO, "identical periodic body".into()).into()],
+                    3,
+                    0,
+                ),
+            ))
             .execute(&ALICE_ID, &mut transaction)
             .unwrap();
-        Register::trigger(Trigger::new(
-            "periodic_repeat".parse().unwrap(),
-            scheduled_action(
-                vec![Log::new(Level::INFO, "identical periodic body".into()).into()],
-                3,
-                0,
-            ),
-        ))
-        .execute(&ALICE_ID, &mut transaction)
-        .unwrap();
-        transaction.apply();
-        setup.commit_world_overlay_for_testing().unwrap();
-        let mut hashes = state.block_hashes.block();
-        for block in &history.blocks {
-            hashes.push(block.hash());
+            transaction.apply();
+            setup.commit_world_overlay_for_testing().unwrap();
         }
-        hashes.commit();
         assert_eq!(history.target_disk_bytes(), prior_wire);
         let previous = history.target();
         let timestamp =
@@ -1006,7 +992,7 @@ mod retry_and_periodic {
             };
             assert_eq!(row.invocation.schedule_index, u32::try_from(index).unwrap());
             assert_eq!(row.invocation.trigger.trigger_id, id);
-            assert_eq!(row.invocation.trigger.registered_at_height, 1);
+            assert_eq!(row.invocation.trigger.registered_at_height, 2);
             if index == 0 {
                 assert_eq!(row.invocation.trigger, initial_use);
             }

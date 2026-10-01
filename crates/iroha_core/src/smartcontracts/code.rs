@@ -1380,7 +1380,7 @@ mod tests {
         assert_eq!(identity.code_hash, code_hash);
         assert_eq!(identity.contract_alias, None);
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
-            .expect("fixture artifact scope");
+            .expect("contract address retains its exact artifact dataspace");
         let borrowed = with_code_bytes(&view, &artifact_id, |bytes| {
             (bytes.as_ptr(), bytes.to_vec())
         })

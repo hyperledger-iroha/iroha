@@ -3011,13 +3011,10 @@ fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAp
         sumeragi_context: context,
     };
     metadata.validate().unwrap();
-    let app = mk_app_state_for_tests_with_world(world);
     {
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut transaction = block.transaction();
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(Default::default(), 0);
         transaction
-            .world_mut_for_testing()
             .parameters_mut_for_testing()
             .get_mut()
             .set_parameter(Parameter::Custom(CustomParameter::new(
@@ -3025,11 +3022,9 @@ fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAp
                 Json::new(metadata),
             )));
         transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit explicit root scope");
+        block.commit();
     }
-    app
+    mk_app_state_for_tests_with_world(world)
 }
 
 #[tokio::test]

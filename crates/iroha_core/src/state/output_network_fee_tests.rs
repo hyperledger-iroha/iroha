@@ -58,12 +58,10 @@ fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         let (state, asset) = priced_fixture(None);
-        let source = carrier(vec![input(
+        let source = carrier(
             &state,
-            failing_body(),
-            payment(&asset, 3),
-            batch,
-        )]);
+            vec![input(&state, failing_body(), payment(&asset, 3), batch)],
+        );
         let (mut block, _recording) = recorded_network_block(&state, &source);
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -110,7 +108,10 @@ fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit()
     assert!(gas > 0);
     for exact in [false, true] {
         let (state, asset) = priced_fixture(None);
-        let source = carrier(vec![input(&state, body.clone(), payment(&asset, 3), false)]);
+        let source = carrier(
+            &state,
+            vec![input(&state, body.clone(), payment(&asset, 3), false)],
+        );
         let (mut block, _recording) = recorded_network_block(&state, &source);
         block.gas_limit_per_block = if exact { gas } else { gas - 1 };
         let fragments = block.committed_fragment_count();
@@ -141,12 +142,10 @@ fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit()
 fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        failing_body(),
-        payment(&asset, 2),
-        false,
-    )]);
+        vec![input(&state, failing_body(), payment(&asset, 2), false)],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -174,8 +173,8 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
     let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let callback: TriggerId = "fee_data_callback".parse().unwrap();
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut transaction = setup.transaction();
+    let (mut setup, _setup_recording) = output_fixture_setup(&state);
+    let mut transaction = setup.transaction_for_callback_testing();
     Register::trigger(Trigger::new(
         callback.clone(),
         Action::new(
@@ -195,7 +194,7 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
     setup.commit_world_overlay_for_testing().unwrap();
     let body = vec![write("data_callback_event")];
     let direct_gas = crate::gas::meter_instructions(&body);
-    let source = carrier(vec![input(&state, body, payment(&asset, 2), false)]);
+    let source = carrier(&state, vec![input(&state, body, payment(&asset, 2), false)]);
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -258,12 +257,15 @@ fn healthy_output_overflow_drops_both_business_and_its_staged_fee() {
             .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
         parameters.commit();
     }
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
-        payment(&asset, 2),
-        false,
-    )]);
+        vec![input(
+            &state,
+            vec![ExecuteTrigger::new("network_callback".parse().unwrap()).into()],
+            payment(&asset, 2),
+            false,
+        )],
+    );
     let (mut block, _recording) = recorded_network_block(&state, &source);
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -291,6 +293,7 @@ fn bind_fee_context(
     signed: &iroha_data_model::transaction::SignedTransaction,
 ) {
     transaction.current_entrypoint_index = Some(0);
+    transaction.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
     transaction.tx_call_hash = Some(Hash::from(signed.hash_as_entrypoint()));
     transaction.current_tx_hash = Some(signed.hash());
     transaction.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
@@ -321,7 +324,7 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         let TransactionEntrypoint::External(foreign_signed) = &foreign else {
             unreachable!()
         };
-        let source = carrier(vec![entry.clone()]);
+        let source = carrier(&state, vec![entry.clone()]);
         let mut block = state.block(source.header());
         let parameters = block.world.parameters.get();
         let accepted = AcceptedTransaction::accept_borrowed_entrypoint_at_time(
@@ -461,11 +464,11 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
         NonZeroU64::new(gas_limit),
     );
     let mut builder = TransactionBuilder::new(state.network_id, ALICE_ID.clone(), fee);
-    builder.set_creation_time(Duration::from_millis(1));
+    builder.set_creation_time(output_fixture_input_time(&state));
     let signed = builder
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
-    let source = carrier(vec![TransactionEntrypoint::External(signed)]);
+    let source = carrier(&state, vec![TransactionEntrypoint::External(signed)]);
     let (mut block, _recording) = recorded_network_block(&state, &source);
     block.gas_limit_per_block = gas_limit;
     let fragments = block.committed_fragment_count();
@@ -520,11 +523,14 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
             NonZeroU64::new(100),
         );
         let mut builder = TransactionBuilder::new(state.network_id, ALICE_ID.clone(), fee);
-        builder.set_creation_time(Duration::from_millis(1));
+        builder.set_creation_time(output_fixture_input_time(&state));
         let signed = builder
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(ALICE_KEYPAIR.private_key());
-        let source = carrier(vec![TransactionEntrypoint::External(signed.clone())]);
+        let source = carrier(
+            &state,
+            vec![TransactionEntrypoint::External(signed.clone())],
+        );
         let cache_owner = state.pipeline_ivm_prepared_cache.read().clone();
         cache_owner.set_checkout_refusal_for_test(Some(reason));
         {

@@ -269,7 +269,7 @@ pub(crate) fn joint_multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
 ///
 /// The top five bits of the 87-by-three limb layout must be zero. This works
 /// for canonical P-256 base coordinates and scalar residues alike.
-fn p256_uint_bits_le<F: BigPrimeField>(
+pub(crate) fn p256_uint_bits_le<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
     value: &ProperCrtUint<F>,
@@ -530,8 +530,8 @@ fn sha256_words_to_be_bytes<F: BigPrimeField>(
 /// `S` is Core's canonical signing message. This function proves its domain
 /// and length framing; the parent must additionally constrain the flat V1 body
 /// to the independently reconstructed transition subject. The expected RP ID
-/// hash and previous/next indices must come from the governed credential and
-/// inherited monetary checkpoint, not from the assertion itself.
+/// hash and independent counter floor must come from the governed credential and
+/// retained native assertion state, not from the assertion itself.
 ///
 /// The full, release-bounded authenticator data, including extensions, enters
 /// the signed SHA-256 preimage. `expected_flags` must be bound by the parent to
@@ -554,15 +554,143 @@ pub(crate) fn queue_apple_assertion_digest<F, const S_LEN: usize, const AUTH_LEN
     authenticator_data: &[AssignedValue<F>; AUTH_LEN],
     governed_rp_id_hash: &[AssignedValue<F>; 32],
     expected_flags: AssignedValue<F>,
-    previous_secure_index: AssignedValue<F>,
-    next_secure_index: AssignedValue<F>,
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
 ) -> Result<[AssignedValue<F>; 32], String>
 where
     F: BigPrimeField + PrimeField + From<u64>,
 {
-    const SIGNING_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-transition-selection\0";
+    queue_apple_framed_message_digest(
+        base_chip,
+        ctx,
+        jobs,
+        canonical_s,
+        b"iroha:kagemusha:v1:hardware-transition-selection\0",
+        (S_LEN - b"iroha:kagemusha:v1:hardware-transition-selection\0".len() - 8) as u64,
+        authenticator_data,
+        governed_rp_id_hash,
+        expected_flags,
+        retained_counter_floor,
+        accepted_counter,
+    )
+}
+
+/// Queue the exact model-owned ordinary approval wrapper's Apple assertion digest.
+///
+/// This authenticates the wrapper bytes, not a custom-device response. The parent
+/// must bind the complete wrapper to the native reserved operation and its same
+/// financial subject, normalized Guard, original credential and independent counter.
+/// The three SHA jobs must be synthesized before any proof can be admitted.
+pub(crate) fn queue_apple_app_operation_approval_digest<F, const AUTH_LEN: usize>(
+    base_chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    wrapper: &[AssignedValue<F>; iroha_data_model::kagemusha::KagemushaAppOperationApprovalSigningLayoutV1::TOTAL_BYTES],
+    authenticator_data: &[AssignedValue<F>; AUTH_LEN],
+    governed_rp_id_hash: &[AssignedValue<F>; 32],
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
+) -> Result<[AssignedValue<F>; 32], String>
+where
+    F: BigPrimeField + PrimeField + From<u64>,
+{
+    use iroha_data_model::kagemusha::{
+        KAGEMUSHA_APP_OPERATION_APPROVAL_DOMAIN_V1,
+        KagemushaAppOperationApprovalSigningLayoutV1 as L,
+    };
+    let gate = base_chip.range().gate();
+    for (cell, byte) in wrapper[L::VERSION].iter().zip([1_u8, 0]) {
+        gate.assert_is_const(ctx, cell, &F::from(u64::from(byte)));
+    }
+    gate.assert_is_const(ctx, &wrapper[L::PURPOSE.start], &F::ONE);
+    let expected_flags = ctx.load_constant(F::from(0x40_u64));
+    queue_apple_framed_message_digest(
+        base_chip,
+        ctx,
+        jobs,
+        wrapper,
+        KAGEMUSHA_APP_OPERATION_APPROVAL_DOMAIN_V1,
+        L::BODY.len() as u64,
+        authenticator_data,
+        governed_rp_id_hash,
+        expected_flags,
+        retained_counter_floor,
+        accepted_counter,
+    )
+}
+
+/// Verify the original Apple assertion equation over the native approval wrapper.
+///
+/// The caller must derive the P-256 scalars from the same original DER/CBOR,
+/// bind the wrapper and credential to the actual native operation, and realize
+/// all queued SHA jobs. Production signatures require the complete 256-bit
+/// window. This equation alone grants no financial authority or native lease.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assert_apple_app_operation_approval_ecdsa<F, const N: usize>(
+    base_chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    wrapper: &[AssignedValue<F>; iroha_data_model::kagemusha::KagemushaAppOperationApprovalSigningLayoutV1::TOTAL_BYTES],
+    authenticator_data: &[AssignedValue<F>; 37],
+    governed_rp_id_hash: &[AssignedValue<F>; 32],
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
+    signature_public_key: &EcPoint<F, ProperCrtUint<F>>,
+    enrolled_public_key: &EcPoint<F, ProperCrtUint<F>>,
+    enrolled_public_key_sec1: &[AssignedValue<F>; 65],
+    r: &ProperCrtUint<F>,
+    s: &ProperCrtUint<F>,
+    z: &ProperCrtUint<F>,
+    digest_reduction_quotient: AssignedValue<F>,
+) -> Result<(), String>
+where
+    F: BigPrimeField + PrimeField + From<u64>,
+{
+    let digest = queue_apple_app_operation_approval_digest(
+        base_chip,
+        ctx,
+        jobs,
+        wrapper,
+        authenticator_data,
+        governed_rp_id_hash,
+        retained_counter_floor,
+        accepted_counter,
+    )?;
+    // Apple's original DER may be high-S. Both original r,s must be preserved
+    // through the canonical parser; do not normalize or reinterpret an assertion.
+    assert_p256_ecdsa_digest::<F, N, false>(
+        base_chip,
+        ctx,
+        signature_public_key,
+        enrolled_public_key,
+        enrolled_public_key_sec1,
+        r,
+        s,
+        z,
+        &digest,
+        digest_reduction_quotient,
+    );
+    Ok(())
+}
+
+fn queue_apple_framed_message_digest<F, const S_LEN: usize, const AUTH_LEN: usize>(
+    base_chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    canonical_s: &[AssignedValue<F>; S_LEN],
+    signing_domain: &[u8],
+    body_len: u64,
+    authenticator_data: &[AssignedValue<F>; AUTH_LEN],
+    governed_rp_id_hash: &[AssignedValue<F>; 32],
+    expected_flags: AssignedValue<F>,
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
+) -> Result<[AssignedValue<F>; 32], String>
+where
+    F: BigPrimeField + PrimeField + From<u64>,
+{
     assert!(
-        S_LEN > SIGNING_DOMAIN.len() + 8 && S_LEN <= 1_024,
+        S_LEN > signing_domain.len() + 8 && S_LEN <= 1_024,
         "Core canonical selection message has a release-bounded length"
     );
     assert!(
@@ -571,10 +699,9 @@ where
     );
     let range = base_chip.range();
     let gate = range.gate();
-    let body_len = (S_LEN - SIGNING_DOMAIN.len() - 8) as u64;
     for (assigned, expected) in canonical_s
         .iter()
-        .zip(SIGNING_DOMAIN.iter().copied().chain(body_len.to_le_bytes()))
+        .zip(signing_domain.iter().copied().chain(body_len.to_le_bytes()))
     {
         gate.assert_is_const(ctx, assigned, &F::from(u64::from(expected)));
     }
@@ -614,16 +741,16 @@ where
         gate.assert_is_const(ctx, &flag_bits[7], &F::ONE);
     }
 
-    range.range_check(ctx, previous_secure_index, 32);
-    range.range_check(ctx, next_secure_index, 32);
-    let exact_next = gate.add(ctx, previous_secure_index, Constant(F::ONE));
-    ctx.constrain_equal(&exact_next, &next_secure_index);
+    range.range_check(ctx, retained_counter_floor, 32);
+    range.range_check(ctx, accepted_counter, 32);
+    let advanced = range.is_less_than(ctx, retained_counter_floor, accepted_counter, 32);
+    gate.assert_is_const(ctx, &advanced, &F::ONE);
     let signed_counter = gate.inner_product(
         ctx,
         authenticator_data[33..37].iter().copied(),
         [24, 16, 8, 0].map(|bit| Constant(power_of_two::<F>(bit))),
     );
-    ctx.constrain_equal(&signed_counter, &next_secure_index);
+    ctx.constrain_equal(&signed_counter, &accepted_counter);
 
     let mut message = auth_bytes;
     message.extend(client_data_hash);
@@ -642,8 +769,9 @@ where
 /// Feed the fully constrained Apple assertion prehash into P-256 ECDSA.
 ///
 /// The parent must still bind `canonical_s` to the Core subject body, the RP
-/// hash/key to the enrolled Apple credential, and the two indices to the
-/// recursive transition. The SHA jobs must be realized with
+/// hash/key to the enrolled Apple credential, and the counter floor/current value
+/// to retained native assertion state. Financial logical indexes bind separately
+/// to the recursive transition. The SHA jobs must be realized with
 /// [`PastaSha256JobsV1::synthesize`] after Base synthesis.
 pub(crate) fn assert_apple_assertion_ecdsa<
     F,
@@ -659,8 +787,8 @@ pub(crate) fn assert_apple_assertion_ecdsa<
     authenticator_data: &[AssignedValue<F>; AUTH_LEN],
     governed_rp_id_hash: &[AssignedValue<F>; 32],
     expected_flags: AssignedValue<F>,
-    previous_secure_index: AssignedValue<F>,
-    next_secure_index: AssignedValue<F>,
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
     signature_public_key: &EcPoint<F, ProperCrtUint<F>>,
     enrolled_public_key: &EcPoint<F, ProperCrtUint<F>>,
     enrolled_public_key_sec1: &[AssignedValue<F>; 65],
@@ -680,8 +808,8 @@ where
         authenticator_data,
         governed_rp_id_hash,
         expected_flags,
-        previous_secure_index,
-        next_secure_index,
+        retained_counter_floor,
+        accepted_counter,
     )?;
     assert_p256_ecdsa_digest::<F, N, REQUIRE_LOW_S>(
         base_chip,
@@ -1412,8 +1540,128 @@ mod apple_assertion_tests {
             .is_ok()
     }
 
+    fn check_native_approval_wrapper<F: BigPrimeField + PrimeField + From<u64>>(
+        wrapper_offset: Option<usize>,
+        floor: u32,
+        accepted: u32,
+    ) -> bool {
+        use iroha_data_model::{
+            NetworkId,
+            kagemusha::{
+                KagemushaAppOperationApprovalChallengeV1, KagemushaAppOperationApprovalPurposeV1,
+                KagemushaAppOperationApprovalSigningLayoutV1 as L,
+                KagemushaHardwareTransitionSelectionV1, KagemushaOperationKindV1,
+            },
+        };
+        let financial_index = u128::from(u32::MAX) + 50;
+        let subject = KagemushaHardwareTransitionSelectionV1 {
+            version: 1,
+            release_id: [1; 32],
+            provider_policy_root: [2; 32],
+            app_policy_digest: [3; 32],
+            credential_id: [4; 32],
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::from_marked_bytes([5; 32])
+                    .expect("marked network identity fixture"),
+            )),
+            lane_commitment: [6; 32],
+            hardware_profile_id: [7; 32],
+            policy_epoch: 1,
+            hardware_epoch_id: [8; 32],
+            hardware_epoch_generation: 1,
+            operation_kind: KagemushaOperationKindV1::MintFold,
+            transition_statement_digest: [9; 32],
+            candidate_envelope_digest: [0; 32],
+            terminal_body_commitment: [0; 32],
+            secure_index_before: financial_index,
+            secure_index_after: financial_index + 1,
+        };
+        let challenge = KagemushaAppOperationApprovalChallengeV1 {
+            version: 1,
+            purpose: KagemushaAppOperationApprovalPurposeV1::MonetaryTransition,
+            operation_id: [10; 32],
+            nonce: [11; 32],
+            account_binding: [12; 32],
+            authority_policy_digest: [13; 32],
+            attested_key_id: [14; 32],
+            enrollment_digest: [15; 32],
+            subject_signing_digest: Sha256::digest(subject.canonical_signing_bytes().unwrap())
+                .into(),
+            normalized_guard_digest: [16; 32],
+            issued_at_ms: 50,
+            expires_at_ms: 100,
+            subject,
+        };
+        // Public structural native model fixture. It grants no enrollment/operation authority.
+        let mut wire = challenge.canonical_signing_bytes().unwrap();
+        let rp = [0x39; 32];
+        let mut auth = rp.to_vec();
+        auth.push(0x40);
+        auth.extend_from_slice(&9_u32.to_be_bytes());
+        let client: [u8; 32] = Sha256::digest(&wire).into();
+        let mut prehash = auth.clone();
+        prehash.extend_from_slice(&client);
+        let nonce: [u8; 32] = Sha256::digest(prehash).into();
+        let expected: [u8; 32] = Sha256::digest(nonce).into();
+        if let Some(offset) = wrapper_offset {
+            wire[offset] ^= 1;
+        }
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits((TEST_K - 1) as usize);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let mut jobs = PastaSha256JobsV1::default();
+        let ctx = builder.main(0);
+        let wrapper: [AssignedValue<F>; L::TOTAL_BYTES] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(wire[i]))));
+        let auth: [AssignedValue<F>; 37] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(auth[i]))));
+        let rp: [AssignedValue<F>; 32] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(rp[i]))));
+        let floor = ctx.load_witness(F::from(u64::from(floor)));
+        let accepted = ctx.load_witness(F::from(u64::from(accepted)));
+        let digest = queue_apple_app_operation_approval_digest(
+            &chip, ctx, &mut jobs, &wrapper, &auth, &rp, floor, accepted,
+        )
+        .unwrap();
+        for (cell, byte) in digest.iter().zip(expected) {
+            let expected = ctx.load_constant(F::from(u64::from(byte)));
+            ctx.constrain_equal(cell, &expected);
+        }
+        builder.calculate_params(Some(UNUSABLE_ROWS));
+        let circuit = AppleCircuit { builder, jobs };
+        MockProver::run(TEST_K, &circuit, vec![])
+            .unwrap()
+            .verify()
+            .is_ok()
+    }
+
     #[test]
-    fn apple_assertion_hash_rp_flags_and_exact_next_are_constrained_in_both_pasta_fields() {
+    fn apple_operation_wrapper_hash_and_counter_bindings_in_both_pasta_fields() {
+        use iroha_data_model::kagemusha::KagemushaAppOperationApprovalSigningLayoutV1 as L;
+        assert!(check_native_approval_wrapper::<Fp>(None, 4, 9));
+        assert!(check_native_approval_wrapper::<Fq>(None, 4, 9));
+        for offset in [
+            0,
+            L::BODY_LENGTH.start,
+            L::VERSION.start,
+            L::PURPOSE.start,
+            L::NONCE.start,
+            L::SUBJECT_SIGNING_DIGEST.start,
+            L::NORMALIZED_GUARD_DIGEST.start,
+        ] {
+            assert!(!check_native_approval_wrapper::<Fp>(Some(offset), 4, 9));
+            assert!(!check_native_approval_wrapper::<Fq>(Some(offset), 4, 9));
+        }
+        for (floor, counter) in [(9, 9), (10, 9), (4, 8)] {
+            assert!(!check_native_approval_wrapper::<Fp>(None, floor, counter));
+            assert!(!check_native_approval_wrapper::<Fq>(None, floor, counter));
+        }
+    }
+
+    #[test]
+    fn apple_assertion_hash_rp_flags_and_monotonic_counter_are_constrained_in_both_pasta_fields() {
         assert!(check_apple_hash_and_counter::<Fp, 41, 0xc0>(Mutation::None));
         assert!(check_apple_hash_and_counter::<Fq, 41, 0xc0>(Mutation::None));
         for mutation in [

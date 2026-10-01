@@ -173,16 +173,32 @@ fn exercise_final_canary_deadline(applied: bool) {
     );
     assert!(quoted.time_to_live_ms.unwrap().get() < DEFAULT_WRITE_TTL_MS);
     *retained.lock().unwrap() = Some(validated.transaction().unwrap().clone());
+    // Construct the real transport and authority context before timing dispatch.
+    // The production wrapper still includes this setup in its caller's budget.
+    let prepared_client = prepare_canary_client(&config, &server.base_url).unwrap();
+    let requests_before_expiry = server.requests.lock().unwrap().len();
+    let expired = submit_exact_prepared_operation_with_client(
+        &prepared_client,
+        &args,
+        &validated,
+        &fee,
+        Instant::now(),
+    )
+    .expect_err("an expired observation must never dispatch or authorize a POST");
+    assert!(prepared_request_timed_out(&expired));
+    assert_eq!(
+        server.requests.lock().unwrap().len(),
+        requests_before_expiry
+    );
     let budget = if applied {
         Duration::from_secs(2)
     } else {
         Duration::from_millis(900)
     };
     let started = Instant::now();
-    let outcome = submit_exact_prepared_operation(
-        &config,
+    let outcome = submit_exact_prepared_operation_with_client(
+        &prepared_client,
         &args,
-        &server.base_url,
         &validated,
         &fee,
         started + budget,

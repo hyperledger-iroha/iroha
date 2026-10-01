@@ -66,7 +66,7 @@ impl Probe {
 
     fn assert_originals_released(&self) {
         assert_eq!(self.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(self.indexes_free.load(Ordering::SeqCst), 11);
+        assert_eq!(self.indexes_free.load(Ordering::SeqCst), 9);
         assert_eq!(self.fence_free.load(Ordering::SeqCst), 1);
     }
 }
@@ -92,7 +92,7 @@ fn assert_physical_prefix(slot: &StateEffectLocks<'_>, blocked_index: usize) {
             index
         }};
     }
-    assert_eq!(effect_indexes!(inspect), 11);
+    assert_eq!(effect_indexes!(inspect), 9);
     assert!(!slot.complete);
 }
 

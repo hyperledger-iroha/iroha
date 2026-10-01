@@ -271,10 +271,10 @@ fn factorized_stage_exponents_and_stride_preserve_every_public_schedule_boundary
 }
 
 #[test]
-fn stage_and_factorized_layouts_share_one_bounded_cache_without_aliasing() {
-    let Some(device) = select_metal_device() else {
-        return;
-    };
+#[ignore = "requires an actual Metal device for bounded cache layout qualification"]
+fn required_metal_stage_and_factorized_layouts_share_one_bounded_cache_without_aliasing() {
+    let device = select_metal_device()
+        .expect("required Metal cache qualification needs an actual Metal device");
     let _lane = crate::backend::acquire_gpu_lane();
     let mut cache = TwiddleCache::new();
     let log = 32;

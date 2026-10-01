@@ -12,6 +12,61 @@ use crate::kagemusha_v1_recursion::{
     KagemushaHardwareTransactionVerifierV1,
 };
 
+#[path = "authenticated_bootstrap_proving.rs"]
+mod bootstrap_proving;
+pub use bootstrap_proving::KagemushaAuthenticatedBootstrapProvingSelectionV1;
+
+#[path = "authenticated_ordinary_enrollment.rs"]
+mod ordinary_enrollment;
+pub use ordinary_enrollment::{
+    KagemushaAuthenticatedOrdinaryApprovalV1,
+    KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1,
+    KagemushaAuthenticatedOrdinaryCredentialFloorV1,
+    KagemushaAuthenticatedOrdinaryCurrentPublicationV1, KagemushaOrdinaryLogicalApprovalJournalV1,
+};
+pub(crate) use ordinary_enrollment::{
+    KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
+    KagemushaAuthenticatedOrdinaryHistoricalApprovalV1,
+    KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
+    verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
+};
+
+#[path = "authenticated_core_dispatch.rs"]
+mod dispatch;
+pub use dispatch::KagemushaAuthenticatedCommittedOutgoingProvingSelectionV1;
+pub use dispatch::KagemushaAuthenticatedOutgoingProvingSelectionV1;
+pub use dispatch::KagemushaAuthenticatedWalletObservationV1;
+#[path = "authenticated_core_publication.rs"]
+mod publication;
+pub use publication::{
+    KagemushaAuthenticatedCorePublicationV1, KagemushaAuthenticatedCoreRecoveryInputsV1,
+    KagemushaAuthenticatedCoreRecoveryV1,
+};
+#[path = "authenticated_core_outgoing.rs"]
+mod outgoing;
+pub use outgoing::{
+    KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,
+};
+#[path = "authenticated_core_incoming.rs"]
+mod incoming;
+pub use incoming::{
+    KagemushaAuthenticatedIncomingFoldV1, KagemushaAuthenticatedIncomingProvingSelectionV1,
+};
+#[path = "authenticated_core_mutation.rs"]
+mod mutation;
+use mutation::Mutation;
+#[path = "authenticated_core_device_commit.rs"]
+mod device_commit;
+pub use device_commit::KagemushaOriginalOutgoingHardwareCommitV1;
+#[path = "authenticated_core_payment_release.rs"]
+mod payment_release;
+pub use payment_release::{
+    KagemushaAuthenticatedOutboxReleaseV1, KagemushaAuthenticatedPaymentReleaseSelectionV1,
+};
+#[path = "authenticated_core_redemption_finality.rs"]
+mod redemption_finality;
+pub use redemption_finality::KagemushaAuthenticatedRedemptionFinalitySelectionV1;
+
 /// Concrete machine type; caller-defined accepting verifiers cannot construct this owner.
 type Machine = KagemushaStateMachineV1<
     Arc<KagemushaAuthenticatedRecursiveVerifierV1>,
@@ -25,6 +80,8 @@ pub struct KagemushaAuthenticatedCoreOwnerV1 {
     machine: Machine,
     journals: KagemushaPendingRecoveryJournalsV1,
     transactions: KagemushaHardwareTransactionJournalV1,
+    selected_publication: Option<publication::HeldOriginal>,
+    committed_authorization: Option<outgoing::CommitAuthorizationOriginal>,
 }
 
 /// Concrete verified bootstrap stage. Its constructor requires real production proof authority.
@@ -93,6 +150,8 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             machine,
             journals,
             transactions,
+            selected_publication: None,
+            committed_authorization: None,
         })
     }
 
@@ -184,7 +243,7 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             state_nonce_commitment,
             enrollment.authenticated_at_ms(),
         )?;
-        KagemushaAcceptedCredentialFloorV1 {
+        KagemushaAcceptedCredentialFloorV1::Oem {
             credential,
             release_id: release.release_id(),
         }
@@ -220,10 +279,14 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
         KagemushaBootstrapJournalStageV1::new(
             preview.state,
             proof_release,
-            credential,
+            KagemushaAcceptedCredentialFloorV1::Oem {
+                credential,
+                release_id: release.release_id(),
+            },
             KagemushaRecoveryEnrollmentBindingV1 {
                 enrollment_id: subject.enrollment_id,
                 owner: subject.owner.clone(),
+                core_authorization_key_reference: subject.issuance.core_authorization_key_reference,
             },
             durable_capacity,
             authenticated_history,
@@ -300,6 +363,8 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
             machine,
             journals,
             transactions,
+            selected_publication: None,
+            committed_authorization: None,
         })
     }
 
@@ -311,6 +376,9 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
     pub fn current_recovery_selection(
         &self,
     ) -> Result<KagemushaCurrentRecoverySelectionV1<'_>, KagemushaStateErrorV1> {
+        if let Some(original) = &self.selected_publication {
+            original.require_selected(&self.machine)?;
+        }
         self.journals.validate_pair(&self.machine)?;
         self.transactions
             .recovery_prefix()
@@ -320,6 +388,9 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
         self.transactions
             .recovery_prefix()
             .map_err(KagemushaStateErrorV1::RecoveryMaterial)?;
+        if let Some(original) = &self.selected_publication {
+            original.require_selected(&self.machine)?;
+        }
         Ok(selection)
     }
 
@@ -398,7 +469,7 @@ mod tests {
             release_id: machine.proof_release.release_id(),
             hardware_policy_digest: [0x91; 32],
             core_authorization_key_reference: [0x92; 32],
-            credential: machine.accepted_credential_floor().credential,
+            credential: *machine.accepted_credential_floor().oem_original().unwrap(),
         };
         let subject = KagemushaRetailEnrollmentSubjectV1 {
             version: 1,

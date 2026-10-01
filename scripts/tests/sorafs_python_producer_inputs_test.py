@@ -216,7 +216,7 @@ for change in ('version','owner','path','seal','missing','installed_seal'):
 assert controls==6
 print('PRODUCER_JOIN_CONTROLS=6')
 """
-    result=subprocess.run((sys.executable,'-I','-B','-c',source,str(ROOT),str(tmp_path/'fixture')),
+    result=subprocess.run((sys.executable,'-I','-S','-B','-c',source,str(ROOT),str(tmp_path/'fixture')),
                           capture_output=True,text=True,timeout=120,check=False)
     (tmp_path/'original-harness.log').write_text(result.stdout+result.stderr)
     assert result.returncode==0,result.stdout+result.stderr

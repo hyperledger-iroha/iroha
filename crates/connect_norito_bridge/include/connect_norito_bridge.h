@@ -587,9 +587,9 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 // Exact inventories embedded in the canonical Norito contract vector.
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_VERSION_V1 UINT16_C(1)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_PEER_MESSAGE_COUNT_V1 UINT16_C(3)
-#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_ARTIFACT_ROLE_COUNT_V1 UINT16_C(50)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_ARTIFACT_ROLE_COUNT_V1 UINT16_C(54)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_RELATION_COUNT_V1 UINT16_C(8)
-#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_HELPER_COUNT_V1 UINT16_C(6)
+#define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_HELPER_COUNT_V1 UINT16_C(7)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_HARDWARE_CAPABILITY_COUNT_V1 UINT16_C(16)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DEVICE_OPERATION_COUNT_V1 UINT16_C(22)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1 \
@@ -699,6 +699,8 @@ int32_t connect_norito_kagemusha_testnet_value_credit_v1(
 #define CONNECT_NORITO_KAGEMUSHA_OUTGOING_STATE_INPUT_ARCHIVE_MAX_BYTES_V1 4096
 #define CONNECT_NORITO_KAGEMUSHA_OUTGOING_PAIRED_PROOF_ARCHIVE_MAX_BYTES_V1 6528
 
+// Method 18 returns [release ID, hardware-policy digest, provider-policy root].
+// This current native catalog projection grants no new hardware or monetary authority.
 typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RESERVE_OPERATION_ID_V1 = 1,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACCEPT_QUALIFICATION_V1 = 2,
@@ -713,7 +715,14 @@ typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_BEGIN_OBSERVATION_V1 = 11,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_INITIAL_ENROLLMENT_V1 = 12,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACKNOWLEDGE_COMMITTED_APP_ATTEST_V1 = 13,
-  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_EXPORT_OUTGOING_STATE_PROOF_V1 = 14
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_EXPORT_OUTGOING_STATE_PROOF_V1 = 14,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARE_INCOMING_FOLD_V1 = 15,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_COMPLETE_INCOMING_FOLD_V1 = 16,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_STAGE_INCOMING_ORIGINAL_V1 = 17,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_AUTHENTICATED_HARDWARE_POLICY_V1 = 18,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARED_APP_OPERATION_APPROVAL_V1 = 19,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARED_APP_ENROLLMENT_POSSESSION_V1 = 20,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARED_ORDINARY_APP_IDENTITY_V1 = 21
 } ConnectNoritoKagemushaCoreCoordinatorMethodV1;
 
 int32_t connect_norito_kagemusha_core_coordinator_contract_v1(
@@ -732,7 +741,8 @@ int32_t connect_norito_kagemusha_core_coordinator_invoke_v1(
     const uint8_t* request_frame, size_t request_frame_length,
     uint8_t** output_frame, size_t* output_frame_length);
 int32_t connect_norito_kagemusha_core_coordinator_close_v1(uint64_t handle);
-// Generic builds provide no native OEM provisioner and fail closed as unavailable.
+// Without a separately registered trusted Rust owner, installation returns UNAVAILABLE.
+// Ordinary app identity alone grants no monetary authority.
 // The path-only installer composes the independently retained Rust owner exactly
 // once; it provides no caller-selected backend, replacement, uninstall or monetary
 // software fallback. Contract words are metadata only; successful install and

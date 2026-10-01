@@ -65,13 +65,15 @@ fn finalized_fixture(rejected: bool, retain_transcripts: bool) -> CommittedNetwo
     let instructions: Vec<InstructionBox> = if retain_transcripts || rejected {
         vec![
             TransferAssetBatch::new(vec![
-                TransferAssetBatchEntry::new(
+                TransferAssetBatchEntry::with_leg_id(
+                    "source-first",
                     (*ALICE_ID).clone(),
                     (*BOB_ID).clone(),
                     definition.clone(),
                     if rejected { 1000_u32 } else { 1_u32 },
                 ),
-                TransferAssetBatchEntry::new(
+                TransferAssetBatchEntry::with_leg_id(
+                    "source-second",
                     (*ALICE_ID).clone(),
                     (*BOB_ID).clone(),
                     definition,
@@ -96,6 +98,39 @@ fn finalized_fixture(rejected: bool, retain_transcripts: bool) -> CommittedNetwo
 
 fn source_state(fixture: &CommittedNetworkProofFixture) -> Arc<State> {
     Arc::clone(&fixture.state)
+}
+
+#[test]
+fn duplicate_transfer_leg_identity_is_rejected_before_any_finalized_source_mutation() {
+    use crate::{smartcontracts::Execute as _, state::StateReadOnly as _};
+    use iroha_data_model::{
+        asset::id::AssetId,
+        block::BlockHeader,
+        isi::{TransferAssetBatch, TransferAssetBatchEntry},
+    };
+    use mv::storage::StorageReadOnly as _;
+    let fixture = finalized_fixture(false, true);
+    let state = source_state(&fixture);
+    let definition = test_delta(10, 0).asset_definition;
+    let alice = AssetId::new(definition.clone(), ALICE_ID.clone());
+    let bob = AssetId::new(definition.clone(), BOB_ID.clone());
+    let leg = TransferAssetBatchEntry::new(ALICE_ID.clone(), BOB_ID.clone(), definition, 1_u32);
+    let mut block = state.block(BlockHeader::new(
+        3.try_into().unwrap(),
+        state.view().latest_block_hash(),
+        None,
+        1003,
+        0,
+    ));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"duplicate-transfer-leg-control"));
+    let alice_before = tx.world.assets.get(&alice).unwrap().as_ref().clone();
+    let bob_before = tx.world.assets.get(&bob).unwrap().as_ref().clone();
+    let error = TransferAssetBatch::new(vec![leg.clone(), leg])
+        .execute(&ALICE_ID, &mut tx)
+        .expect_err("identical leg IDs must not acquire two source occurrences");
+    assert!(error.to_string().contains("duplicate leg_id"));
+    assert_eq!(tx.world.assets.get(&alice).unwrap().as_ref(), &alice_before);
+    assert_eq!(tx.world.assets.get(&bob).unwrap().as_ref(), &bob_before);
 }
 
 fn source_claim(block: &SignedBlock) -> AxtSourceTransferOccurrenceV1 {

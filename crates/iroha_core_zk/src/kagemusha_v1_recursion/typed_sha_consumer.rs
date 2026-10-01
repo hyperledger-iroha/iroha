@@ -5,19 +5,31 @@
 //! carried history and the caller's predecessor. The returned carrier tail must also be bound
 //! into both scalar and reciprocal deferred audits; native validation alone grants no authority.
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use halo2_base::{
     AssignedValue,
     utils::{BigPrimeField, CurveAffineExt},
 };
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use snark_verifier::{
     loader::native::NativeLoader,
     pcs::ipa::{IpaAccumulator, IpaSuccinctVerifyingKey},
     verifier::plonk::PlonkProtocol,
 };
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use super::{
     DigestV1, KagemushaPastaParityV1,
     deferred_parent::{
@@ -35,10 +47,18 @@ use super::{
         public_instance as hash_claim_public,
     },
 };
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use crate::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::PastaSha256JobsV1};
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Exact terminal ordered claim for the SHA jobs emitted by one consumer parity.
 pub(super) struct KagemushaRecursiveHashClaimParityWitnessV1<'a, C: CurveAffineExt> {
     /// Release-authenticated Eq/Ep claim and Eq/Ep shard protocol identities, in that order.
@@ -57,7 +77,11 @@ pub(super) struct KagemushaRecursiveHashClaimParityWitnessV1<'a, C: CurveAffineE
     pub(super) merge_fold_proof: &'a [u8],
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Validate paired claim identities, exact public shape, histories, and carrier binding.
 ///
 /// This is an early native diagnostic; callers must still constrain the proof and its audits.
@@ -99,7 +123,11 @@ pub(super) fn validate_recursive_hash_claim_v1(
     Ok(())
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 fn validate_recursive_hash_claim_history_v1<F: KagemushaPoseidonFieldV1>(
     instances: &[Vec<F>],
     history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
@@ -133,7 +161,11 @@ fn validate_recursive_hash_claim_history_v1<F: KagemushaPoseidonFieldV1>(
     Ok(())
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Verify the exact ordered SHA queue and fold its complete authenticated history.
 ///
 /// The returned carrier binding must be absorbed in both deferred audits and equality-bound in

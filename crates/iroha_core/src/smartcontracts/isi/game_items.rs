@@ -294,7 +294,7 @@ pub(crate) fn validate_restored_items(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{fund_payout_fixture, header, key, payout_state};
+    use super::super::tests::{fund_payout_fixture, header, key, payout_state, payout_transaction};
     use super::*;
     use crate::smartcontracts::isi::nft_custody::reserve_nft_v1;
     use iroha_data_model::{
@@ -344,7 +344,7 @@ mod tests {
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         let owner = session.participants[0].account.clone();
         let domain_id = DomainId::try_new(&"a".repeat(63), &"b".repeat(63)).unwrap();
@@ -368,7 +368,7 @@ mod tests {
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         for (label, dataspace) in [("art.gallery", "universal"), ("art", "gallery.universal")] {
             assert!(DomainId::try_new(label, dataspace).is_err());
@@ -385,7 +385,7 @@ mod tests {
         session.liability = Quantity::zero();
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         let owner = session.participants[0].account.clone();
         assert!(validate_item_admission(&session, &outsider, &session.manifest_hash, 1).is_err());
@@ -488,7 +488,7 @@ mod tests {
             session.liability = Quantity::zero();
             session.phase = GamePhaseV1::Lobby;
             let mut block = state.block(header());
-            let mut st = block.transaction();
+            let mut st = payout_transaction(&mut block);
             fund_payout_fixture(&mut st, &mut session);
             reserve_fixture_item(&mut st, &mut session, 0);
             reserve_fixture_item(&mut st, &mut session, 1);
@@ -551,7 +551,7 @@ mod tests {
         session.liability = Quantity::zero();
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         reserve_fixture_item(&mut st, &mut session, 0);
         session.deadline_height = 0;

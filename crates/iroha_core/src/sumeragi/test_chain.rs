@@ -123,6 +123,8 @@ pub struct TestChainConfig {
     pub consensus_mode: SumeragiConsensusMode,
     /// Creation time of the first genesis transaction in milliseconds.
     pub genesis_time_ms: u64,
+    /// Immutable block cadence included in the original signed genesis manifest.
+    pub genesis_block_cadence_ms: NonZeroU64,
     /// Original execution configuration, fixed before signed genesis policies are derived.
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Optional physical/routing and fee configuration installed before deriving signed genesis policies.
@@ -131,6 +133,8 @@ pub struct TestChainConfig {
     pub zk: Option<iroha_config::parameters::actual::Zk>,
     /// Optional governance policy installed before deriving signed genesis execution policies.
     pub governance: Option<iroha_config::parameters::actual::Governance>,
+    /// Original lane manifest policy installed before deriving signed genesis execution policies.
+    pub lane_manifests: Option<Arc<LaneManifestRegistry>>,
     /// Signature algorithms admitted by the original signed genesis configuration.
     pub crypto: Option<iroha_config::parameters::actual::Crypto>,
     /// Fraud admission configuration fixed before signed genesis execution.
@@ -147,6 +151,7 @@ impl core::fmt::Debug for TestChainConfig {
             .field("genesis_instructions", &self.genesis_instructions.len())
             .field("genesis_parameters", &self.genesis_parameters.len())
             .field("genesis_time_ms", &self.genesis_time_ms)
+            .field("genesis_block_cadence_ms", &self.genesis_block_cadence_ms)
             .finish_non_exhaustive()
     }
 }
@@ -164,10 +169,12 @@ impl TestChainConfig {
             genesis_parameters: Vec::new(),
             consensus_mode: SumeragiConsensusMode::Permissioned,
             genesis_time_ms,
+            genesis_block_cadence_ms: NonZeroU64::new(1).expect("nonzero fixture cadence"),
             pipeline: iroha_config::parameters::actual::Pipeline::default(),
             nexus: None,
             zk: None,
             governance: None,
+            lane_manifests: None,
             crypto: None,
             fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring::default(),
             lane_blocks: Arc::new(crate::sumeragi::lanes::merge::NoLanes),
@@ -319,10 +326,12 @@ impl CertifiedTestChain {
             genesis_parameters,
             consensus_mode,
             genesis_time_ms,
+            genesis_block_cadence_ms,
             pipeline,
             nexus,
             zk,
             governance,
+            lane_manifests,
             crypto,
             fraud_monitoring,
             lane_blocks,
@@ -363,6 +372,7 @@ impl CertifiedTestChain {
             genesis_parameters,
             consensus_mode,
             genesis_time_ms,
+            genesis_block_cadence_ms,
         ) {
             Ok(genesis) => genesis,
             Err(error) => {
@@ -396,6 +406,7 @@ impl CertifiedTestChain {
             zk.as_ref(),
             governance.as_ref(),
             crypto.as_ref(),
+            lane_manifests.as_ref(),
         )?;
         let validated_genesis = iroha_genesis::validate_prepared_genesis_bundle(
             &genesis.encode_wire().expect("fixture genesis framing"),
@@ -1640,6 +1651,7 @@ pub(super) fn prepare_configured_genesis(
     zk: Option<&iroha_config::parameters::actual::Zk>,
     governance: Option<&iroha_config::parameters::actual::Governance>,
     crypto: Option<&iroha_config::parameters::actual::Crypto>,
+    lane_manifests: Option<&Arc<LaneManifestRegistry>>,
 ) -> Result<
     (
         SignedBlock,
@@ -1725,9 +1737,10 @@ pub(super) fn prepare_configured_genesis(
         state.set_pipeline(pipeline.clone());
         state.set_fraud_monitoring(fraud_monitoring.clone());
         let nexus = state.nexus_snapshot();
-        state.install_lane_manifests_for_testing(&Arc::new(
-            LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-        ));
+        let manifests = lane_manifests.cloned().unwrap_or_else(|| {
+            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance))
+        });
+        state.install_lane_manifests_for_testing(&manifests);
         let policies = {
             let validation = crate::block::ValidBlock::validate_signed_genesis(
                 genesis.clone(),
@@ -1828,6 +1841,7 @@ pub(crate) fn signed_genesis_fixture(
         genesis_policy::npos_genesis_parameters(npos),
         mode.into(),
         genesis_time_ms,
+        NonZeroU64::new(1).expect("nonzero fixture cadence"),
     )
     .map(|(block, _)| block)
 }
@@ -1841,6 +1855,7 @@ fn build_genesis(
     parameters: Vec<Parameter>,
     consensus_mode: SumeragiConsensusMode,
     genesis_time_ms: u64,
+    genesis_block_cadence_ms: NonZeroU64,
 ) -> Result<(SignedBlock, iroha_genesis::RawGenesisTransaction), String> {
     let entries = validators
         .iter()
@@ -1854,7 +1869,7 @@ fn build_genesis(
         })
         .collect::<Vec<_>>();
     let builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-        .with_block_cadence_ms(NonZeroU64::new(1).expect("non-zero"))
+        .with_block_cadence_ms(genesis_block_cadence_ms)
         .set_topology(entries)
         .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(
@@ -1894,6 +1909,73 @@ fn build_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_genesis_cadence_is_signed_and_used_for_original_sealed_work() {
+        use iroha_data_model::transaction::signed::{
+            SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+        };
+        let mut config = TestChainConfig::new(World::default(), 0);
+        config.genesis_block_cadence_ms = NonZeroU64::new(1001).unwrap();
+        let key = config.genesis_key.clone();
+        let mut chain = CertifiedTestChain::start(config).expect("original signed cadence");
+        let parent = chain.genesis().clone();
+        let view = chain.state().view();
+        assert_eq!(
+            view.world()
+                .parameters()
+                .sumeragi()
+                .block_cadence_ms()
+                .get(),
+            1001
+        );
+        assert_eq!(
+            view.world()
+                .consensus_schedule()
+                .ready(2)
+                .unwrap()
+                .params
+                .block_time_ms,
+            1001
+        );
+        drop(view);
+        let entry = iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(
+            SignedSealedTransactionCommitment::sign(
+                SealedTransactionCommitmentPayload::new(
+                    chain.network_id(),
+                    AccountId::new(key.public_key().clone()),
+                    iroha_crypto::Hash::new(b"original sealed cadence fixture"),
+                    3,
+                    5,
+                    None,
+                ),
+                key.private_key(),
+            ),
+        );
+        let entry_hash = entry.hash();
+        let committed = chain.commit_entrypoints(vec![entry]);
+        assert_eq!(
+            committed.block().header().prev_block_hash(),
+            Some(parent.hash())
+        );
+        assert_eq!(
+            committed.block().header().creation_time(),
+            parent.header().creation_time() + Duration::from_millis(1001)
+        );
+        assert_eq!(
+            committed.block().network_input_hashes().collect::<Vec<_>>(),
+            vec![entry_hash]
+        );
+        assert!(
+            committed
+                .block()
+                .network_output_at(0)
+                .unwrap()
+                .1
+                .result
+                .is_ok()
+        );
+    }
 
     #[test]
     fn boundary_currency_fixture_retains_native_authority_with_signed_genesis() {
@@ -2270,6 +2352,7 @@ mod tests {
             Vec::new(),
             SumeragiConsensusMode::Permissioned,
             10_000,
+            NonZeroU64::new(1).expect("nonzero fixture cadence"),
         )
         .unwrap();
         let owner = AccountId::new(genesis_key.public_key().clone());
@@ -2292,6 +2375,7 @@ mod tests {
             10_000,
             &iroha_config::parameters::actual::Pipeline::default(),
             &iroha_config::parameters::actual::FraudMonitoring::default(),
+            None,
             None,
             None,
             None,

@@ -112,10 +112,7 @@ pub mod quic {
     pub const P2P_BIDI_STREAMS_PER_CONNECTION: u32 = 2;
     /// Smallest per-direction flow-control allocation used by the budget split.
     pub const FLOW_CONTROL_GRANULE_BYTES: usize = 64 * 1024;
-    const QUIC_DEPENDENCY_BLOCK_REASON: &str = "QUIC transport is unavailable with locked quinn-proto 0.11.15: \
-released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, \
-connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 \
-or later and requalify QUIC before re-enabling it";
+    const QUIC_DEPENDENCY_BLOCK_REASON: &str = "QUIC transport is unavailable pending transport requalification of locked quinn-proto 0.11.18; dependency memory and panic fixes alone do not establish authenticated transport, resource, or interoperability qualification";
     const FLOW_CONTROL_DIRECTIONS_PER_CONNECTION: usize = 4;
     // Quinn's endpoint configuration expresses the maximum UDP payload as a
     // `u16`, and its receive path additionally caps one datagram at 64 KiB.
@@ -181,9 +178,9 @@ or later and requalify QUIC before re-enabling it";
     /// [`flow_control_geometry`] requires four such granules per active connection, each aggregate
     /// pending region fits within one quarter of the same minimum process geometry. Datagram
     /// buffers are separately configured, but their per-connection sum and aggregate multiplication
-    /// are still checked explicitly. This arithmetic is not a DATAGRAM-entry bound: locked Quinn
-    /// charges only payload bytes for those entries. Shipping constructors reject DATAGRAM buffers
-    /// until quinn-proto 0.11.17 or later is locked. Pending-`Incoming` object metadata is
+    /// are still checked explicitly. Locked Quinn separately charges payload bytes
+    /// and fixed per-entry overhead in its DATAGRAM buffers. Shipping constructors still reject QUIC pending
+    /// transport requalification with locked quinn-proto 0.11.18. Pending-`Incoming` object metadata is
     /// count-bounded by `max_incoming`, but is not part of this payload/flow-credit byte geometry.
     pub fn endpoint_buffer_geometry(
         flow_control: FlowControlConfig,
@@ -500,7 +497,7 @@ or later and requalify QUIC before re-enabling it";
             assert!(total <= cfg.process_budget_bytes);
         }
         #[test]
-        fn public_dialer_rejects_vulnerable_quinn_before_binding() {
+        fn public_dialer_rejects_unqualified_quinn_before_binding() {
             let unbindable: std::net::SocketAddr = "192.0.2.1:0".parse().unwrap();
             for cfg in [
                 DialerConfig::default(),
@@ -518,12 +515,12 @@ or later and requalify QUIC before re-enabling it";
                 },
             ] {
                 let error = Dialer::bind(unbindable, cfg)
-                    .expect_err("vulnerable Quinn must fail before the UDP bind");
+                    .expect_err("unqualified Quinn must fail before the UDP bind");
                 assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
                 let reason = error.to_string();
-                assert!(reason.contains("quinn-proto 0.11.15"));
-                assert!(reason.contains("remote memory exhaustion"));
-                assert!(reason.contains("0.11.17"));
+                assert!(reason.contains("quinn-proto 0.11.18"));
+                assert!(reason.contains("transport requalification"));
+                assert!(reason.contains("requalification"));
             }
         }
         #[test]

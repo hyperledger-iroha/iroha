@@ -171,92 +171,174 @@ fn an_invalid_local_certificate_is_not_signer_finality() {
 }
 
 #[test]
+fn original_genesis_without_a_successor_has_execution_but_no_signer_finality() {
+    use crate::sumeragi::certified_chain::{CertifiedChain, QcVerification};
+
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("original executed genesis");
+    let view = chain.state().view();
+    assert_eq!(chain.state().committed_height(), 1);
+    assert_eq!(chain.kura().blocks_count(), 1);
+    assert!(committed_block(&view, 1).is_ok());
+    let reader = CertifiedChain::new(&view).unwrap();
+    assert_eq!(
+        reader.certified(1).unwrap().verification(),
+        QcVerification::Genesis
+    );
+    assert!(super::certified_block_v1(&reader, 1, hash(&chain, 1)).is_err());
+    assert_eq!(
+        verify_signer_finality_v1(&view, 1, hash(&chain, 1)),
+        Err(SignerFinalityErrorV1)
+    );
+}
+
+#[test]
 fn genesis_execution_finality_requires_a_verified_successor() {
     use crate::sumeragi::{
-        block_store::commit_certificate,
         certified_chain::{CertifiedChain, QcVerification},
         commitment::ExecutionResultCommitment,
-        crypto::BlsCrypto,
     };
 
-    let chain = chain();
-    let genesis = chain.committed(1).block().clone();
-    let second = chain.committed(2).block().clone();
-    let original_result = genesis.commit_certificate().unwrap();
-    let mut preimage =
-        ExecutionResultCommitment::decode(original_result.result_preimage()).unwrap();
-    preimage.execution.ordinary_writes_root = Hash::new(b"unsigned replacement genesis result");
-    let changed_result = iroha_data_model::block::CommitCertificate::from_untrusted_parts(
-        original_result.consensus_header().to_vec(),
-        original_result.commit_qc().to_vec(),
-        preimage.preimage().unwrap(),
-        original_result.availability().to_vec(),
-    );
-    let changed_genesis = Arc::new(
-        genesis
-            .as_ref()
-            .clone()
-            .with_commit_certificate(Some(changed_result)),
-    );
-    assert_eq!(changed_genesis.hash(), genesis.hash());
-    assert_eq!(
-        changed_genesis.signatures().collect::<Vec<_>>(),
-        genesis.signatures().collect::<Vec<_>>()
-    );
-    let second_certificate = second.commit_certificate().unwrap();
-    let (body, qc) = chain.committed_body(2).unwrap().unwrap();
-    let header = body.header();
-    let below_quorum = chain.commit_qc(
-        2,
-        header.hash(&BlsCrypto::new()),
-        qc.result,
-        header.attest,
-        Signers::BelowQuorum,
-    );
-    let bad_second = Arc::new(
-        second.as_ref().clone().with_commit_certificate(Some(
-            commit_certificate(
-                header,
-                &below_quorum,
-                second_certificate.result_preimage().to_vec(),
-                second_certificate.availability().to_vec(),
-            )
-            .unwrap(),
-        )),
-    );
-    for history in [
-        vec![Arc::clone(&genesis)],
-        vec![Arc::clone(&changed_genesis)],
-        vec![changed_genesis, Arc::clone(&second)],
-        vec![Arc::clone(&genesis), bad_second],
+    for (has_successor, changed_result, bad_successor) in [
+        (false, false, false),
+        (false, true, false),
+        (true, true, false),
+        (true, false, true),
     ] {
-        let kura = Kura::blank_kura_for_testing();
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            World::new(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            "sumeragi-certified-test-chain".parse().unwrap(),
-            chain.network_id(),
-        );
-        for block in history {
-            kura.store_block(Arc::clone(&block)).unwrap();
-            state.push_block_hash_for_testing(block.hash());
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+            .expect("original native genesis execution");
+        let genesis = chain.committed(1).block().clone();
+        if has_successor {
+            chain.commit_at(2_000, Vec::new());
+            verify_signer_finality_v1(&chain.state().view(), 1, hash(&chain, 1)).expect(
+                "exact original successor authenticates the genesis result before corruption",
+            );
         }
-        let view = state.view();
-        // Deterministic State-anchored reads and signed genesis identity remain available.
-        assert!(committed_block(&view, 1).is_ok());
+        if changed_result {
+            let original = genesis.commit_certificate().unwrap();
+            let mut preimage =
+                ExecutionResultCommitment::decode(original.result_preimage()).unwrap();
+            preimage.execution.world_state_root = Hash::new(b"unsigned replacement genesis result");
+            preimage.validate().expect(
+                "the forged World root preserves result shape and the native-lane proof; only authenticated R rejects it",
+            );
+            chain
+                .kura()
+                .corrupt_commit_result_for_testing(
+                    std::num::NonZeroUsize::new(1).unwrap(),
+                    preimage.preimage().unwrap(),
+                )
+                .expect("change only the unsigned local result after genuine publication");
+            let changed = chain
+                .kura()
+                .get_block(std::num::NonZeroUsize::new(1).unwrap())
+                .unwrap();
+            assert_eq!(changed.hash(), genesis.hash());
+            assert_eq!(
+                changed.signatures().collect::<Vec<_>>(),
+                genesis.signatures().collect::<Vec<_>>()
+            );
+            assert_eq!(
+                changed.executed_block_wire_identity().unwrap(),
+                genesis.executed_block_wire_identity().unwrap()
+            );
+            let certificate = changed.commit_certificate().unwrap();
+            assert_eq!(certificate.consensus_header(), original.consensus_header());
+            assert_eq!(certificate.commit_qc(), original.commit_qc());
+            assert_eq!(certificate.availability(), original.availability());
+            assert_ne!(certificate.result_preimage(), original.result_preimage());
+        }
+        if bad_successor {
+            chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+        }
+        let view = chain.state().view();
+        // State's original tip authenticates R even when the proposal hash is unchanged.
+        // A replaced local result fails that native ancestry check before any signer use.
+        let native_read = committed_block(&view, 1);
+        if changed_result {
+            assert!(
+                matches!(&native_read, Err(crate::sumeragi::certified_chain::ChainReadError::Malformed { height: 1, reason })
+                    if reason.contains("native header or R differs from authenticated execution ancestry at 1")),
+                "substituted result must fail its original State ancestry: {native_read:?}"
+            );
+        } else {
+            native_read.expect("unchanged original execution survives absent or invalid local QC");
+        }
         let reader = CertifiedChain::new(&view).unwrap();
         assert_eq!(
             reader.certified(1).unwrap().verification(),
             QcVerification::Genesis
         );
-        assert!(super::certified_block_v1(&reader, 1, hash(&chain, 1)).is_err());
+        assert!(super::certified_block_v1(&reader, 1, *genesis.hash().as_ref()).is_err());
         assert_eq!(
-            verify_signer_finality_v1(&view, 1, hash(&chain, 1)),
+            verify_signer_finality_v1(&view, 1, *genesis.hash().as_ref()),
             Err(SignerFinalityErrorV1)
         );
     }
+    let chain = chain();
     let view = chain.state().view();
     let verified = verify_signer_finality_v1(&view, 1, hash(&chain, 1)).unwrap();
     assert_eq!(verified.context_id(), chain.committed(1).id());
+}
+
+#[test]
+fn genesis_result_rejects_a_substituted_native_lane_witness_root() {
+    use crate::sumeragi::{
+        certified_chain::{CertifiedChain, ChainReadError},
+        commitment::ExecutionResultCommitment,
+    };
+
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("original native genesis execution");
+    let original = chain.committed(1).block().clone();
+    let mut preimage =
+        ExecutionResultCommitment::decode(original.commit_certificate().unwrap().result_preimage())
+            .unwrap();
+    preimage.execution.ordinary_writes_root = Hash::new(b"substituted native lane witness root");
+    assert_eq!(
+        preimage.validate().unwrap_err().to_string(),
+        "invalid native context proof"
+    );
+    chain
+        .kura()
+        .corrupt_commit_result_for_testing(
+            std::num::NonZeroUsize::new(1).unwrap(),
+            preimage.preimage().unwrap(),
+        )
+        .unwrap();
+    let view = chain.state().view();
+    assert!(matches!(committed_block(&view, 1),
+        Err(ChainReadError::Malformed { height: 1, reason })
+            if reason.contains("invalid native context proof")));
+    assert!(matches!(CertifiedChain::new(&view).unwrap().certified(1),
+        Err(ChainReadError::Malformed { height: 1, reason })
+            if reason.contains("invalid native context proof")));
+    assert_eq!(
+        verify_signer_finality_v1(&view, 1, *original.hash().as_ref()),
+        Err(SignerFinalityErrorV1)
+    );
+}
+
+#[test]
+fn imported_genesis_frame_and_hash_journal_cannot_replace_original_execution() {
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("original native genesis");
+    let genesis = chain.committed(1).block().clone();
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = State::new_with_chain_and_network_id_for_testing(
+        World::new(),
+        std::sync::Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        chain.state().chain_id_ref().clone(),
+        chain.network_id(),
+    );
+    kura.store_block(std::sync::Arc::clone(&genesis)).unwrap();
+    state.push_block_hash_for_testing(genesis.hash());
+    let view = state.view();
+    assert!(committed_block(&view, 1).is_err());
+    assert_eq!(
+        verify_signer_finality_v1(&view, 1, hash(&chain, 1)),
+        Err(SignerFinalityErrorV1)
+    );
 }
