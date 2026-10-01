@@ -4,6 +4,7 @@
 //! workspaces, noise transfers and sanitization, which remain mandatory blockers.
 
 use super::{HiddenRamFheInstruction as Op, HiddenRamFheProgram};
+use crate::fhe_bfv::plaintext_packing_candidate::GALOIS_EXPONENTS;
 use std::fmt;
 use zeroize::Zeroize;
 
@@ -13,7 +14,6 @@ const INITIAL_VALUES: usize = 34; // Input, 32 state embeddings, shared register
 // Select creates at most 20 nodes including every rank-alignment demand; input
 // broadcast creates 15. Retired IDs are never reused during one private plan.
 const VALUE_CAPACITY: usize = INITIAL_VALUES + TAPE_CAPACITY * 20;
-const GALOIS_EXPONENTS: [u16; 7] = [5, 25, 625, 5601, 4033, 3969, 8191];
 const PROGRAM_KEY_BYTES: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

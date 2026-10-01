@@ -1389,10 +1389,7 @@ mod tests {
         let stored_ptr = view
             .world()
             .contract_code()
-            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                code_hash,
-            ))
+            .get(&artifact_id)
             .expect("stored bytes")
             .as_ptr();
         assert_eq!(borrowed.0, stored_ptr, "borrow helper must not clone bytes");

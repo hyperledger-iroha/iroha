@@ -1975,7 +1975,8 @@ mod typed_error_contract_tests {
                     )
                 }),
             )
-            .layer(axum::middleware::from_fn(capture_response_format))
+            // Exercise the response boundary itself: request negotiation rejects
+            // unacceptable public requests before this handler can execute.
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
         let response = router
             .oneshot(

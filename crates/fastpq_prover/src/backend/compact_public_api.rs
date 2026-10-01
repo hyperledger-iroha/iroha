@@ -16,73 +16,23 @@
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 
 #[cfg(test)]
-use super::compact_protocol::{
-    FixedAir,
-    shared_openings::codec::{VerifiedSharedProof, decode_and_verify_with_allocation_committed},
-};
-#[cfg(test)]
 use super::compact_value_domain::CompactTransferValue;
+#[cfg(test)]
+use super::{
+    compact_protocol::FixedAir, deep_engine::VerificationWork, deep_relation::DeepRelation,
+};
 use crate::{
     Result, VerifyLimits,
     axt_binding::{AxtProofContextMirrors, AxtPublicMetadataBytes},
 };
 
 #[cfg(test)]
-use super::{
-    compact_axt_air::AxtTransferAir, compact_protocol::shared_openings::SharedVerificationWork,
-    compact_public_transfer::PublicTransferAir,
-};
+use super::{compact_axt_air::AxtTransferAir, compact_public_transfer::PublicTransferAir};
 #[cfg(test)]
 use crate::{
     Error, ProofSemantics, gadgets::public_transfer_statement::PreparedPublicTransfers,
     proof::PublicIO,
 };
-
-/// Diagnostic decoding policy for predecessor single-relation fixtures.
-#[cfg(test)]
-#[derive(Clone, Copy)]
-pub(super) struct SharedVerifier {
-    /// Maximum cumulative allocation charges for this complete child frame.
-    pub(super) max_decode_allocation_charges: usize,
-}
-
-#[cfg(test)]
-impl SharedVerifier {
-    /// Fixed query count; no artifact or caller policy can change geometry.
-    #[allow(
-        clippy::unused_self,
-        reason = "asked of a verifier value; tests pin that its policy never changes it"
-    )]
-    pub(super) const fn queries(self) -> usize {
-        375
-    }
-
-    /// Authenticate a frame under the sole context and unchanged complete relation.
-    #[cfg(test)]
-    pub(super) fn verify_frame(
-        self,
-        relation: &impl FixedAir,
-        bytes: &[u8],
-        limits: VerifyLimits,
-    ) -> Result<SharedVerificationWork> {
-        Ok(self.verify_frame_committed(relation, bytes, limits)?.work())
-    }
-
-    /// Publish the full row commitment only after complete successful verification.
-    pub(super) fn verify_frame_committed(
-        self,
-        relation: &impl FixedAir,
-        bytes: &[u8],
-        limits: VerifyLimits,
-    ) -> Result<VerifiedSharedProof> {
-        decode_and_verify_with_allocation_committed(
-            relation,
-            bytes,
-            limits,
-            self.max_decode_allocation_charges,
-        )
-    }
-}
 
 /// Child decoding policy for the sole normal compact proof dispatcher.
 #[derive(Clone, Copy)]
@@ -92,6 +42,17 @@ pub(super) struct DeepVerifier {
 }
 
 impl DeepVerifier {
+    /// Test-only public facade over the same complete canonical verifier.
+    #[cfg(test)]
+    pub(super) fn verify_frame(
+        self,
+        relation: &impl DeepRelation,
+        bytes: &[u8],
+        limits: VerifyLimits,
+    ) -> Result<VerificationWork> {
+        Ok(self.verify_frame_committed(relation, bytes, limits)?.work())
+    }
+
     /// Fixed query count; neither the carrier nor caller can choose a profile.
     #[allow(
         clippy::unused_self,
@@ -138,12 +99,12 @@ pub(super) struct AxtVerificationContext<'a> {
 ///
 /// Only successful typed facade paths construct this result. Its inputs were
 /// supplied by the caller and exactly checked by the selected relation before
-/// the bounded raw-byte verifier authenticated the complete shared proof.
+/// the bounded raw-byte verifier authenticated the complete canonical proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
 pub(super) struct VerifiedPublicTransfer {
     public_io: PublicIO,
-    work: SharedVerificationWork,
+    work: VerificationWork,
 }
 
 #[cfg(test)]
@@ -154,7 +115,7 @@ impl VerifiedPublicTransfer {
     }
 
     /// Return measured bounded verification work, with no private trace replay.
-    pub(super) const fn work(&self) -> SharedVerificationWork {
+    pub(super) const fn work(&self) -> VerificationWork {
         self.work
     }
 }
@@ -176,7 +137,7 @@ pub(super) fn verify_transfer<V: CompactTransferValue>(
         expected,
         proof_bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 32 * 1024 * 1024,
         },
     )
@@ -188,11 +149,17 @@ fn verify_transfer_with<V: CompactTransferValue>(
     expected: &PublicIO,
     proof_bytes: &[u8],
     limits: VerifyLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<VerifiedPublicTransfer> {
     preflight_inputs(prepared, proof_bytes, limits)?;
     require_profile(prepared.semantics(), ProofSemantics::StateTransition)?;
-    let relation = PublicTransferAir::new(prepared, expected)?;
+    let batch = super::compact_public_batch::PublicTransferBatch::new(
+        prepared,
+        expected,
+        &[],
+        super::compact_public_batch::BatchContextLimits::default(),
+    )?;
+    let relation = batch.segment(0)?;
     let work = verifier.verify_frame(&relation, proof_bytes, limits)?;
     Ok(VerifiedPublicTransfer {
         public_io: *expected,
@@ -223,7 +190,7 @@ pub(super) fn verify_axt_transfer<V: CompactTransferValue>(
         &context,
         proof_bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 32 * 1024 * 1024,
         },
     )
@@ -236,18 +203,18 @@ fn verify_axt_transfer_with<V: CompactTransferValue>(
     context: &AxtVerificationContext<'_>,
     proof_bytes: &[u8],
     limits: VerifyLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<VerifiedPublicTransfer> {
     preflight_inputs(prepared, proof_bytes, limits)?;
     require_profile(prepared.semantics(), ProofSemantics::AxtTransferClaim)?;
-    let relation = AxtTransferAir::new(
+    let batch = super::compact_axt_batch::AxtTransferBatch::new(
         prepared,
         expected,
-        context.binding,
-        context.metadata,
-        context.mirrors,
-        context.remote_spend_claims,
+        &[],
+        *context,
+        super::compact_public_batch::BatchContextLimits::default(),
     )?;
+    let relation = batch.segment(0)?;
     let work = verifier.verify_frame(&relation, proof_bytes, limits)?;
     Ok(VerifiedPublicTransfer {
         public_io: *expected,
@@ -270,7 +237,7 @@ pub(super) fn verify_transfer_with_allocation<V: CompactTransferValue>(
         expected,
         proof_bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges,
         },
     )
@@ -297,7 +264,7 @@ pub(super) fn verify_axt_transfer_with_allocation<V: CompactTransferValue>(
         &context,
         proof_bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges,
         },
     )
@@ -349,7 +316,7 @@ fn require_profile(actual: ProofSemantics, required: ProofSemantics) -> Result<(
 mod tests {
     fn final_test_limits() -> crate::VerifyLimits {
         crate::VerifyLimits {
-            max_queries: 375,
+            max_queries: super::super::deep_geometry::QUERY_COUNT,
             ..crate::VerifyLimits::default()
         }
     }
@@ -602,14 +569,15 @@ mod tests {
             ),
             (
                 VerifyLimits {
-                    max_air_row_values: 341,
+                    max_air_row_values: super::super::compact_public_columns::COMMITTED_COLUMN_COUNT
+                        - 1,
                     ..final_test_limits()
                 },
                 "max_air_row_values",
             ),
             (
                 VerifyLimits {
-                    max_queries: 374,
+                    max_queries: super::super::deep_geometry::QUERY_COUNT - 1,
                     ..final_test_limits()
                 },
                 "max_queries",
@@ -621,10 +589,16 @@ mod tests {
         }
         // A private test value exercises only the Copy accessors; it is not a
         // successful facade verification and cannot be constructed by callers.
-        let work = SharedVerificationWork {
+        let work = VerificationWork {
             proof_bytes: 123,
-            air_evaluations: 375,
-            ..SharedVerificationWork::default()
+            air_evaluations: 1,
+            leaf_hashes: 0,
+            parent_hashes: 0,
+            h_calls: 0,
+            verifier_messages: 10,
+            g_tape_bytes: 0,
+            fold_checks: 0,
+            terminal_values: 128,
         };
         let result = VerifiedPublicTransfer {
             public_io: expected,
@@ -650,16 +624,12 @@ mod tests {
         let construction_started = std::time::Instant::now();
         let columns = private_axt_prover_columns(&mut fixture);
         let construction = construction_started.elapsed();
-        let limits = VerifyLimits {
-            max_proof_bytes: 16 * 1024 * 1024,
-            ..final_test_limits()
-        };
-        let (encoded, typed_bytes, proving, conversion) =
-            prove_shared_axt_frame(&fixture, columns, limits);
+        let limits = super::super::deep_fixture::verification_limits();
+        let (encoded, proving) = prove_canonical_axt_frame(&fixture, columns);
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&prepared);
-        assert!(encoded.len() > final_test_limits().max_proof_bytes);
-        assert!(encoded.len() < typed_bytes);
+        assert!(encoded.len() <= final_test_limits().max_proof_bytes);
+        assert!(encoded.len() <= super::super::deep_proof::PROOF_BYTE_TARGET);
         assert!(encoded.len() <= limits.max_proof_bytes);
         assert!(matches!(
             verify_axt_transfer(
@@ -667,7 +637,10 @@ mod tests {
                 &expected,
                 context(&fixture),
                 &encoded,
-                final_test_limits(),
+                VerifyLimits {
+                    max_proof_bytes: encoded.len() - 1,
+                    ..limits
+                },
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
@@ -698,12 +671,12 @@ mod tests {
             .join("../../target/fastpq-production-validation");
         std::fs::create_dir_all(&artifact_dir).unwrap();
         let artifact = artifact_dir.join(format!(
-            "compact-shared-axt-transfer-{}.bin",
+            "compact-q77-axt-transfer-{}.bin",
             hex::encode(Sha256::digest(&encoded))
         ));
         std::fs::write(&artifact, &encoded).unwrap();
         eprintln!(
-            "compact_axt_construction={construction:?}; proving={proving:?}; shared_conversion={conversion:?}; raw_facade_verifying={verifying:?}; typed_bytes={typed_bytes}; work={work:?}; default_admitted=false; diagnostic_limit={}; production_security_qualified=false; public_fixture_artifact={}",
+            "compact_axt_construction={construction:?}; proving={proving:?}; raw_facade_verifying={verifying:?}; work={work:?}; diagnostic_limit={}; production_security_qualified=false; public_fixture_artifact={}",
             limits.max_proof_bytes,
             artifact.display()
         );
@@ -713,10 +686,11 @@ mod tests {
     ///
     /// Every private path, witness and witness-bearing transcript is scoped
     /// here. Only exact prover columns leave this function.
-    fn private_axt_prover_columns(fixture: &mut Fixture) -> Vec<Vec<u64>> {
+    fn private_axt_prover_columns(
+        fixture: &mut Fixture,
+    ) -> super::super::deep_trace_source::OwnedTraceSource {
         use crate::gadgets::{
-            compact_smt_air::{COLUMN_COUNT, PATH_LEVELS, PHYSICAL_ROW_COUNT, SmtWitness},
-            compact_trace_columns::smt_row_cells,
+            compact_smt_air::{PATH_LEVELS, SmtWitness},
             public_transfer_statement::{PublicTransferLimits, public_claims_from_transcripts},
             transfer::attach_transfer_smt_witnesses,
         };
@@ -785,32 +759,14 @@ mod tests {
         let witness = SmtWitness::from_inputs(&statements[0], &siblings)
             .unwrap()
             .into_physical();
-        let mut columns = (0..COLUMN_COUNT)
-            .map(|_| Vec::with_capacity(PHYSICAL_ROW_COUNT))
-            .collect::<Vec<_>>();
-        for row in witness.rows() {
-            for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-                column.push(value);
-            }
-        }
-        columns
+        super::super::deep_trace_source::OwnedTraceSource::from_rows(witness.rows()).unwrap()
     }
 
-    /// Prove the fixture's AXT relation and convert it to one canonical shared frame.
-    ///
-    /// Proving AIR, typed proof, shared DTO and public preparation all leave
-    /// scope on return. The facade receives only original public facts and
-    /// one canonical raw frame, never a retained prover/verifier object.
-    fn prove_shared_axt_frame(
+    /// Construct the exact AXT frame; consumed private source drops before return.
+    fn prove_canonical_axt_frame(
         fixture: &Fixture,
-        columns: Vec<Vec<u64>>,
-        limits: VerifyLimits,
-    ) -> (Vec<u8>, usize, std::time::Duration, std::time::Duration) {
-        use crate::backend::{
-            compact_axt_context::encode_context,
-            compact_protocol::{self, FixedAir, shared_openings},
-        };
-
+        source: super::super::deep_trace_source::OwnedTraceSource,
+    ) -> (Vec<u8>, std::time::Duration) {
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&prepared);
         let air = AxtTransferAir::new(
@@ -835,7 +791,7 @@ mod tests {
         );
         assert_eq!(
             air.statement_bytes(),
-            encode_context(
+            crate::backend::compact_axt_context::encode_context(
                 &prepared,
                 &expected,
                 &fixture.binding,
@@ -845,20 +801,26 @@ mod tests {
             )
             .unwrap()
         );
-        let proving_started = std::time::Instant::now();
-        let proof = compact_protocol::prove(&air, &columns).unwrap();
-        let proving = proving_started.elapsed();
-        drop(columns);
-        let typed_bytes = norito::core::encoded_frame_len(&proof).unwrap();
-        let conversion_started = std::time::Instant::now();
-        let shared = shared_openings::from_compact(&air, &proof, limits).unwrap();
-        let encoded = norito::core::to_bytes(&shared).unwrap();
+        let batch = super::super::compact_axt_batch::AxtTransferBatch::new(
+            &prepared,
+            &expected,
+            &[],
+            context(fixture),
+            super::super::compact_public_batch::BatchContextLimits::default(),
+        )
+        .unwrap();
+        let relation = batch.segment(0).unwrap();
+        let started = std::time::Instant::now();
+        let encoded = super::super::deep_fixture::prove(&relation, source, 0x077_a17).unwrap();
+        let proof =
+            super::super::deep_proof::decode(&encoded, super::super::deep_proof::PROOF_BYTE_TARGET)
+                .unwrap();
         assert_eq!(
             encoded.len(),
-            norito::core::encoded_frame_len(&shared).unwrap()
+            norito::core::encoded_frame_len(&proof).unwrap()
         );
-        let conversion = conversion_started.elapsed();
-        (encoded, typed_bytes, proving, conversion)
+        assert_eq!(norito::encode_canonical(&proof).unwrap(), encoded);
+        (encoded, started.elapsed())
     }
 
     /// Check the verified public result and its measured bounded opening work.
@@ -866,39 +828,33 @@ mod tests {
         verified: &VerifiedPublicTransfer,
         expected: PublicIO,
         proof_bytes: usize,
-    ) -> SharedVerificationWork {
-        use crate::gadgets::compact_smt_air::PHYSICAL_ROW_COUNT;
-
+    ) -> VerificationWork {
+        use super::super::deep_geometry::{FRI_ARITIES, FRI_LENGTHS, LDE_ROWS, QUERY_COUNT};
         let work = verified.work();
-        let queries = 375;
         assert_eq!(
-            SharedVerifier {
-                max_decode_allocation_charges: 64 * 1024 * 1024
+            DeepVerifier {
+                max_decode_allocation_charges: 32 * 1024 * 1024
             }
             .queries(),
-            queries
+            QUERY_COUNT
         );
         assert_eq!(verified.public_io(), expected);
         assert_eq!(work.proof_bytes, proof_bytes);
-        assert_eq!(work.transcripts, 1);
-        assert_eq!(work.air_evaluations, queries);
-        assert!((queries..=2 * queries).contains(&work.row_leaves));
-        assert_eq!(work.oracle_leaves, 2 * queries);
-        assert_eq!(work.terminal_degree_checks, 1);
-        let lde_rows = PHYSICAL_ROW_COUNT * fastpq_isi::FASTPQ_FINAL_V1.fri.blowup_factor as usize;
-        let mut length = lde_rows;
-        let mut fri_leaf_bound = 1; // One complete terminal leaf.
-        let mut parent_bound =
-            (work.row_leaves + work.oracle_leaves) * lde_rows.ilog2() as usize + 1;
-        while length > fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize {
-            let leaves = length / 2;
-            let groups = queries.min(leaves);
-            fri_leaf_bound += groups;
+        assert_eq!(work.air_evaluations, 1);
+        assert_eq!(work.verifier_messages, 10);
+        assert_eq!(work.terminal_values, 128);
+        let mut leaf_bound = 2 * QUERY_COUNT + 1;
+        let mut parent_bound = 2 * QUERY_COUNT * LDE_ROWS.ilog2() as usize + 1;
+        for (&length, &arity) in FRI_LENGTHS.iter().zip(FRI_ARITIES.iter()) {
+            let leaves = length / arity;
+            let groups = QUERY_COUNT.min(leaves);
+            leaf_bound += groups;
             parent_bound += groups * (leaves.ilog2() as usize).max(1);
-            length /= 2;
         }
-        assert!((1..=fri_leaf_bound).contains(&work.fri_leaves));
+        assert!((2 * QUERY_COUNT + 1..=leaf_bound).contains(&work.leaf_hashes));
         assert!((1..=parent_bound).contains(&work.parent_hashes));
+        assert!(work.fold_checks >= QUERY_COUNT);
+
         work
     }
 
@@ -1001,8 +957,8 @@ mod tests {
 
     fn final_limits() -> VerifyLimits {
         VerifyLimits {
-            max_proof_bytes: 4_326_227,
-            max_queries: 375,
+            max_proof_bytes: super::super::deep_proof::MAX_FRAME_BYTES,
+            max_queries: super::super::deep_geometry::QUERY_COUNT,
             ..final_test_limits()
         }
     }
@@ -1026,14 +982,15 @@ mod tests {
             ),
             (
                 VerifyLimits {
-                    max_air_row_values: 341,
+                    max_air_row_values: super::super::compact_public_columns::COMMITTED_COLUMN_COUNT
+                        - 1,
                     ..final_limits()
                 },
                 "max_air_row_values",
             ),
             (
                 VerifyLimits {
-                    max_queries: 374,
+                    max_queries: super::super::deep_geometry::QUERY_COUNT - 1,
                     ..final_limits()
                 },
                 "max_queries",
@@ -1123,11 +1080,11 @@ mod tests {
         }
         for max_decode_allocation_charges in [0, 1, 32 * 1024 * 1024, usize::MAX] {
             assert_eq!(
-                SharedVerifier {
+                DeepVerifier {
                     max_decode_allocation_charges
                 }
                 .queries(),
-                375
+                super::super::deep_geometry::QUERY_COUNT
             );
         }
     }

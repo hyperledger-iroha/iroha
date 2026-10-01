@@ -109,7 +109,7 @@ fn geometry_extends_the_exact_existing_subgroup_and_preserves_every_fold() {
     assert_eq!(field_pow(LDE_ROOT, LDE_ROWS as u64), 1);
     assert_ne!(field_pow(LDE_ROOT, (LDE_ROWS / 2) as u64), 1);
     assert_ne!(field_pow(COSET_OFFSET, LDE_ROWS as u64), 1);
-    assert_eq!((QUERY_COUNT, QUERY_CANDIDATES, CONSTRAINTS), (64, 74, 923));
+    assert_eq!((QUERY_COUNT, QUERY_CANDIDATES, CONSTRAINTS), (77, 87, 923));
     let mut domain = geometry.domain();
     for (round, arity) in FRI_ARITIES.into_iter().enumerate() {
         assert_eq!(field_pow(domain.generator, FRI_LENGTHS[round] as u64), 1);

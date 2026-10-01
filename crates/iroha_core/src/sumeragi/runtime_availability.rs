@@ -298,4 +298,4 @@ fn admit_lane_authority(crypto: &BlsCrypto, authority: &LaneAuthority) -> io::Re
 
 #[cfg(test)]
 #[path = "runtime_availability/tests.rs"]
-mod tests;
+pub(in crate::sumeragi) mod tests;

@@ -99,7 +99,7 @@ fn state_certificate_checks_quorum_and_signed_availability_after_execution_authe
     let original = frame(&chain, 4);
     let parent = chain.committed(3);
     reader
-        .verify_executed_successor(parent.clone(), read_frame(original.clone(), 4).unwrap())
+        .verify_executed_successor(&parent, read_frame(original.clone(), 4).unwrap())
         .unwrap();
     let (_, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();
     for signers in [Signers::BelowQuorum, Signers::All] {
@@ -108,14 +108,14 @@ fn state_certificate_checks_quorum_and_signed_availability_after_execution_authe
         });
         assert!(
             reader
-                .verify_executed_successor(parent.clone(), read_frame(changed, 4).unwrap())
+                .verify_executed_successor(&parent, read_frame(changed, 4).unwrap())
                 .is_err()
         );
     }
     let forged = with_parts(&original, |_, qc, _| qc.agg_sig.0[5] ^= 1);
     assert!(
         reader
-            .verify_executed_successor(parent.clone(), read_frame(forged, 4).unwrap())
+            .verify_executed_successor(&parent, read_frame(forged, 4).unwrap())
             .is_err()
     );
     let certificate = original.commit_certificate().unwrap();
@@ -140,7 +140,8 @@ fn state_certificate_checks_quorum_and_signed_availability_after_execution_authe
         )));
         assert!(
             read_frame(changed, 4)
-                .and_then(|current| reader.verify_executed_successor(parent.clone(), current))
+                .map_err(VerificationReadError::from)
+                .and_then(|current| reader.verify_executed_successor(&parent, current))
                 .is_err()
         );
     }
@@ -167,7 +168,7 @@ fn state_certificate_verifies_actual_attested_npos_boundary() {
     });
     assert!(
         reader
-            .verify_executed_successor(chain.committed(9), read_frame(forged, 10).unwrap())
+            .verify_executed_successor(&chain.committed(9), read_frame(forged, 10).unwrap())
             .is_err()
     );
 }
@@ -299,4 +300,216 @@ fn state_certificate_source_allowance_includes_genesis_and_recent_ancestry() {
             }
         }
     }
+}
+
+#[test]
+fn state_certificate_selected_ancestor_reuses_original_walk_and_adjacent_parent() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let latest_id = chain.committed(5).id();
+    for selected in [None, Some(4_usize), Some(3), Some(2)] {
+        let last = selected.unwrap_or(5) - 1;
+        let source_heights = (last as u64..=5).rev().collect::<Vec<_>>();
+        let source_bytes = source_heights
+            .iter()
+            .map(|h| frame(&chain, *h).encode_wire().unwrap().len() as u64)
+            .sum::<u64>();
+        for refused in [true, false] {
+            let mut work_left = source_heights.len() as u64 - u64::from(refused);
+            let mut bytes_left = source_bytes;
+            let (result, observed) = relation_counts::measure(|| {
+                reader.certified_with_ancestor_from_execution(
+                    NonZeroUsize::new(5).unwrap(),
+                    |work, bytes| {
+                        work_left = work_left
+                            .checked_sub(work)
+                            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                        bytes_left = bytes_left
+                            .checked_sub(bytes)
+                            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                        Ok(())
+                    },
+                    |latest| {
+                        assert_eq!(latest.id(), latest_id);
+                        Ok(selected.and_then(NonZeroUsize::new))
+                    },
+                )
+            });
+            if refused {
+                assert!(matches!(result, Err(QueryExecutionFail::GasBudgetExceeded)));
+            } else {
+                let (latest, ancestor) = result.unwrap();
+                assert_eq!(latest.id(), latest_id);
+                assert_eq!(
+                    ancestor.as_ref().map(|block| block.height()),
+                    selected.map(|h| h as u64)
+                );
+                assert_eq!(observed.frames, source_heights);
+                assert_eq!(
+                    observed.qcs,
+                    [Some(5), selected.map(|h| h as u64)]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!((work_left, bytes_left), (0, 0));
+            }
+        }
+    }
+    for invalid in [1, 5, 6] {
+        assert!(
+            reader
+                .certified_with_ancestor_from_execution(
+                    NonZeroUsize::new(5).unwrap(),
+                    |_, _| Ok(()),
+                    |_| Ok(NonZeroUsize::new(invalid)),
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn state_certificate_selected_ancestor_checks_both_native_quorums() {
+    for bad_height in [3, 5] {
+        for signers in [Signers::BelowQuorum, Signers::All] {
+            let (chain, _) = chain();
+            chain.corrupt_local_quorum_for_test(bad_height, signers);
+            let view = chain.state().view();
+            let reader = CertifiedChain::new(&view).unwrap();
+            assert!(
+                reader.committed(bad_height).is_ok(),
+                "original execution remains authenticated"
+            );
+            let mut selected = false;
+            let result = reader.certified_with_ancestor_from_execution(
+                NonZeroUsize::new(5).unwrap(),
+                |_, _| Ok(()),
+                |_| {
+                    selected = true;
+                    Ok(NonZeroUsize::new(3))
+                },
+            );
+            assert!(
+                result.is_err(),
+                "both requested certificates require the exact native quorum"
+            );
+            assert_eq!(
+                selected,
+                bad_height != 5,
+                "selector must not see an unverified target"
+            );
+        }
+    }
+}
+
+#[test]
+fn state_certificate_signed_availability_scratch_uses_original_query_allowance() {
+    use iroha_allocation::AllocationBudget;
+    use iroha_sumeragi::availability::PayloadBytes;
+
+    let (chain, _) = chain();
+    let source = frame(&chain, 3);
+    let current = read_frame(Arc::clone(&source), 3).unwrap();
+    let parent = chain.committed(2);
+    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
+        panic!("original executed parent authorizes height 3");
+    };
+    let config = scheduled.height_config().unwrap();
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 3).unwrap();
+    let budget = AllocationBudget::new(1 << 26);
+    let artifacts = artifacts::PrefixArtifactsRead::new(Arc::clone(&source), budget.clone())
+        .complete(&budget)
+        .unwrap_or_else(|(_, error)| panic!("original artifact owners: {error}"));
+    let (_, table, payload) = artifacts
+        .into_parts(&source, current.header.as_ref().unwrap())
+        .unwrap();
+    let retained = budget.reserved_bytes();
+    assert!(table.admitted_to(&budget) && payload.admitted_to(&budget));
+    let verified = iroha_sumeragi::availability::verify_availability(
+        current.header.as_ref().unwrap().instance,
+        &config,
+        current.header.as_ref().unwrap(),
+        table.as_slice(),
+        &authority.crypto,
+    )
+    .unwrap();
+    let shape = verified.shape();
+    let scratch = shape.encoded_bytes() + shape.workspace_words() * size_of::<u16>();
+    let check = |limit, bytes: &PayloadBytes| {
+        norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 128),
+            || {
+                verify_availability(
+                    &current,
+                    &config,
+                    &authority.crypto,
+                    Some((table.clone(), bytes.clone())),
+                    &mut crate::sumeragi::certified_chain::state_certificate::query_scratch_admission,
+                )
+            },
+        )
+    };
+    assert!(matches!(
+        check(scratch - 1, &payload),
+        Err(VerificationReadError::Resource(
+            norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit }
+        )) if attempted == scratch as u64 && limit == (scratch - 1) as u64
+    ));
+    assert_eq!(budget.reserved_bytes(), retained);
+    check(scratch, &payload).expect("same source and original owners retry at the exact allowance");
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert!(Arc::ptr_eq(&current.block, &source));
+
+    let mut corrupt = payload.as_slice().to_vec();
+    corrupt[0] ^= 1;
+    let mut corrupt = PayloadBytes::from_untrusted(corrupt).unwrap();
+    corrupt.admit(&budget).unwrap();
+    assert!(matches!(
+        check(scratch, &corrupt),
+        Err(VerificationReadError::Source(
+            ChainReadError::Malformed { .. }
+        ))
+    ));
+    drop((corrupt, payload, table));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn state_certificate_native_qc_decode_refusal_is_capacity_and_retries_original_source() {
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let current = chain.committed(3);
+    let parent = chain.committed(2);
+    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
+        panic!("original parent authorizes the source");
+    };
+    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 3).unwrap();
+    let config = scheduled.height_config().unwrap();
+    let check = |field_limit| {
+        norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, field_limit, usize::MAX, usize::MAX, 128),
+            || {
+                reader.verification_context().verify_certificate_with_scratch_admission(
+                    current.clone(),
+                    &authority,
+                    Some(&config),
+                    None,
+                    &mut crate::sumeragi::certified_chain::state_certificate::query_scratch_admission,
+                )
+            },
+        )
+    };
+    assert!(matches!(
+        check(1),
+        Err(VerificationReadError::Resource(
+            norito::core::DecodeResourceError::FieldLengthExceeded { limit: 1, .. }
+        ))
+    ));
+    let certified =
+        check(usize::MAX).expect("exact original source retries without a new authority");
+    assert_eq!(certified.id(), current.id());
+    assert!(Arc::ptr_eq(certified.block(), current.block()));
 }

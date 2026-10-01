@@ -8,18 +8,19 @@
 //! Pending observation, canonical block admission, pristine finality effects and restored
 //! evidence use this original-history verifier. TODO(S8 release blocker): retain all decoded
 //! evidence/context allocations in the original preparation pool; source-read accounting alone
-//! does not fund that graph. Lane evidence additionally needs its native lane history owner.
+//! does not fund that graph. Native lane evidence retains its original source and branch owner;
+//! that owner does not yet fund every decoded proof and cryptographic allocation.
 
 use std::num::NonZeroUsize;
 
+use iroha_data_model::block::consensus::{EvidenceOffender, EvidenceScope};
 use iroha_data_model::query::error::QueryExecutionFail;
-use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
     api::CommittedTip,
     evidence::{EvidenceContext, EvidenceError, verify_evidence},
     message::Evidence,
     topology::demotion_window,
-    types::{EpochId, Hash32, ValidatorIndex},
+    types::{EpochId, Hash32},
 };
 
 use super::{
@@ -34,6 +35,9 @@ pub(crate) enum NativeEvidenceError {
     /// Original history is missing, corrupt or refused by the supplied source budget.
     #[error("native evidence history: {0}")]
     History(QueryExecutionFail),
+    /// Retained lane source I/O or local capacity refusal; never blame the signed report.
+    #[error("native lane evidence source: {0}")]
+    Source(std::io::Error),
     /// The requested subject or its authenticated schedule is inconsistent.
     #[error("native evidence context: {0}")]
     Context(String),
@@ -46,15 +50,49 @@ pub(crate) enum NativeEvidenceError {
 /// Finality application must bind the retained observation to its original State cut.
 #[derive(Debug)]
 pub(crate) struct VerifiedNativeEvidence {
+    scope: EvidenceScope,
     tip: NativeExecutionTip,
     instance: Hash32,
     epoch: EpochId,
     authority_generation: Hash32,
     height: u64,
-    offenders: Vec<(ValidatorIndex, PeerId)>,
+    offenders: Vec<EvidenceOffender>,
     safety_violation: bool,
 }
 impl VerifiedNativeEvidence {
+    /// Original root or lane admission cut, authenticated independently of signed proof bytes.
+    pub(crate) fn scope(&self) -> EvidenceScope {
+        self.scope
+    }
+    /// Move verified signer owners into the canonical attribution without cloning them.
+    pub(crate) fn into_attribution(
+        self,
+    ) -> iroha_data_model::block::consensus::EvidenceAttribution {
+        iroha_data_model::block::consensus::EvidenceAttribution {
+            scope: self.scope,
+            instance: self.instance.0,
+            height: self.height,
+            epoch: self.epoch.epoch,
+            context_id: self.epoch.context.0,
+            authority_generation: self.authority_generation.0,
+            offenders: self.offenders,
+            safety_violation: self.safety_violation,
+        }
+    }
+    /// Compare a restored claim with the full verified value without cloning its signer graph.
+    pub(crate) fn matches_attribution(
+        &self,
+        claim: &iroha_data_model::block::consensus::EvidenceAttribution,
+    ) -> bool {
+        self.scope == claim.scope
+            && self.instance.0 == claim.instance
+            && self.height == claim.height
+            && self.epoch.epoch == claim.epoch
+            && self.epoch.context.0 == claim.context_id
+            && self.authority_generation.0 == claim.authority_generation
+            && self.offenders == claim.offenders
+            && self.safety_violation == claim.safety_violation
+    }
     /// Original execution cut from which all historical authority was authenticated.
     pub(crate) fn tip(&self) -> NativeExecutionTip {
         self.tip
@@ -76,7 +114,7 @@ impl VerifiedNativeEvidence {
         self.height
     }
     /// Every directly accountable signer in authenticated historical committee order.
-    pub(crate) fn offenders(&self) -> &[(ValidatorIndex, PeerId)] {
+    pub(crate) fn offenders(&self) -> &[EvidenceOffender] {
         &self.offenders
     }
     /// Conflicting certified results demand a safety halt, even without attributable overlap.
@@ -272,10 +310,15 @@ pub(crate) fn verify_from_state(
                 .ok_or_else(|| {
                     invalid("verified signer is absent from its historical committee")
                 })?;
-            Ok((signer, member.validator.clone()))
+            Ok(EvidenceOffender {
+                signer,
+                peer_id: member.validator.clone(),
+                lane_stake: None,
+            })
         })
         .collect::<Result<Vec<_>, NativeEvidenceError>>()?;
     Ok(VerifiedNativeEvidence {
+        scope: EvidenceScope::Root,
         tip,
         instance,
         epoch: config.epoch.id,
@@ -285,6 +328,10 @@ pub(crate) fn verify_from_state(
         safety_violation: attribution.safety_violation(),
     })
 }
+
+mod lane;
+mod lane_read;
+pub(crate) use lane_read::LaneEvidenceRead;
 
 #[cfg(test)]
 mod tests;

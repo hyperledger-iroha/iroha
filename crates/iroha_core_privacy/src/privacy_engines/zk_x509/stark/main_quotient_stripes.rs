@@ -1,6 +1,7 @@
 //! Bounded interleaved quotient cosets with unchanged full-domain row order.
 
 use super::*;
+#[cfg(test)]
 use crate::privacy_engines::transparent_stark::goldilocks_fft_v1;
 
 /// Maximum live rows per trace column while evaluating one registration.
@@ -58,30 +59,49 @@ impl MainQuotientStripeV1 {
     ///
     /// Folding `a_k * shift^k` into lane `k mod rows` before the FFT evaluates
     /// the original polynomial exactly; truncating coefficients would be wrong.
+    #[cfg(test)]
     pub(super) fn evaluate_v1(
         self,
         coefficients: &[F],
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
-        if coefficients
-            .iter()
-            .any(|value| F::canonical(value.0).is_none())
-        {
-            return Err(ZkX509StarkErrorV1::ProfileMismatch);
-        }
         let mut values = ZeroizingMainTraceColumnV1(Vec::new());
         values
             .0
             .try_reserve_exact(self.rows)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         values.0.resize(self.rows, F::ZERO);
+        self.fold_into_v1(coefficients, &mut values)?;
+        goldilocks_fft_v1(&mut values, self.root).map_err(map_transparent_error_v1)?;
+        Ok(values)
+    }
+    /// Fold every shifted coefficient into its exact stripe lane, including
+    /// masked coefficients above the stripe degree. No output allocation lives
+    /// outside the caller's already admitted clearing matrix.
+    pub(super) fn fold_into_v1(
+        self,
+        coefficients: &[F],
+        values: &mut [F],
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        if self.rows < 2
+            || !self.rows.is_power_of_two()
+            || self.rows > 1 << MAIN_QUOTIENT_STRIPE_LOG2_V1
+            || values.len() != self.rows
+            || F::canonical(self.shift.0).is_none()
+            || self.shift == F::ZERO
+            || coefficients
+                .iter()
+                .any(|value| F::canonical(value.0).is_none())
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        values.fill(F::ZERO);
         let mut shift_power = F::ONE;
         for (index, coefficient) in coefficients.iter().enumerate() {
             let lane = index % self.rows;
             values[lane] = values[lane].add(coefficient.mul(shift_power));
             shift_power = shift_power.mul(self.shift);
         }
-        goldilocks_fft_v1(&mut values, self.root).map_err(map_transparent_error_v1)?;
-        Ok(values)
+        Ok(())
     }
 }
 
@@ -89,6 +109,39 @@ impl MainQuotientStripeV1 {
 mod tests {
     use super::*;
     use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+
+    #[test]
+    fn folded_coefficient_adapter_rejects_bad_shapes_before_private_output_mutation() {
+        let valid = MainQuotientStripeV1::new_v1(2, 4, 0).unwrap();
+        for (stripe, coefficients, rows) in [
+            (valid, vec![F(GOLDILOCKS_MODULUS_V1)], 16),
+            (valid, vec![F::ONE], 15),
+            (MainQuotientStripeV1 { rows: 0, ..valid }, vec![F::ONE], 16),
+            (
+                MainQuotientStripeV1 {
+                    shift: F::ZERO,
+                    ..valid
+                },
+                vec![F::ONE],
+                16,
+            ),
+            (
+                MainQuotientStripeV1 {
+                    shift: F(GOLDILOCKS_MODULUS_V1),
+                    ..valid
+                },
+                vec![F::ONE],
+                16,
+            ),
+        ] {
+            let mut values = vec![F(19); rows];
+            assert!(stripe.fold_into_v1(&coefficients, &mut values).is_err());
+            assert_eq!(values, vec![F(19); rows]);
+        }
+        let mut values = vec![F(19); 16];
+        valid.fold_into_v1(&[], &mut values).unwrap();
+        assert_eq!(values, vec![F::ZERO; 16]);
+    }
 
     #[test]
     fn interleaved_stripes_preserve_full_domain_indices_and_native_translation() {

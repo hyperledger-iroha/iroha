@@ -157,29 +157,58 @@ mod tests {
             let source = validate(&view, &budget, work()).unwrap();
             source.capture_tables_candidate(leaves(), 3).unwrap()
         };
+        // Resolver and directory revisions need not equal the availability revision.
+        // Advance the source revision instead of assuming the seed starts at one.
+        let next_revision = world
+            .musubi_resolver_index_revision
+            .view()
+            .get()
+            .get()
+            .checked_add(1)
+            .expect("fixture revision can advance");
         let mut block = world.block();
         let availability = block.musubi_archive_availability.get_mut(&archive).unwrap();
-        availability.index_revision = 2;
+        let old_availability = MusubiAvailabilityAuthorityV1::from_record(availability);
+        availability.index_revision = next_revision;
         availability.finalized_block_hash[0] ^= 1;
+        assert_ne!(
+            old_availability,
+            MusubiAvailabilityAuthorityV1::from_record(availability)
+        );
         let availability = *availability;
         let resolver = block.musubi_resolver_index.get_mut(&release).unwrap();
-        resolver.index_revision = 2;
+        let old_resolver = MusubiResolverAuthorityV1::from_record(resolver);
+        resolver.index_revision = next_revision;
         resolver.selection.storage = availability;
-        block
-            .musubi_public_directory
-            .get_mut(&selector)
-            .unwrap()
-            .index_revision = 2;
+        assert_ne!(
+            old_resolver,
+            MusubiResolverAuthorityV1::from_record(resolver)
+        );
+        let directory = block.musubi_public_directory.get_mut(&selector).unwrap();
+        let old_directory = MusubiDirectoryAuthorityV1::from_record(directory);
+        directory.index_revision = next_revision;
+        assert_ne!(
+            old_directory,
+            MusubiDirectoryAuthorityV1::from_record(directory)
+        );
         *block.musubi_resolver_index_revision.get_mut() =
-            MusubiResolverIndexRevisionV1::new(2).unwrap();
+            MusubiResolverIndexRevisionV1::new(next_revision).unwrap();
         block.commit();
         let view = world.view();
         let source = validate(&view, &budget, work()).unwrap();
         let changed = source.capture_tables_candidate(leaves(), 3).unwrap();
-        for (old, changed) in old.iter().zip(&changed) {
-            assert_ne!(old.root(), changed.root());
-            assert_ne!(old.lookup_root(), changed.lookup_root());
-            assert_ne!(old.ordered_root(), changed.ordered_root());
+        for ((old, changed), table) in old.iter().zip(&changed).zip(TABLES) {
+            assert_ne!(old.root(), changed.root(), "{table}: paired root");
+            assert_ne!(
+                old.lookup_root(),
+                changed.lookup_root(),
+                "{table}: lookup root"
+            );
+            assert_ne!(
+                old.ordered_root(),
+                changed.ordered_root(),
+                "{table}: ordered root"
+            );
         }
         drop(changed);
         drop(old);

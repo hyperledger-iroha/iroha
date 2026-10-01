@@ -444,8 +444,11 @@ impl MainProverBufferPlanV1 {
             product(&[aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, rows, field])?,
             product(&[2, maximum_native, field])?,
         ])?;
-        // DEEP has no common-domain evaluation batch: two point-power arrays
-        // and two weighted arrays per lane replace that reserved storage.
+        // Keep the former coefficient replay allowance unchanged. Native DEEP
+        // charges its Lagrange weights, mask powers, bounded native batch and
+        // weighted arrays by actual capacity inside this envelope. The temporary
+        // inversion prefix ends before the weighted/native batch lifetime starts;
+        // no common-domain evaluation matrix is allocated during DEEP.
         let deep_replay = sum(&[
             product(&[
                 2 + 2 * SECURITY_LANES,
@@ -516,6 +519,15 @@ impl MainProverBufferPlanV1 {
                 plan.openings,
             ])?),
         ])?;
+        // Joined finalization runs after its coefficient/FFT batch has dropped.
+        // Its bounded digest tile, exact-level prefixes and named worker
+        // temporaries reuse this unchanged reservation, never a second matrix.
+        if aggregate::streaming_row_finalization_payload_bound_v1()
+            .map_err(map_aggregate_error_v1)?
+            > replay_batch
+        {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
         let ceiling =
             usize::try_from(super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;

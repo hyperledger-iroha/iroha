@@ -12,7 +12,10 @@
 pub(crate) mod joined_trace;
 use super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::privacy_outer_hash::PrivacyOuterLastFieldStreamV1;
+use super::privacy_outer_hash::{PrivacyOuterDomainPrefixV1, PrivacyOuterLastFieldStreamV1};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "aggregate_stark/streaming_commitment.rs"]
+mod streaming_commitment;
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
     PrivacyOuterDigestV1, PrivacyOuterMerkleTreeV1, TransparentStarkDigestContextV1,
@@ -26,12 +29,10 @@ use super::transparent_stark::{
 use super::transparent_stark::{
     ReplayableTraceMaskV1, masked_trace_coefficients_on_coset_v1,
     masked_trace_coefficients_with_mask_v1, masked_trace_lde_column_with_mask_v1,
-    sample_trace_mask_v1,
+    privacy_outer_last_field_stream_v1, sample_trace_mask_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::transparent_stark::{
-    goldilocks_ifft_v1, map_digest_stream_error_v1, privacy_outer_last_field_stream_v1,
-};
+use super::transparent_stark::{goldilocks_ifft_v1, map_digest_stream_error_v1};
 use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
@@ -1729,8 +1730,7 @@ pub(crate) struct StreamingMerkleCommitmentV1 {
 /// `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct StreamingMerkleAccumulatorV1 {
-    context: TransparentStarkDigestContextV1,
-    node_role: &'static [u8],
+    node_prefixes: Vec<PrivacyOuterDomainPrefixV1>,
     leaf_count: usize,
     next_leaf: usize,
     pending: Vec<Option<PrivacyOuterDigestV1>>,
@@ -1762,6 +1762,30 @@ impl StreamingMerkleAccumulatorV1 {
         }
         let height = usize::try_from(leaf_count.ilog2())
             .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+        let mut node_prefixes = Vec::new();
+        node_prefixes
+            .try_reserve_exact(height)
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        if node_prefixes.capacity() > usize::BITS as usize {
+            return Err(AggregateStarkErrorV1::AllocationFailure);
+        }
+        let catalog = context.catalog_v1();
+        for level in 1..=height {
+            let domain = context
+                .domain_v1(
+                    &catalog,
+                    node_role,
+                    b"binary-merkle-node",
+                    level as u64,
+                    0,
+                    0,
+                )
+                .map_err(map_transparent_error_v1)?;
+            node_prefixes.push(
+                PrivacyOuterDomainPrefixV1::new(domain)
+                    .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
+            );
+        }
         let mut frontier_positions = BTreeMap::new();
         let mut current = opening_indices.iter().copied().collect::<BTreeSet<_>>();
         let mut level_size = leaf_count;
@@ -1807,8 +1831,7 @@ impl StreamingMerkleAccumulatorV1 {
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
         frontier.resize(frontier_len, None);
         Ok(Self {
-            context,
-            node_role,
+            node_prefixes,
             leaf_count,
             next_leaf: 0,
             pending,
@@ -1834,16 +1857,30 @@ impl StreamingMerkleAccumulatorV1 {
         }
         Ok(())
     }
-    /// Append the next leaf digest.
-    pub(crate) fn append_leaf(
+    /// Append one complete aligned subtree whose lower frontier was captured.
+    fn append_subtree_v1(
         &mut self,
+        mut level: usize,
         mut node: PrivacyOuterDigestV1,
     ) -> Result<(), AggregateStarkErrorV1> {
-        if self.next_leaf >= self.leaf_count {
+        let subtree_leaves = 1usize
+            .checked_shl(
+                u32::try_from(level).map_err(|_| AggregateStarkErrorV1::InvalidProofShape)?,
+            )
+            .ok_or(AggregateStarkErrorV1::InvalidProofShape)?;
+        if !self.next_leaf.is_multiple_of(subtree_leaves)
+            || self
+                .next_leaf
+                .checked_add(subtree_leaves)
+                .is_none_or(|end| end > self.leaf_count)
+            || self
+                .pending
+                .get(..level)
+                .is_none_or(|slots| slots.iter().any(Option::is_some))
+        {
             return Err(AggregateStarkErrorV1::InvalidProofShape);
         }
-        let mut index = self.next_leaf;
-        let mut level = 0_usize;
+        let mut index = self.next_leaf >> level;
         self.capture(level, index, node)?;
         loop {
             let slot = self
@@ -1860,22 +1897,19 @@ impl StreamingMerkleAccumulatorV1 {
                 .take()
                 .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
             let parent_index = index >> 1;
-            node = privacy_outer_merkle_node_v1(
-                self.context,
-                self.node_role,
-                u64::try_from(level + 1).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
-                u64::try_from(parent_index).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
-                left,
-                node,
-            )
-            .map_err(map_transparent_error_v1)?;
+            node = self
+                .node_prefixes
+                .get(level)
+                .ok_or(AggregateStarkErrorV1::InternalInvariant)?
+                .hash_at_with_counter(parent_index as u64, 0, &[left.as_bytes(), node.as_bytes()])
+                .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
             index = parent_index;
             level += 1;
             self.capture(level, index, node)?;
         }
         self.next_leaf = self
             .next_leaf
-            .checked_add(1)
+            .checked_add(subtree_leaves)
             .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
         Ok(())
     }
@@ -1914,10 +1948,15 @@ where
 {
     let mut accumulator =
         StreamingMerkleAccumulatorV1::new(context, node_role, leaf_count, opening_indices)?;
-    for leaf in leaves {
-        accumulator.append_leaf(leaf?)?;
-    }
+    streaming_commitment::append_leaves_v1(&mut accumulator, leaves.into_iter())?;
     accumulator.finish()
+}
+/// Fixed finalization scratch, including named worker temporaries and prefixes.
+/// The row-state allocation itself remains charged separately by its caller.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn streaming_row_finalization_payload_bound_v1() -> Result<usize, AggregateStarkErrorV1>
+{
+    streaming_commitment::payload_bound_v1()
 }
 /// Result of one column-streamed vector-row commitment pass.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1986,20 +2025,29 @@ impl StreamingRowCommitmentV1 {
         digest_streams
             .try_reserve_exact(rows)
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        for row_index in 0..rows {
-            digest_streams.push(
-                privacy_outer_last_field_stream_v1(
-                    context,
-                    leaf_role,
-                    b"vector-row-leaf",
-                    0,
-                    u64::try_from(row_index).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
-                    u64::from(u16::from_be_bytes(group)),
-                    &[&group, &width_u16],
-                    value_bytes,
-                )
-                .map_err(map_transparent_error_v1)?,
-            );
+        if digest_streams.capacity() != rows {
+            return Err(AggregateStarkErrorV1::AllocationFailure);
+        }
+        {
+            let catalog = context.catalog_v1();
+            let domain = context
+                .domain_v1(&catalog, leaf_role, b"vector-row-leaf", 0, 0, 0)
+                .map_err(map_transparent_error_v1)?;
+            let prefix = PrivacyOuterDomainPrefixV1::new(domain)
+                .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+            for row_index in 0..rows {
+                digest_streams.push(
+                    prefix
+                        .last_field_stream_at_with_counter(
+                            row_index as u64,
+                            u64::from(u16::from_be_bytes(group)),
+                            &[&group, &width_u16],
+                            value_bytes,
+                        )
+                        .map_err(map_digest_stream_error_v1)
+                        .map_err(map_transparent_error_v1)?,
+                );
+            }
         }
         let mut opened_rows = BTreeMap::new();
         for &index in opening_indices {
@@ -2115,6 +2163,7 @@ impl StreamingRowCommitmentV1 {
         mut self,
     ) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1> {
         if self.failed
+            || self.digest_streams.capacity() != self.rows
             || self.received_columns != self.width
             || self
                 .opened_rows
@@ -2123,21 +2172,14 @@ impl StreamingRowCommitmentV1 {
         {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
-        let leaves = core::mem::take(&mut self.digest_streams)
-            .into_iter()
-            .map(|stream| {
-                stream
-                    .finalize()
-                    .map_err(map_digest_stream_error_v1)
-                    .map_err(map_transparent_error_v1)
-            });
-        let commitment = streaming_merkle_commitment_v1(
+        let mut accumulator = StreamingMerkleAccumulatorV1::new(
             self.context,
             self.node_role,
             self.rows,
             &self.opening_indices,
-            leaves,
         )?;
+        streaming_commitment::finish_rows_v1(&mut accumulator, &mut self.digest_streams)?;
+        let commitment = accumulator.finish()?;
         Ok(StreamingRowCommitmentResultV1 {
             commitment,
             opened_rows: core::mem::take(&mut self.opened_rows),

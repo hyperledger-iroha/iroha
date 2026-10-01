@@ -2170,8 +2170,21 @@ pub(crate) fn zk_x509_der_stark_aggregate_base_row_v1(
     );
     Ok(row)
 }
+// Exact local auxiliary witnesses for the canonical inactive base row.
+// Goldilocks p - 1 is divisible by 128, so (p - 1) / k is the inverse of
+// -k for k in {64, 128}. The remaining nonzero witnesses are zero indicators.
+// Carried bus terminals are private and are copied separately below.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+const DER_INACTIVE_LOW_DEGREE_AUXILIARIES_V1: [F; ZK_X509_DER_STARK_AUX_WIDTH_V1] = {
+    let mut row = [F::ZERO; ZK_X509_DER_STARK_AUX_WIDTH_V1];
+    row[AUX_HIGH_LOW_ZERO] = F::ONE;
+    row[AUX_BYTE_ZERO] = F::ONE;
+    row[AUX_BYTE_64_INVERSE] = F((GOLDILOCKS_MODULUS_V1 - 1) / 64);
+    row[AUX_BYTE_128_INVERSE] = F((GOLDILOCKS_MODULUS_V1 - 1) / 128);
+    row
+};
 /// Reconstruct one native-domain auxiliary row. Padding carries every public
-/// and cross-adapter terminal while all local inverse witnesses are zero.
+/// and cross-adapter terminal with exact canonical local zero-test witnesses.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_aggregate_aux_row_v1(
     trace: &ZkX509DerStarkTraceV1,
@@ -2222,13 +2235,12 @@ pub(crate) fn zk_x509_der_stark_aggregate_aux_row_v1(
         .aux_rows
         .get(carry_compact_index)
         .ok_or(ZkX509DerStarkErrorV1::Row)?;
-    let mut row = [F::ZERO; ZK_X509_DER_STARK_AUX_WIDTH_V1];
-    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)?;
-    populate_low_degree_auxiliaries_v1(
-        &zk_x509_der_stark_aggregate_base_row_v1(&trace.base, index)?,
-        &schedule.fixed_row(index)?,
-        &mut row,
-    )?;
+    // Keep the canonical base reconstruction's shape/error checks. Its
+    // inactive row contains only document-count metadata, which the local
+    // auxiliary equations do not read. Reuse their exact public result rather
+    // than recomputing two field inverses for every padding row and column.
+    zk_x509_der_stark_aggregate_base_row_v1(&trace.base, index)?;
+    let mut row = DER_INACTIVE_LOW_DEGREE_AUXILIARIES_V1;
     for (before, after) in [
         (AUX_STACK_PUSH_BEFORE, AUX_STACK_PUSH_AFTER),
         (AUX_STACK_POP_BEFORE, AUX_STACK_POP_AFTER),

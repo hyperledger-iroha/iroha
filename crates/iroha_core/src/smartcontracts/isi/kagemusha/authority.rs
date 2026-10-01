@@ -293,14 +293,9 @@ pub(crate) fn runtime_matches_governed_registry(
 }
 
 #[cfg(test)]
-// This test-only allocator observes the exact commit check without changing production code.
-#[allow(unsafe_code)]
 mod tests {
-    use std::{
-        alloc::{GlobalAlloc, Layout, System},
-        cell::Cell,
-        collections::BTreeMap,
-    };
+    use crate::test_allocations::allocations_during;
+    use std::collections::BTreeMap;
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::kagemusha::{
@@ -310,70 +305,6 @@ mod tests {
 
     use super::*;
     use crate::smartcontracts::isi::kagemusha::KagemushaVerifierReleaseLifecycleV1;
-
-    thread_local! {
-        static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
-        static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
-    }
-
-    struct CountingAllocator;
-
-    #[global_allocator]
-    static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-    fn record_allocation() {
-        let _ = TRACK_ALLOCATIONS.try_with(|tracking| {
-            if tracking.get() {
-                let _ = ALLOCATION_COUNT.try_with(|count| count.set(count.get() + 1));
-            }
-        });
-    }
-
-    // SAFETY: all operations delegate to System with the original allocation layout.
-    unsafe impl GlobalAlloc for CountingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let pointer = unsafe { System.alloc(layout) };
-            if !pointer.is_null() {
-                record_allocation();
-            }
-            pointer
-        }
-
-        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            let pointer = unsafe { System.alloc_zeroed(layout) };
-            if !pointer.is_null() {
-                record_allocation();
-            }
-            pointer
-        }
-
-        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-            let result = unsafe { System.realloc(pointer, layout, size) };
-            if !result.is_null() {
-                record_allocation();
-            }
-            result
-        }
-
-        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(pointer, layout) };
-        }
-    }
-
-    fn allocations_during(f: impl FnOnce()) -> usize {
-        ALLOCATION_COUNT.with(|count| count.set(0));
-        TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
-        struct StopTracking;
-        impl Drop for StopTracking {
-            fn drop(&mut self) {
-                TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
-            }
-        }
-        let stop = StopTracking;
-        f();
-        drop(stop);
-        ALLOCATION_COUNT.with(Cell::get)
-    }
 
     #[test]
     fn status_tags_are_distinct_and_stable() {

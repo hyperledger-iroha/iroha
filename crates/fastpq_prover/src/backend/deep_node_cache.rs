@@ -5,7 +5,7 @@
 //! siblings. The original canonical multiproof reconstructs the committed root
 //! before any opening leaves this owner. No cache is shared between attempts.
 
-use fastpq_isi::GoldilocksDigest384V1 as Digest;
+use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
 use zeroize::Zeroize;
 
 use super::{
@@ -44,7 +44,7 @@ impl NodeCachePlan {
             ));
         }
         let nodes = leaves.saturating_sub(1).max(1);
-        let payload_bytes = add(mul(nodes, 48)?, mul(nodes.div_ceil(64), 8)?)?;
+        let payload_bytes = add(mul(nodes, Digest::BYTES)?, mul(nodes.div_ceil(64), 8)?)?;
         // Initialization, canonical/coverage checks, insertion and erasure. The
         // old replay work remains charged separately as a conservative bound.
         let work_units = mul(payload_bytes, 8)?;
@@ -90,16 +90,19 @@ pub(super) fn opening_payload_bytes(oracle: Oracle) -> Result<usize> {
     add(
         mul(MAX_LEAVES + QUERY_COUNT, leaf_bytes)?,
         add(
-            mul(MAX_LEAVES + QUERY_COUNT + 2 * MAX_SIBLINGS, 48)?,
+            mul(MAX_LEAVES + QUERY_COUNT + 2 * MAX_SIBLINGS, Digest::BYTES)?,
             // Canonical plan, selected indices and two reconstruction frontiers;
             // Vec capacities are bounded by explicit reservations/the fixed plan.
-            mul(8 * MAX_SIBLINGS + 8 * MAX_LEAVES, size_of::<usize>() + 48)?,
+            mul(
+                8 * MAX_SIBLINGS + 8 * MAX_LEAVES,
+                size_of::<usize>() + Digest::BYTES,
+            )?,
         )?,
     )
 }
 
 /// Fixed private-derived digest storage; no Clone or Debug exposure.
-struct ClearingNodes(SecretPolynomial<[u64; 6]>);
+struct ClearingNodes(SecretPolynomial<[u8; 32]>);
 impl Drop for ClearingNodes {
     fn drop(&mut self) {
         self.0.iter_mut().for_each(Zeroize::zeroize);
@@ -108,7 +111,7 @@ impl Drop for ClearingNodes {
             let (cells, bad) = observed.get();
             observed.set((
                 cells + self.0.len(),
-                bad + self.0.iter().filter(|v| **v != [0; 6]).count(),
+                bad + self.0.iter().filter(|v| **v != [0; 32]).count(),
             ));
         });
     }
@@ -176,7 +179,7 @@ impl PendingNodes {
             return Err(invalid("internal-node cache received a duplicate write"));
         }
         self.coverage[slot / 64] |= bit;
-        self.nodes.0[slot] = value.words();
+        self.nodes.0[slot] = value.into_bytes();
         self.count += 1;
         self.failed = false;
         Ok(())
@@ -184,7 +187,7 @@ impl PendingNodes {
     pub(super) fn finish(self, root: Digest) -> Result<CompletedNodes> {
         if self.failed
             || self.count != self.plan.nodes
-            || self.nodes.0[self.plan.nodes - 1] != root.words()
+            || self.nodes.0[self.plan.nodes - 1] != root.into_bytes()
         {
             return Err(invalid(
                 "internal-node cache is incomplete or has another root",
@@ -342,8 +345,8 @@ impl CachedOpening {
         self.values.chunks_exact(self.leaf_bytes)
     }
 }
-fn digest(words: [u64; 6]) -> Digest {
-    Digest::new(words).expect("cache stores canonical digest outputs")
+fn digest(words: [u8; 32]) -> Digest {
+    Digest::from_bytes(words)
 }
 fn binding_error(error: &super::deep_binding::BindingError) -> Error {
     Error::InvalidTraceShape {

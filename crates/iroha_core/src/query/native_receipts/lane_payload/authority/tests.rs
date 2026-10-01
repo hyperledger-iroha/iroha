@@ -359,3 +359,55 @@ fn native_ancestry_returns_the_exact_funded_authority_on_uncovered_subject_witho
     drop(cursor);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn selected_authority_copy_prepays_second_graph_in_original_pool_and_refunds_exactly() {
+    let (network, record) = record();
+    let budget = AllocationBudget::new(1 << 20);
+    let source = source(network, &record, &budget);
+    let source_pointer = source.bytes.as_slice().as_ptr();
+    let source_bytes = budget.reserved_bytes();
+    let demand = RawAuthority::parse(&record.encode())
+        .unwrap()
+        .demand()
+        .unwrap()
+        .bytes;
+    let owner = LaneAuthorityRead::new(source, record.incarnation)
+        .complete(&budget)
+        .unwrap_or_else(|(_, error)| panic!("original authority: {error}"));
+    let original_epoch = std::ptr::from_ref(owner.config().epoch.as_ref());
+    let held = source_bytes + demand;
+    assert_eq!(budget.reserved_bytes(), held);
+    let foreign = AllocationBudget::new(1 << 20);
+    assert!(matches!(
+        owner.copy_config(&foreign),
+        Err(LanePayloadError::Source)
+    ));
+    assert_eq!(foreign.reserved_bytes(), 0);
+    budget.set_limit_bytes(held + demand - 1);
+    let error = owner
+        .copy_config(&budget)
+        .err()
+        .expect("one byte below second graph");
+    assert!(error.is_local_refusal());
+    assert_eq!(budget.reserved_bytes(), held);
+    assert_eq!(owner.source.bytes.as_slice().as_ptr(), source_pointer);
+    assert_eq!(
+        std::ptr::from_ref(owner.config().epoch.as_ref()),
+        original_epoch
+    );
+    budget.set_limit_bytes(held + demand);
+    let copy = owner.copy_config(&budget).unwrap();
+    assert!(copy.belongs_to(&budget));
+    assert_eq!(copy.get(), owner.config());
+    assert_ne!(
+        std::ptr::from_ref(copy.get().epoch.as_ref()),
+        original_epoch
+    );
+    assert_eq!(budget.reserved_bytes(), held + demand);
+    drop(copy);
+    assert_eq!(budget.reserved_bytes(), held);
+    assert_eq!(owner.source.bytes.as_slice().as_ptr(), source_pointer);
+    drop(owner);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

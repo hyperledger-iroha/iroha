@@ -447,6 +447,13 @@ int32_t connect_norito_parliament_timed_ovn_ballot_from_proof_v1(
 uint64_t connect_norito_chain_discriminant_scope_enter(uint16_t discriminant);
 int32_t connect_norito_chain_discriminant_scope_exit(uint64_t token);
 
+// ---------------- Canonical domain identity ----------------
+// Require exact native-canonical ASCII domain.dataspace text (maximum 127 bytes).
+// No normalization is performed. Returns 0 when valid, 1 when invalid, -1 for
+// null input, -2 for invalid UTF-8, and -3 for a native panic. Lengths outside
+// 1..127 are rejected before input is read. No output allocation is returned.
+int32_t connect_norito_domain_id_validate_v1(const char* input, unsigned long input_len);
+
 // ---------------- Account address helpers ----------------
 int32_t connect_norito_account_address_parse(
     const char* input,

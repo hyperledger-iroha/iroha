@@ -48,9 +48,9 @@ fn division_retains_native_security_geometry_and_degree_with_maximum_attempted_t
     for out_of_gas in [false, true] {
         let (segment, records) = maximum_segment(out_of_gas);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        assert_eq!(segment.base_width_v1(), 1_351);
-        assert_eq!(segment.profile_constraint_count_v1(), 2_940);
-        assert_eq!(segment.profile_fixed_width_v1(), 7);
+        assert_eq!(segment.base_width_v1(), 1_356);
+        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+        assert_eq!(segment.profile_fixed_width_v1(), 10);
         let fixed = segment.profile_fixed_columns_v1().unwrap();
         for row in 0..TRACE_SIZE {
             assert_eq!(
@@ -79,8 +79,8 @@ fn division_retains_native_security_geometry_and_degree_with_maximum_attempted_t
         )
         .unwrap();
         let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-        assert_eq!(bound, 4_141_952);
-        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 52_352);
+        assert_eq!(bound, 4_153_152);
+        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [0xdc + u8::from(out_of_gas); 32],
@@ -100,7 +100,7 @@ fn native_stark_proves_maximum_division_segment_and_binds_exact_trap_reason_gas_
         let (segment, records) = maximum_segment(out_of_gas);
         let columns = segment.columns(&records).unwrap();
         let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-        assert!(proof.len() <= 4_141_952);
+        assert!(proof.len() <= 4_153_152);
         verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
         let other = if out_of_gas {
             SegmentOutcome::AssertionFailed

@@ -12617,6 +12617,21 @@ seiyaku Privacy {
                 .and_then(|map| map.get("RegisterSmartContractCode"))
                 .is_some()
         );
+        let payload = json_value
+            .get("RegisterSmartContractCode")
+            .expect("manifest instruction payload present");
+        let artifact = payload
+            .get("artifact_id")
+            .expect("manifest artifact identity present");
+        assert_eq!(
+            artifact.get("dataspace_id"),
+            Some(&json::Value::String(u64::MAX.to_string()))
+        );
+        assert_eq!(
+            artifact.get("code_hash"),
+            Some(&json::Value::String(hash_literal(0xAA)))
+        );
+        assert!(payload.get("code_hash").is_none());
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize RegisterSmartContractCode");
         assert_eq!(reconstructed, instruction);

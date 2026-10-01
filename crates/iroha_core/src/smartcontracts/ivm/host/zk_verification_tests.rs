@@ -546,7 +546,16 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
     stark_cfg.enabled = true;
     host.set_stark_config(&stark_cfg);
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-syscall";
+    // This checks generic proof dispatch through a host syscall, not an IVM
+    // execution relation. The unavailable IVM namespace must remain reserved.
+    assert!(!crate::zk::stark_open_verify_circuit_id_matches_backend(
+        backend,
+        "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-syscall",
+    ));
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:host-syscall-batch-v1";
+    assert!(crate::zk::stark_open_verify_circuit_id_matches_backend(
+        backend, circuit_id,
+    ));
     let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
         version: 1,
         circuit_id: circuit_id.to_string(),
@@ -558,7 +567,7 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
     };
     let vk_bytes = norito::encode_canonical(&vk_payload).expect("encode canonical STARK vk");
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
-    let schema_descriptor = b"ivm-syscall-schema-v1";
+    let schema_descriptor = b"host-syscall-batch-schema-v1";
     let proof = crate::zk::prove_stark_fri_open_verify_envelope(
         backend,
         circuit_id,

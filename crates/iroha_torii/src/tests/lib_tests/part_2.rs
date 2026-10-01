@@ -685,13 +685,14 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
         .parameters
         .get_mut()
         .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
-    block.transactions.insert_block(
-        HashSet::new(),
-        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-    );
     block
-        .commit()
+        .commit_world_overlay_for_testing()
         .expect("commit should persist recipient lookup policy");
+    assert_eq!(
+        next_block_height(app),
+        height,
+        "policy fixture setup must not manufacture finalized history"
+    );
 }
 #[tokio::test]
 async fn retail_recipient_lookup_rejects_unsigned_public_alias() {
@@ -1035,7 +1036,11 @@ async fn fee_sponsor_program_by_id_returns_the_exact_on_chain_program() {
     let object = payload.as_object().expect("policy response object");
     assert_eq!(
         object.keys().cloned().collect::<BTreeSet<_>>(),
-        BTreeSet::from(["id".to_owned(), "lifecycle".to_owned()])
+        BTreeSet::from([
+            "id".to_owned(),
+            "lifecycle".to_owned(),
+            "payout_account".to_owned(),
+        ])
     );
     assert!(
         !object.contains_key("program"),
@@ -1345,11 +1350,18 @@ async fn retail_recipient_route_and_sponsor_program_reject_noncanonical_or_malfo
     .expect("malformed signed fee quote rejection")
     .into_response();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .unwrap(),
+        "application/x-norito"
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("fee quote rejection body");
     let envelope: ErrorEnvelope =
-        norito::json::from_slice(&body).expect("typed fee quote error envelope");
+        norito::decode_from_bytes(&body).expect("typed fee quote error envelope");
     let fee = envelope
         .details
         .and_then(|details| details.fee)
@@ -2223,7 +2235,11 @@ async fn alias_resolve_returns_not_found_for_unknown_alias() {
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [],
+        [authority_account],
+        [],
+    ));
     let alias_label =
         AccountAlias::domainless("missing".parse().expect("label"), DataSpaceId::UNIVERSAL);
     let request = routing::AliasResolveRequestDto {
@@ -2618,28 +2634,36 @@ async fn alias_resolve_rejects_empty_alias() {
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-    let request = routing::AliasResolveRequestDto {
-        alias: "   ".to_string(),
-    };
-    let body = norito::json::to_vec(&request).expect("encode request");
-    let method = axum::http::Method::POST;
-    let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-    let err = handler_alias_resolve(
-        State(app),
-        method,
-        uri,
-        headers,
-        crate::loopback_connect_info(),
-        axum::body::Bytes::from(body),
-    )
-    .await
-    .expect_err("empty alias requests should be rejected");
-    match err {
-        Error::Query(ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-        )) => assert_eq!(message, "alias must not be empty"),
-        other => panic!("unexpected error: {other:?}"),
+    for (alias, expected) in [
+        ("", "account alias must not be empty"),
+        (
+            "   ",
+            "account alias must not contain leading or trailing whitespace",
+        ),
+    ] {
+        let request = routing::AliasResolveRequestDto {
+            alias: alias.to_owned(),
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+        let err = handler_alias_resolve(
+            State(app.clone()),
+            method,
+            uri,
+            headers,
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect_err("empty alias requests should be rejected");
+        match err {
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => assert_eq!(message, expected),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
 #[tokio::test]
@@ -2772,12 +2796,12 @@ async fn alias_lookup_by_account_lists_primary_and_secondary_aliases() {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
         .build(&authority);
-    let account = Account::new(authority.clone())
-        .with_label(Some(primary_label.clone()))
-        .build(&authority);
-    let app =
-        mk_app_state_for_tests_with_world(World::with([domain], [authority_account, account], []));
-    bind_account_alias_for_test(&app, &authority, "banking@centralbank.universal");
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [domain],
+        [authority_account],
+        [],
+    ));
+    bind_primary_account_alias_for_test(&app, &authority, &primary_label);
     bind_account_alias_for_test(&app, &authority, "public@universal");
     grant_alias_resolve_permissions(&app, &authority, &primary_label);
     let request = routing::AliasLookupByAccountRequestDto {
@@ -2790,7 +2814,14 @@ async fn alias_lookup_by_account_lists_primary_and_secondary_aliases() {
     let uri: axum::http::Uri = "/v1/aliases/by-account"
         .parse()
         .expect("alias by-account uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_lookup_by_account(
         State(app),
         method,
@@ -2889,12 +2920,12 @@ async fn alias_lookup_by_account_filters_by_dataspace_and_domain() {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
         .build(&authority);
-    let account = Account::new(authority.clone())
-        .with_label(Some(primary_label.clone()))
-        .build(&authority);
-    let app =
-        mk_app_state_for_tests_with_world(World::with([domain], [authority_account, account], []));
-    bind_account_alias_for_test(&app, &authority, "banking@centralbank.universal");
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [domain],
+        [authority_account],
+        [],
+    ));
+    bind_primary_account_alias_for_test(&app, &authority, &primary_label);
     grant_alias_resolve_permissions(&app, &authority, &primary_label);
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: authority.to_string(),
@@ -2906,7 +2937,14 @@ async fn alias_lookup_by_account_filters_by_dataspace_and_domain() {
     let uri: axum::http::Uri = "/v1/aliases/by-account"
         .parse()
         .expect("alias by-account uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_lookup_by_account(
         State(app),
         method,
@@ -2934,7 +2972,11 @@ async fn alias_lookup_by_account_returns_not_found_for_unknown_account() {
         checked_torii_test_ed25519_keypair(0xa2, "derive alias lookup known authority fixture key");
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let authority_account = Account::new(authority.clone()).build(&authority);
-    let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+    let app = crate::tests_runtime_handlers::native_ingress_app_with_world_for_test(World::with(
+        [],
+        [authority_account],
+        [],
+    ));
     let missing =
         checked_torii_test_account_id(0xa3, "derive alias lookup missing account fixture key");
     let request = routing::AliasLookupByAccountRequestDto {
@@ -2947,7 +2989,14 @@ async fn alias_lookup_by_account_returns_not_found_for_unknown_account() {
     let uri: axum::http::Uri = "/v1/aliases/by-account"
         .parse()
         .expect("alias by-account uri");
-    let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &authority_keypair,
+        &method,
+        &uri,
+        &body,
+    );
     let response = handler_alias_lookup_by_account(
         State(app),
         method,

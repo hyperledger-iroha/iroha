@@ -13,8 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 65_533
-EXPECTED_ASSET_SHA256 = "8aeb2a5f09c39bfe7ff75353ba05b1c1f8a06a64e20ce64a5f50deea2e2ae159"
+# Manual asset formatting owner: one-space JSON indentation, enforced below.
+EXPECTED_ASSET_LENGTH = 109_610
+EXPECTED_ASSET_SHA256 = "dd5712b9432008b1c55ae38eb96ffd8ea833a65d9c58b70cce8263269c38c90e"
 EXPECTED_SEMANTIC_SHA256 = "f546351a80bd7d7d3ed4d0437068b9ca4845fde56b12cbfe909b4e1f7c9a748d"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
@@ -23,7 +24,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "86a2209e7adee5e4e150b00c852d4ebcafc0a056d870783d5c2ddc061babc438"
+    "f3a0a64f1e46c5a5368b0f59a7f6218f858134eceb9af27021bfbd24b9e4eb30"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -427,6 +428,20 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
     def test_current_asset_and_source_match_the_historical_inventory(self) -> None:
         validate(self.source, self.asset)
 
+    def test_asset_format_and_runtime_byte_limit_are_preserved(self) -> None:
+        # This asset is edited directly; there is no separate generator. Keep
+        # regeneration deterministic without growing the production byte cap.
+        canonical = (
+            json.dumps(json.loads(self.asset, object_pairs_hook=_strict_object), ensure_ascii=False, indent=1)
+            + "\n"
+        ).encode()
+        self.assertEqual(self.asset, canonical)
+        self.assertRegex(
+            self.source,
+            r"const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 \* 1024;",
+        )
+        self.assertLessEqual(len(self.asset), 128 * 1024)
+
     def test_prepared_account_schemas_are_closed_and_fully_typed(self) -> None:
         asset = json.loads(self.asset)
         descriptors = {
@@ -609,8 +624,8 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
         mutations = (
             self.asset[:-1],
             self.asset.replace(b'"schema_version": 1', b'"schema_version": 2', 1),
-            self.asset.replace(b'"effect":"read"', b'"effect":"write"', 1),
-            self.asset.replace(b'"type":"object"', b'"type":"array" ', 1),
+            self.asset.replace(b'"effect": "read"', b'"effect": "write"', 1),
+            self.asset.replace(b'"type": "object"', b'"type": "array" ', 1),
         )
         for mutated in mutations:
             with self.subTest(digest=hashlib.sha256(mutated).hexdigest()):

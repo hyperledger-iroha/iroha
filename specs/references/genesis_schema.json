@@ -892,6 +892,10 @@
       {
         "name": "code",
         "type": "u32"
+      },
+      {
+        "name": "message",
+        "type": "Option<String>"
       }
     ]
   },
@@ -3790,6 +3794,10 @@
   "SumeragiGenesisContextParameters": {
     "Struct": [
       {
+        "name": "root_scope",
+        "type": "SumeragiRootScope"
+      },
+      {
         "name": "da_layout",
         "type": "DataAvailabilityLayout"
       },
@@ -3852,6 +3860,31 @@
       {
         "name": "demotion_window",
         "type": "NonZero<u64>"
+      }
+    ]
+  },
+  "SumeragiRootScope": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "global"
+      },
+      {
+        "discriminant": 1,
+        "tag": "dataspace",
+        "type": "SumeragiRootScope::Dataspace"
+      }
+    ]
+  },
+  "SumeragiRootScope::Dataspace": {
+    "Struct": [
+      {
+        "name": "parent_network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "dataspace_id",
+        "type": "DataSpaceId"
       }
     ]
   },

@@ -826,6 +826,19 @@ and `false` property values are accepted. For example:
 ./gradlew :client-android:assembleDebug -PirohaDebugNativeBridge=true
 ```
 
+For local device integration inside this checkout, create the ignored
+`dist/norito-bridge-android-local` directory with mode `0700` and set
+`MOBILE_SDK_ANDROID_ARTIFACT_DIR` to that exact absolute canonical path. Set
+`MOBILE_SDK_PYTHON_BINARY` to a canonical Python 3.12 executable and add
+`-PirohaAndroidLocalIntegration=true` to the same normal Gradle command. This
+developer routing keeps the regular locked two-ABI native build, source seal,
+stripping, export and byte checks. It requires an owned directory with no tracked
+files and never falls back to source-tree JNI copies. Its embedded provenance
+has `artifact_scope: local-integration`; publication and release packaging reject
+that scope, including when the source is clean. It supplies local test evidence,
+not release or physical-device qualification by itself. Ordinary release output
+continues to require the external artifact root.
+
 The property also applies to this SDK when an Android app includes it as a
 composite build. Release packaging always includes the bridge independently of
 this Debug property. An unchanged raw build is reusable only while its saved source seal still

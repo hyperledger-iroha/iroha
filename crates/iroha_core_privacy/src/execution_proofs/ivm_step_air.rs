@@ -27,6 +27,7 @@ mod alu;
 mod bitwise;
 mod branch;
 mod machine_bus;
+mod memory_address;
 mod shift;
 mod trace;
 mod word;

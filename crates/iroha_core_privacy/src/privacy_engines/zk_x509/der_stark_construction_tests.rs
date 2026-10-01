@@ -154,3 +154,176 @@ fn ordinary_and_maximum_release_documents_satisfy_complete_numeric_der_air() {
         assert_complete_numeric_construction(&documents);
     }
 }
+
+#[test]
+fn inactive_local_auxiliary_template_matches_generic_witness_equations() {
+    let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).unwrap();
+    let null = [0x05, 0x00];
+    for count in 1..=ZK_X509_DER_STARK_MAX_DOCUMENTS_V1 {
+        let documents = vec![null.as_slice(); count];
+        let base = build_zk_x509_der_stark_base_v1(&documents).unwrap();
+        let inactive =
+            zk_x509_der_stark_aggregate_base_row_v1(&base, base.private_shape.parser_rows).unwrap();
+        assert_eq!(inactive[BASE_ROW_ACTIVE], F::ZERO);
+        assert_eq!(inactive[BASE_FINAL_DOCUMENT], F((count - 1) as u64));
+        // Exercise every distinct public fixed-row boundary, including parser,
+        // comparator and aggregate padding. Private inactivity must dominate
+        // those public selectors in the unchanged witness equations.
+        for index in [
+            0,
+            1,
+            ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 - 1,
+            ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1,
+            ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + 1,
+            ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 - 1,
+            ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1,
+            ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1,
+        ] {
+            let mut expected = [F::ZERO; ZK_X509_DER_STARK_AUX_WIDTH_V1];
+            populate_low_degree_auxiliaries_v1(
+                &inactive,
+                &schedule.fixed_row(index).unwrap(),
+                &mut expected,
+            )
+            .unwrap();
+            assert_eq!(
+                DER_INACTIVE_LOW_DEGREE_AUXILIARIES_V1, expected,
+                "document count {count}, fixed boundary {index}"
+            );
+        }
+    }
+    for (value, column) in [(64, AUX_BYTE_64_INVERSE), (128, AUX_BYTE_128_INVERSE)] {
+        assert_eq!(
+            F::ZERO
+                .sub(F(value))
+                .mul(DER_INACTIVE_LOW_DEGREE_AUXILIARIES_V1[column]),
+            F::ONE
+        );
+    }
+}
+
+#[test]
+fn inactive_auxiliary_reconstruction_preserves_active_rows_and_both_carry_domains() {
+    for document in [&[0x05, 0x00][..], &[0x31, 0x04, 0x05, 0x00, 0x05, 0x00][..]] {
+        let base = build_zk_x509_der_stark_base_v1(&[document]).unwrap();
+        let mut trace = build_zk_x509_der_stark_trace_v1(base, construction_challenges()).unwrap();
+        let parser_end = trace.base.private_shape.parser_rows;
+        let comparator_rows = trace.base.private_shape.comparator_rows;
+        assert_eq!(comparator_rows > 0, document[0] == 0x31);
+        // Distinct public synthetic values expose any lost or cross-domain carry.
+        // This tests the adapter's cell copying, not validity of a modified trace.
+        for (index, row) in trace.aux_rows.iter_mut().enumerate() {
+            for (column, cell) in row.iter_mut().enumerate() {
+                *cell = F((1 + index * ZK_X509_DER_STARK_AUX_WIDTH_V1 + column) as u64);
+            }
+        }
+        for index in 0..parser_end {
+            assert_eq!(
+                zk_x509_der_stark_aggregate_aux_row_v1(&trace, index).unwrap(),
+                trace.aux_rows[index]
+            );
+        }
+        for index in 0..comparator_rows {
+            assert_eq!(
+                zk_x509_der_stark_aggregate_aux_row_v1(
+                    &trace,
+                    ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + index
+                )
+                .unwrap(),
+                trace.aux_rows[parser_end + index]
+            );
+        }
+        let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).unwrap();
+        for index in [
+            parser_end,
+            ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 - 1,
+            ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + comparator_rows,
+            ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 - 1,
+            ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1,
+            ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1,
+        ] {
+            let carry = if index < ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 {
+                &trace.aux_rows[parser_end - 1]
+            } else {
+                trace.aux_rows.last().unwrap()
+            };
+            let mut expected = [F::ZERO; ZK_X509_DER_STARK_AUX_WIDTH_V1];
+            populate_low_degree_auxiliaries_v1(
+                &zk_x509_der_stark_aggregate_base_row_v1(&trace.base, index).unwrap(),
+                &schedule.fixed_row(index).unwrap(),
+                &mut expected,
+            )
+            .unwrap();
+            for (before, after) in [
+                (AUX_STACK_PUSH_BEFORE, AUX_STACK_PUSH_AFTER),
+                (AUX_STACK_POP_BEFORE, AUX_STACK_POP_AFTER),
+                (AUX_DOCUMENT_BEFORE, AUX_DOCUMENT_AFTER),
+                (AUX_NODE_BEFORE, AUX_NODE_AFTER),
+                (AUX_PAIR_PRODUCER_BEFORE, AUX_PAIR_PRODUCER_AFTER),
+                (AUX_PAIR_CONSUMER_BEFORE, AUX_PAIR_CONSUMER_AFTER),
+                (AUX_BYTE_TABLE_SUM_BEFORE, AUX_BYTE_TABLE_SUM_AFTER),
+                (AUX_BYTE_QUERY_SUM_BEFORE, AUX_BYTE_QUERY_SUM_AFTER),
+                (
+                    AUX_BYTE_TABLE_ZERO_COUNT_BEFORE,
+                    AUX_BYTE_TABLE_ZERO_COUNT_AFTER,
+                ),
+                (
+                    AUX_BYTE_QUERY_ZERO_COUNT_BEFORE,
+                    AUX_BYTE_QUERY_ZERO_COUNT_AFTER,
+                ),
+                (AUX_INPUT_BYTE_BEFORE, AUX_INPUT_BYTE_AFTER),
+            ] {
+                for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
+                    expected[before + lane] = carry[after + lane];
+                    expected[after + lane] = carry[after + lane];
+                }
+            }
+            assert_eq!(
+                zk_x509_der_stark_aggregate_aux_row_v1(&trace, index).unwrap(),
+                expected,
+                "native padding index {index}"
+            );
+        }
+    }
+}
+
+#[test]
+fn inactive_auxiliary_template_keeps_shape_row_and_resource_errors() {
+    let document = [0x05, 0x00];
+    let base = build_zk_x509_der_stark_base_v1(&[&document]).unwrap();
+    let trace = build_zk_x509_der_stark_trace_v1(base, construction_challenges()).unwrap();
+    let padding_index = trace.base.private_shape.parser_rows;
+    assert_eq!(
+        zk_x509_der_stark_aggregate_aux_row_v1(&trace, ZK_X509_DER_STARK_TRACE_SIZE_V1),
+        Err(ZkX509DerStarkErrorV1::Resource)
+    );
+    let mut missing_document = trace.clone();
+    missing_document.base.private_shape.document_lengths.clear();
+    assert_eq!(
+        zk_x509_der_stark_aggregate_aux_row_v1(&missing_document, padding_index),
+        Err(ZkX509DerStarkErrorV1::Shape)
+    );
+    let mut missing_parser = trace.clone();
+    missing_parser.base.private_shape.parser_rows = 0;
+    assert_eq!(
+        zk_x509_der_stark_aggregate_aux_row_v1(&missing_parser, 0),
+        Err(ZkX509DerStarkErrorV1::Shape)
+    );
+    let mut missing_carry = trace.clone();
+    missing_carry.aux_rows.clear();
+    assert_eq!(
+        zk_x509_der_stark_aggregate_aux_row_v1(&missing_carry, padding_index),
+        Err(ZkX509DerStarkErrorV1::Row)
+    );
+    assert_eq!(
+        zk_x509_der_stark_aggregate_aux_row_v1(
+            &missing_carry,
+            ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
+        ),
+        Err(ZkX509DerStarkErrorV1::Shape)
+    );
+    assert_eq!(
+        zk_x509_der_stark_aggregate_aux_row_v1(&missing_carry, 0),
+        Err(ZkX509DerStarkErrorV1::Row)
+    );
+}

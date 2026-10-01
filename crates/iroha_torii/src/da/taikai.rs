@@ -3897,7 +3897,7 @@ pub(crate) mod taikai_ingest {
                     .await
                     .expect_err("symlink replacement must reject");
             assert!(
-                err.contains("not a regular file"),
+                err.contains("Taikai artifact test") && err.contains("taikai-artifact.norito"),
                 "unexpected error: {err}"
             );
             assert!(

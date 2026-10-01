@@ -1132,3 +1132,11 @@ mod tests {
         assert!(frames.finish(TOP, RESULT, 1).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "call_frame/ownership_summary_tests.rs"]
+mod ownership_summary_tests;
+
+#[cfg(test)]
+#[path = "call_frame/initialization_transition_tests.rs"]
+mod initialization_transition_tests;

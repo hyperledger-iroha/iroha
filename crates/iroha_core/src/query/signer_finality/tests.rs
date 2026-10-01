@@ -171,6 +171,28 @@ fn an_invalid_local_certificate_is_not_signer_finality() {
 }
 
 #[test]
+fn original_genesis_without_a_successor_has_execution_but_no_signer_finality() {
+    use crate::sumeragi::certified_chain::{CertifiedChain, QcVerification};
+
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("original executed genesis");
+    let view = chain.state().view();
+    assert_eq!(chain.state().committed_height(), 1);
+    assert_eq!(chain.kura().blocks_count(), 1);
+    assert!(committed_block(&view, 1).is_ok());
+    let reader = CertifiedChain::new(&view).unwrap();
+    assert_eq!(
+        reader.certified(1).unwrap().verification(),
+        QcVerification::Genesis
+    );
+    assert!(super::certified_block_v1(&reader, 1, hash(&chain, 1)).is_err());
+    assert_eq!(
+        verify_signer_finality_v1(&view, 1, hash(&chain, 1)),
+        Err(SignerFinalityErrorV1)
+    );
+}
+
+#[test]
 fn genesis_execution_finality_requires_a_verified_successor() {
     use crate::sumeragi::{
         block_store::commit_certificate,
@@ -243,8 +265,9 @@ fn genesis_execution_finality_requires_a_verified_successor() {
             state.push_block_hash_for_testing(block.hash());
         }
         let view = state.view();
-        // Deterministic State-anchored reads and signed genesis identity remain available.
-        assert!(committed_block(&view, 1).is_ok());
+        // Imported frames and a hash journal retain signed proposal identity,
+        // but cannot replace the original State's native execution authority.
+        assert!(committed_block(&view, 1).is_err());
         let reader = CertifiedChain::new(&view).unwrap();
         assert_eq!(
             reader.certified(1).unwrap().verification(),

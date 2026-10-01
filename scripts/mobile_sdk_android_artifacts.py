@@ -13,10 +13,12 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 
 
 SDK_MODULES = ("core-jvm", "client-android", "kagemusha-wallet-android")
+LOCAL_INTEGRATION_DIRECTORY = Path("dist/norito-bridge-android-local")
 
 
 def canonical_directory(value: str, label: str) -> Path:
@@ -28,8 +30,43 @@ def canonical_directory(value: str, label: str) -> Path:
     return path
 
 
-def build_root(repository: Path, external: str | None) -> Path:
+def local_integration_directory(repository: Path, value: str) -> Path:
+    """Authenticate the sole ignored, owned diagnostic artifact directory."""
     repository = canonical_directory(str(repository), "repository")
+    artifacts = canonical_directory(value, "local Android artifact directory")
+    if artifacts != repository / LOCAL_INTEGRATION_DIRECTORY:
+        raise ValueError("local Android artifacts must use the fixed integration directory")
+    metadata = artifacts.lstat()
+    if (metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700
+            or not os.access(artifacts, os.R_OK | os.W_OK | os.X_OK)):
+        raise ValueError("local Android artifact directory must be owned and mode 0700")
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("GIT_")}
+    environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                       GIT_OPTIONAL_LOCKS="0")
+    tracked = subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "ls-files", "-z", "--",
+         str(LOCAL_INTEGRATION_DIRECTORY)], env=environment, check=True,
+        capture_output=True, timeout=30,
+    )
+    ignored = subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "check-ignore", "--no-index", "-q",
+         "--", str(LOCAL_INTEGRATION_DIRECTORY)], env=environment, check=False,
+        capture_output=True, timeout=30,
+    )
+    if tracked.stdout or ignored.returncode != 0:
+        raise ValueError("local Android artifact directory must be ignored with no tracked files")
+    return artifacts
+
+
+def build_root(repository: Path, external: str | None, *,
+               local_integration: bool = False) -> Path:
+    repository = canonical_directory(str(repository), "repository")
+    if local_integration:
+        if external is None:
+            raise ValueError("local Android integration requires an explicit artifact directory")
+        artifacts = local_integration_directory(repository, external)
+        return artifacts / "gradle-build/iroha_kotlin_sdk"
     if external is None:
         return repository / "kotlin"
     artifacts = canonical_directory(external, "MOBILE_SDK_ANDROID_ARTIFACT_DIR")
@@ -55,8 +92,9 @@ def regular_file(path: Path) -> Path:
     return path
 
 
-def built_artifacts(repository: Path, external: str | None) -> tuple[Path, Path]:
-    root = build_root(repository, external)
+def built_artifacts(repository: Path, external: str | None, *,
+                    local_integration: bool = False) -> tuple[Path, Path]:
+    root = build_root(repository, external, local_integration=local_integration)
     libraries = module_build(root, "core-jvm", external) / "libs"
     jars = sorted(p for p in libraries.glob("core-jvm-*.jar")
                   if not p.name.endswith(("-sources.jar", "-javadoc.jar")))
@@ -106,20 +144,31 @@ def main() -> int:
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--collect-sboms", type=Path)
     parser.add_argument("--print-build-root", action="store_true")
+    parser.add_argument("--local-integration", action="store_true")
+    parser.add_argument("--validate-local-root", action="store_true")
     parser.add_argument("--version")
     parser.add_argument("--artifact-dir", default=os.environ.get("MOBILE_SDK_ANDROID_ARTIFACT_DIR"))
     args = parser.parse_args()
     try:
         external = args.artifact_dir
-        if args.print_build_root:
-            print(build_root(args.root, external))
+        if args.validate_local_root:
+            if (args.local_integration or args.print_build_root
+                    or args.collect_sboms is not None or external is None):
+                raise ValueError("local directory validation requires only an explicit artifact directory")
+            if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
+                raise ValueError("local directory validation requires isolated Python 3.12")
+            print(local_integration_directory(args.root, external))
+        elif args.print_build_root:
+            print(build_root(args.root, external, local_integration=args.local_integration))
         elif args.collect_sboms is not None:
+            if args.local_integration:
+                raise ValueError("diagnostic Android artifacts cannot enter release SBOM collection")
             collect_sboms(args.root, external, args.collect_sboms, args.version)
         else:
-            for path in built_artifacts(args.root, external):
+            for path in built_artifacts(args.root, external, local_integration=args.local_integration):
                 print(path)
         return 0
-    except (OSError, ValueError, TypeError, AttributeError) as error:
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError) as error:
         print(f"[mobile-sdk-android] ERROR: {error}", file=sys.stderr)
         return 1
 

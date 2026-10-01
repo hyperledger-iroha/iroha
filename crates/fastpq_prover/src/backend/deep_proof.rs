@@ -1,6 +1,6 @@
 //! Canonical bounded wire owner for the masked DEEP compact protocol.
 //!
-//! This DTO fixes 301 retained columns, 64 initial queries, a paired quotient plus composition mask,
+//! This DTO fixes 301 retained columns, 77 initial queries, a paired quotient plus composition mask,
 //! five folds [16,16,8,8,4], fixed raw FRI fibers, and all 128 terminal values. Minimal frontiers derive
 //! from sorted unique positions; a distinct frame admits no legacy fallback.
 //! Decoding checks bytes and cumulative resource budgets before shape preflight.
@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 
-use iroha_data_model::privacy::GoldilocksDigest384V1 as Digest;
+use iroha_data_model::fastpq::FastpqCommitmentV1 as Digest;
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
 
 use super::{
@@ -43,20 +43,20 @@ pub(super) const GROUP_LEAVES: [usize; 5] = [
 /// Full terminal vector, checked by the eventual verifier rather than sampled.
 pub(super) const TERMINAL_VALUES: usize = FRI_LENGTHS[5];
 /// Exact serialized upper envelope for the fixed canonical DTO.
-pub(super) const MAX_FRAME_BYTES: usize = 502_895;
+pub(super) const MAX_FRAME_BYTES: usize = 500_084;
 /// Existing production-sized single-proof byte target; this is not admission.
 pub(super) const PROOF_BYTE_TARGET: usize = 512 * 1024;
 /// Fixed maximum cumulative Norito allocation charges for one proof decode.
 pub(super) const MAX_ALLOCATION_CHARGES: usize = 8 * 1024 * 1024;
-const MAX_SEQUENCE_ELEMENTS: usize = 1088;
-const MAX_TOTAL_ELEMENTS: usize = 5415;
+const MAX_SEQUENCE_ELEMENTS: usize = 1283;
+const MAX_TOTAL_ELEMENTS: usize = 6182;
 const MAX_DECODE_DEPTH: usize = 16;
 
 /// Sole canonical frame for the proposed DEEP proof layout.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::deep_proof::DeepProof",
-    frame = "fastpq_prover::deep_compact::MaskedCompositionProofV1"
+    frame = "fastpq_prover::deep_compact::Sha3MaskedCompositionProofV1"
 )]
 pub(super) struct DeepProof {
     pub(super) row_root: Digest,
@@ -163,10 +163,29 @@ fn plan(leaves: usize, indices: &[usize]) -> Result<MultiproofPlan> {
 }
 
 impl OpeningPlans {
-    /// Validate exactly 64 sorted unique initial positions, then derive all groups.
+    /// The smallest independently known incoming index selects the omitted cell.
+    /// No selector is supplied by the proof, and every shared incoming edge is checked.
+    pub(super) fn omitted_coordinate(&self, round: usize, group: usize) -> Result<usize> {
+        let incoming = if round == 0 {
+            self.initial.queried_indices()
+        } else {
+            self.round_indices
+                .get(round - 1)
+                .ok_or_else(|| shape("FRI round outside fixed geometry"))?
+        };
+        let next = *GROUP_LEAVES
+            .get(round)
+            .ok_or_else(|| shape("FRI round outside fixed geometry"))?;
+        incoming
+            .iter()
+            .find(|&&index| index % next == group)
+            .map(|index| index / next)
+            .ok_or_else(|| shape("FRI group has no incoming known coordinate"))
+    }
+    /// Validate exactly 77 sorted unique initial positions, then derive all groups.
     pub(super) fn new(queries: &[usize]) -> Result<Self> {
         if queries.len() != QUERY_COUNT {
-            return Err(shape("DEEP proof needs exactly 64 initial query positions"));
+            return Err(shape("DEEP proof needs exactly 77 initial query positions"));
         }
         let initial = plan(LDE_ROWS, queries)?;
         let mut current = queries.to_vec();
@@ -263,7 +282,10 @@ pub(super) fn preflight(proof: &DeepProof, queries: &[usize]) -> Result<OpeningP
             return Err(shape("DEEP FRI frontier is not minimal and exact"));
         }
         for group in &proof_round.groups {
-            canonical(&group.values, ARITIES[round], "deep_fri_group")?;
+            if group.values.arity() != ARITIES[round] {
+                return Err(shape("compact FRI fiber arity differs from fixed round"));
+            }
+            canonical(&group.values, ARITIES[round] - 1, "deep_fri_group")?;
         }
     }
     Ok(plans)
@@ -313,7 +335,7 @@ pub(super) fn decode_with_allocation(
         decode_limits_with_allocation(bytes.len(), allocation_charges),
     )?;
     if proof.rows.len() != QUERY_COUNT {
-        return Err(shape("DEEP proof needs exactly 64 complete retained rows"));
+        return Err(shape("DEEP proof needs exactly 77 complete retained rows"));
     }
     let positions: Vec<_> = proof.rows.iter().map(|row| row.index as usize).collect();
     preflight(&proof, &positions)?;

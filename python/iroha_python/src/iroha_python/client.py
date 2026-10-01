@@ -9926,8 +9926,20 @@ class SumeragiEvidenceRecord:
             return value
 
         raw_offenders = payload["offenders"]
-        if not isinstance(raw_offenders, list) or not 1 <= len(raw_offenders) <= 1024:
-            raise ValueError(f"{context}.offenders must contain between 1 and 1024 entries")
+        # Different-view CommitQC conflicts do not attribute individual signers.
+        permits_unattributed_safety_violation = (
+            evidence_class == "conflicting_certificates"
+            and payload["safety_violation"] is True
+        )
+        if (
+            not isinstance(raw_offenders, list)
+            or len(raw_offenders) > 1024
+            or (not raw_offenders and not permits_unattributed_safety_violation)
+        ):
+            raise ValueError(
+                f"{context}.offenders must contain between 1 and 1024 entries, "
+                "or be empty for a conflicting-certificate safety violation"
+            )
         offenders = []
         peers: set[str] = set()
         previous_signer = -1

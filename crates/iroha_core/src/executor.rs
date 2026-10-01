@@ -9810,6 +9810,7 @@ mod tests {
     include!("executor_sorafs_market_tests.rs");
     include!("executor_sorafs_provider_governance_tests.rs");
     include!("executor_sorafs_pop_registry_tests.rs");
+    include!("executor_asset_lock_admission_tests.rs");
     macro_rules! concrete_instruction_box {
         ($instruction_ty:ty, $instruction:expr) => {{
             const TEST_WIRE_ID: &str = "iroha.test.concrete_instruction.v1";

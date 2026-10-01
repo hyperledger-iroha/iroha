@@ -296,23 +296,71 @@ fn contract_deployment_instructions_roundtrip_frames_and_archives() {
 }
 
 #[test]
-fn deployment_artifact_identity_is_exact_and_keeps_full_u64_dataspace() {
+fn artifact_identity_preserves_full_dataspace_range_and_rejects_retired_layouts() {
     for name in [
         "UploadSmartContractCodeChunk",
         "FinalizeSmartContractCodeUpload",
     ] {
-        let original = deployment(name);
-        let mut full_width = original.clone();
-        let payload = fields(fields(&mut full_width).get_mut(name).unwrap());
-        fields(payload.get_mut("artifact_id").unwrap())
-            .insert("dataspace_id".into(), Value::String(u64::MAX.to_string()));
-        roundtrip(&full_width);
-        for field in ["dataspace_id", "code_hash"] {
-            let mut missing = original.clone();
-            let payload = fields(fields(&mut missing).get_mut(name).unwrap());
-            fields(payload.get_mut("artifact_id").unwrap()).remove(field);
-            rejects(&missing);
+        for dataspace in [0_u64, 42, u64::MAX] {
+            let mut value = deployment(name);
+            fields(
+                fields(fields(&mut value).get_mut(name).unwrap())
+                    .get_mut("artifact_id")
+                    .unwrap(),
+            )
+            .insert("dataspace_id".into(), Value::String(dataspace.to_string()));
+            let native = roundtrip(&value);
+            let actual = if name == "UploadSmartContractCodeChunk" {
+                native
+                    .as_any()
+                    .downcast_ref::<UploadSmartContractCodeChunk>()
+                    .unwrap()
+                    .artifact_id
+            } else {
+                native
+                    .as_any()
+                    .downcast_ref::<FinalizeSmartContractCodeUpload>()
+                    .unwrap()
+                    .artifact_id
+            };
+            assert_eq!(actual.dataspace_id.as_u64(), dataspace);
+            assert_eq!(actual.code_hash, Hash::new(b"lifecycle-codec-test"));
         }
+        let original = deployment(name);
+        for replacement in [
+            Value::Null,
+            Value::from(42_u64),
+            Value::String("01".into()),
+            Value::String("+42".into()),
+            Value::String("18446744073709551616".into()),
+        ] {
+            let mut value = original.clone();
+            fields(
+                fields(fields(&mut value).get_mut(name).unwrap())
+                    .get_mut("artifact_id")
+                    .unwrap(),
+            )
+            .insert("dataspace_id".into(), replacement);
+            rejects(&value);
+        }
+        for field in ["dataspace_id", "code_hash"] {
+            let mut value = original.clone();
+            fields(
+                fields(fields(&mut value).get_mut(name).unwrap())
+                    .get_mut("artifact_id")
+                    .unwrap(),
+            )
+            .remove(field);
+            rejects(&value);
+        }
+        let mut extra = original.clone();
+        fields(
+            fields(fields(&mut extra).get_mut(name).unwrap())
+                .get_mut("artifact_id")
+                .unwrap(),
+        )
+        .insert("unrecognized".into(), Value::Null);
+        rejects(&extra);
         let mut retired = original.clone();
         let payload = fields(fields(&mut retired).get_mut(name).unwrap());
         payload.remove("artifact_id");

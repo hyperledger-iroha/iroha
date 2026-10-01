@@ -3,8 +3,9 @@
 use super::*;
 use iroha_core::{
     beacon::{
-        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_roster_hash_v1,
-        validate_global_threshold_beacon_session_v1,
+        GlobalThresholdBeaconSessionBindingV1, GlobalThresholdBeaconVerificationError,
+        global_threshold_beacon_roster_hash_iter_v1,
+        validate_global_threshold_beacon_session_with_admission_v1,
     },
     state::{StateReadOnly, WorldReadOnly},
     sumeragi::certified_chain::CertifiedChain,
@@ -16,7 +17,8 @@ use iroha_data_model::{
     },
     sumeragi::finality::{
         NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT,
-        NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityArtifact, NativeFinalityLimits,
+        NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityArtifact, NativeFinalityArtifactError,
+        NativeFinalityLimits,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -38,6 +40,66 @@ fn unavailable() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
+}
+
+fn capacity() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+    ))
+}
+
+fn codec_error(error: norito::Error) -> Error {
+    if error.is_decode_resource_limit() {
+        capacity()
+    } else {
+        invalid(error.to_string())
+    }
+}
+
+fn artifact_error(error: NativeFinalityArtifactError) -> Error {
+    match error {
+        NativeFinalityArtifactError::Resource(_) => capacity(),
+        NativeFinalityArtifactError::Invalid(message) => invalid(message),
+    }
+}
+
+fn beacon_error(error: GlobalThresholdBeaconVerificationError<norito::Error>) -> Error {
+    match error {
+        GlobalThresholdBeaconVerificationError::Resource(_) => capacity(),
+        GlobalThresholdBeaconVerificationError::Invalid(error) => {
+            invalid(format!("invalid prepared committee beacon: {error}"))
+        }
+    }
+}
+
+fn response_error(error: crate::utils::BoundedResponseEncodeError) -> Error {
+    match error {
+        crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. }
+        | crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. } => capacity(),
+        crate::utils::BoundedResponseEncodeError::Serialization => {
+            invalid("committee response canonical serialization failed")
+        }
+    }
+}
+
+// Copy a borrowed World graph only through a counted, prepaid canonical buffer and the
+// caller's unchanged cumulative decoder. The buffer and decoded graph may overlap; both
+// are charged before allocation. Refusal leaves the original immutable row untouched.
+fn admitted_copy<T>(value: &T, max_frame_bytes: usize) -> Result<T, Error>
+where
+    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+{
+    let length = norito::canonical_frame_len(value).map_err(codec_error)?;
+    if length > max_frame_bytes {
+        return Err(capacity());
+    }
+    norito::core::reserve_decode_allocation(length).map_err(codec_error)?;
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let bytes = norito::core::to_bytes_bounded(value, length).map_err(|error| match error {
+        norito::core::BoundedEncodeError::Serialization(error) => codec_error(error),
+        _ => capacity(),
+    })?;
+    norito::decode_canonical(&bytes).map_err(codec_error)
 }
 
 fn load(
@@ -74,52 +136,58 @@ fn load(
     };
     let reader =
         CertifiedChain::new_with_source_admission(state, &mut admit).map_err(query_error)?;
-    let mut read = |height: u64| {
-        let height = usize::try_from(height)
-            .ok()
-            .and_then(std::num::NonZeroUsize::new)
-            .ok_or_else(unavailable)?;
-        reader
-            .certified_from_execution(height, &mut admit)
-            .map_err(query_error)
-    };
-    let latest = read(height)?;
+    let index = usize::try_from(height)
+        .ok()
+        .and_then(std::num::NonZeroUsize::new)
+        .ok_or_else(unavailable)?;
+    let mut resolved_epoch = None;
+    let mut transition = None;
+    let (latest, historical) = reader
+        .certified_with_ancestor_from_execution(index, &mut admit, |latest| {
+            let outcome = &latest.commitment().schedule;
+            let current = outcome
+                .boundary
+                .as_ref()
+                .map_or(&outcome.current, |boundary| &boundary.next);
+            let epoch = target_epoch.map_or_else(
+                || {
+                    current.authorization.epoch.checked_add(1).ok_or_else(|| {
+                        QueryExecutionFail::Conversion("committee epoch overflow".into())
+                    })
+                },
+                Ok,
+            )?;
+            resolved_epoch = Some(epoch);
+            transition = state.world().validator_committee_transitions().get(&epoch);
+            transition
+                .filter(|row| row.preparation.selection_height != height)
+                .map(|row| {
+                    usize::try_from(row.preparation.selection_height)
+                        .ok()
+                        .and_then(std::num::NonZeroUsize::new)
+                        .ok_or(QueryExecutionFail::NotFound)
+                })
+                .transpose()
+        })
+        .map_err(query_error)?;
+    let target_epoch = resolved_epoch.ok_or_else(unavailable)?;
     let latest_finality =
-        NativeFinalityArtifact::from_block(latest.block(), limits).map_err(invalid)?;
+        NativeFinalityArtifact::from_block(latest.block(), limits).map_err(artifact_error)?;
     let outcome = &latest.commitment().schedule;
-    let current = outcome
-        .boundary
-        .as_ref()
-        .map_or(&outcome.current, |boundary| &boundary.next);
-    let target_epoch = match target_epoch {
-        Some(epoch) => epoch,
-        None => current
-            .authorization
-            .epoch
-            .checked_add(1)
-            .ok_or_else(|| invalid("committee target epoch overflow"))?,
-    };
-    let selected = state
-        .world()
-        .validator_committee_transitions()
-        .get(&target_epoch)
-        .cloned()
+    let selected = transition
         .map(|transition| {
-            let historical = (transition.preparation.selection_height != height)
-                .then(|| read(transition.preparation.selection_height))
-                .transpose()?;
             let selecting = historical.as_ref().unwrap_or(&latest);
             validate_validator_committee_selection_binding_v1(
-                &transition,
+                transition,
                 selecting,
                 &latest,
                 target_epoch,
             )
             .map_err(invalid)?;
-            let selecting_finality =
-                NativeFinalityArtifact::from_block(selecting.block(), limits).map_err(invalid)?;
+            let selecting_finality = NativeFinalityArtifact::from_block(selecting.block(), limits)
+                .map_err(artifact_error)?;
             let selection = ValidatorCommitteeSelectionStatusV1 {
-                transition,
+                transition: admitted_copy(transition, limits.block_bytes)?,
                 selecting_finality,
             };
             Ok::<_, Error>(selection)
@@ -142,6 +210,16 @@ fn load(
     let mut candidate_keys = Vec::new();
     if let Some(selection) = &selected {
         let generation = selection.transition.preparation.authority_generation;
+        let seats = selection.transition.preparation.committee.len();
+        norito::core::reserve_decode_allocation(
+            seats
+                .checked_mul(size_of::<ValidatorCandidateKeysV1>())
+                .ok_or_else(capacity)?,
+        )
+        .map_err(codec_error)?;
+        candidate_keys
+            .try_reserve_exact(seats)
+            .map_err(|_| capacity())?;
         for seat in &selection.transition.preparation.committee {
             let key = ValidatorCandidateKeysV1::key_id(network_id, generation, &seat.validator);
             let Some(candidate) = state.world().validator_candidate_keys().get(&key) else {
@@ -154,7 +232,7 @@ fn load(
                 return Err(invalid("candidate publication storage binding differs"));
             }
             candidate.validate().map_err(invalid)?;
-            candidate_keys.push(candidate.clone());
+            candidate_keys.push(admitted_copy(candidate, limits.block_bytes)?);
         }
     }
     let pending_beacon_session = selected
@@ -167,12 +245,7 @@ fn load(
                 .global_beacon_key_sessions()
                 .get(&session_id)
                 .map(|record| {
-                    let peers = preparation
-                        .committee
-                        .iter()
-                        .map(|seat| seat.validator.clone())
-                        .collect::<Vec<_>>();
-                    if usize::from(record.session.committee_size) != peers.len()
+                    if usize::from(record.session.committee_size) != preparation.committee.len()
                         || record.session.adaptive_dkg.session.start_height
                             <= preparation.selection_height
                         || record.session.adaptive_dkg.finalized_at_height
@@ -185,13 +258,18 @@ fn load(
                     let binding = GlobalThresholdBeaconSessionBindingV1 {
                         network_id,
                         session_id,
-                        roster_hash: global_threshold_beacon_roster_hash_v1(&peers),
+                        roster_hash: global_threshold_beacon_roster_hash_iter_v1(
+                            preparation.committee.iter().map(|seat| &seat.validator),
+                        ),
                         transcript_hash: record.session.transcript_hash,
                     };
-                    validate_global_threshold_beacon_session_v1(record.session.clone(), &binding)
-                        .map_err(|error| {
-                        invalid(format!("invalid prepared committee beacon: {error}"))
-                    })?;
+                    let session = admitted_copy(&record.session, limits.block_bytes)?;
+                    let validated = validate_global_threshold_beacon_session_with_admission_v1(
+                        session,
+                        &binding,
+                        &mut norito::core::reserve_decode_allocation,
+                    )
+                    .map_err(beacon_error)?;
                     if selection
                         .transition
                         .credentials
@@ -206,7 +284,7 @@ fn load(
                             "prepared committee beacon differs from fixed credentials",
                         ));
                     }
-                    Ok(record.session.clone())
+                    Ok(validated.into_record())
                 })
                 .transpose()
         })
@@ -229,6 +307,39 @@ fn load(
         candidate_keys,
         pending_beacon_session,
     })
+}
+
+/// One reservation, specialized for two certificates and their shared native ancestry.
+/// Four units cover cumulative admitted decode/owned projection/scratch; one covers
+/// the currently read canonical frame; one the final response and one its encoder.
+/// The existing fixed allowance remains reserved throughout. This phase split does
+/// not by itself qualify the remaining native crypto/cache and decoded-graph owners.
+/// No per-frame budget is reset or enlarged.
+#[derive(Clone, Copy, Debug)]
+struct CommitteeMemoryEnvelope {
+    limits: NativeFinalityLimits,
+    response_bytes: usize,
+}
+
+impl CommitteeMemoryEnvelope {
+    fn new(working_set_bytes: usize) -> Result<Self, Response> {
+        let phases = QueryFanoutMemoryEnvelope::new(working_set_bytes, 0)?;
+        let unit = phases.route_body_bytes;
+        // QueryFanoutMemoryEnvelope already checked the fixed allowance plus seven
+        // units against the acquired reservation, so these smaller products fit.
+        let limits = NativeFinalityLimits {
+            block_bytes: unit.min(NATIVE_FINALITY_MAX_BLOCK_BYTES),
+            journal_bytes: phases
+                .final_body_bytes
+                .min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
+            block_count: NATIVE_FINALITY_MAX_BLOCK_COUNT,
+            allocated_bytes: unit * 4,
+        };
+        Ok(Self {
+            limits,
+            response_bytes: unit,
+        })
+    }
 }
 
 /// Serve the exact selected preparation and its immutable finality attachments.
@@ -258,7 +369,7 @@ pub(super) async fn handler_validator_committee_status(
     // Committee evidence reads complete certified blocks. The ordinary name/ID
     // query source bound is only 1 KiB and cannot describe this workload. Reserve
     // a complete working set before reading State and retain it through egress.
-    let envelope = match QueryFanoutMemoryEnvelope::new(app.query_fanout_working_set_bytes, 0) {
+    let envelope = match CommitteeMemoryEnvelope::new(app.query_fanout_working_set_bytes) {
         Ok(envelope) => envelope,
         Err(response) => {
             return Ok(hold_query_fanout_memory_in_response_body(
@@ -267,16 +378,8 @@ pub(super) async fn handler_validator_committee_status(
             ));
         }
     };
-    let response_limit = envelope.final_body_bytes;
-    let limits = NativeFinalityLimits {
-        block_bytes: envelope
-            .route_body_bytes
-            .min(NATIVE_FINALITY_MAX_BLOCK_BYTES)
-            .min(response_limit),
-        journal_bytes: response_limit.min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
-        block_count: NATIVE_FINALITY_MAX_BLOCK_COUNT,
-        allocated_bytes: envelope.decode_allocated_bytes,
-    };
+    let response_limit = envelope.response_bytes;
+    let limits = envelope.limits;
     limits.validate().map_err(invalid)?;
     let state = app.state.clone();
     let worker_reservation = reservation.clone();
@@ -289,13 +392,8 @@ pub(super) async fn handler_validator_committee_status(
                 limits.decode_limits().map_err(invalid)?,
                 || load(&view, query.target_epoch, limits),
             )?;
-            crate::utils::respond_with_format_bounded(payload, format, response_limit).map_err(
-                |error| {
-                    invalid(format!(
-                        "committee response exceeds its configured bound: {error}"
-                    ))
-                },
-            )
+            crate::utils::respond_with_format_bounded(payload, format, response_limit)
+                .map_err(response_error)
         })
         .await?;
     let response = proof_response_with_exact_egress(
@@ -318,6 +416,225 @@ mod tests {
     use super::*;
     use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     use iroha_data_model::query::error::QueryExecutionFail;
+
+    #[test]
+    fn beacon_read_resource_refusal_remains_distinct_from_invalid_evidence() {
+        let resource = norito::with_decode_limits(norito::DecodeLimits::new(1, 1, 1, 0, 1), || {
+            norito::core::reserve_decode_allocation(1)
+        })
+        .expect_err("original zero allocation owner refuses its first byte");
+        assert!(resource.is_decode_resource_limit());
+        assert!(matches!(
+            beacon_error(GlobalThresholdBeaconVerificationError::Resource(resource)),
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::GasBudgetExceeded
+            ))
+        ));
+        assert!(matches!(
+            beacon_error(GlobalThresholdBeaconVerificationError::Invalid(
+                iroha_core::beacon::GlobalThresholdBeaconError::TranscriptMismatch
+            )),
+            Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+                if message.contains("invalid prepared committee beacon")
+        ));
+    }
+
+    #[test]
+    fn committee_envelope_preserves_one_working_set_and_original_fixed_allowance() {
+        let fixed = query_fanout_fixed_overhead_bytes().unwrap();
+        for reserved in [48 * 1024 * 1024, 64 * 1024 * 1024, 128 * 1024 * 1024] {
+            let envelope = CommitteeMemoryEnvelope::new(reserved).unwrap();
+            let phase = QueryFanoutMemoryEnvelope::new(reserved, 0)
+                .unwrap()
+                .route_body_bytes;
+            assert_eq!(envelope.limits.allocated_bytes, phase * 4);
+            assert_eq!(envelope.response_bytes, phase);
+            assert_eq!(
+                envelope.limits.block_bytes,
+                phase.min(NATIVE_FINALITY_MAX_BLOCK_BYTES)
+            );
+            assert!(
+                fixed + envelope.limits.allocated_bytes + phase + 2 * envelope.response_bytes
+                    <= reserved
+            );
+            envelope.limits.validate().unwrap();
+        }
+        assert!(CommitteeMemoryEnvelope::new(fixed).is_err());
+    }
+
+    #[test]
+    fn committee_world_copy_charges_encoding_and_decoded_graph_before_retry() {
+        let source = vec![vec![0x37_u8; 512], vec![0x51_u8; 128]];
+        let encoded = norito::canonical_frame_len(&source).unwrap();
+        let copy = |budget, bound| {
+            norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(65536, 65536, 65536, budget, 128),
+                || {
+                    let result = admitted_copy(&source, bound);
+                    let norito::Error::TotalAllocationExceeded { attempted, .. } =
+                        norito::core::reserve_decode_allocation(budget + 1).unwrap_err()
+                    else {
+                        panic!("allocation usage probe must refuse without charging");
+                    };
+                    (result, attempted as usize - budget - 1)
+                },
+            )
+        };
+        let (result, charged) = copy(65536, encoded);
+        assert_eq!(result.unwrap(), source);
+        assert!(charged >= encoded + 640 + 2 * size_of::<Vec<u8>>());
+        assert_eq!(copy(charged, encoded).0.unwrap(), source);
+        assert!(matches!(
+            copy(charged - 1, encoded).0,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::GasBudgetExceeded
+            )))
+        ));
+        let (refused, used) = copy(65536, encoded - 1);
+        assert!(matches!(
+            refused,
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::GasBudgetExceeded
+            )))
+        ));
+        assert_eq!(
+            used, 0,
+            "oversized source must refuse before its first allocation"
+        );
+        assert_eq!(source, [vec![0x37; 512], vec![0x51; 128]]);
+        assert!(matches!(
+            codec_error(norito::Error::LengthMismatch),
+            Error::Query(iroha_data_model::ValidationFail::InternalError(_))
+        ));
+    }
+
+    fn committee_source_with_logs(log_bytes: usize) -> CertifiedTestChain {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            isi::{InstructionBox, Log},
+            level::Level,
+        };
+        let author = KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519);
+        let account_id = iroha_data_model::account::AccountId::new(author.public_key().clone());
+        let account =
+            iroha_data_model::account::Account::new(account_id.clone()).build(&account_id);
+        let world = iroha_core::state::World::with([], [account], []);
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1_000)).unwrap();
+        for height in 2..=3 {
+            let tx = chain.sign(
+                &author,
+                [InstructionBox::from(Log::new(
+                    Level::TRACE,
+                    "q".repeat(log_bytes),
+                ))],
+                height * 1_000 - 1,
+            );
+            assert_eq!(chain.commit_at(height * 1_000, vec![tx]), [true]);
+        }
+        chain
+    }
+
+    #[test]
+    fn validator_committee_status_large_signed_source_fits_its_reserved_envelope() {
+        // This genuine source exceeds one generic decode unit while leaving room
+        // for both complete source decodes, RS16 scratch and the final artifact.
+        let chain = committee_source_with_logs(256 * 1024);
+        let envelope = CommitteeMemoryEnvelope::new(48 * 1024 * 1024).unwrap();
+        let legacy = QueryFanoutMemoryEnvelope::new(48 * 1024 * 1024, 0).unwrap();
+        let view = chain.state().view();
+        let read = |limits: NativeFinalityLimits| {
+            norito::core::with_decode_limits_scope(limits.decode_limits().unwrap(), || {
+                load(&view, None, limits)
+            })
+        };
+        let refused = NativeFinalityLimits {
+            allocated_bytes: legacy.decode_allocated_bytes,
+            ..envelope.limits
+        };
+        assert!(
+            matches!(
+                read(refused),
+                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    QueryExecutionFail::GasBudgetExceeded
+                )))
+            ),
+            "the former generic decode unit cannot admit this genuine finalized source"
+        );
+        let observed = read(envelope.limits)
+            .expect("same source fits the complete acquired committee envelope");
+        assert_eq!(
+            observed.latest_finality.block_wire,
+            chain.committed(3).block().encode_wire().unwrap()
+        );
+        for format in [ResponseFormat::Json, ResponseFormat::Norito] {
+            let observed = read(envelope.limits).unwrap();
+            let response = crate::utils::respond_with_format_bounded(
+                observed,
+                format,
+                envelope.response_bytes,
+            )
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let observed = read(envelope.limits).unwrap();
+            let refused = crate::utils::respond_with_format_bounded(observed, format, 1)
+                .map_err(response_error);
+            assert!(matches!(
+                refused,
+                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    QueryExecutionFail::GasBudgetExceeded
+                )))
+            ));
+        }
+        assert!(matches!(
+            response_error(crate::utils::BoundedResponseEncodeError::Serialization),
+            Error::Query(iroha_data_model::ValidationFail::InternalError(_))
+        ));
+        let insufficient_source = NativeFinalityLimits {
+            block_count: 2,
+            ..envelope.limits
+        };
+        assert!(matches!(
+            read(insufficient_source),
+            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::GasBudgetExceeded
+            )))
+        ));
+        assert!(
+            read(envelope.limits).is_ok(),
+            "refusal must not poison canonical source storage"
+        );
+    }
+
+    #[test]
+    fn validator_committee_status_oversized_signed_source_refuses_without_poisoning() {
+        // Measured independently with one diagnostic cumulative scope: this
+        // source needs over 48 MiB of admitted work, so it must never be admitted
+        // by reallocating phases within the 48 MiB total request reservation.
+        let chain = committee_source_with_logs(1024 * 1024);
+        let envelope = CommitteeMemoryEnvelope::new(48 * 1024 * 1024).unwrap();
+        let view = chain.state().view();
+        for _ in 0..2 {
+            let refused = norito::core::with_decode_limits_scope(
+                envelope.limits.decode_limits().unwrap(),
+                || load(&view, None, envelope.limits),
+            );
+            assert!(matches!(
+                refused,
+                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    QueryExecutionFail::GasBudgetExceeded
+                )))
+            ));
+        }
+        assert_eq!(view.height(), 3);
+        assert_eq!(chain.kura().blocks_count(), 3);
+        // A bounded source refusal remains independent of disk validity. A
+        // fresh native certificate read authenticates the same original tip.
+        let reader = CertifiedChain::new(&view).unwrap();
+        let tip = reader
+            .certified_from_execution(std::num::NonZeroUsize::new(3).unwrap(), |_, _| Ok(()))
+            .unwrap();
+        assert_eq!(tip.block().hash(), chain.committed(3).block().hash());
+    }
 
     #[test]
     fn validator_committee_status_charges_genesis_to_the_shared_source_limits() {

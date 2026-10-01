@@ -272,12 +272,14 @@ fn fixture_attribution(evidence: &Evidence) -> EvidenceAttribution {
         panic!("native fixture vote pair")
     };
     EvidenceAttribution {
+        scope: iroha_data_model::block::consensus::EvidenceScope::Root,
         instance: vote.instance.0,
         height: vote.height,
         epoch: vote.epoch.epoch,
         context_id: vote.epoch.context.0,
         authority_generation: [0xA4; 32],
         offenders: vec![EvidenceOffender {
+            lane_stake: None,
             signer: vote.signer,
             peer_id: checked_bls_peer_id_from_seed(0xA1),
         }],

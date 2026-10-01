@@ -2718,7 +2718,10 @@ pub mod extractors {
             assert_eq!(oversized_error.status(), StatusCode::PAYLOAD_TOO_LARGE);
         }
         #[cfg(feature = "app_api")]
-        impl KagemushaCanonicalNoritoSchemaV1 for Vec<u64> {
+        impl<T> KagemushaCanonicalNoritoSchemaV1 for Vec<T>
+        where
+            Vec<T>: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+        {
             const MAX_BODY_BYTES: usize = 4 * 1024;
 
             fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError> {
@@ -4285,24 +4288,77 @@ pub mod extractors {
                         | norito::Error::TotalAllocationExceeded { .. }
                 ))
             ));
-            // Keep the forged count within the per-sequence and cumulative
-            // element limits, but make the requested `u64` backing allocation
-            // exceed the production fourfold byte budget. The decoder must
-            // reject before attempting to read or allocate those elements.
+            // Keep the forged count within the element limits but omit most
+            // of its length prefixes. Structural preflight must reject this
+            // truncation before reserving storage for elements or their spans.
             const ALLOCATION_COUNT: u64 = 128;
             let mut allocation_payload = ALLOCATION_COUNT.to_le_bytes().to_vec();
-            allocation_payload.resize(allocation_payload.len() + ALLOCATION_COUNT as usize, 0);
+            allocation_payload.resize(allocation_payload.len() + ALLOCATION_COUNT as usize - 1, 0);
             let allocation_frame = norito::core::frame_bare_with_header_flags::<Vec<u64>>(
                 &allocation_payload,
                 norito::core::default_encode_flags(),
             )
             .expect("frame forged allocation with a valid checksum");
+            let defaults = norito::canonical_decode_limits(allocation_frame.len());
+            let preflight_only = norito::DecodeLimits::new(
+                defaults.max_sequence_elements(),
+                defaults.max_field_bytes(),
+                defaults.max_total_elements(),
+                allocation_frame.len() * 2,
+                defaults.max_nesting_depth(),
+            );
+            // Enough for frame handling, but not for 128 spans or u64 values:
+            // allocating either first would report a resource refusal instead.
             assert!(matches!(
-                decode_kagemusha_canonical_norito::<Vec<u64>>(&allocation_frame),
+                norito::with_decode_limits(preflight_only, || {
+                    Ok(decode_kagemusha_canonical_norito::<Vec<u64>>(
+                        &allocation_frame,
+                    ))
+                }),
+                Ok(Err(KagemushaCanonicalNoritoDecodeError::Norito(
+                    norito::Error::LengthMismatch
+                )))
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        #[test]
+        fn kagemusha_norito_decoder_rejects_large_owned_elements_before_allocation() {
+            // Absent large inline values have a small, valid encoding but
+            // still require their full element size in the owned output Vec.
+            type Element = Option<[u64; 1024]>;
+            let values = vec![None::<[u64; 1024]>; 128];
+            let frame = norito::encode_canonical(&values).expect("canonical compact values");
+            assert!(
+                frame.len() <= <Vec<Element> as KagemushaCanonicalNoritoSchemaV1>::MAX_BODY_BYTES
+            );
+            let limits = norito::canonical_decode_limits(frame.len());
+            let backing_bytes = values.len() * core::mem::size_of::<Element>();
+            assert!(backing_bytes > limits.max_total_allocated_bytes());
+            assert!(matches!(
+                decode_kagemusha_canonical_norito::<Vec<Element>>(&frame),
                 Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::TotalAllocationExceeded { .. }
                 ))
             ));
+            // The canonical API must keep its mandatory envelope even when
+            // callers supply looser limits. A separately funded frame decode
+            // and exact re-encode prove these original bytes are well formed.
+            let funded = norito::DecodeLimits::new(
+                limits.max_sequence_elements(),
+                limits.max_field_bytes(),
+                limits.max_total_elements(),
+                limits.max_total_allocated_bytes() + backing_bytes,
+                limits.max_nesting_depth(),
+            );
+            assert!(matches!(
+                norito::decode_canonical_with_limits::<Vec<Element>>(&frame, funded),
+                Err(norito::Error::TotalAllocationExceeded { .. })
+            ));
+            let decoded = norito::decode_from_bytes_with_limits::<Vec<Element>>(&frame, funded)
+                .expect("the same frame with explicitly funded output storage");
+            assert_eq!(decoded, values);
+            norito::verify_exact_canonical_frame(&decoded, &frame)
+                .expect("the valid frame has the exact canonical bytes");
         }
         #[cfg(feature = "app_api")]
         #[test]

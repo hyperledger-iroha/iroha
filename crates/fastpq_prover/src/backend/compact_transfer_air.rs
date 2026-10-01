@@ -9,8 +9,8 @@
 //! leaf hashes and collision-resolved paths, and authenticate external roots.
 //!
 //! The complete arithmetic evaluator accepts canonical base or quartic-extension
-//! points and cells, preserving all 923 slots. The existing compact proof still
-//! uses its fixed base-field openings and unchanged transcript/profile.
+//! points and cells, preserving all 923 slots. The canonical masked q77 proof
+//! consumes this same relation through the closed DEEP relation owner.
 //! Verification evaluates only the two complete openings and bounded public
 //! polynomials. It never constructs a witness, FFT or LDE. Prover preparation
 //! expands exactly 49 fixed public columns once and shares those immutable LDEs
@@ -20,10 +20,9 @@
 //! then yields quotient degree <2N. Explicit masked column degrees require the
 //! separate full-polynomial degree calculation and new degree authentication.
 //!
-//! TODO: Qualify the complete protocol's soundness and public resource envelope
-//! before changing production admission. This internal prototype proves one
-//! declared two-update SMT statement; it changes no query/profile/default limit
-//! and does not replace the production verifier's mandatory replay.
+//! TODO: Independently qualify the complete protocol's soundness and public
+//! resource envelope. This relation describes one declared two-update SMT
+//! statement; it grants no source-finality or execution authority.
 
 use super::{
     air_degree::{AirDegreeBounds, PolynomialDegree},
@@ -1271,75 +1270,87 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "explicit full 65536x342 compact SMT prover resource diagnostic"]
+    #[ignore = "explicit complete canonical q77 SMT proof with native masked trace"]
     fn complete_smt_prover_diagnostic() {
+        use crate::backend::{
+            deep_engine,
+            deep_geometry::QUERY_COUNT,
+            deep_proof,
+            deep_prover::{ConstructionLimits, ProducerPlan},
+            deep_trace_source::OwnedTraceSource,
+            offline_compact::ProvingLimits,
+        };
+        use rand::{SeedableRng, rngs::StdRng};
         let start = std::time::Instant::now();
         let (statement, witness) = physical_fixture();
-        let columns = physical_columns(&witness);
+        let source = OwnedTraceSource::from_rows(witness.rows()).unwrap();
         drop(witness);
         let construction = start.elapsed();
         let air =
             CompactTransferAir::new(&statement, Some(b"test-only-full-smt-diagnostic")).unwrap();
+        let policy = ProvingLimits::default();
+        let plan = ProducerPlan::new(
+            &air,
+            ConstructionLimits {
+                digest_execution: policy.digest_execution,
+                max_payload_bytes: policy.max_segment_charge_bytes,
+                max_work_units: policy.max_segment_work_units,
+                max_hash_calls: policy.max_segment_work_units,
+                max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
+            },
+        )
+        .unwrap();
         let prove_start = std::time::Instant::now();
-        let proof = super::super::compact_protocol::prove(&air, &columns).unwrap();
+        let bytes = plan
+            .build(source, &mut StdRng::seed_from_u64(0x375_077))
+            .unwrap();
         let proving = prove_start.elapsed();
-        drop(columns);
-        let proof_bytes = norito::core::to_bytes(&proof).unwrap().len();
+        // Both the physical witness and consumed clearing trace owner are gone.
+        // Verification receives only exact public ports and the canonical frame.
         let limits = VerifyLimits::default();
+        assert_eq!(QUERY_COUNT, 77);
+        assert!(bytes.len() <= deep_proof::MAX_FRAME_BYTES);
+        assert!(bytes.len() <= limits.max_proof_bytes);
         let verification_start = std::time::Instant::now();
-        let verification = super::super::compact_protocol::verify(&air, &proof, limits);
+        let verified =
+            deep_engine::verify_committed(&air, &bytes, limits, 32 * 1024 * 1024).unwrap();
+        let work = verified.work();
+        assert_eq!(work.proof_bytes, bytes.len());
+        assert_eq!(work.air_evaluations, 1);
+        assert_eq!(work.terminal_values, 128);
+        assert!(work.leaf_hashes >= QUERY_COUNT);
+        // The same resource-boundary assertions now exercise the sole admitted
+        // q77 geometry, without retaining a q375 decoder or enlarging any cap.
+        for (policy, name) in [
+            (
+                VerifyLimits {
+                    max_queries: QUERY_COUNT - 1,
+                    ..limits
+                },
+                "max_queries",
+            ),
+            (
+                VerifyLimits {
+                    max_proof_bytes: bytes.len() - 1,
+                    ..limits
+                },
+                "max_proof_bytes",
+            ),
+        ] {
+            assert!(
+                matches!(deep_engine::verify_committed(&air, &bytes, policy, 32 * 1024 * 1024),
+                Err(Error::VerifierLimitExceeded { limit, .. }) if limit == name)
+            );
+        }
         eprintln!(
-            "compact_transfer_construction={construction:?}; prove={proving:?}; verify={:?}; proof_bytes={proof_bytes}; default_proof_limit={}; default_verification={verification:?}",
-            verification_start.elapsed(),
-            limits.max_proof_bytes
-        );
-        // Defaults are intentionally never raised by this diagnostic. A proof
-        // outside its byte envelope remains a reported production blocker.
-        assert!(proof_bytes > limits.max_proof_bytes);
-        assert!(matches!(
-            verification,
-            Err(Error::VerifierLimitExceeded {
-                limit: "max_queries",
-                actual: 375,
-                max: 136
-            })
-        ));
-        let byte_policy = VerifyLimits {
-            max_queries: 375,
-            ..limits
-        };
-        assert!(matches!(
-            super::super::compact_protocol::verify(&air, &proof, byte_policy),
-            Err(Error::VerifierLimitExceeded {
-                limit: "max_proof_bytes",
-                ..
-            })
-        ));
-        // Independently exercise the complete verifier after all private trace
-        // objects have been dropped, even when the default byte gate rejects.
-        // This explicit test envelope never alters production policy.
-        let diagnostic_limits = VerifyLimits {
-            max_proof_bytes: 16 * 1024 * 1024,
-            max_queries: 375,
-            ..limits
-        };
-        let diagnostic_start = std::time::Instant::now();
-        let work = super::super::compact_protocol::verify(&air, &proof, diagnostic_limits)
-            .expect("valid full SMT proof within the explicit diagnostic envelope");
-        assert_eq!(work.air_evaluations, 375);
-        assert!((375..=750).contains(&work.row_leaves));
-        eprintln!(
-            "compact_transfer_diagnostic_verify={:?}; work={work:?}; diagnostic_limit={}; production_profile_qualified=false",
-            diagnostic_start.elapsed(),
-            diagnostic_limits.max_proof_bytes
+            "canonical_smt_construction={construction:?}; prove={proving:?}; verify={:?}; work={work:?}; independently_qualified=false",
+            verification_start.elapsed()
         );
         let mut changed = statement;
         changed.new_root[0] ^= 1;
         let changed =
             CompactTransferAir::new(&changed, Some(b"test-only-full-smt-diagnostic")).unwrap();
-        assert!(
-            super::super::compact_protocol::verify(&changed, &proof, diagnostic_limits).is_err()
-        );
+        assert!(deep_engine::verify_committed(&changed, &bytes, limits, 32 * 1024 * 1024).is_err());
     }
 
     #[test]

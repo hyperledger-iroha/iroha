@@ -498,10 +498,8 @@ impl Evidence {
             first: &mut T,
             second: &mut T,
         ) -> Result<(), CodecError> {
-            let left =
-                norito::encode_canonical(first).map_err(|e| CodecError::Norito(e.to_string()))?;
-            let right =
-                norito::encode_canonical(second).map_err(|e| CodecError::Norito(e.to_string()))?;
+            let left = norito::encode_canonical(first).map_err(CodecError::from)?;
+            let right = norito::encode_canonical(second).map_err(CodecError::from)?;
             if left > right {
                 core::mem::swap(first, second);
             }
@@ -540,7 +538,7 @@ impl<'de> norito::core::DeserializePayload<'de> for Evidence {
         };
         evidence
             .decode_native()
-            .map_err(|e| norito::core::Error::Message(e.to_string()))?;
+            .map_err(norito::core::Error::from)?;
         Ok(evidence)
     }
 }
@@ -552,9 +550,12 @@ impl norito::json::JsonDeserialize for Evidence {
         let evidence = Self {
             native: wire.native,
         };
-        evidence
-            .decode_native()
-            .map_err(|e| norito::json::Error::Message(e.to_string()))?;
+        evidence.decode_native().map_err(|error| match error {
+            iroha_sumeragi::message::CodecError::Resource(_) => {
+                norito::json::Error::DecodeResourceLimit
+            }
+            other => norito::json::Error::Message(other.to_string()),
+        })?;
         Ok(evidence)
     }
 }
@@ -589,6 +590,72 @@ pub struct EvidenceOffender {
     pub signer: u32,
     /// Original historical peer bound to that signer index.
     pub peer_id: PeerId,
+    /// Exact creation-time monetary binding for a lane signer; absent for root reports or
+    /// lane members whose original creation had no genuine positive staking custody.
+    pub lane_stake: Option<crate::sumeragi_lanes::SumeragiLaneStakeBinding>,
+}
+
+/// Original root-chain execution cut that admitted one native lane report.
+/// Native subject heights remain in [`EvidenceAttribution::height`]; none of these fields
+/// asserts a global occurrence height for the offence.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::block::consensus::LaneEvidenceScope")]
+pub struct LaneEvidenceScope {
+    /// Physical lane selected by the independently authenticated creation record.
+    pub lane: LaneId,
+    /// Exact original incarnation, independent of later lane-ID reuse.
+    pub incarnation: [u8; 32],
+    /// Creation height on the root carrier chain, not a signed native offence height.
+    pub created_at: u64,
+    /// Original parent of the root carrier that first admitted this report.
+    pub admission_parent_height: u64,
+    /// Canonical carrier hash of that original parent.
+    pub admission_parent_hash: HashOf<BlockHeader>,
+    /// Native root consensus hash of that original parent.
+    pub admission_parent_core_hash: [u8; 32],
+    /// Certified original execution result of that parent.
+    pub admission_parent_result: [u8; 32],
+}
+
+/// Clock and historical authority of an independently authenticated native report.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[norito_schema(name = "iroha_data_model::block::consensus::EvidenceScope")]
+pub enum EvidenceScope {
+    /// The executing State's root instance; its signed height uses the carrier clock.
+    Root,
+    /// A pinned native lane instance, authenticated beneath an original root execution cut.
+    Lane(LaneEvidenceScope),
 }
 
 /// Independently authenticated historical attribution retained with a committed report.
@@ -607,6 +674,8 @@ pub struct EvidenceOffender {
 #[norito(deny_unknown_fields)]
 #[norito_schema(name = "iroha_data_model::block::consensus::EvidenceAttribution")]
 pub struct EvidenceAttribution {
+    /// Distinguishes the root carrier clock from native lane heights and original custody.
+    pub scope: EvidenceScope,
     /// Exact native consensus instance.
     pub instance: [u8; 32],
     /// Native height at which the original artifacts were signed.

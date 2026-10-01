@@ -148,6 +148,45 @@ fn install_current_lane_manifest_registry(state: &State) {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 }
+// The stored-manifest component has an explicit committed global root.
+fn manifest_admission_root_parameter() -> iroha_data_model::parameter::Parameter {
+    use iroha_data_model::{
+        block::consensus::{SumeragiRootScope, ValidatorPower},
+        parameter::{
+            Parameter,
+            custom::CustomParameter,
+            system::{
+                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+                consensus_metadata,
+            },
+        },
+    };
+    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
+        .into_iter()
+        .map(|(validator, _)| ValidatorPower {
+            validator,
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    assert_eq!(context.root_scope, SumeragiRootScope::Global);
+    let metadata = ConsensusHandshakeMetadata {
+        mode: SumeragiConsensusMode::Permissioned,
+        block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
+        wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
+        consensus_fingerprint: ConsensusFingerprint::new([0xA5; 32]),
+        kagemusha_mint_finality:
+            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
+        sumeragi_context: context,
+    };
+    metadata
+        .validate()
+        .expect("valid global manifest fixture metadata");
+    Parameter::Custom(CustomParameter::new(
+        consensus_metadata::handshake_meta_id(),
+        Json::new(metadata),
+    ))
+}
 #[test]
 fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
@@ -182,6 +221,10 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
+    stx1.world
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(manifest_admission_root_parameter());
     // Grant CanManageSmartContractCode to the authority
     let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
@@ -200,6 +243,10 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     // Block 2: submit the IVM program; admission should reject due to abi_hash mismatch
     let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(block2.world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
     let tx = TransactionBuilder::new(
         network_id,
         account_id.clone(),
@@ -263,6 +310,10 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
+    stx1.world
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(manifest_admission_root_parameter());
     // Grant permission
     let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
@@ -317,6 +368,10 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     // Block 2: submit the IVM program; admission should accept due to matching abi_hash
     let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(block2.world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
     let tx = TransactionBuilder::new(
         network_id,
         account_id.clone(),
@@ -368,6 +423,10 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
+    stx1.world
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(manifest_admission_root_parameter());
     // Grant permission
     let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
@@ -386,6 +445,10 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     // Block 2: a present V1 manifest is incomplete without its ABI binding.
     let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(block2.world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
     let tx = TransactionBuilder::new(
         network_id,
         account_id.clone(),
@@ -444,6 +507,10 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
+    stx1.world
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(manifest_admission_root_parameter());
     let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
@@ -495,6 +562,10 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     // Block 2: submit program; admission should accept
     let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(block2.world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
     let tx = TransactionBuilder::new(
         network_id,
         account_id.clone(),
@@ -550,6 +621,10 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
+    stx1.world
+        .parameters_mut_for_testing()
+        .get_mut()
+        .set_parameter(manifest_admission_root_parameter());
     let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
@@ -567,6 +642,10 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     // Block 2: submit the program with an unknown syscall; admission should reject before execution.
     let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(block2.world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
     let tx = TransactionBuilder::new(
         network_id,
         account_id.clone(),

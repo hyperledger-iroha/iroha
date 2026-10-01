@@ -221,15 +221,16 @@ def test_rejects_contextual_shipping_feature_reachable_from_default() -> None:
 
 
 def test_rejects_explicit_opt_in_reachable_from_default() -> None:
-    document = copy.deepcopy(_guarded_document("iroha_core"))
-    document["features"]["default"].append("quic")
+    for feature in ("quic", "mutation-testing"):
+        document = copy.deepcopy(_guarded_document("iroha_core"))
+        document["features"]["default"].append(feature)
 
-    errors = _guarded_errors("iroha_core", document)
+        errors = _guarded_errors("iroha_core", document)
 
-    assert any(
-        "explicit opt-in feature `quic` is reachable from `default`" in error
-        for error in errors
-    )
+        assert any(
+            f"explicit opt-in feature `{feature}` is reachable from `default`" in error
+            for error in errors
+        ), errors
 
 
 def test_rejects_stale_explicit_opt_in_name(monkeypatch) -> None:

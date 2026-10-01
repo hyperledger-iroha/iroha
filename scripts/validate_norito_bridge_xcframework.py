@@ -122,6 +122,11 @@ EXPECTED_ENVIRONMENT_PROFILES = {
 }
 EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_bridge_abi_version",
+    "connect_norito_domain_id_validate_v1",
+    "soranet_mldsa_parameters",
+    "soranet_mldsa_generate_keypair",
+    "soranet_mldsa_sign",
+    "soranet_mldsa_verify",
     "connect_norito_free",
     "connect_norito_chain_discriminant_scope_enter",
     "connect_norito_chain_discriminant_scope_exit",
@@ -175,6 +180,7 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
     "connect_norito_kagemusha_contract_vector_v1",
     "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_install_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",

@@ -226,3 +226,40 @@ def test_sumeragi_evidence_reads_enforce_strict_bounded_json(
     assert response.was_closed is True
     assert session.calls[0]["stream"] is True
     assert session.calls[0]["headers"]["Accept"] == "application/json"
+
+
+def test_evidence_preserves_unattributed_certificate_safety_violation() -> None:
+    record = _sumeragi_native_evidence_record()
+    record.update({
+        "class": "conflicting_certificates", "safety_violation": True, "offenders": [],
+    })
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"total": 1, "items": [record]}))
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
+    parsed = client.list_sumeragi_evidence().items[0]
+    assert parsed.class_ == "conflicting_certificates"
+    assert parsed.safety_violation is True
+    assert parsed.offenders == ()
+    assert parsed.native_frame_hash == record["native_frame_hash"]
+
+
+@pytest.mark.parametrize("evidence_class,safety_violation", [
+    ("conflicting_certificates", False), ("conflicting_certificates", 1),
+    ("phase_vote", True),
+])
+def test_empty_offenders_require_exact_certificate_safety_violation(
+    evidence_class: str, safety_violation: Any,
+) -> None:
+    record = _sumeragi_native_evidence_record()
+    record.update({
+        "class": evidence_class, "safety_violation": safety_violation, "offenders": [],
+    })
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"total": 1, "items": [record]}))
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
+    with pytest.raises(RuntimeError, match="offenders must contain"):
+        client.list_sumeragi_evidence()

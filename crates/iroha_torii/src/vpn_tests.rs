@@ -2325,7 +2325,7 @@ fn list_vpn_receipts_cannot_reintroduce_a_global_lease_scan() {
         .expect("receipt projection function");
     let tail = &source[start..];
     let end = tail
-        .find("fn external_signed_transaction_results(")
+        .find("fn committed_transaction_by_hash(")
         .expect("receipt projection terminator");
     let implementation = &tail[..end];
     assert!(implementation.contains("vpn_settled_leases_by_account()"));

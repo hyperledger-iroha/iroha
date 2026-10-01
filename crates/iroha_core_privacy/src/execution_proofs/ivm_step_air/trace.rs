@@ -13,9 +13,16 @@
 //! MEAN computes the signed 65-bit sum and truncates toward zero, charging two
 //! gas units and completing three cycles. Final-attempt cycle admission follows
 //! the interpreter pre-dispatch limit, including a completed last-step crossing.
-//! JAL with a link register is excluded. This relation does not prove
-//! call entry/return, memory, private
-//! values, host effects, deployment authority, finality or invocation completion.
+//! ISQRT proves n=q²+r and 0<=r<=2q with a 32-bit root, charging six gas
+//! and cycles. DIV_CEIL proves the signed quotient plus its exact same-sign
+//! nonzero-remainder correction, charging twelve gas and cycles; OOG takes
+//! precedence over denominator-zero and signed-overflow traps. All use the
+//! existing arithmetic workspaces. GCD uses five constrained mode cells and
+//! 93 physical rows per attempt whenever the complete authenticated code contains
+//! a GCD opcode (including unreachable words); other programs use one row per
+//! attempt. Architectural state freezes until commit. JAL with a link register is excluded. This
+//! relation does not prove call entry/return, memory, private values, host effects,
+//! deployment authority, finality or invocation completion.
 //! There is no serialized statement or production verifier registration. The
 //! interpreter recorder provides untrusted witness material, never authority.
 //! Cycle admission uses the immutable artifact policy, including the default
@@ -25,9 +32,12 @@
 
 mod absolute;
 mod bit_count;
+mod ceiling;
 mod division;
+mod gcd;
 mod mean;
 mod multiply;
+mod square_root;
 
 use ivm::{
     PreparedContract,
@@ -47,6 +57,7 @@ use super::{
 
 const MAX_STEPS: usize = 64;
 const MAX_WORDS: usize = 64;
+const _: () = assert!(MAX_STEPS * gcd::STRIDE < TRACE_SIZE);
 const REGISTERS: usize = 256;
 const REGISTER_WIDTH: usize = REGISTERS * 2;
 const PC: usize = REGISTER_WIDTH;
@@ -66,7 +77,8 @@ const BIT_COUNT: usize = RESULT + 2;
 const MULTIPLY: usize = BIT_COUNT + bit_count::WIDTH;
 const ABSOLUTE: usize = MULTIPLY + multiply::WIDTH;
 const MEAN_GAS: usize = ABSOLUTE + absolute::WIDTH;
-const ROW_WIDTH: usize = MEAN_GAS + mean::GAS_WIDTH;
+const GCD: usize = MEAN_GAS + mean::GAS_WIDTH;
+const ROW_WIDTH: usize = GCD + gcd::WIDTH;
 const EXEC: usize = 0;
 const TRANSITION: usize = 1;
 const FIRST: usize = 2;
@@ -74,7 +86,10 @@ const END: usize = 3;
 const OUT_OF_GAS: usize = 4;
 const ASSERTION_FAILED: usize = 5;
 const LAST_ATTEMPT: usize = 6;
-const FIXED_WIDTH: usize = 7;
+const SLOT_ENTRY: usize = 7;
+const SLOT_WORK: usize = 8;
+const SLOT_COMMIT: usize = 9;
+const FIXED_WIDTH: usize = 10;
 // Fetch Boolean/disabled-word checks, sum and PC; source links; result links;
 // every register transition and r0; PC/gas/cycle transitions; u64 range/carries;
 // full boundary register/control checks; arithmetic banks.
@@ -94,8 +109,12 @@ const CONSTRAINT_COUNT: usize = 2 * MAX_WORDS
     + bit_count::CONSTRAINTS
     + multiply::CONSTRAINTS
     + division::CONSTRAINTS
+    + ceiling::CONSTRAINTS
+    + square_root::CONSTRAINTS
     + absolute::CONSTRAINTS
     + mean::CONSTRAINTS
+    + gcd::CONSTRAINTS
+    + 2
     + absolute::WIDTH
     + mean::GAS_WIDTH
     + 2;
@@ -119,7 +138,7 @@ const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
     fri_beta_label: b"ivm-scalar-segment-fri-beta-v1",
     query_seed: b"ivm-scalar-segment-query-seed-v1",
 };
-const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:256-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:getgas:direct-jmp-jal-rd0:cmov-cmovi:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:mean:signed65bit-sum:truncation-toward-zero:reuse-absolute-workspace:gas2-cycles3:gas-first-trap:last-attempt-cycle-limit:canonical-inactive-absolute-and-mean-cells:abs:canonical-rs1-zero-unused-operand:exact-signed-magnitude:min-trap-after-one-gas:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:typed-last-attempt-outcome:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit:zk-zero-default:no-host-cycle-overrides:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
+const PROFILE: &[u8] = b"ivm-public-scalar-segment-v1:attempts=1..64:whole-code<=64-words:prepared-v1-artifact:dynamic-one-hot-fetch:256-registers:two-u32-limbs:all-tags-public-zero:pre-read-post-write:r0:alu-branch-shift:compare=slt-sltu-seq-sne:signed-min-max:wrapping-neg:not:getgas:direct-jmp-jal-rd0:cmov-cmovi:full-word-nonzero:retain-false-destination:popcnt-clz-ctz:shared-source-bits:count-product-workspace:mul-mulhu-mulhsu-mulh:exact-radix16-product:18-bit-carries:two-signed-high-corrections:mean:signed65bit-sum:truncation-toward-zero:reuse-absolute-workspace:gas2-cycles3:gas-first-trap:last-attempt-cycle-limit:canonical-inactive-absolute-and-mean-cells:isqrt:root32:square-plus-remainder:strict-next-square:gas6-cycles6:div-ceil:signed-quotient:nonzero-same-sign-correction:gas12-cycles12:abs:canonical-rs1-zero-unused-operand:exact-signed-magnitude:min-trap-after-one-gas:div-divu-rem-remu:exact-product-plus-remainder:strict-remainder-bound:typed-last-attempt-outcome:gas-before-arithmetic:trap-before-invocation-cleanup:u64-gas-and-cycles:no-wrap:artifact-cycle-limit:zk-zero-default:no-host-cycle-overrides:gcd:signed-input-unsigned-magnitude:euclid-exact-product-remainder:terminal-denominator-zero:fixed91-divisions:program-derived-stride=93-if-any-code-word-opcode-is-gcd-else-1:entry-work-commit:gas12-cycles12-once:no-internal-traps:degree4:explicit-boundaries:padding-freezes:no-invocation-admission";
 const BRANCH_OPS: [u8; 6] = [
     wide::control::BEQ,
     wide::control::BNE,
@@ -181,10 +200,21 @@ enum Family {
     Division(usize),
     Absolute,
     Mean,
+    SquareRoot,
+    Gcd,
 }
 
 fn family(word: u32) -> Option<Family> {
     let opcode = wide::opcode(word);
+    if opcode == wide::arithmetic::GCD {
+        return Some(Family::Gcd);
+    }
+    if opcode == wide::arithmetic::ISQRT {
+        return Some(Family::SquareRoot);
+    }
+    if opcode == wide::arithmetic::DIV_CEIL {
+        return Some(Family::Division(4));
+    }
     if matches!(
         semantic_opcode(opcode),
         wide::arithmetic::ADD
@@ -253,10 +283,11 @@ fn family(word: u32) -> Option<Family> {
 // This is the canonical completed dispatch cost, not the gas price. MEAN
 // charges two gas units but completes three cycles in the sole interpreter.
 fn completed_cycles(word: u32) -> u64 {
-    if wide::opcode(word) == wide::arithmetic::MEAN {
-        3
-    } else {
-        1
+    match wide::opcode(word) {
+        wide::arithmetic::MEAN => 3,
+        wide::arithmetic::ISQRT => 6,
+        wide::arithmetic::DIV_CEIL | wide::arithmetic::GCD => 12,
+        _ => 1,
     }
 }
 
@@ -306,7 +337,9 @@ fn operands(word: u32, family: Family) -> [Operand; 2] {
         _ => match family {
             Family::Branch(_) => [Register(wide::rd(word)), Register(wide::rs1(word))],
             Family::Jump(_) => [Constant(0), Constant(0)],
-            Family::Count(_) | Family::Absolute => [Register(wide::rs1(word)), Constant(0)],
+            Family::Count(_) | Family::Absolute | Family::SquareRoot => {
+                [Register(wide::rs1(word)), Constant(0)]
+            }
             Family::Move(_) => [
                 Register(if wide::opcode(word) == wide::arithmetic::CMOV {
                     wide::rs2(word)
@@ -337,7 +370,7 @@ fn signed(value: i64) -> F {
     }
 }
 
-/// Public opcode-boundary outcome. Traps end the final attempted DIV-family, ABS or MEAN
+/// Public opcode-boundary outcome. Traps end the final attempted arithmetic
 /// instruction before global invocation cleanup; they do not authorize effects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -531,19 +564,42 @@ impl ScalarSegment {
         .map_err(|_| Error::InvalidProfile)
     }
 
+    /// Derived from the complete immutable code, including unreachable GCD words.
+    /// The witness supplies neither a schedule nor an instruction subset.
+    fn stride(&self) -> usize {
+        if self
+            .words
+            .iter()
+            .any(|word| wide::opcode(*word) == wide::arithmetic::GCD)
+        {
+            gcd::STRIDE
+        } else {
+            1
+        }
+    }
+
+    fn physical_steps(&self) -> usize {
+        self.steps * self.stride()
+    }
+
     fn fixed_row(&self, row: usize) -> [F; FIXED_WIDTH] {
+        let stride = self.stride();
+        let active = row < self.physical_steps();
+        let last = active && row / stride + 1 == self.steps;
+        let phase = row % stride;
         [
-            F(u64::from(row < self.steps)),
+            F(u64::from(active)),
             F(u64::from(row + 1 < TRACE_SIZE)),
             F(u64::from(row == 0)),
-            F(u64::from(row == self.steps)),
+            F(u64::from(row == self.physical_steps())),
+            F(u64::from(last && self.outcome == SegmentOutcome::OutOfGas)),
             F(u64::from(
-                row + 1 == self.steps && self.outcome == SegmentOutcome::OutOfGas,
+                last && self.outcome == SegmentOutcome::AssertionFailed,
             )),
-            F(u64::from(
-                row + 1 == self.steps && self.outcome == SegmentOutcome::AssertionFailed,
-            )),
-            F(u64::from(row + 1 == self.steps)),
+            F(u64::from(last)),
+            F(u64::from(active && stride > 1 && phase == 0)),
+            F(u64::from(active && phase > 0 && phase + 1 < stride)),
+            F(u64::from(active && phase + 1 == stride)),
         ]
     }
 
@@ -557,7 +613,7 @@ impl ScalarSegment {
         {
             return Err(Error::InvalidTrace);
         }
-        let mut rows = Vec::with_capacity(self.steps + 1);
+        let mut rows = Vec::with_capacity(self.physical_steps() + 1);
         for (index, record) in records.iter().enumerate() {
             let outcome = if index + 1 == self.steps {
                 self.outcome
@@ -602,12 +658,36 @@ impl ScalarSegment {
                 || (outcome.trapped()
                     && !matches!(
                         family(word),
-                        Some(Family::Division(_) | Family::Absolute | Family::Mean)
+                        Some(
+                            Family::Division(_)
+                                | Family::Absolute
+                                | Family::Mean
+                                | Family::SquareRoot
+                                | Family::Gcd
+                        )
                     ))
             {
                 return Err(Error::InvalidTrace);
             }
-            rows.push(self.witness_row(&record.before, Some((word_index, word))));
+            let mut pair = if matches!(family(word), Some(Family::Gcd)) {
+                [
+                    gcd::magnitude(record.before.registers[wide::rs1(word)]),
+                    gcd::magnitude(record.before.registers[wide::rs2(word)]),
+                ]
+            } else {
+                [0, 0]
+            };
+            for phase in 0..self.stride() {
+                rows.push(self.witness_row_at(
+                    &record.before,
+                    Some((word_index, word)),
+                    phase,
+                    pair,
+                ));
+                if phase > 0 && phase + 1 < self.stride() && pair[1] != 0 {
+                    pair = [pair[1], pair[0] % pair[1]];
+                }
+            }
         }
         rows.push(self.witness_row(&self.after, None));
         Ok(rows)
@@ -617,6 +697,16 @@ impl ScalarSegment {
         &self,
         state: &DiagnosticStepState,
         instruction: Option<(usize, u32)>,
+    ) -> Vec<F> {
+        self.witness_row_at(state, instruction, 0, [0, 0])
+    }
+
+    fn witness_row_at(
+        &self,
+        state: &DiagnosticStepState,
+        instruction: Option<(usize, u32)>,
+        phase: usize,
+        pair: [u64; 2],
     ) -> Vec<F> {
         let mut row = vec![F::ZERO; ROW_WIDTH];
         for (register, value) in state.registers.into_iter().enumerate() {
@@ -642,6 +732,12 @@ impl ScalarSegment {
             selected_family = family(word);
             let sources = operands(word, selected_family.expect("validated scalar instruction"));
             [left, right] = sources.map(|source| source.value(state));
+            if matches!(selected_family, Some(Family::Gcd))
+                && state.gas_remaining >= 12
+                && phase > 0
+            {
+                [left, right] = pair;
+            }
             match selected_family {
                 Some(Family::Alu(opcode)) => alu_opcode = opcode,
                 Some(Family::Branch(index)) => branch_opcode = BRANCH_OPS[index],
@@ -655,7 +751,9 @@ impl ScalarSegment {
                     | Family::Multiply(_)
                     | Family::Division(_)
                     | Family::Absolute
-                    | Family::Mean,
+                    | Family::Mean
+                    | Family::SquareRoot
+                    | Family::Gcd,
                 ) => {}
                 Some(Family::Move(_)) => branch_opcode = wide::control::BNE,
                 None => unreachable!("validated scalar instruction"),
@@ -670,12 +768,18 @@ impl ScalarSegment {
                             && right == u64::MAX)
                 }
                 Some(Family::Absolute) => state.gas_remaining < cost || left == i64::MIN as u64,
-                Some(Family::Mean) => state.gas_remaining < cost,
+                Some(Family::Mean | Family::SquareRoot | Family::Gcd) => state.gas_remaining < cost,
                 _ => false,
             };
             let effective_cost = if matches!(
                 selected_family,
-                Some(Family::Division(_) | Family::Absolute | Family::Mean)
+                Some(
+                    Family::Division(_)
+                        | Family::Absolute
+                        | Family::Mean
+                        | Family::SquareRoot
+                        | Family::Gcd
+                )
             ) && state.gas_remaining < cost
             {
                 0
@@ -764,6 +868,22 @@ impl ScalarSegment {
             for half in 0..2 {
                 row[RESULT + half] = division::result_half(&witness.bank, kind, half);
             }
+            if kind == 4 {
+                let bank = ceiling::witness(&witness.bank);
+                for half in 0..2 {
+                    row[RESULT + half] = half_from_limbs(&bank, 0, half);
+                }
+                row[ABSOLUTE..MEAN_GAS].copy_from_slice(&bank);
+            }
+        }
+        if let Some(Family::SquareRoot) = selected_family {
+            let witness = square_root::witness(left, state.gas_remaining);
+            row[SHIFT..RESULT].copy_from_slice(&witness.bank);
+            row[BIT_COUNT..MULTIPLY].copy_from_slice(&witness.digits);
+            row[MULTIPLY..ABSOLUTE].copy_from_slice(&witness.product);
+            for half in 0..2 {
+                row[RESULT + half] = half_from_limbs(&witness.bank, division::QUOTIENT, half);
+            }
         }
         if let Some(Family::Absolute) = selected_family {
             let bank = absolute::witness(left, state.gas_remaining);
@@ -778,7 +898,42 @@ impl ScalarSegment {
                 row[RESULT + half] = half_from_limbs(&bank, 0, half);
             }
             row[ABSOLUTE..MEAN_GAS].copy_from_slice(&bank);
-            row[MEAN_GAS..].copy_from_slice(&gas);
+            row[MEAN_GAS..GCD].copy_from_slice(&gas);
+        }
+        if let Some(Family::Gcd) = selected_family {
+            let (absolute, gas) = gcd::gas_witness(state.gas_remaining);
+            row[ABSOLUTE..MEAN_GAS].copy_from_slice(&absolute);
+            row[MEAN_GAS..GCD].copy_from_slice(&gas);
+            if state.gas_remaining >= 12 {
+                let entering = phase == 0;
+                let working = phase > 0 && phase + 1 < self.stride();
+                let committing = phase + 1 == self.stride();
+                row[GCD..].copy_from_slice(&[
+                    F::ONE,
+                    F(u64::from(entering)),
+                    F(u64::from(working)),
+                    F(u64::from(working && right != 0)),
+                    F(u64::from(committing)),
+                ]);
+                if entering || working {
+                    let witness = gcd::witness(left, right, entering);
+                    row[SHIFT..RESULT].copy_from_slice(&witness.bank);
+                    row[BIT_COUNT..MULTIPLY].copy_from_slice(&witness.digits);
+                    row[MULTIPLY..ABSOLUTE].copy_from_slice(&witness.product);
+                    row[BRANCH..SHIFT].copy_from_slice(&branch::bank_witness(
+                        wide::control::BEQ,
+                        witness.remainder,
+                        witness.denominator,
+                    ));
+                }
+                if committing {
+                    row[RESULT..RESULT + 2].copy_from_slice(&halves(left));
+                }
+            }
+        }
+        if phase + 1 != self.stride() {
+            row[GAS_BORROW] = F::ZERO;
+            row[CYCLE_CARRY] = F::ZERO;
         }
         row
     }
@@ -788,7 +943,7 @@ impl ScalarSegment {
         let mut columns = vec![vec![F::ZERO; TRACE_SIZE]; NOTE_COPY_WIDTH_V1 + ROW_WIDTH];
         for (index, column) in columns[NOTE_COPY_WIDTH_V1..].iter_mut().enumerate() {
             for (row, value) in column.iter_mut().enumerate() {
-                *value = rows[row.min(self.steps)][index];
+                *value = rows[row.min(self.physical_steps())][index];
             }
         }
         Ok(columns)
@@ -830,7 +985,9 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     let mut compare_selectors = [F::ZERO; 6];
     let mut count_selectors = [F::ZERO; 3];
     let mut multiply_selectors = [F::ZERO; 4];
-    let mut division_selectors = [F::ZERO; 4];
+    let mut division_selectors = [F::ZERO; 5];
+    let mut square_selected = F::ZERO;
+    let mut gcd_selected = F::ZERO;
     let mut absolute_selected = F::ZERO;
     let mut mean_selected = F::ZERO;
     let mut last_cycle_refusal = F::ZERO;
@@ -912,6 +1069,8 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
             }
             Family::Absolute => absolute_selected = absolute_selected.add(selected),
             Family::Mean => mean_selected = mean_selected.add(selected),
+            Family::SquareRoot => square_selected = square_selected.add(selected),
+            Family::Gcd => gcd_selected = gcd_selected.add(selected),
             Family::Division(index) => {
                 division_selectors[index] = division_selectors[index].add(selected);
             }
@@ -947,12 +1106,20 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     );
     shift_selectors[0] = shift_selectors[0].add(F::ONE.sub(shift_selected));
     let sources = Sources::new(&row[SOURCES..ALU]);
+    let gcd_entry = row[GCD + gcd::ENTRY];
+    let gcd_work = row[GCD + gcd::WORK];
+    let gcd_divide = row[GCD + gcd::DIVIDE];
+    let gcd_commit = row[GCD + gcd::COMMIT];
+    let canonical_reads = F::ONE.sub(row[GCD + gcd::ACTIVE]).add(gcd_entry);
     for half in 0..2 {
-        out.push(sources.half(0, half).sub(left[half]));
-        out.push(sources.half(1, half).sub(right[half]));
+        out.push(canonical_reads.mul(sources.half(0, half).sub(left[half])));
+        out.push(canonical_reads.mul(sources.half(1, half).sub(right[half])));
     }
     let division_selected = division_selectors.into_iter().fold(F::ZERO, F::add);
-    let division_signed = division_selectors[0].add(division_selectors[2]);
+    let ceiling_selected = division_selectors[4];
+    let division_signed = division_selectors[0]
+        .add(division_selectors[2])
+        .add(ceiling_selected);
     let trap = fixed[OUT_OF_GAS].add(fixed[ASSERTION_FAILED]);
     cost = cost.mul(F::ONE.sub(fixed[OUT_OF_GAS]));
     let division_trap = trap.mul(division_selected);
@@ -988,12 +1155,19 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
                 .sub(taken.mul(move_value[half]))
                 .sub(F::ONE.sub(taken).mul(move_retained[half]))
                 .sub(if half == 0 { count } else { F::ZERO })
-                .sub(absolute_selected.add(mean_selected).mul(half_from_limbs(
-                    &row[ABSOLUTE..MEAN_GAS],
-                    0,
+                .sub(
+                    absolute_selected
+                        .add(mean_selected)
+                        .add(ceiling_selected)
+                        .mul(half_from_limbs(&row[ABSOLUTE..MEAN_GAS], 0, half)),
+                )
+                .sub(gcd_commit.mul(sources.half(0, half)))
+                .sub(square_selected.mul(half_from_limbs(
+                    &row[SHIFT..RESULT],
+                    division::QUOTIENT,
                     half,
                 )))
-                .sub(division_selectors.iter().enumerate().fold(
+                .sub(division_selectors[..4].iter().enumerate().fold(
                     F::ZERO,
                     |sum, (kind, selector)| {
                         sum.add(selector.mul(division::result_half(
@@ -1020,46 +1194,52 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         for half in 0..2 {
             let offset = 2 * register + half;
             out.push(
-                fixed[TRANSITION].mul(
-                    next[offset]
-                        .sub(row[offset])
-                        .sub(write.mul(row[RESULT + half].sub(row[offset]))),
+                fixed[TRANSITION].mul(next[offset].sub(row[offset])).sub(
+                    fixed[SLOT_COMMIT]
+                        .mul(write)
+                        .mul(row[RESULT + half].sub(row[offset])),
                 ),
             );
         }
     }
     out.extend([row[0], row[1]]);
     out.push(
-        fixed[TRANSITION].mul(
-            next[PC]
-                .sub(row[PC])
-                .sub(fixed[EXEC].sub(trap).mul(F(4)))
-                .sub(taken.mul(displacement.sub(branch_selected.mul(F(4)))))
-                .sub(jump_displacement.sub(jump_selected.mul(F(4)))),
+        fixed[TRANSITION].mul(next[PC].sub(row[PC])).sub(
+            fixed[SLOT_COMMIT].mul(
+                fixed[EXEC]
+                    .sub(trap)
+                    .mul(F(4))
+                    .add(taken.mul(displacement.sub(branch_selected.mul(F(4)))))
+                    .add(jump_displacement.sub(jump_selected.mul(F(4)))),
+            ),
         ),
     );
     out.push(
-        fixed[TRANSITION].mul(
-            row[GAS]
-                .sub(cost)
-                .sub(next[GAS])
-                .add(row[GAS_BORROW].mul(F(1 << 32))),
-        ),
+        fixed[TRANSITION]
+            .mul(row[GAS].sub(next[GAS]).add(row[GAS_BORROW].mul(F(1 << 32))))
+            .sub(fixed[SLOT_COMMIT].mul(cost)),
     );
     out.push(fixed[TRANSITION].mul(row[GAS + 1].sub(row[GAS_BORROW]).sub(next[GAS + 1])));
     out.push(
-        fixed[TRANSITION].mul(
-            row[CYCLES]
-                .add(
+        fixed[TRANSITION]
+            .mul(
+                row[CYCLES]
+                    .sub(next[CYCLES])
+                    .sub(row[CYCLE_CARRY].mul(F(1 << 32))),
+            )
+            .add(
+                fixed[SLOT_COMMIT].mul(
                     fixed[EXEC]
                         .add(mean_selected.mul(F(2)))
+                        .add(square_selected.mul(F(5)))
+                        .add(ceiling_selected.add(gcd_selected).mul(F(11)))
                         .mul(F::ONE.sub(trap)),
-                )
-                .sub(next[CYCLES])
-                .sub(row[CYCLE_CARRY].mul(F(1 << 32))),
-        ),
+                ),
+            ),
     );
     out.push(fixed[TRANSITION].mul(row[CYCLES + 1].add(row[CYCLE_CARRY]).sub(next[CYCLES + 1])));
+    out.push(F::ONE.sub(fixed[SLOT_COMMIT]).mul(row[GAS_BORROW]));
+    out.push(F::ONE.sub(fixed[SLOT_COMMIT]).mul(row[CYCLE_CARRY]));
     range_u64(&mut out, row, GAS, GAS_DIGITS, GAS_BORROW);
     range_u64(&mut out, row, CYCLES, CYCLE_DIGITS, CYCLE_CARRY);
     for (mask, boundary) in [
@@ -1080,6 +1260,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     }
     sources.append_residues(&mut out);
     out.extend(alu_bank_residues(&row[ALU..BRANCH], sources, alu_selectors));
+    let division_workspace = division_selected.add(gcd_entry).add(gcd_work);
     out.extend(branch::bank_residues(
         &row[BRANCH..SHIFT],
         std::array::from_fn(|operand| {
@@ -1090,9 +1271,9 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
                     row[MULTIPLY + multiply::SIGNED_SIGNED + limb]
                 };
                 F::ONE
-                    .sub(division_selected)
+                    .sub(division_workspace)
                     .mul(sources.limb(operand, limb))
-                    .add(division_selected.mul(divided))
+                    .add(division_workspace.mul(divided))
             })
         }),
         [sources.sign(0), sources.sign(1)],
@@ -1105,7 +1286,10 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         shift_selectors,
     ));
     for residual in &mut out[shift_start..] {
-        *residual = F::ONE.sub(division_selected).mul(*residual);
+        *residual = F::ONE
+            .sub(division_workspace)
+            .sub(square_selected)
+            .mul(*residual);
     }
     let multiply_selected = multiply_selectors.into_iter().fold(F::ZERO, F::add);
     let prefix_start = out.len();
@@ -1121,7 +1305,8 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     for residual in &mut out[prefix_start..] {
         *residual = F::ONE
             .sub(multiply_selected)
-            .sub(division_selected)
+            .sub(division_workspace)
+            .sub(square_selected)
             .mul(*residual);
     }
     multiply::append_residues(
@@ -1131,9 +1316,13 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         sources,
         multiply::Selection {
             multiply: multiply_selected,
-            division: division_selected,
-            signed: division_signed,
-            success: division_selected.sub(division_trap),
+            division: division_workspace,
+            square: square_selected,
+            signed: division_signed.add(gcd_entry),
+            success: division_selected
+                .sub(division_trap)
+                .add(square_selected.mul(F::ONE.sub(trap)))
+                .add(gcd_divide),
             quotient: std::array::from_fn(|limb| row[SHIFT + division::QUOTIENT + limb]),
         },
     );
@@ -1147,9 +1336,26 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         division::Selection {
             active: division_selected,
             signed: division_signed,
+            ceiling: ceiling_selected,
             out_of_gas: fixed[OUT_OF_GAS].mul(division_selected),
             assertion_failed: fixed[ASSERTION_FAILED].mul(division_selected),
         },
+    );
+    square_root::append_residues(
+        &mut out,
+        &row[SHIFT..RESULT],
+        &row[MULTIPLY..ABSOLUTE],
+        sources,
+        &row[GAS_DIGITS..GAS_DIGITS + 32],
+        square_selected,
+        fixed[OUT_OF_GAS].mul(square_selected),
+        fixed[ASSERTION_FAILED].mul(square_selected),
+    );
+    ceiling::append_residues(
+        &mut out,
+        &row[ABSOLUTE..MEAN_GAS],
+        &row[SHIFT..RESULT],
+        ceiling_selected,
     );
     absolute::append_residues(
         &mut out,
@@ -1163,7 +1369,7 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
     mean::append_residues(
         &mut out,
         &row[ABSOLUTE..MEAN_GAS],
-        &row[MEAN_GAS..],
+        &row[MEAN_GAS..GCD],
         &row[ALU..BRANCH],
         sources,
         &row[GAS_DIGITS..GAS_DIGITS + 32],
@@ -1171,17 +1377,40 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
         fixed[OUT_OF_GAS].mul(mean_selected),
         fixed[ASSERTION_FAILED].mul(mean_selected),
     );
+    gcd::append_residues(
+        &mut out,
+        &row[GCD..],
+        &row[SHIFT..RESULT],
+        &row[MULTIPLY..ABSOLUTE],
+        &row[ABSOLUTE..MEAN_GAS],
+        &row[MEAN_GAS..GCD],
+        sources,
+        Sources::new(&next[SOURCES..ALU]),
+        &row[GAS_DIGITS..GAS_DIGITS + 32],
+        row[BRANCH + branch::BORROW + 3],
+        gcd::Selection {
+            fetched: gcd_selected,
+            out_of_gas: fixed[OUT_OF_GAS],
+            assertion_failed: fixed[ASSERTION_FAILED],
+            entry: fixed[SLOT_ENTRY],
+            work: fixed[SLOT_WORK],
+            commit: fixed[SLOT_COMMIT],
+        },
+    );
     // Every newly introduced cell has a canonical inactive value. In particular,
     // the ABS inverse cells must not become free witness cells on other opcodes.
+    out.extend(row[ABSOLUTE..MEAN_GAS].iter().map(|cell| {
+        F::ONE
+            .sub(absolute_selected)
+            .sub(mean_selected)
+            .sub(ceiling_selected)
+            .sub(gcd_selected)
+            .mul(*cell)
+    }));
     out.extend(
-        row[ABSOLUTE..MEAN_GAS]
+        row[MEAN_GAS..GCD]
             .iter()
-            .map(|cell| F::ONE.sub(absolute_selected).sub(mean_selected).mul(*cell)),
-    );
-    out.extend(
-        row[MEAN_GAS..]
-            .iter()
-            .map(|cell| F::ONE.sub(mean_selected).mul(*cell)),
+            .map(|cell| F::ONE.sub(mean_selected).sub(gcd_selected).mul(*cell)),
     );
     // A declared trap must belong to an explicitly constrained trapping family.
     out.push(
@@ -1189,7 +1418,9 @@ fn residues(segment: &ScalarSegment, row: &[F], next: &[F], fixed: &[F]) -> Resu
             F::ONE
                 .sub(division_selected)
                 .sub(absolute_selected)
-                .sub(mean_selected),
+                .sub(mean_selected)
+                .sub(square_selected)
+                .sub(gcd_selected),
         ),
     );
     debug_assert_eq!(out.len(), CONSTRAINT_COUNT);

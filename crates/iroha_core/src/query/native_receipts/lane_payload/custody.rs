@@ -7,7 +7,10 @@ use iroha_data_model::sumeragi_lanes::{
 };
 use iroha_model_base::topology::LaneId;
 
-use super::select::{field, fields, identity};
+use super::{
+    LanePayloadError,
+    select::{field, fields, identity},
+};
 
 // These fixed current-layout readers never invoke a decoder realignment allocation. The
 // enclosing payload commitment and codec-parity tests bind their layout to the model.
@@ -158,6 +161,13 @@ impl<'a> LaneCustodyView<'a> {
             self.fences.slashing_delay,
             self.fences.retired_at,
         )
+    }
+
+    /// Admission uses the immutable global lifetime fence, never a native subject height.
+    pub(crate) fn admits_at(&self, height: u64) -> Result<bool, LanePayloadError> {
+        self.fences
+            .admits_at(height)
+            .map_err(|_| LanePayloadError::Source)
     }
 
     /// Exact original signer tenure; absent positions remain forensic-only forever.

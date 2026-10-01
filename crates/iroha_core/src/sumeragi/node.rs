@@ -977,7 +977,7 @@ impl NetworkedNode {
 }
 
 /// Retains independently authenticated observations for the next original global candidate.
-/// TODO(S8): lane instances need their own authenticated native history admission route.
+/// Lane reducers retain their own bounded reports through the lane runner observer.
 struct NativeEvidenceObserver {
     state: Arc<State>,
     downstream: Arc<dyn Observer>,

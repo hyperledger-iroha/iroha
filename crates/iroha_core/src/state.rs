@@ -2777,6 +2777,12 @@ pub enum EvidencePreparationError {
         /// Maximum cumulative bytes permitted by the active decode scope.
         limit_bytes: u64,
     },
+    /// Exact local Norito ceiling or allocator refusal while decoding an original proof.
+    #[error("consensus evidence decoder resource refusal: {0}")]
+    DecodeResource(norito::core::DecodeResourceError),
+    /// Original native history or its funded read owner cannot complete yet.
+    #[error("original native evidence history is pending")]
+    OriginalHistoryPending,
     /// A bounded append violated the count proved by the borrowed scan.
     #[error("consensus penalty preparation plan exceeded its fixed capacity")]
     Invariant,
@@ -12049,6 +12055,9 @@ pub struct State {
     /// Process-lived finite owner for committed-evidence preparation allocations.
     /// Funded slices cover fixed prune keys and pending penalty metadata only.
     evidence_preparation_budget: iroha_allocation::AllocationBudget,
+    /// One bounded pristine-parent evidence read, retaining original jobs across local refusal.
+    pub(crate) native_evidence_admission:
+        parking_lot::Mutex<crate::sumeragi::evidence::admission::AdmissionCache>,
     /// Original process-local owner for flat consensus stake-index key backing.
     stake_index_budget: iroha_allocation::AllocationBudget,
     /// Tiered state backend coordinating hot/cold snapshots.
@@ -27623,6 +27632,9 @@ impl State {
             evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
             ),
+            native_evidence_admission: parking_lot::Mutex::new(
+                crate::sumeragi::evidence::admission::AdmissionCache::default(),
+            ),
             stake_index_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
             ),
@@ -39413,16 +39425,19 @@ mod tiered_snapshot_diff_tests {
         world
             .musubi_domain_ownership_generations
             .insert(domain.clone(), 4);
-        let decoded =
-            decode_world_snapshot(world).expect("decode canonical Musubi generation snapshot");
+        let decoded = deserialize::decode_world_component_for_testing(&world)
+            .expect("decode canonical Musubi generation component");
         assert_eq!(
             decoded
                 .view()
-                .world
                 .musubi_domain_ownership_generations
                 .get(&domain),
             Some(&4)
         );
+        assert!(matches!(
+            decode_world_snapshot(world),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
         let mut missing = state_snapshot_value(World::default(), SNAPSHOT_CHAIN_ID);
         assert!(
             state_snapshot_world_mut(&mut missing)
@@ -39490,25 +39505,38 @@ mod tiered_snapshot_diff_tests {
         original
             .musubi_pin_outbox_high_waters
             .insert(owner.clone(), record.clone());
-        let restored = decode_world_snapshot(original)
-            .expect("canonical pin-outbox high-water survives snapshot restore");
+        let restored = deserialize::decode_world_component_for_testing(&original)
+            .expect("canonical pin-outbox high-water survives component decoding");
         assert_eq!(
-            restored
-                .view()
-                .world
-                .musubi_pin_outbox_high_waters
-                .get(&owner),
+            restored.view().musubi_pin_outbox_high_waters.get(&owner),
             Some(&record)
         );
+        assert!(matches!(
+            decode_world_snapshot(original),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
 
-        let decode_substituted_high_waters = |world: World| {
-            let mut snapshot = state_snapshot_value(World::default(), SNAPSHOT_CHAIN_ID);
-            let encoded = norito::json::to_value(&world.musubi_pin_outbox_high_waters)
-                .expect("encode substituted high-water table");
-            state_snapshot_world_mut(&mut snapshot)
-                .insert("musubi_pin_outbox_high_waters".to_owned(), encoded);
-            decode_state_snapshot_value(snapshot)
+        let decode_substituted_high_waters = |world: World| -> Result<(), String> {
+            let decoded = deserialize::decode_world_component_for_testing(&world)
+                .map_err(|error| error.to_string())?;
+            // Exercise the actual authoritative-network validator separately
+            // from the closed committed-State snapshot installation path.
+            let mut component = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            assert_eq!(component.network_id, *DEFAULT_TEST_NETWORK_ID);
+            assert!(component.view().native_execution_tip().is_none());
+            component.world = decoded;
+            component.validate_musubi_pin_outbox_high_waters()
         };
+        let mut canonical = World::default();
+        canonical
+            .musubi_pin_outbox_high_waters
+            .insert(owner.clone(), record.clone());
+        decode_substituted_high_waters(canonical)
+            .expect("canonical high-water matches the actual State network");
 
         let mut mismatch = World::default();
         mismatch

@@ -1,6 +1,6 @@
 //! ABI hash tests ensure the hash is stable for the same policy.
 use ivm::syscalls::compute_abi_hash;
-const ABI_V1_HASH_GOLDEN: &str = "ecb75640994009bc31b3ca23f40aa5ff07550841285f24613e2c497a6a1e5733";
+const ABI_V1_HASH_GOLDEN: &str = "2c87c2d959a15687d82b8838a3ab787a2aa84923e4c4d6386f9f862dd53f74eb";
 #[test]
 fn abi_hash_is_stable() {
     let h1 = compute_abi_hash(ivm::SyscallPolicy::AbiV1);

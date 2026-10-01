@@ -41,8 +41,7 @@ fn doubled_degree_geometry_changes_the_bound_context_and_root_commitment() {
         statement: b"complete immutable public statement".to_vec(),
     };
     let old = Context {
-        framing: FramingContext::new_deep(&norito::encode_canonical(&old_descriptor).unwrap())
-            .unwrap(),
+        framing: FramingContext::new(&norito::encode_canonical(&old_descriptor).unwrap()).unwrap(),
     };
     let row = vec![0; COMMITTED_COLUMN_COUNT * 8];
     assert_ne!(
@@ -60,74 +59,56 @@ fn raw_challenge(transcript: &mut Transcript, round: Round) -> Result<Message> {
 }
 
 #[test]
-fn ten_messages_637_blocks_and_exact_commitment_order() {
+fn ten_atomic_raw_messages_and_exact_commitment_order() {
     assert_eq!(
-        (1..=10).map(|i| Round(i).tape_bytes() / 48).sum::<usize>(),
-        637
+        (1..=10).map(|i| Round(i).tape_bytes()).sum::<usize>(),
+        30_920
     );
-    assert_eq!(Round(2).tape_bytes(), 29_568);
-    assert_eq!(Round(10).tape_bytes(), 624);
+    assert_eq!(Round(2).tape_bytes(), 29_584);
+    assert_eq!(Round(10).tape_bytes(), 744);
     for round in [0, 11, u8::MAX] {
         assert!(Round::new(round).is_err());
     }
     let mut transcript = Transcript::new(context());
     let zero_row = [F::ZERO; COMMITTED_COLUMN_COUNT];
-    assert!(
-        transcript
-            .commit_root(Oracle::Row, Digest::default())
-            .is_err()
-    );
     for ordinal in 1..=10 {
         let message = raw_challenge(&mut transcript, Round(ordinal)).unwrap();
         match ordinal {
             1 => assert_eq!(message, Message::Dummy),
-            2 => assert!(matches!(message, Message::Fields(values) if values.len() == 923)),
-            3..=9 => assert!(matches!(message, Message::Fields(values) if values.len() == 1)),
-            10 => assert_eq!(message, Message::Queries((0..64).collect())),
+            2 => assert!(matches!(message,Message::Fields(v) if v.len()==923)),
+            3..=9 => assert!(matches!(message,Message::Fields(v) if v.len()==1)),
+            10 => assert_eq!(message, Message::Queries((0..77).collect())),
             _ => unreachable!(),
         }
-        assert!(transcript.challenge().is_err());
         if ordinal == 10 {
             break;
         }
-        let root = Digest::new([u64::from(ordinal); 6]).unwrap();
         if ordinal == 3 {
-            assert!(transcript.commit_root(Oracle::Row, root).is_err());
             transcript
                 .commit_ood(&zero_row, &zero_row, &[F::ZERO; 2])
                 .unwrap();
         } else {
-            assert!(
-                transcript
-                    .commit_ood(&zero_row, &zero_row, &[F::ZERO; 2])
-                    .is_err()
-            );
-            let expected = match ordinal {
+            let oracle = match ordinal {
                 1 => Oracle::Row,
                 2 => Oracle::QuotientAndMask,
                 4..=8 => Oracle::Fri(ordinal - 4),
                 9 => Oracle::Terminal,
                 _ => unreachable!(),
             };
-            assert!(transcript.commit_root(Oracle::Fri(255), root).is_err());
-            transcript.commit_root(expected, root).unwrap();
+            transcript
+                .commit_root(oracle, Digest::from_bytes([ordinal; 32]))
+                .unwrap();
         }
     }
-    assert_eq!(transcript.phase, Phase::Complete);
-    assert!(
-        transcript
-            .commit_root(Oracle::Terminal, Digest::default())
-            .is_err()
-    );
+    assert!(matches!(transcript.phase, Phase::Complete));
+    assert!(transcript.challenge().is_err());
 }
-
 #[test]
-fn all_tape_coordinates_are_canonical_and_alpha_coordinates_are_independent() {
+fn decoded_coordinates_are_canonical_and_raw_rejections_are_not_reductions() {
     for ordinal in 1..=10 {
         let round = Round(ordinal);
         let original = tape(round, 0..(round.tape_bytes() / 8) as u64);
-        let decoded = decode(round, &original).unwrap();
-        if let Message::Fields(values) = decoded {
+        if let Message::Fields(values) = decode(round, &original).unwrap() {
             for (i, value) in values.into_iter().enumerate() {
                 assert_eq!(
                     value.coefficients(),
@@ -135,22 +116,25 @@ fn all_tape_coordinates_are_canonical_and_alpha_coordinates_are_independent() {
                 );
             }
         }
-        for index in 0..original.len() / 8 {
-            let mut malformed = original.clone();
-            malformed[index * 8..(index + 1) * 8].copy_from_slice(&MODULUS.to_le_bytes());
-            assert!(matches!(decode(round, &malformed), Err(BindingError::Tape)));
-        }
         assert!(matches!(
-            decode(round, &original[..original.len() - 8]),
+            decode(round, &original[..original.len() - 1]),
             Err(BindingError::Tape)
         ));
     }
+    let mut words = (0..10).collect::<Vec<u64>>();
+    words[0] = MODULUS;
+    words[1] = u64::MAX;
+    assert_eq!(
+        decode(Round(4), &tape(Round(4), words)).unwrap(),
+        Message::Fields(vec![F::new([2, 3, 4, 5]).unwrap()])
+    );
+    assert_eq!(decode(Round(1), &[0xff; 32]).unwrap(), Message::Dummy);
 }
 
 #[test]
-fn every_unused_canonical_coordinate_is_bound_before_the_next_message() {
+fn every_unused_raw_coordinate_is_bound_before_the_next_message() {
     let context = context();
-    let root = Digest::new([19; 6]).unwrap();
+    let root = Digest::from_bytes([19; 32]);
     for ordinal in 1..=9 {
         let round = Round(ordinal);
         let raw = tape(round, 0..(round.tape_bytes() / 8) as u64);
@@ -173,45 +157,43 @@ fn every_unused_canonical_coordinate_is_bound_before_the_next_message() {
 }
 
 #[test]
-fn query_candidate_74_is_used_and_four_padding_words_are_only_padding() {
+fn query_candidate_87_is_used_and_raw_suffix_cannot_extend_the_candidate_budget() {
     let round = Round(10);
-    let mut words = vec![0; 78];
-    for (i, value) in words.iter_mut().enumerate().take(63) {
-        *value = i as u64;
+    let mut words = vec![0; 93];
+    for (i, v) in words.iter_mut().enumerate().take(76) {
+        *v = i as u64;
     }
-    words[73] = 63;
-    words[74..].fill(MODULUS - 1);
+    words[86] = 76;
+    words[87..].fill(MODULUS - 1);
     assert_eq!(
         decode(round, &tape(round, words.clone())).unwrap(),
-        Message::Queries((0..64).collect())
+        Message::Queries((0..77).collect())
     );
-    words[73] = MODULUS - 1;
-    words[74] = 63;
+    words[86] = MODULUS - 1;
+    words[87] = 76;
     assert!(matches!(
         decode(round, &tape(round, words)),
         Err(BindingError::Exhausted)
     ));
-    let reversed = tape(round, (0..78).rev());
     assert_eq!(
-        decode(round, &reversed).unwrap(),
-        Message::Queries((14..78).collect())
+        decode(round, &tape(round, (0..93).rev())).unwrap(),
+        Message::Queries((16..93).collect())
     );
 }
-
 #[test]
-fn base_ood_sampler_encoding_and_fill_failures_are_permanent_abort() {
-    for ordinal in [1, 2, 3, 4, 9, 10] {
+fn sampler_fill_ood_and_schedule_failures_are_permanent_abort() {
+    for ordinal in [2, 3, 4, 9, 10] {
         let mut transcript = Transcript::new(context());
         transcript.phase = Phase::Ready(Round(ordinal));
-        let result = transcript.challenge_with(|_, _, _, output| {
-            output.fill(0);
-            if ordinal != 3 && ordinal != 10 {
-                output[..8].copy_from_slice(&MODULUS.to_le_bytes());
-            }
-            Ok(())
-        });
-        assert!(result.is_err());
-        assert_eq!(transcript.phase, Phase::Aborted);
+        assert!(
+            transcript
+                .challenge_with(|_, _, _, output| {
+                    output.fill(0xff);
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(matches!(transcript.phase, Phase::Aborted));
         assert!(transcript.challenge().is_err());
         assert!(
             transcript
@@ -219,18 +201,43 @@ fn base_ood_sampler_encoding_and_fill_failures_are_permanent_abort() {
                 .is_err()
         );
     }
+    let mut transcript = Transcript::new(context());
+    transcript.phase = Phase::Ready(Round(3));
+    assert!(
+        transcript
+            .challenge_with(|_, _, _, output| {
+                output.fill(0);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(matches!(transcript.phase, Phase::Aborted));
     for lane in 1..4 {
-        let mut words = [0; 6];
+        let mut words = [0; 10];
         words[lane] = 1;
         assert!(decode(Round(3), &tape(Round(3), words)).is_ok());
     }
-    let mut transcript = Transcript::new(context());
+    for kind in 0..4 {
+        let mut t = Transcript::new(context());
+        if kind != 0 {
+            raw_challenge(&mut t, Round(1)).unwrap();
+        }
+        let result = match kind {
+            0 => t.commit_root(Oracle::Row, Digest::default()),
+            1 => t.challenge().map(|_| ()),
+            2 => t.commit_root(Oracle::Fri(255), Digest::default()),
+            _ => t.commit_ood(&[], &[], &[]),
+        };
+        assert!(result.is_err());
+        assert!(matches!(t.phase, Phase::Aborted));
+        assert!(t.challenge().is_err());
+    }
+    let mut t = Transcript::new(context());
     assert!(
-        transcript
-            .challenge_with(|_, _, _, _| Err(BindingError::Shape))
+        t.challenge_with(|_, _, _, _| Err(BindingError::Shape))
             .is_err()
     );
-    assert_eq!(transcript.phase, Phase::Aborted);
+    assert!(matches!(t.phase, Phase::Aborted));
 }
 
 #[test]
@@ -271,10 +278,11 @@ fn complete_ood_coordinates_have_fixed_order_and_reject_every_noncanonical_lane(
     let mut transcript = Transcript::new(context);
     transcript.phase = Phase::Pending {
         round: Round(3),
-        raw: tape(Round(3), 0..6),
+        raw: RawTapeV1::from_bytes(RawTapeRoundV1::new(3).unwrap(), &tape(Round(3), 0..10))
+            .unwrap(),
     };
     assert!(transcript.commit_ood(&[], next, quotient).is_err());
-    assert_eq!(transcript.phase, Phase::Aborted);
+    assert!(matches!(transcript.phase, Phase::Aborted));
 }
 
 #[test]
@@ -341,7 +349,7 @@ fn all_fixed_oracle_shapes_and_full_terminal_are_checked() {
                 1,
                 0,
                 Digest::default(),
-                Digest::new([1; 6]).unwrap()
+                Digest::from_bytes([1; 32])
             )
             .is_err()
     );
@@ -365,11 +373,12 @@ fn shared_framing_binds_statement_profile_oracle_and_fri_round() {
             .hash_parent(Oracle::QuotientAndMask, 1, 0, zero, zero)
             .unwrap()
     );
-    let old = FramingContext::new(b"complete immutable public statement").unwrap();
+    let raw = Context {
+        framing: FramingContext::new(b"complete immutable public statement").unwrap(),
+    };
     assert_ne!(
         expected,
-        old.hash_parent(super::super::compact_v1::Oracle::Row, 1, 0, zero, zero)
-            .unwrap()
+        raw.hash_parent(Oracle::Row, 1, 0, zero, zero).unwrap()
     );
     assert_ne!(
         context.hash_leaf(Oracle::Fri(0), 0, &[0; 512]).unwrap(),
@@ -390,7 +399,7 @@ fn shared_framing_binds_statement_profile_oracle_and_fri_round() {
 }
 
 #[test]
-fn real_challenge_uses_every_block_and_preserves_full_raw_tape() {
+fn real_challenge_uses_exact_whole_raw_extent_and_preserves_full_raw_tape() {
     let mut transcript = Transcript::new(context());
     assert_eq!(transcript.challenge().unwrap(), Message::Dummy);
     transcript
@@ -404,10 +413,13 @@ fn real_challenge_uses_every_block_and_preserves_full_raw_tape() {
         panic!("pending");
     };
     assert_eq!(*round, Round(2));
-    assert_eq!(raw.len(), 616 * 48);
-    assert_ne!(&raw[..48], &raw[48..96]);
-    assert_ne!(&raw[..48], &raw[615 * 48..]);
-    assert_eq!(decode(*round, raw).unwrap(), Message::Fields(alpha));
+    assert_eq!(raw.as_bytes().len(), 29_584);
+    assert_ne!(&raw.as_bytes()[..136], &raw.as_bytes()[136..272]);
+    assert_ne!(&raw.as_bytes()[..136], &raw.as_bytes()[29_448..]);
+    assert_eq!(
+        decode(*round, raw.as_bytes()).unwrap(),
+        Message::Fields(alpha)
+    );
 }
 
 #[test]
@@ -470,4 +482,29 @@ fn prepared_relation_identity_is_explicit_bounded_and_separate_from_raw_fixtures
         .is_ok()
     );
     assert!(core::ptr::eq(&raw const relation, relation.deep_relation()));
+}
+
+#[test]
+fn exact_keccak_ledger_covers_every_oracle_and_complete_raw_tapes() {
+    let context = Context::new(b"source-bound Keccak work ledger").unwrap();
+    let mut total = 0;
+    for oracle in [
+        Oracle::Row,
+        Oracle::QuotientAndMask,
+        Oracle::Fri(0),
+        Oracle::Fri(1),
+        Oracle::Fri(2),
+        Oracle::Fri(3),
+        Oracle::Fri(4),
+        Oracle::Terminal,
+    ] {
+        let (leaf, parent) = context.tree_frame_lengths(oracle).unwrap();
+        let (lp, pp) = context.tree_permutations(oracle).unwrap();
+        assert_eq!(lp, context.framing.body_permutations(leaf).unwrap());
+        assert_eq!(pp, context.framing.body_permutations(parent).unwrap());
+        assert!(lp >= 1 && pp >= 1);
+        total += lp + pp;
+    }
+    assert!(context.transcript_permutations().unwrap() > 29584 / 136);
+    assert!(total > 8);
 }

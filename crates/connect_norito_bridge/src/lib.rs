@@ -3366,6 +3366,135 @@ pub extern "C" fn connect_norito_chain_discriminant_scope_exit(token: u64) -> c_
         0
     })
 }
+// ---------------- Canonical domain identity ----------------
+/// Validate an already canonical ASCII `domain.dataspace` identity.
+///
+/// This calls the same pinned UTS-46 owner as native `DomainId` wire decoding
+/// and requires byte-exact canonical spelling. It never normalizes caller input.
+/// Each DNS label is bounded to 63 bytes, for a total of at most 127 bytes.
+/// Returns zero for valid input, one for invalid/noncanonical input, `-1` for
+/// a null pointer, `-2` for invalid UTF-8 and `-3` for a native panic.
+///
+/// # Safety
+/// A non-null `input_ptr` with a length in `1..=127` must point to that many
+/// readable bytes, which must remain unchanged for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_domain_id_validate_v1(
+    input_ptr: *const c_char,
+    input_len: c_ulong,
+) -> c_int {
+    if input_ptr.is_null() {
+        return -1;
+    }
+    if !(1..=127).contains(&input_len) {
+        return 1;
+    }
+    // The public length bound is checked before dereferencing or allocating.
+    let bytes = unsafe { slice::from_raw_parts(input_ptr.cast::<u8>(), input_len as usize) };
+    let Ok(input) = std::str::from_utf8(bytes) else {
+        return -2;
+    };
+    if !input.is_ascii() {
+        return 1;
+    }
+    std::panic::catch_unwind(|| match DomainId::parse_fully_qualified(input) {
+        Ok(domain) if domain.to_string() == input => 0,
+        _ => 1,
+    })
+    .unwrap_or(-3)
+}
+
+#[cfg(test)]
+mod domain_id_ffi_tests {
+    use super::*;
+
+    fn validate(input: &str) -> c_int {
+        // SAFETY: input remains borrowed and provides exactly its byte length.
+        unsafe {
+            connect_norito_domain_id_validate_v1(input.as_ptr().cast(), input.len() as c_ulong)
+        }
+    }
+
+    #[test]
+    fn canonical_domains_match_native_wire_admission() {
+        for input in [
+            "banka.universal".to_owned(),
+            "xn--bcher-kva.universal".to_owned(),
+            "banka.xn--bcher-kva".to_owned(),
+            "bank_a.universal".to_owned(),
+            "_banka.universal".to_owned(),
+            "banka_.universal".to_owned(),
+            format!("{}.universal", "a".repeat(63)),
+            format!("{}.{}", "a".repeat(63), "b".repeat(63)),
+        ] {
+            assert_eq!(validate(&input), 0, "{input}");
+            let domain = DomainId::parse_fully_qualified(&input).unwrap();
+            let frame = norito::to_bytes(&domain).unwrap();
+            let decoded: DomainId = norito::decode_from_bytes(&frame).unwrap();
+            assert_eq!(decoded.to_string(), input);
+        }
+    }
+
+    #[test]
+    fn invalid_and_noncanonical_domains_are_rejected_without_normalizing() {
+        for input in [
+            "",
+            "banka",
+            ".universal",
+            "banka.",
+            "a.b.c",
+            "BANKA.universal",
+            "banka.UNIVERSAL",
+            "bad!.universal",
+            "-banka.universal",
+            "banka-.universal",
+            "ab--cd.universal",
+            "xn--.universal",
+            "xn--a.universal",
+            "xn--abc.universal",
+            "bücher.universal",
+            " bank.universal",
+            "bank.universal ",
+            "bank\0.universal",
+        ] {
+            assert_eq!(validate(input), 1, "{input:?}");
+        }
+        assert_eq!(validate(&format!("{}.universal", "a".repeat(64))), 1);
+        assert_eq!(validate(&format!("banka.{}", "b".repeat(64))), 1);
+    }
+
+    #[test]
+    fn ffi_rejects_null_utf8_and_excess_length_before_dereference() {
+        // SAFETY: null is explicitly accepted for rejection; the two valid
+        // buffers below are readable for their declared lengths. Oversized
+        // lengths must be rejected before reading any byte from the pointer.
+        unsafe {
+            assert_eq!(
+                connect_norito_domain_id_validate_v1(std::ptr::null(), 0),
+                -1
+            );
+            let invalid_utf8 = [0xff_u8];
+            assert_eq!(
+                connect_norito_domain_id_validate_v1(invalid_utf8.as_ptr().cast(), 1),
+                -2
+            );
+            let one_byte = b"a";
+            assert_eq!(
+                connect_norito_domain_id_validate_v1(one_byte.as_ptr().cast(), 0),
+                1
+            );
+            assert_eq!(
+                connect_norito_domain_id_validate_v1(one_byte.as_ptr().cast(), 128),
+                1
+            );
+            assert_eq!(
+                connect_norito_domain_id_validate_v1(one_byte.as_ptr().cast(), c_ulong::MAX),
+                1
+            );
+        }
+    }
+}
+
 // ---------------- Account address helpers ----------------
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_account_address_parse(
@@ -16401,3 +16530,6 @@ mod tests {
 }
 include!("bridge_tail_tests.rs");
 include!("sorafs_tests.rs");
+
+#[cfg(test)]
+mod native_execution_capture_tests;

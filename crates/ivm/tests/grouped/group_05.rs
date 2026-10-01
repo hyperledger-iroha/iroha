@@ -56,6 +56,8 @@ mod memory_log;
 mod memory_merkle;
 #[path = "../memory_merkle_combined.rs"]
 mod memory_merkle_combined;
+#[path = "../memory_request_semantics.rs"]
+mod memory_request_semantics;
 #[path = "../merkle_cross.rs"]
 mod merkle_cross;
 #[path = "../merkle_crosscrate.rs"]

@@ -9,7 +9,7 @@ use crate::{
     },
     proof::PublicIO,
 };
-use fastpq_isi::GoldilocksDigest384V1 as Digest;
+use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
 use iroha_data_model::fastpq::FastpqQuantityUnits;
 use iroha_primitives::numeric::Quantity;
 

@@ -1,3 +1,6 @@
+const propertyDescriptor = Object.getOwnPropertyDescriptor.bind(Object);
+const hasOwn = Object.hasOwn.bind(Object);
+const applyIntrinsic = Reflect.apply.bind(Reflect);
 import { normalizeCompilerResult, validateUnicodeScalarString } from "./normalize.js";
 
 // One error constructor preserves the same class, message and optional cause.
@@ -18,12 +21,12 @@ function rejectRange(message) {
 }
 
 function invoke(callable, receiver, args = []) {
-  return Reflect.apply(callable, receiver, args);
+  return applyIntrinsic(callable, receiver, args);
 }
 
 // Capture native accessors once; callers never select getters from instances.
 function intrinsicGetter(constructor, name) {
-  return constructor ? (Object.getOwnPropertyDescriptor(constructor.prototype, name)?.get ?? null) : null;
+  return constructor ? (propertyDescriptor(constructor.prototype, name)?.get ?? null) : null;
 }
 
 const COMPILER_RESPONSE_LABEL = "Kotodama compiler response";
@@ -72,7 +75,7 @@ const readerReleaseLock =
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const [typedArrayBufferGetter, typedArrayByteOffsetGetter, typedArrayByteLengthGetter, typedArrayTagGetter] =
   ["buffer", "byteOffset", "byteLength", Symbol.toStringTag].map((name) =>
-    Object.getOwnPropertyDescriptor(typedArrayPrototype, name)?.get);
+    propertyDescriptor(typedArrayPrototype, name)?.get);
 const sharedArrayBufferByteLengthGetter = intrinsicGetter(globalThis.SharedArrayBuffer, "byteLength");
 const Uint8ArrayIntrinsic = Uint8Array;
 const uint8ArraySet = Uint8Array.prototype.set;
@@ -129,7 +132,7 @@ function canonicalizeCompilerOptions(options, allowedNames) {
     if (!allowedNames.has(name)) {
       rejectType(`unknown Kotodama compiler option '${name}'`);
     }
-    const descriptor = Object.getOwnPropertyDescriptor(options, name);
+    const descriptor = propertyDescriptor(options, name);
     if (
       descriptor === undefined ||
       !descriptor.enumerable ||
@@ -145,7 +148,7 @@ function canonicalizeCompilerOptions(options, allowedNames) {
 }
 
 function validateCompilerRequestFields(options) {
-  if (Object.hasOwn(options, "sourceName")) {
+  if (hasOwn(options, "sourceName")) {
     if (typeof options.sourceName !== "string" || options.sourceName.length === 0) {
       rejectType("sourceName must be a non-empty string");
     }
@@ -169,15 +172,15 @@ function validateCompilerRequestFields(options) {
       );
     }
   }
-  if (Object.hasOwn(options, "zk") && typeof options.zk !== "boolean") {
+  if (hasOwn(options, "zk") && typeof options.zk !== "boolean") {
     rejectType("zk must be a boolean");
   }
-  if (SOURCE_SET_FIELDS.some((key) => Object.hasOwn(options, key))) {
+  if (SOURCE_SET_FIELDS.some((key) => hasOwn(options, key))) {
     if (options.sourceName === undefined) rejectType("sourceName is required when sources are supplied");
     const names = new Set([canonicalSourcePath(options.sourceName)]);
-    if (Object.hasOwn(options, "sources")) options.sources = canonicalSourceFiles(options.sources, names);
-    if (Object.hasOwn(options, "imports")) options.imports = canonicalSourceImports(options.imports);
-    if (Object.hasOwn(options, "packages")) {
+    if (hasOwn(options, "sources")) options.sources = canonicalSourceFiles(options.sources, names);
+    if (hasOwn(options, "imports")) options.imports = canonicalSourceImports(options.imports);
+    if (hasOwn(options, "packages")) {
       const identities = new Set();
       options.packages = canonicalDataArray(options.packages, "packages").map((value) => {
         const pkg = canonicalizeCompilerOptions(value, new Set(["identity", "modules", "sources", "exports", "imports"]));
@@ -208,8 +211,8 @@ function canonicalDataArray(value, label) {
   if (value.length > 512) rejectRange(`${label} exceeds the 512-item limit`);
   const result = [];
   for (let index = 0; index < value.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (!descriptor || !Object.hasOwn(descriptor, "value")) rejectType(`${label} must contain inert data entries`);
+    const descriptor = propertyDescriptor(value, String(index));
+    if (!descriptor || !hasOwn(descriptor, "value")) rejectType(`${label} must contain inert data entries`);
     result.push(descriptor.value);
   }
   return result;
@@ -283,10 +286,10 @@ function validateAbortSignal(signal) {
 }
 
 function validateCompilerTransportFields(options) {
-  if (Object.hasOwn(options, "signal")) {
+  if (hasOwn(options, "signal")) {
     validateAbortSignal(options.signal);
   }
-  if (Object.hasOwn(options, "timeoutMs")) {
+  if (hasOwn(options, "timeoutMs")) {
     if (
       !Number.isInteger(options.timeoutMs) ||
       options.timeoutMs <= 0 ||
@@ -315,12 +318,12 @@ export function validateCompilerOptions(options) {
     ),
   );
   if (
-    Object.hasOwn(options, "compilerUrl") &&
+    hasOwn(options, "compilerUrl") &&
     (typeof options.compilerUrl !== "string" || options.compilerUrl.length === 0)
   ) {
     rejectType("compilerUrl must be a non-empty string");
   }
-  if (Object.hasOwn(options, "fetchImpl") && typeof options.fetchImpl !== "function") {
+  if (hasOwn(options, "fetchImpl") && typeof options.fetchImpl !== "function") {
     rejectType("fetchImpl must be a function");
   }
   return options;
@@ -362,7 +365,7 @@ export function selectCompilerCallOptions(options) {
 function selectCompilerFields(options, names) {
   const selected = {};
   for (const name of names) {
-    if (Object.hasOwn(options, name)) selected[name] = options[name];
+    if (hasOwn(options, name)) selected[name] = options[name];
   }
   return selected;
 }
@@ -753,7 +756,7 @@ export class KotodamaCompilerClient {
       rejectCompilerType("baseUrl must be a non-empty string");
     }
     options = canonicalizeCompilerOptions(options, COMPILER_CLIENT_OPTION_NAMES);
-    const fetchImpl = Object.hasOwn(options, "fetchImpl")
+    const fetchImpl = hasOwn(options, "fetchImpl")
       ? options.fetchImpl
       : DefaultFetch;
     let parsed;
@@ -779,9 +782,7 @@ export class KotodamaCompilerClient {
     if (typeof fetchImpl !== "function") {
       rejectCompilerType("client requires fetch");
     }
-    // Keep the validated transport policy in private slots. Public properties
-    // can be added by callers for compatibility, but cannot redirect a later
-    // compilation around the constructor's HTTPS/loopback boundary.
+    // Private slots preserve the constructor's validated HTTPS/loopback transport policy.
     this.#baseUrl = parsed.href.replace(/\/$/, "");
     this.#fetchImpl = fetchImpl;
   }
@@ -848,7 +849,7 @@ export class KotodamaCompilerClient {
         const detail = await readBoundedResponseText(
           metadata,
           MAX_COMPILER_ERROR_BYTES,
-          "Kotodama compiler error response",
+          ("Kotodama compiler " + "error response"),
           operation,
         );
         const suffix = detail.length === 0 ? "" : `: ${detail}`;

@@ -28,7 +28,7 @@ use std::{
 };
 
 #[path = "store/read.rs"]
-mod read;
+pub(in crate::sumeragi) mod read;
 #[path = "store/recovery.rs"]
 mod recovery;
 use read::{LaneBodyRead, RestoreFrame, certified_source, record_error};

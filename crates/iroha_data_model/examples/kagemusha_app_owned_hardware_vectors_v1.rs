@@ -77,13 +77,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             vectors.push(norito::json!({
                 "operation": name,
                 "operation_tag": tag,
-                "secure_index_before": index.to_string(),
-                "secure_index_after": (index + 1).to_string(),
-                "subject_signing_hex": hex::encode(&s),
-                "subject_sha256_hex": hex::encode(Sha256::digest(&s)),
-                "approval_signing_hex": hex::encode(&w),
-                "approval_sha256_hex": hex::encode(Sha256::digest(&w)),
-                "challenge_archive_hex": hex::encode(norito::encode_canonical(&challenge)?),
+                "secure_index_before": (index.to_string()),
+                "secure_index_after": ((index + 1).to_string()),
+                "subject_signing_hex": (hex::encode(&s)),
+                "subject_sha256_hex": (hex::encode(Sha256::digest(&s))),
+                "approval_signing_hex": (hex::encode(&w)),
+                "approval_sha256_hex": (hex::encode(Sha256::digest(&w))),
+                "challenge_archive_hex": (hex::encode(norito::encode_canonical(&challenge)?)),
             }));
         }
     }
@@ -93,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "native_authority": false,
         "hardware_qualified": false,
         "monetary_authority": false,
-        "account_binding_hex": hex::encode(account_binding),
+        "account_binding_hex": (hex::encode(account_binding)),
         "vectors": vectors,
     });
     println!("{}", norito::json::to_json_pretty(&result)?);

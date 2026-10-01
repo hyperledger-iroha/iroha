@@ -9,8 +9,8 @@
 //!
 //! A sole leaf has an empty sibling frontier but still uses the existing root
 //! `node(role, level=1, index=0, leaf, leaf)`. It is never its own root. Native
-//! digest types admit only six canonical Goldilocks coordinates; future wire
-//! decoding must preserve that admission boundary.
+//! digest encodings are selected by the typed caller: normal compact roots are
+//! opaque SHA3 bytes, and test-only reference callers retain their own encoding.
 //!
 //! Both the bounded producer and verifier use this same canonical schedule.
 //! Reconstruction clears its digest frontiers even when authenticating a private
@@ -19,6 +19,7 @@
 
 #[cfg(test)]
 use fastpq_isi::GoldilocksDigest384DomainPrefixV1;
+#[cfg(test)]
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use zeroize::Zeroize;
 
@@ -32,24 +33,24 @@ const MAX_PARALLEL_PARENT_JOBS: usize = 32;
 // become public proof values. Own each fixed-capacity frontier before inserting
 // digests, and clear every live tuple on success, errors and callback unwinding.
 // Each next frontier is no wider than its input, so pushes never grow the heap.
-struct DigestFrontier(Vec<(usize, Digest)>);
-impl DigestFrontier {
+struct DigestFrontier<D: Copy + Eq + Default + Zeroize>(Vec<(usize, D)>);
+impl<D: Copy + Eq + Default + Zeroize> DigestFrontier<D> {
     fn reserved(capacity: usize) -> Result<Self> {
         Ok(Self(reserved(capacity)?))
     }
 }
-impl core::ops::Deref for DigestFrontier {
-    type Target = Vec<(usize, Digest)>;
+impl<D: Copy + Eq + Default + Zeroize> core::ops::Deref for DigestFrontier<D> {
+    type Target = Vec<(usize, D)>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl core::ops::DerefMut for DigestFrontier {
+impl<D: Copy + Eq + Default + Zeroize> core::ops::DerefMut for DigestFrontier<D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-impl Drop for DigestFrontier {
+impl<D: Copy + Eq + Default + Zeroize> Drop for DigestFrontier<D> {
     fn drop(&mut self) {
         self.0.iter_mut().for_each(Zeroize::zeroize);
         #[cfg(test)]
@@ -60,7 +61,7 @@ impl Drop for DigestFrontier {
                 bad + self
                     .0
                     .iter()
-                    .filter(|(index, digest)| *index != 0 || digest.words() != [0; 6])
+                    .filter(|(index, digest)| *index != 0 || *digest != D::default())
                     .count(),
             ));
         });
@@ -313,11 +314,11 @@ impl MultiproofPlan {
     /// The callback receives only coordinates derived from trusted geometry.
     /// All cached level widths are checked before the first hash invocation.
     #[cfg(test)]
-    pub(super) fn open_with(
+    pub(super) fn open_with<D: Copy + Eq + Default + Zeroize>(
         &self,
-        levels: &[Vec<Digest>],
-        hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
-    ) -> Result<Vec<Digest>> {
+        levels: &[Vec<D>],
+        hash: impl FnMut(usize, usize, D, D) -> Result<D>,
+    ) -> Result<Vec<D>> {
         if levels.len() != self.depth + 1 {
             return Err(shape("multiproof tree level count mismatch"));
         }
@@ -374,12 +375,12 @@ impl MultiproofPlan {
     /// Malformed cardinalities invoke no callback. Each shared parent is hashed
     /// once at its plan-derived level/index; the sole leaf is duplicated into
     /// its required parent. Hash failures propagate immediately without retry.
-    pub(super) fn verify_with(
+    pub(super) fn verify_with<D: Copy + Eq + Default + Zeroize>(
         &self,
-        root: Digest,
-        leaves: &[Digest],
-        siblings: &[Digest],
-        hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
+        root: D,
+        leaves: &[D],
+        siblings: &[D],
+        hash: impl FnMut(usize, usize, D, D) -> Result<D>,
     ) -> Result<MultiproofWork> {
         let computed = self.reconstruct(leaves, siblings, hash)?;
         if computed != root {
@@ -402,12 +403,12 @@ impl MultiproofPlan {
     /// a fixed 32-result stack array. Rayon runtime and the hash callback retain
     /// their own allocations and are not covered by this frontier-storage bound.
     /// Small frontiers and single-worker pools use the serial reference path.
-    pub(super) fn verify_parallel_with(
+    pub(super) fn verify_parallel_with<D: Copy + Eq + Default + Zeroize + Send + Sync>(
         &self,
-        root: Digest,
-        leaves: &[Digest],
-        siblings: &[Digest],
-        hash: impl Fn(usize, usize, Digest, Digest) -> Result<Digest> + Sync,
+        root: D,
+        leaves: &[D],
+        siblings: &[D],
+        hash: impl Fn(usize, usize, D, D) -> Result<D> + Sync,
     ) -> Result<MultiproofWork> {
         use rayon::prelude::*;
 
@@ -431,7 +432,7 @@ impl MultiproofPlan {
                     && current.get(position + 1).map(|node| node.0) == Some(index + 1);
                 // Reuse the output index word for this parent's input position.
                 // No per-parent job descriptor or duplicate digest is retained.
-                next.push((position, Digest::default()));
+                next.push((position, D::default()));
                 position += if paired { 2 } else { 1 };
                 consumed += usize::from(!paired);
             }
@@ -442,7 +443,7 @@ impl MultiproofPlan {
             };
             let chunk_width = next.len().div_ceil(jobs);
             let job_count = next.len().div_ceil(chunk_width);
-            let hash_chunk = |ordinal: usize, output: &mut [(usize, Digest)]| -> Result<()> {
+            let hash_chunk = |ordinal: usize, output: &mut [(usize, D)]| -> Result<()> {
                 let mut position = output[0].0;
                 // Before parent k, p inputs consumed implies p-k paired and
                 // 2*k-p unpaired parents. Only unpaired parents use siblings.
@@ -497,12 +498,12 @@ impl MultiproofPlan {
         Ok(self.work)
     }
 
-    fn reconstruct(
+    fn reconstruct<D: Copy + Eq + Default + Zeroize>(
         &self,
-        leaves: &[Digest],
-        siblings: &[Digest],
-        mut hash: impl FnMut(usize, usize, Digest, Digest) -> Result<Digest>,
-    ) -> Result<Digest> {
+        leaves: &[D],
+        siblings: &[D],
+        mut hash: impl FnMut(usize, usize, D, D) -> Result<D>,
+    ) -> Result<D> {
         if leaves.len() != self.indices.len() || siblings.len() != self.siblings.len() {
             return Err(shape("multiproof leaf or sibling count mismatch"));
         }
@@ -567,6 +568,10 @@ fn shape(details: &'static str) -> Error {
         details: details.to_owned(),
     }
 }
+
+#[cfg(test)]
+#[path = "merkle_multiproof/sha3_reference.rs"]
+mod sha3_reference;
 
 #[cfg(test)]
 mod tests {
@@ -649,42 +654,41 @@ mod tests {
 
     /// Hash one candidate parent at `usize` tree coordinates.
     fn candidate_parent(
-        context: &crate::backend::compact_v1::Context,
-        oracle: crate::backend::compact_v1::Oracle,
+        context: &crate::backend::compact_sha3::Context,
+        oracle: u8,
         level: usize,
         index: usize,
-        left: Digest,
-        right: Digest,
-    ) -> Result<Digest> {
-        context
-            .hash_parent(
-                oracle,
-                u32::try_from(level).unwrap(),
-                u32::try_from(index).unwrap(),
-                left,
-                right,
-            )
-            .map_err(|_| shape("candidate parent hash failed"))
+        left: fastpq_isi::keccak256::Sha3Digest256V1,
+        right: fastpq_isi::keccak256::Sha3Digest256V1,
+    ) -> Result<fastpq_isi::keccak256::Sha3Digest256V1> {
+        sha3_reference::parent(
+            context,
+            oracle,
+            u32::try_from(level).unwrap(),
+            u32::try_from(index).unwrap(),
+            left,
+            right,
+        )
     }
 
     #[test]
-    fn shake_parent_adapter_authenticates_sparse_frontiers_and_terminal_with_exact_work() {
-        use crate::backend::compact_v1::{Context, Oracle};
-        let context = Context::new(b"complete public context for shared six-lane adapter").unwrap();
+    fn sha3_parent_adapter_authenticates_sparse_frontiers_and_terminal_with_exact_work() {
+        use crate::backend::compact_sha3::Context;
+        use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
+        let context = Context::new(b"complete public context for shared SHA3 adapter").unwrap();
         let wrong_context =
-            Context::new(b"changed complete public context for shared six-lane adapter").unwrap();
+            Context::new(b"changed complete public context for shared SHA3 adapter").unwrap();
         for (round, count, bytes, indices) in [
-            (15, 8_usize, 64, vec![0, 3, 7]),
-            (16, 4, 64, vec![1, 2]),
-            (17, 1, 128, vec![0]),
+            (3, 8_usize, 64, vec![0, 3, 7]),
+            (4, 4, 64, vec![1, 2]),
+            (5, 1, 128, vec![0]),
         ] {
-            let oracle = Oracle::Fri(round);
+            let oracle = round;
             let mut leaves: Vec<_> = (0..count)
                 .map(|i| {
                     let mut payload = vec![0; bytes];
                     payload[..8].copy_from_slice(&(i as u64 + 1).to_le_bytes());
-                    context
-                        .hash_leaf(oracle, u32::try_from(i).unwrap(), &payload)
+                    sha3_reference::leaf(&context, oracle, u32::try_from(i).unwrap(), &payload)
                         .unwrap()
                 })
                 .collect();
@@ -737,7 +741,7 @@ mod tests {
             assert_eq!(positions.len(), work.parent_hashes);
             for altered in [&wrong_context, &context] {
                 let role = if std::ptr::eq(altered, &raw const context) {
-                    Oracle::Fri(round - 1)
+                    round - 1
                 } else {
                     oracle
                 };
@@ -759,7 +763,9 @@ mod tests {
                 } else {
                     &mut root
                 };
-                *value = changed(*value, 5);
+                let mut bytes = value.into_bytes();
+                bytes[31] ^= 1;
+                *value = Digest::from_bytes(bytes);
                 assert!(
                     plan.verify_with(root, &selected, &siblings, |level, index, left, right| {
                         candidate_parent(&context, oracle, level, index, left, right)

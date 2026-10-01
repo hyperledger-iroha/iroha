@@ -1,6 +1,28 @@
 import { rejectType } from "./validationThrow.js";
 import { isCanonicalKotodamaEntrypoint } from "./kotodamaIdentifiers.js";
 
+/** Validate the current field set before reading values; preserve the caller's error boundary. */
+export function validateManifestFieldsV1(manifest, context, reject = rejectType) {
+  const fields = [
+    ["seiyaku_name", "seiyakuName"], ["code_hash", "codeHash"],
+    ["abi_hash", "abiHash"], ["compiler_fingerprint", "compilerFingerprint"],
+    ["features_bitmap", "featuresBitmap"], ["access_set_hints", "accessSetHints"],
+    ["entrypoints", "entryPoints"], ["error_types", "errorTypes"],
+    ["error_messages", "errorMessages"], ["states"], ["kotoba"], ["provenance"],
+  ];
+  const allowed = new Set(fields.flat());
+  const unknown = Object.keys(manifest).filter((key) => !allowed.has(key));
+  if (unknown.length !== 0) {
+    reject(`${context} contains unsupported fields: ${unknown.sort().join(", ")}`);
+  }
+  for (const aliases of fields) {
+    const present = aliases.filter((key) => Object.hasOwn(manifest, key));
+    if (present.length > 1) {
+      reject(`${context} contains conflicting aliases: ${present.join(", ")}`);
+    }
+  }
+}
+
 /** Require the declared entrypoint kind and permission to match its canonical selector. */
 export function validateManifestEntrypointIdentityV1(name, kind, permission, context) {
   if (!isCanonicalKotodamaEntrypoint(name)) {

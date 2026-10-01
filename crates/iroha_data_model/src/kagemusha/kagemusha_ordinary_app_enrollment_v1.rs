@@ -29,6 +29,8 @@ pub const KAGEMUSHA_ORDINARY_APP_ENROLLMENT_CHALLENGE_DOMAIN_V1: &[u8] =
 const POLICY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-trust-policy\0";
 const CREDENTIAL_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-credential-original\0";
 const STATIC_BINDING_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-static-binding\0";
+const POSSESSION_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-enrollment-possession\0";
+const EVIDENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ordinary-app-enrollment-evidence\0";
 const INTEGRITY_REQUEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:play-integrity-enrollment\0";
 
 /// Model-owned absolute ranges in the sole ordinary issuer signing message.
@@ -134,6 +136,25 @@ impl KagemushaOrdinaryAppCredentialSigningLayoutV1 {
     /// Exact `play_integrity_refresh_before_ms` slot; optional Integrity slots are zero when absent.
     pub const PLAY_INTEGRITY_REFRESH_BEFORE_MS: core::ops::Range<usize> =
         Self::BODY.start + 786..Self::BODY.start + 794;
+}
+
+/// Encoder-owned ranges and framing for the exact complete original credential digest.
+/// Ranges address the domain + LE64 canonical archive length + complete canonical archive.
+/// Values and CRC are None; Some bytes pin all authoritative framing/prefixes and option tags.
+/// This data-only description grants no credential or signature authority.
+#[derive(Debug, Clone)]
+pub struct KagemushaOrdinaryAppCredentialOriginalLayoutV1 {
+    /// Complete digest preimage template, including original Ed signature and CRC positions.
+    pub bytes: Vec<Option<u8>>,
+    /// Complete canonical original archive range within the digest preimage.
+    pub original: core::ops::Range<usize>,
+    /// All 28 encoded subject field ranges in the actual declared model order.
+    /// Platform/security fields are their actual Norito enum representation, not signing tags.
+    pub subject_fields: [core::ops::Range<usize>; 28],
+    /// Exact original raw Ed25519 signature bytes, excluding vector framing.
+    pub signature: core::ops::Range<usize>,
+    /// Five encoded Integrity binding fields when present; None pins the absent option bytes.
+    pub play_integrity_fields: Option<[core::ops::Range<usize>; 5]>,
 }
 
 /// Platform security level established by the independent raw verifier.
@@ -558,6 +579,47 @@ impl KagemushaSignedOrdinaryAppEnrollmentChallengeV1 {
     }
 }
 
+/// Exact original app-key possession signing message selected by the native preparation.
+/// The attested key remains nonexportable; its signature does not reveal a financial secret.
+/// # Errors
+/// Rejects another preparation shape, absent key or oversized original message.
+pub fn kagemusha_ordinary_app_enrollment_possession_message_v1(
+    challenge: &KagemushaOrdinaryAppEnrollmentChallengeV1,
+    key: &KagemushaDevicePublicKeyV1,
+) -> Result<Vec<u8>, String> {
+    key.validate().map_err(|e| e.to_string())?;
+    let prepared = challenge.canonical_signing_bytes()?;
+    let mut message = POSSESSION_DOMAIN.to_vec();
+    message.extend_from_slice(&((prepared.len() + 32) as u64).to_le_bytes());
+    message.extend_from_slice(&prepared);
+    message.extend_from_slice(&Sha256::digest(key.as_sec1_bytes()));
+    Ok(message)
+}
+
+/// Commit complete bounded attestation and original possession evidence in their actual order.
+/// This selector provides no attestation, issuer or wallet authority by itself.
+/// # Errors
+/// Rejects empty originals or role bounds before constructing the preimage.
+pub fn kagemusha_ordinary_app_enrollment_evidence_digest_v1(
+    raw_attestation: &[u8],
+    raw_possession: &[u8],
+) -> Result<[u8; 32], String> {
+    if raw_attestation.is_empty()
+        || raw_attestation.len() > 128 * 1024
+        || raw_possession.is_empty()
+        || raw_possession.len() > super::KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1
+    {
+        return Err("ordinary enrollment evidence bound differs".into());
+    }
+    let mut hash = Sha256::new();
+    hash.update(EVIDENCE_DOMAIN);
+    hash.update((raw_attestation.len() as u64).to_le_bytes());
+    hash.update(raw_attestation);
+    hash.update((raw_possession.len() as u64).to_le_bytes());
+    hash.update(raw_possession);
+    Ok(hash.finalize().into())
+}
+
 /// Original independent Google verdict binding, kept separate from KeyMint evidence.
 #[derive(
     Debug,
@@ -642,7 +704,7 @@ pub struct KagemushaOrdinaryAppCredentialSubjectV1 {
     pub app_key_reference: [u8; 32],
     /// Separate native financial secret commitment; the platform scalar is never a witness.
     pub financial_authority_commitment: [u8; 32],
-    /// SHA-256 of the complete original raw platform attestation.
+    /// Model digest of complete original raw attestation and original app-key possession evidence.
     pub platform_evidence_digest: [u8; 32],
     /// Exact original preparation signing-message hash.
     pub enrollment_challenge_digest: [u8; 32],
@@ -838,6 +900,38 @@ impl KagemushaOrdinaryAppCredentialSubjectV1 {
         }
         Ok(bytes)
     }
+    fn encoded_field_values(&self) -> [Vec<u8>; 28] {
+        [
+            self.version.encode(),
+            self.platform_class.encode(),
+            self.security_level.encode(),
+            self.enrollment_id.encode(),
+            self.client_nonce.encode(),
+            self.server_nonce.encode(),
+            self.account_binding.encode(),
+            self.network_id.encode(),
+            self.lane_id.encode(),
+            self.release_id.encode(),
+            self.hardware_profile_id.encode(),
+            self.suite_id.encode(),
+            self.trust_policy_digest.encode(),
+            self.app_authority_policy_digest.encode(),
+            self.app_signing_identity_digest.encode(),
+            self.app_release_digest.encode(),
+            self.attested_key_id.encode(),
+            self.app_key_reference.encode(),
+            self.financial_authority_commitment.encode(),
+            self.platform_evidence_digest.encode(),
+            self.enrollment_challenge_digest.encode(),
+            self.app_public_key.encode(),
+            self.policy_epoch.encode(),
+            self.hardware_epoch.encode(),
+            self.issued_at_ms.encode(),
+            self.expires_at_ms.encode(),
+            self.app_attest_counter_floor.encode(),
+            self.play_integrity.encode(),
+        ]
+    }
 }
 
 /// New ordinary-app credential, signed under the actual governed Ed app authority.
@@ -907,6 +1001,111 @@ impl KagemushaVerifiedOrdinaryAppCredentialV1 {
     }
 }
 impl KagemushaOrdinaryAppCredentialV1 {
+    /// Exact model-owned digest preimage layout derived from the sole canonical encoder.
+    /// This validates offsets against separately encoded subject fields and raw issuer signature.
+    /// # Errors
+    /// Rejects changed frame/schema/field layouts, another signature width or invalid body shape.
+    pub fn original_preimage_layout(
+        &self,
+    ) -> Result<KagemushaOrdinaryAppCredentialOriginalLayoutV1, String> {
+        self.subject.canonical_signing_bytes()?;
+        if self.signature.payload().len() != 64 {
+            return Err("ordinary credential Ed signature width differs".into());
+        }
+        let frame = bounded_encode(self)?;
+        let payload = self.encode();
+        let root_offset = frame
+            .len()
+            .checked_sub(payload.len())
+            .ok_or("ordinary credential root layout differs")?;
+        if root_offset < norito::core::Header::SIZE
+            || frame.get(root_offset..) != Some(payload.as_slice())
+        {
+            return Err("ordinary credential canonical root layout differs".into());
+        }
+        let flags = frame[39];
+        let mut offset = root_offset;
+        let subject_bytes =
+            crate::isi::read_aos_field(&frame, &mut offset, flags).map_err(|e| e.to_string())?;
+        let subject_start = offset - subject_bytes.len();
+        if subject_bytes != self.subject.encode() {
+            return Err("ordinary credential subject encoder differs".into());
+        }
+        let signature_bytes =
+            crate::isi::read_aos_field(&frame, &mut offset, flags).map_err(|e| e.to_string())?;
+        if offset != frame.len()
+            || signature_bytes != self.signature.encode()
+            || !signature_bytes.ends_with(self.signature.payload())
+        {
+            return Err("ordinary credential original signature framing differs".into());
+        }
+        let prelude_len = CREDENTIAL_DIGEST_DOMAIN.len() + 8;
+        let signature = prelude_len + offset - 64..prelude_len + offset;
+        let expected_fields = self.subject.encoded_field_values();
+        let mut subject_offset = 0;
+        let mut ranges: [core::ops::Range<usize>; 28] = core::array::from_fn(|_| 0..0);
+        for (range, expected) in ranges.iter_mut().zip(expected_fields) {
+            let field = crate::isi::read_aos_field(subject_bytes, &mut subject_offset, flags)
+                .map_err(|e| e.to_string())?;
+            if field != expected {
+                return Err("ordinary credential declared field layout differs".into());
+            }
+            *range = prelude_len + subject_start + subject_offset - field.len()
+                ..prelude_len + subject_start + subject_offset;
+        }
+        if subject_offset != subject_bytes.len() {
+            return Err("ordinary credential subject trailing fields".into());
+        }
+        let mut preimage = CREDENTIAL_DIGEST_DOMAIN.to_vec();
+        preimage.extend_from_slice(&(frame.len() as u64).to_le_bytes());
+        preimage.extend_from_slice(&frame);
+        let mut template: Vec<Option<u8>> = preimage.into_iter().map(Some).collect();
+        template[prelude_len + 31..prelude_len + 39].fill(None);
+        for range in &ranges[..27] {
+            template[range.clone()].fill(None);
+        }
+        template[signature.clone()].fill(None);
+        let pi_fields = if let Some(pi) = self.subject.play_integrity {
+            let encoded = pi.encode();
+            let option = &frame[ranges[27].start - prelude_len..ranges[27].end - prelude_len];
+            if !option.ends_with(&encoded) {
+                return Err("ordinary credential Integrity option encoder differs".into());
+            }
+            let start = ranges[27].end - encoded.len();
+            let mut cursor = 0;
+            let expected = [
+                pi.request_hash.encode(),
+                pi.evidence_digest.encode(),
+                pi.policy_digest.encode(),
+                pi.verified_at_ms.encode(),
+                pi.refresh_before_ms.encode(),
+            ];
+            let mut fields: [core::ops::Range<usize>; 5] = core::array::from_fn(|_| 0..0);
+            for (range, expected) in fields.iter_mut().zip(expected) {
+                let field = crate::isi::read_aos_field(&encoded, &mut cursor, flags)
+                    .map_err(|e| e.to_string())?;
+                if field != expected {
+                    return Err("ordinary credential Integrity field encoder differs".into());
+                }
+                *range = start + cursor - field.len()..start + cursor;
+                template[range.clone()].fill(None);
+            }
+            if cursor != encoded.len() {
+                return Err("ordinary credential Integrity trailing bytes".into());
+            }
+            Some(fields)
+        } else {
+            None
+        };
+        Ok(KagemushaOrdinaryAppCredentialOriginalLayoutV1 {
+            bytes: template,
+            original: prelude_len..prelude_len + frame.len(),
+            subject_fields: ranges,
+            signature,
+            play_integrity_fields: pi_fields,
+        })
+    }
+
     /// Authenticate actual issuer, policy, release, original preparation and independently held key.
     /// # Errors
     /// Rejects substituted key roles, signer, policy, release, challenge, scope, Integrity or time.
@@ -1056,6 +1255,31 @@ impl KagemushaOrdinaryAppCredentialV1 {
         checked.recheck_at_trusted_time(now)?;
         Ok(checked)
     }
+}
+
+/// Derive the ordinary native financial epoch identity from the exact signed credential.
+/// This is logical native metadata, never a platform monotonicity or rollback claim.
+/// # Errors
+/// Rejects another signing shape or reserved generation/financial commitment.
+pub fn kagemusha_ordinary_financial_epoch_id_v1(
+    subject: &KagemushaOrdinaryAppCredentialSubjectV1,
+) -> Result<[u8; 32], String> {
+    subject.canonical_signing_bytes()?;
+    let mut hash = Sha256::new();
+    hash.update(b"iroha:kagemusha:v1:ordinary-financial-epoch\0");
+    hash.update((6u64 * 32 + 8).to_le_bytes());
+    for field in [
+        subject.enrollment_id,
+        subject.network_id,
+        subject.lane_id,
+        subject.release_id,
+        subject.hardware_profile_id,
+        subject.financial_authority_commitment,
+    ] {
+        hash.update(field);
+    }
+    hash.update(subject.hardware_epoch.to_le_bytes());
+    Ok(hash.finalize().into())
 }
 
 /// Model-owned ordinary account binding shared with the operation approval challenge.

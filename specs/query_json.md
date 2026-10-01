@@ -31,13 +31,21 @@ Singular requests identify the query by name and optionally include a payload:
 ```json
 {
   "singular": {
-    "type": "FindContractManifestByCodeHash",
+    "type": "FindContractManifestByArtifactId",
     "payload": {
-      "code_hash": "0x00112233…"
+      "artifact_id": {
+        "dataspace_id": 0,
+        "code_hash": "hash:BAF171AF0123F8A6C0BFAD9A4CA03A80C678DA21355E484320E2E5C667408D2F#0BB7"
+      }
     }
   }
 }
 ```
+
+The artifact identity binds the complete `.to` image to one exact dataspace;
+zero explicitly selects the universal dataspace. Use the artifact's actual
+domain-separated hash in place of the illustrative value above. The signed
+query context independently binds the network.
 
 The following singular queries are supported:
 
@@ -46,7 +54,7 @@ The following singular queries are supported:
 - `FindParameters`
 - `FindAssetDefinitionById` with `{ "asset": "<base58-asset-definition-id>" }`
 - `FindAssetById` with `{ "asset": "<base58-asset-definition-id>", "account_id": "<canonical-i105>", "scope": { "kind": "Global" } }`
-- `FindContractManifestByCodeHash` (requires a 32-byte `code_hash` hex string)
+- `FindContractManifestByArtifactId` (requires `artifact_id` with an explicit unsigned 64-bit `dataspace_id` and a canonical checksummed Norito `code_hash` literal)
 
 Example singular asset-definition lookup:
 

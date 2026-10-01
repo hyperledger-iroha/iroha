@@ -11,8 +11,8 @@
 //! TODO: Qualify generated artifacts and independently review source/finality
 //! authentication, privacy and cryptographic/resource bounds.
 
-use fastpq_isi::GoldilocksDigest384V1 as Digest;
-use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
+use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
+use iroha_data_model::fastpq::FastpqCommitmentV1 as WireDigest;
 
 use super::{
     deep_binding::{BindingError, Context, Message, Oracle, Transcript},
@@ -42,9 +42,9 @@ pub(super) struct VerificationWork {
     pub(super) h_calls: usize,
     /// Complete indivisible verifier messages.
     pub(super) verifier_messages: usize,
-    /// Materialized six-lane G blocks including every unused suffix word.
-    pub(super) g_blocks: usize,
-    /// Checked initial-query fold edges, including repeated shared fibers.
+    /// Materialized raw G bytes including every rejected and unused suffix word.
+    pub(super) g_tape_bytes: usize,
+    /// Checked distinct incoming fold edges, including every coordinate in shared fibers.
     pub(super) fold_checks: usize,
     /// Every terminal value checked against one degree-below-two polynomial.
     pub(super) terminal_values: usize,
@@ -210,8 +210,19 @@ fn verify_decoded(
     };
     let queries: Vec<_> = queries.into_iter().map(|index| index as usize).collect();
     let plans = deep_proof::preflight(proof, &queries)?;
-    let (leaf_hashes, parent_hashes) = authenticate(&binding, proof, &plans)?;
-    let fold_checks = check_chains(&geometry, &composition, lambda, &betas, &queries, proof)?;
+    let (initial_leaves, initial_parents) = authenticate(&binding, proof, &plans)?;
+    let (fold_checks, fri_leaves, fri_parents) = check_chains(
+        &geometry,
+        &composition,
+        lambda,
+        &betas,
+        &queries,
+        proof,
+        &binding,
+        &plans,
+    )?;
+    let leaf_hashes = initial_leaves + fri_leaves;
+    let parent_hashes = initial_parents + fri_parents;
     let work = VerificationWork {
         proof_bytes,
         air_evaluations: 1,
@@ -219,7 +230,7 @@ fn verify_decoded(
         parent_hashes,
         h_calls: leaf_hashes + parent_hashes + 9 + 1,
         verifier_messages: 10,
-        g_blocks: 637,
+        g_tape_bytes: 30_920,
         fold_checks,
         terminal_values: proof.terminal.len(),
     };
@@ -284,36 +295,7 @@ fn authenticate(
         &pairs,
         &proof.quotient_siblings,
     )?;
-    let mut leaves = rows.len() + pairs.len();
-    for (round, opening) in proof.rounds.iter().enumerate() {
-        // Preflight admits exactly five rounds, so the ordinal always fits.
-        let oracle = Oracle::Fri(
-            u8::try_from(round).map_err(|_| shape("DEEP FRI round ordinal exceeds u8"))?,
-        );
-        let groups = opening
-            .groups
-            .iter()
-            .map(|group| {
-                let bytes: Vec<_> = group
-                    .values
-                    .iter()
-                    .flat_map(|value| value.to_le_bytes())
-                    .collect();
-                binding
-                    .hash_leaf(oracle, group.index, &bytes)
-                    .map_err(binding_error)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        parents += verify_tree(
-            binding,
-            oracle,
-            &plans.rounds[round],
-            proof.fri_roots[round],
-            &groups,
-            &opening.siblings,
-        )?;
-        leaves += groups.len();
-    }
+    let leaves = rows.len() + pairs.len();
     let terminal: Vec<_> = proof
         .terminal
         .iter()
@@ -359,7 +341,13 @@ fn verify_tree(
     Ok(work.parent_hashes)
 }
 
-// Called only after exact preflight, complete field decoding and authentication.
+// Called only after exact preflight, row/Q/R authentication and OOD checking.
+// A layer stores at most q known values. Full reconstructed fibers never persist
+// beyond their round; the proof supplies no omitted-coordinate selector.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "all authenticated protocol owners are explicit"
+)]
 fn check_chains(
     geometry: &DeepGeometry,
     composition: &DeepComposition,
@@ -367,64 +355,122 @@ fn check_chains(
     betas: &[F; 5],
     queries: &[usize],
     proof: &DeepProof,
-) -> Result<usize> {
+    binding: &Context,
+    plans: &OpeningPlans,
+) -> Result<(usize, usize, usize)> {
+    walk_chains(
+        geometry,
+        composition,
+        lambda,
+        betas,
+        queries,
+        proof,
+        binding,
+        plans,
+        |round, oracle, digests| {
+            verify_tree(
+                binding,
+                oracle,
+                &plans.rounds[round],
+                proof.fri_roots[round],
+                digests,
+                &proof.rounds[round].siblings,
+            )
+        },
+    )
+}
+#[allow(
+    clippy::too_many_arguments,
+    reason = "fixed reconstruction dependencies and internal authentication callback"
+)]
+fn walk_chains(
+    geometry: &DeepGeometry,
+    composition: &DeepComposition,
+    lambda: F,
+    betas: &[F; 5],
+    queries: &[usize],
+    proof: &DeepProof,
+    binding: &Context,
+    plans: &OpeningPlans,
+    mut authenticate_round: impl FnMut(usize, Oracle, &[Digest]) -> Result<usize>,
+) -> Result<(usize, usize, usize)> {
     let mut domain = geometry.domain();
-    let mut domains = Vec::with_capacity(FRI_ARITIES.len());
-    let mut folds = Vec::with_capacity(FRI_ARITIES.len());
-    for (round, &arity) in FRI_ARITIES.iter().enumerate() {
-        domains.push(domain);
-        folds.push(FriFoldPlan::new(
-            arity,
-            domain.coset_generator(FRI_LENGTHS[round + 1]),
-        )?);
-        domain = domain.folded(arity);
-    }
-    // Authenticate and check the entire terminal rather than only the sampled
-    // positions. The folded coset is essential: checking an index-linear vector
-    // would accept values that are not degree below two on this actual domain.
-    check_terminal_degree(domain, &proof.terminal)?;
-    for (ordinal, &initial) in queries.iter().enumerate() {
+    let mut known = Vec::with_capacity(QUERY_COUNT);
+    for (ordinal, &index) in queries.iter().enumerate() {
         let pair = &proof.quotients[ordinal];
-        let mut value = composition
+        let value = composition
             .base_value_at(
-                geometry.domain().point(initial),
+                domain.point(index),
                 &proof.rows[ordinal].values,
                 &[pair.low, pair.high],
                 lambda,
             )?
             .mul(lambda)
             .add(pair.composition_mask);
-        let mut index = initial;
-        for round in 0..FRI_ARITIES.len() {
-            let next_len = FRI_LENGTHS[round + 1];
-            let group_index = index % next_len;
-            let coordinate = index / next_len;
-            let group_key = u32::try_from(group_index)
-                .map_err(|_| shape("DEEP FRI group index exceeds u32"))?;
-            let position = proof.rounds[round]
-                .groups
-                .binary_search_by_key(&group_key, |group| group.index)
-                .map_err(|_| shape("DEEP authenticated FRI fiber is missing"))?;
-            let group = &proof.rounds[round].groups[position];
-            if group.values[coordinate] != value {
+        known.push((index, value));
+    }
+    let mut checks = 0;
+    let mut leaves = 0;
+    let mut parents = 0;
+    for (round, &arity) in FRI_ARITIES.iter().enumerate() {
+        let next_len = FRI_LENGTHS[round + 1];
+        let fold = FriFoldPlan::new(arity, domain.coset_generator(next_len))?;
+        let oracle = Oracle::Fri(u8::try_from(round).expect("five rounds"));
+        let mut digests = Vec::with_capacity(plans.round_indices[round].len());
+        let mut next = Vec::with_capacity(plans.round_indices[round].len());
+        for group in &proof.rounds[round].groups {
+            let group_index = group.index as usize;
+            let first = known
+                .iter()
+                .find(|(index, _)| index % next_len == group_index)
+                .ok_or_else(|| shape("compact FRI group has no incoming edge"))?;
+            let omitted = plans.omitted_coordinate(round, group_index)?;
+            if first.0 / next_len != omitted {
                 return Err(shape(
-                    "DEEP composition or folded value differs from its authenticated fiber",
+                    "compact FRI omission differs from canonical incoming index",
                 ));
             }
-            value = folds[round].fold_coset(
-                &group.values,
-                betas[round],
-                domains[round].point(group_index),
-            )?;
-            index = group_index;
+            let full = group.values.expand(omitted, first.1)?;
+            // Retain every incoming equality, including nonomitted coordinates
+            // when multiple queries enter the same authenticated fiber.
+            for &(index, value) in &known {
+                if index % next_len == group_index {
+                    if full[index / next_len] != value {
+                        return Err(shape(
+                            "DEEP composition or folded value differs from its authenticated fiber",
+                        ));
+                    }
+                    checks += 1;
+                }
+            }
+            let mut bytes = [0; 16 * F::BYTES];
+            for (target, value) in bytes.chunks_exact_mut(F::BYTES).zip(&full[..arity]) {
+                target.copy_from_slice(&value.to_le_bytes());
+            }
+            digests.push(
+                binding
+                    .hash_leaf(oracle, group.index, &bytes[..arity * F::BYTES])
+                    .map_err(binding_error)?,
+            );
+            next.push((
+                group_index,
+                fold.fold_coset(&full[..arity], betas[round], domain.point(group_index))?,
+            ));
         }
+        parents += authenticate_round(round, oracle, &digests)?;
+        leaves += digests.len();
+        known = next;
+        domain = domain.folded(arity);
+    }
+    check_terminal_degree(domain, &proof.terminal)?;
+    for (index, value) in known {
         if proof.terminal[index] != value {
             return Err(shape(
                 "DEEP final folded value differs from its authenticated terminal",
             ));
         }
     }
-    Ok(queries.len() * FRI_ARITIES.len())
+    Ok((checks, leaves, parents))
 }
 
 /// Require all authenticated values to lie on one polynomial over the folded coset.

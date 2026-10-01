@@ -1,8 +1,8 @@
 //! Necessary decode-policy minima checked before private quantity proving.
 //!
 //! These are lower bounds, not a sufficient budget or an estimate of the final
-//! decoder's charges. Every child opens 64 distinct current rows of 301 fixed
-//! eight-byte values. Their payload alone costs at least 154,112 bytes both in
+//! decoder's charges. Every child opens 77 distinct current rows of 301 fixed
+//! eight-byte values. Their payload alone costs at least 185,416 bytes both in
 //! the canonical frame and in the decoded row vectors. The transport owns the
 //! complete carrier as a `Vec<u8>`, so that raw row payload also supplies a lower
 //! bound on its sequence, field, cumulative-element and allocation requirements.
@@ -126,7 +126,8 @@ mod tests {
 
     #[test]
     fn decode_policy_necessary_minima_are_inclusive_and_scale_with_all_children() {
-        assert_eq!(CHILD_ROW_PAYLOAD_BYTES, 154_112);
+        assert_eq!(DISTINCT_CURRENT_ROWS, 77);
+        assert_eq!(CHILD_ROW_PAYLOAD_BYTES, 185_416);
         for count in [1, 2, 128] {
             let exact = policy(count);
             preflight_decode_policy(count, &exact).unwrap();

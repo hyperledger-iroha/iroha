@@ -159,3 +159,48 @@ fn lane_payload_rejects_foreign_carrier_pool_network_and_changed_complete_state(
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
+
+#[test]
+fn lane_payload_classifies_typed_decode_refusal_without_masking_invalid_source() {
+    for error in [
+        norito::Error::ArchiveLengthExceeded {
+            length: 2,
+            limit: 1,
+        },
+        norito::Error::SequenceLengthExceeded {
+            length: 2,
+            limit: 1,
+        },
+        norito::Error::FieldLengthExceeded {
+            length: 2,
+            limit: 1,
+        },
+        norito::Error::TotalElementsExceeded {
+            attempted: 2,
+            limit: 1,
+        },
+        norito::Error::TotalAllocationExceeded {
+            attempted: 2,
+            limit: 1,
+        },
+        norito::Error::NestingDepthExceeded {
+            depth: 2,
+            limit: 1,
+            context: "lane custody",
+        },
+        norito::Error::AllocationFailed { bytes: 1 },
+    ] {
+        assert!(LanePayloadError::Codec(error).is_local_refusal());
+    }
+    for error in [
+        norito::Error::LengthMismatch,
+        norito::Error::ChecksumMismatch,
+        norito::Error::NonCanonicalEncoding,
+        norito::Error::MissingLayoutFlags,
+    ] {
+        assert!(!LanePayloadError::Codec(error).is_local_refusal());
+    }
+    assert!(!LanePayloadError::Source.is_local_refusal());
+    assert!(!LanePayloadError::Commitment.is_local_refusal());
+    assert!(!LanePayloadError::Admission(AllocationRefusal::DemandOverflow).is_local_refusal());
+}

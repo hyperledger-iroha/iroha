@@ -638,7 +638,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
             p2p_outbound_frame_queue_max_low_frames:
                 defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap: nonzero!(128usize),
+            p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
             consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
             consensus_ingress_bytes_per_sec: defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
@@ -680,7 +680,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             allow_cidrs: Vec::new(),
             deny_cidrs: Vec::new(),
             disconnect_on_post_overflow: false,
-            max_frame_bytes: 256 * 1024,
+            // The encrypted cap must cover every plaintext topic plus nonce/tag bytes.
+            max_frame_bytes: 512 * 1024 + defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
             tcp_nodelay: true,
             tcp_keepalive: None,
             max_frame_bytes_consensus: 128 * 1024,

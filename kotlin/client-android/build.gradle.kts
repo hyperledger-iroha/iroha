@@ -1295,6 +1295,9 @@ abstract class StripNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
+    abstract val localIntegration: Property<Boolean>
+
+    @get:Input
     abstract val privacyProductionEnabled: Property<Boolean>
 
     @get:InputDirectory
@@ -1557,6 +1560,9 @@ abstract class StripNativeBridgeTask @Inject constructor(
             "strip_tool_sha256" to NativeBridgeBuildContract.sha256Hex(stripExecutablePath),
             "libraries" to libraries,
         )
+        if (localIntegration.get()) {
+            manifest["artifact_scope"] = "local-integration"
+        }
         val provenanceFile = provenanceRoot.resolve(
             "iroha/native-build-provenance-v1.json",
         )
@@ -1668,6 +1674,7 @@ publishing {
 dependencies {
     api(project(":core-jvm"))
     implementation(libs.play.services.nearby)
+    implementation(libs.play.integrity)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(kotlin("test"))
     testImplementation(libs.bcprov)
@@ -1763,17 +1770,49 @@ require(includeDebugNativeBridgeInput == "true" || includeDebugNativeBridgeInput
     "irohaDebugNativeBridge must be exactly 'true' or 'false'"
 }
 val includeDebugNativeBridge = includeDebugNativeBridgeInput == "true"
+fun validateLocalAndroidArtifactDirectory(root: Path, artifacts: Path) {
+    val rawPython = System.getenv("MOBILE_SDK_PYTHON_BINARY")
+        ?: throw GradleException("Local Android integration requires MOBILE_SDK_PYTHON_BINARY")
+    val python = Path.of(rawPython)
+    require(python.isAbsolute && python.normalize() == python &&
+        python.toRealPath() == python &&
+        Files.isRegularFile(python, LinkOption.NOFOLLOW_LINKS) &&
+        !Files.isSymbolicLink(python) && Files.isExecutable(python)) {
+        "MOBILE_SDK_PYTHON_BINARY must be one canonical regular executable"
+    }
+    val process = ProcessBuilder(
+        python.toString(), "-I", "-S",
+        root.resolve("scripts/mobile_sdk_android_artifacts.py").toString(),
+        "--root", root.toString(), "--artifact-dir", artifacts.toString(),
+        "--validate-local-root",
+    ).directory(root.toFile()).redirectErrorStream(true)
+    process.environment().clear()
+    process.environment().putAll(mapOf("PATH" to "/usr/bin:/bin", "LANG" to "C.UTF-8"))
+    val child = process.start()
+    val output = child.inputStream.bufferedReader().use { it.readText() }.trim()
+    require(child.waitFor() == 0 && output == artifacts.toString()) {
+        "Local Android artifact custody validation failed: $output"
+    }
+}
+
+val localAndroidIntegrationInput =
+    providers.gradleProperty("irohaAndroidLocalIntegration").orNull ?: "false"
+require(localAndroidIntegrationInput in setOf("true", "false")) {
+    "irohaAndroidLocalIntegration must be exactly true or false"
+}
+val localAndroidIntegration = localAndroidIntegrationInput == "true"
 val mobileSdkAndroidArtifactDirectoryInput =
     providers.environmentVariable("MOBILE_SDK_ANDROID_ARTIFACT_DIR")
-val requireExternalAndroidArtifactDirectory =
-    tasks.register("requireExternalAndroidArtifactDirectory") {
+val requireAndroidArtifactDirectory =
+    tasks.register("requireAndroidArtifactDirectory") {
         group = "verification"
         description =
-            "Requires the canonical external artifact root used by reviewed Android releases"
+            "Requires authenticated canonical Android release or local integration output"
         inputs.property(
             "mobileSdkAndroidArtifactDirectory",
             mobileSdkAndroidArtifactDirectoryInput.orElse("<missing>"),
         )
+        inputs.property("localAndroidIntegration", localAndroidIntegration)
         doLast {
             val raw = mobileSdkAndroidArtifactDirectoryInput.orNull
                 ?: throw GradleException(
@@ -1795,8 +1834,12 @@ val requireExternalAndroidArtifactDirectory =
                     "non-symbolic directory"
             }
             val irohaRoot = file(irohaDir()).toPath().toRealPath()
-            require(canonical != irohaRoot && !canonical.startsWith(irohaRoot)) {
-                "MOBILE_SDK_ANDROID_ARTIFACT_DIR must be outside the reviewed Iroha source tree"
+            if (localAndroidIntegration) {
+                validateLocalAndroidArtifactDirectory(irohaRoot, canonical)
+            } else {
+                require(canonical != irohaRoot && !canonical.startsWith(irohaRoot)) {
+                    "MOBILE_SDK_ANDROID_ARTIFACT_DIR must be outside the reviewed Iroha source tree"
+                }
             }
             val expectedBuildDirectory = canonical
                 .resolve("gradle-build/iroha_kotlin_sdk/client-android")
@@ -2094,12 +2137,13 @@ val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLi
         ),
     )
     outputs.upToDateWhen { hasReusableSealedOutput() }
-    dependsOn(requireExternalAndroidArtifactDirectory)
+    dependsOn(requireAndroidArtifactDirectory)
 }
 
 val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     group = "native"
     description = "Canonically strip the compiled Android native bridge libraries"
+    localIntegration.set(localAndroidIntegration)
     privacyProductionEnabled.set(privacyProductionEnabledValue)
     inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })
     sourceSealFile.set(compileNativeLibs.flatMap { it.sourceSealFile })
@@ -2153,7 +2197,7 @@ tasks.register("buildNativeLibs") {
     group = "native"
     description = "Build and canonically strip connect_norito_bridge Android libraries"
     dependsOn(stripNativeLibs)
-    dependsOn(requireExternalAndroidArtifactDirectory)
+    dependsOn(requireAndroidArtifactDirectory)
 }
 
 tasks.matching {
@@ -2161,7 +2205,7 @@ tasks.matching {
         name == "bundleReleaseAar" ||
         name.startsWith("publishRelease")
 }.configureEach {
-    dependsOn(requireExternalAndroidArtifactDirectory)
+    dependsOn(requireAndroidArtifactDirectory)
 }
 
 afterEvaluate {

@@ -9716,6 +9716,12 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
+        // This stored-manifest fixture belongs to an explicitly committed global root.
+        tx1.world.parameters.get_mut().set_parameter(
+            crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ),
+        );
         let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
@@ -9743,6 +9749,10 @@ pub mod tests {
         // though the stored manifest matches.
         let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block2 = fixture.state.block(header2);
+        assert_eq!(
+            crate::sumeragi::lanes::routing::committed_root_scope(&block2.world),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
+        );
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x55;
         let manifest = ContractManifest {
@@ -9929,6 +9939,12 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
+        // This stored-manifest fixture belongs to an explicitly committed global root.
+        tx1.world.parameters.get_mut().set_parameter(
+            crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ),
+        );
         let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
@@ -9958,6 +9974,10 @@ pub mod tests {
         // because the stored manifest ABI hash mismatches the computed one.
         let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block2 = fixture.state.block(header2);
+        assert_eq!(
+            crate::sumeragi::lanes::routing::committed_root_scope(&block2.world),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
+        );
         let manifest = ContractManifest {
             seiyaku_name: None,
             code_hash: Some(code_hash),
@@ -10122,6 +10142,12 @@ pub mod tests {
         let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
+        // This stored-manifest fixture belongs to an explicitly committed global root.
+        tx1.world.parameters.get_mut().set_parameter(
+            crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ),
+        );
         // Build a minimal program to compute its code_hash/abi_hash
         let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
@@ -10150,9 +10176,21 @@ pub mod tests {
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept
         let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block2 = fixture.state.block(header2);
+        assert_eq!(
+            crate::sumeragi::lanes::routing::committed_root_scope(&block2.world),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global),
+        );
         let mut state_tx = block2.transaction();
-        state_tx.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
-        state_tx.world.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
+        state_tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        assert_eq!(
+            crate::executor::root_scope::captured_artifact_id(&state_tx, code_hash)
+                .expect("fixture captures the exact committed artifact dataspace"),
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                code_hash,
+            ),
+        );
         let mut ivm_cache = IvmCache::new();
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),

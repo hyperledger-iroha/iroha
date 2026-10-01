@@ -558,6 +558,12 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     let service_name: iroha_model_base::name::Name =
         "web_portal".parse().expect("hosted topology service");
     let service_version = "2026.02.0";
+    let alice_peer_id = PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string();
+    let (validator_two, validator_two_peer_id) = checked_torii_test_inrou_host_identity(
+        0x7d,
+        "derive canonical hosted HTTP topology second validator host fixture key",
+    );
+    let validator_two_peer_id = validator_two_peer_id.to_string();
     let mut bundle = world
         .view()
         .soracloud_service_revisions()
@@ -570,6 +576,16 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     bundle.service.execution_plane =
         iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
     bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replicas");
+    bundle.service.placement_targets = BTreeSet::from([
+        iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
+            validator_account_id: ALICE_ID.clone(),
+            peer_id: alice_peer_id.clone(),
+        },
+        iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
+            validator_account_id: validator_two.clone(),
+            peer_id: validator_two_peer_id.clone(),
+        },
+    ]);
     bundle.service.state_bindings.clear();
     bundle.service.handlers.clear();
     bundle.service.artifacts.clear();
@@ -580,6 +596,16 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
         mount_path: "/".to_owned(),
         max_total_bytes: std::num::NonZeroU64::new(1024 * 1024 * 1024).expect("bytes"),
     }];
+    bundle
+        .service
+        .lease_volumes
+        .push(iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "service_state".parse().expect("volume"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/var/lib/soracloud/volumes/service_state".to_owned(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("bytes"),
+        });
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
     bundle
         .validate_for_admission()
@@ -588,11 +614,12 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
         (service_name.to_string(), service_version.to_owned()),
         bundle.clone(),
     );
-    let service_lease = hosted_http_service_lease_state(
+    let mut service_lease = hosted_http_service_lease_state(
         iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
         "50".parse().expect("runtime balance"),
         u64::MAX,
     );
+    service_lease.replica_count = bundle.service.replicas;
     let mut deployment = world
         .view()
         .soracloud_service_deployments()
@@ -614,12 +641,6 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     world
         .soracloud_service_deployments_mut_for_testing()
         .insert(service_name, deployment);
-    let alice_peer_id = PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string();
-    let (validator_two, validator_two_peer_id) = checked_torii_test_inrou_host_identity(
-        0x7d,
-        "derive canonical hosted HTTP topology second validator host fixture key",
-    );
-    let validator_two_peer_id = validator_two_peer_id.to_string();
     for (validator_account_id, status, peer_id) in [
         (
             ALICE_ID.clone(),
@@ -636,7 +657,31 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
             &status,
             iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Exited
         )
-        .then_some(2);
+        .then_some(1);
+        {
+            let mut stake_block = world.block();
+            let mut stake_tx = stake_block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
+            stake_tx.public_lane_stake_shares_mut_for_testing().insert(
+                (
+                    iroha_model_base::topology::LaneId::SINGLE,
+                    validator_account_id.clone(),
+                    validator_account_id.clone(),
+                ),
+                iroha_data_model::nexus::PublicLaneStakeShare {
+                    lane_id: iroha_model_base::topology::LaneId::SINGLE,
+                    validator: validator_account_id.clone(),
+                    staker: validator_account_id.clone(),
+                    bonded: Quantity::from(1_u64),
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: Default::default(),
+                },
+            );
+            stake_tx.apply();
+            stake_block.commit();
+        }
         world.public_lane_validators_mut_for_testing().insert(
             (
                 iroha_model_base::topology::LaneId::SINGLE,
@@ -756,7 +801,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
             ("web_portal".to_owned(), "2026.02.0".to_owned()),
             placement_record,
         );
-    let app = mk_app_state_for_tests_with_world(world);
+    let app = mk_hosted_http_app_with_world(world);
     let topology = super::soracloud_hosted_http_topology_section(&app);
     assert_eq!(
         topology
@@ -1135,8 +1180,7 @@ async fn app_api_get_by_id_not_found_returns_404() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let key_pair = checked_torii_test_ed25519_keypair(0xc1, "contract artifact read fixture");
     let caller = AccountId::new(key_pair.public_key().clone());
-    let world = world_with_root_scope_for_token_test(world_with_account(&caller), false);
-    let mut app = mk_app_state_for_tests_with_world(world);
+    let mut app = app_with_root_scope_for_handler_test(world_with_account(&caller), false);
     let code_hash = hex::encode(Hash::new(b"missing scoped contract artifact").as_ref());
     let method = axum::http::Method::GET;
     let uri: axum::http::Uri = format!("/v1/contracts/artifacts/0/{code_hash}")
@@ -1159,9 +1203,14 @@ async fn app_api_get_by_id_not_found_returns_404() {
         &[],
         Some(&caller),
     )
-    .expect("canonical artifact request verifies")
-    .expect("signed artifact caller");
-    // Exact universal-dataspace artifact (non-existent), after real read admission.
+    .expect("valid exact-network artifact request signature")
+    .expect("authenticated artifact reader");
+    assert_eq!(verified.account, caller);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state.view().world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
+    // Contract artifact in the authenticated public dataspace (non-existent).
     let resp = super::handler_get_contract_code(
         State(app.clone()),
         headers.clone(),

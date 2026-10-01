@@ -15372,6 +15372,18 @@ seiyaku StaleRuntimeBinding {
         ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<iroha_data_model::ValidationFail>>
     {
+        // This helper executes ordinary signed calls after the fixture's bootstrap.
+        // Committing only a world overlay does not advance the durable block height.
+        if state.view().height() == 0 {
+            state
+                .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
+                .commit_empty_block_for_testing()
+                .expect("commit fixture bootstrap before ordinary contract execution");
+        }
+        let dataspace = invocation
+            .contract_address
+            .dataspace_id()
+            .expect("fixture contract address identifies its execution dataspace");
         let next_height = u64::try_from(state.view().height() + 1)
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -15389,6 +15401,8 @@ seiyaku StaleRuntimeBinding {
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut stx =
             block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        stx.current_dataspace_id = Some(dataspace);
+        stx.world.current_dataspace_id = Some(dataspace);
         let result = crate::executor::Executor::Initial
             .execute_transaction(&mut stx, authority, tx, ivm_cache);
         if result.is_ok() {
@@ -20011,9 +20025,12 @@ seiyaku StoredAccountView {
         vm.set_register(1, vm.memory.code_len());
         vm.set_program_counter(entry_pc).expect("seek stored view");
         vm.run_with_host(&mut host).expect("run stored view");
+        assert_eq!(vm.call_result_word_count(), Ok(1));
+        let returned_pointer = vm
+            .public_call_result_word(0)
+            .expect("completed public result owns one account pointer word");
         let tlv = vm
-            .memory
-            .validate_tlv(vm.register(10))
+            .validate_tlv(returned_pointer)
             .expect("stored view return tlv");
         assert_eq!(tlv.type_id, PointerType::AccountId);
         let returned: AccountId =
@@ -20265,9 +20282,9 @@ seiyaku Callee {
     counter = 0;
   }
 
-  kotoage fn write_then_return() -> int authorize("AssetOps") {
+  kotoage fn write_then_return() -> bytes authorize("AssetOps") {
     counter = 9;
-    return 1000000;
+    return b"\xff";
   }
 }
 "#,
@@ -20278,12 +20295,44 @@ seiyaku Callee {
                     .iter_mut()
                     .find(|entrypoint| entrypoint.name == "write_then_return")
                     .expect("callee entrypoint descriptor");
-                // Force post-child decoding to interpret the returned Int TLV
-                // as an AccountId TLV after the state write.
-                descriptor.return_type = Some("AccountId".to_owned());
+                // Bytes and String share the exact public Blob call role. A genuine
+                // compiler-produced invalid UTF-8 Blob completes its protected return,
+                // then fails String encoding after the child wrote counter = 9.
+                assert_eq!(
+                    descriptor.return_schema,
+                    Some(exact_return_type(
+                        iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
+                    )),
+                    "the unmodified compiler artifact declares its actual Bytes result"
+                );
+                descriptor.return_type = Some("string".to_owned());
                 descriptor.return_schema = Some(exact_return_type(
-                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AccountId,
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::String,
                 ));
+                let entry_pc = descriptor.entry_pc;
+                let result_roles = descriptor
+                    .return_schema
+                    .as_ref()
+                    .unwrap()
+                    .word_kinds()
+                    .unwrap()
+                    .into_iter()
+                    .map(ivm::call::CallWordV1::from_entrypoint_word)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    result_roles,
+                    vec![ivm::call::CallWordV1::Pointer(PointerType::Blob as u16)]
+                );
+                assert_eq!(
+                    interface
+                        .callables
+                        .iter()
+                        .find(|callable| callable.entry_pc == entry_pc)
+                        .expect("the compiled entrypoint has its authenticated callable")
+                        .result_words,
+                    result_roles,
+                    "the post-child schema error must not be an artifact or call-role error"
+                );
             },
         );
         grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
@@ -20593,7 +20642,10 @@ seiyaku Callee {
     // Low-level artifact authorization tests bind a genuine signed Halt root.
     // They exercise artifact authority snapshots, not correspondence to that
     // program's VM output, full transaction admission, or budget qualification.
-    fn bind_artifact_test_signed_root(tx: &mut StateTransaction<'_, '_>, authority: &AccountId) {
+    fn artifact_test_signed_root(
+        network_id: NetworkId,
+        authority: &AccountId,
+    ) -> iroha_data_model::transaction::SignedTransaction {
         let keypair = if authority == &*ALICE_ID {
             &*ALICE_KEYPAIR
         } else if authority == &*BOB_ID {
@@ -20603,8 +20655,8 @@ seiyaku Callee {
         };
         let mut program = ivm::ProgramMetadata::default().encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let source = TransactionBuilder::new(
-            tx.network_id,
+        TransactionBuilder::new(
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -20614,12 +20666,23 @@ seiyaku Callee {
         .with_executable(Executable::Ivm(
             iroha_data_model::transaction::executable::IvmBytecode::from_compiled(program),
         ))
-        .sign(keypair.private_key());
+        .sign(keypair.private_key())
+    }
+
+    fn bind_artifact_test_source_root(
+        tx: &mut StateTransaction<'_, '_>,
+        source: &iroha_data_model::transaction::SignedTransaction,
+    ) {
         assert_eq!(tx.current_dataspace_id, tx.world.current_dataspace_id);
         tx.current_tx_hash = Some(source.hash());
         tx.tx_call_hash = Some(Hash::from(source.hash_as_entrypoint()));
-        tx.begin_execution_effect_budget(&source)
+        tx.begin_execution_effect_budget(source)
             .expect("bind exact signed artifact test root");
+    }
+
+    fn bind_artifact_test_signed_root(tx: &mut StateTransaction<'_, '_>, authority: &AccountId) {
+        let source = artifact_test_signed_root(tx.network_id, authority);
+        bind_artifact_test_source_root(tx, &source);
     }
 
     #[test]
@@ -20653,6 +20716,11 @@ seiyaku Callee {
         world
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
         let state = State::new_for_testing(world, kura, query);
         let caller_contract = install_contract(
             &state,
@@ -20786,13 +20854,18 @@ seiyaku Callee {
             vec![caller_contract.subject_id(), callee_contract.subject_id()],
             "root and nested effects retain their respective contract subjects"
         );
-        let next_height = u64::try_from(state.view().height() + 1)
-            .ok()
-            .and_then(core::num::NonZeroU64::new)
-            .expect("next block height");
+        // Apply these component artifacts in ordinary execution, with no
+        // claim to an authenticated genesis source capability.
+        let next_height = core::num::NonZeroU64::new(2).unwrap();
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
-        let mut stx = block.transaction();
-        bind_artifact_test_signed_root(&mut stx, &authority);
+        let source = artifact_test_signed_root(*block.network_id(), &authority);
+        let source_call = Hash::from(source.hash_as_entrypoint());
+        // Retain this exact signed source's invocation identity before borrowing
+        // its State child. The signed source stays local; no Network or finality
+        // authority is granted by this bounded component owner.
+        let mut stx = block.transaction_for_fastpq_testing(source_call);
+        bind_artifact_test_source_root(&mut stx, &source);
+        assert_eq!(stx.tx_call_hash, Some(source_call));
         artifacts
             .apply_to_transaction(&mut stx, &authority)
             .expect("root and nested transfers should apply");
@@ -21068,6 +21141,15 @@ seiyaku Callee {
                 None,
             )
         };
+        // Alias cases exercise ordinary global-root contract execution; their
+        // alias permissions and asset balances remain independent fixture inputs.
+        {
+            let mut parameters = world.parameters.block();
+            parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ));
+            parameters.commit();
+        }
         let mut state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
         let (paynet, catalog) = retail_dataspace_catalog();
         state.set_dataspace_catalog_for_testing(catalog);
@@ -21564,6 +21646,11 @@ seiyaku Callee {
             [source_asset],
             [],
         );
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
@@ -21574,7 +21661,9 @@ seiyaku Callee {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let source = artifact_test_signed_root(*block.network_id(), &outer_authority);
+        let source_call = Hash::from(source.hash_as_entrypoint());
+        let mut stx = block.transaction_for_fastpq_testing(source_call);
         let artifacts = HostExecutionArtifacts {
             queued: vec![QueuedInstruction {
                 instruction: InstructionBox::from(Transfer::asset_quantity(
@@ -21596,7 +21685,8 @@ seiyaku Callee {
         assert_eq!(grouped.len(), 1);
         assert_eq!(grouped.get(&nested_authority).map(Vec::len), Some(1));
         assert!(!grouped.contains_key(&outer_authority));
-        bind_artifact_test_signed_root(&mut stx, &outer_authority);
+        bind_artifact_test_source_root(&mut stx, &source);
+        assert_eq!(stx.tx_call_hash, Some(source_call));
         artifacts
             .apply_to_transaction(&mut stx, &outer_authority)
             .expect("queued instruction should execute under queued authority");
@@ -21712,10 +21802,15 @@ seiyaku Callee {
                 .into_execution_artifacts(None)
                 .expect("export actual artifact");
             assert_eq!(artifacts.queued_instructions().len(), 1);
-            let next_height =
-                core::num::NonZeroU64::new(u64::try_from(state.view().height() + 1).unwrap())
-                    .unwrap();
-            let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
+            // This is an ordinary component artifact test, not authenticated
+            // genesis execution. Keep both signed-budget cases at height two.
+            let mut block = state.block(BlockHeader::new(
+                core::num::NonZeroU64::new(2).unwrap(),
+                None,
+                None,
+                0,
+                0,
+            ));
             let fragments = block.committed_fragment_count();
             let mut tx = block.transaction();
             if bind_root {
@@ -22755,8 +22850,12 @@ seiyaku DurableOwner {
         read_vm
             .run_with_host(&mut host)
             .expect("read canonical durable contract address bytes");
+        assert_eq!(read_vm.call_result_word_count(), Ok(1));
+        let returned_pointer = read_vm
+            .public_call_result_word(0)
+            .expect("completed public result owns one pointer word");
         let returned = read_vm
-            .validate_tlv(read_vm.register(10))
+            .validate_tlv(returned_pointer)
             .expect("validate bytes return");
         assert_eq!(returned.type_id, PointerType::Blob);
         assert_eq!(returned.version, 1);
@@ -22969,8 +23068,12 @@ seiyaku DurableOwner {
             .set_program_counter(main_entry_pc)
             .expect("select credit-reader main entrypoint");
         contract_vm.run().expect("read native consensus credit");
+        assert_eq!(contract_vm.call_result_word_count(), Ok(1));
+        let returned_pointer = contract_vm
+            .public_call_result_word(0)
+            .expect("completed public result owns one pointer word");
         let returned = contract_vm
-            .validate_tlv(contract_vm.register(10))
+            .validate_tlv(returned_pointer)
             .expect("returned validation-fee credit must be a valid TLV");
         assert_eq!(returned.type_id, PointerType::Quantity);
         let returned = QuantityValueV1::decode_frame(returned.payload)

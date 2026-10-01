@@ -887,7 +887,9 @@ mod retry_and_periodic {
             crate::state::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
-            World::default(),
+            crate::sumeragi::lanes::routing::test_support::world(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ),
             Arc::clone(&history.kura),
             LiveQueryStore::start_test(),
             history.state.chain_id.clone(),

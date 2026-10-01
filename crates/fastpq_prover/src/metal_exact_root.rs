@@ -59,7 +59,7 @@ pub(crate) fn transform(
         }
     }
     validate_metal_pooled_word_len(&context.device, words)?;
-    let twiddles = context.stage_twiddle_buffer(log_size, root, inverse)?;
+    let twiddles = context.factorized_root_twiddle_buffer(log_size, root, inverse)?;
     let args = ExactRootFftArgs {
         column_len: extent as u64,
         normalization: if inverse {

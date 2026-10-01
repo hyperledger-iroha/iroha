@@ -90,4 +90,3 @@ export function normalizeValidationFeeCheckpointV1(value) {
   // Neither the caller's original view nor a returned view can mutate the retained binding.
   return Object.freeze({ get checkpointNorito() { return Buffer.from(bytes); } });
 }
-

@@ -42,8 +42,8 @@ pub(crate) const V1_LAYOUT: CanonicalLayout = CanonicalLayout {
 pub(crate) enum Schema {
     /// Existing Norito codec with its explicit nominal schema declaration.
     Norito {
-        /// Declared schema identity, composed by Norito for generic types.
-        nominal_name: fn() -> String,
+        /// Exact declared identity: literal names are borrowed; generic names retain ownership.
+        nominal_name: fn() -> std::borrow::Cow<'static, str>,
         /// Explicit payload layout used by the leaf encoder.
         layout: CanonicalLayout,
     },
@@ -68,7 +68,7 @@ pub(crate) enum Schema {
 /// Resolve the declared type schema only when inspection is requested.
 pub(crate) const fn schema<T: Encode + NoritoSchema>() -> Schema {
     Schema::Norito {
-        nominal_name: T::nominal_name,
+        nominal_name: norito::schema::identity::nominal_name::<T>,
         layout: V1_LAYOUT,
     }
 }

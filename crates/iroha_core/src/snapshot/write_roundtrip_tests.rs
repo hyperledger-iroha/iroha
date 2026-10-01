@@ -285,7 +285,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     chain.commit(Vec::new());
     chain.commit(Vec::new()); // H5 contains the actual finality-authorized marker.
     let state = chain.state();
-    crate::sumeragi::evidence::validate_persisted_records(&state.view())
+    crate::sumeragi::evidence::validate_persisted_records(&state)
         .expect("original authenticated history and lifecycle");
     let original_tip = *state.view().native_execution_tip.get();
     {
@@ -305,7 +305,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
         original_tip,
         "negative snapshot mutation must not replace original native history"
     );
-    let invalid_lifecycle = crate::sumeragi::evidence::validate_persisted_records(&state.view())
+    let invalid_lifecycle = crate::sumeragi::evidence::validate_persisted_records(&state)
         .expect_err("an overdue restored pending penalty must be rejected");
     assert!(invalid_lifecycle.to_string().contains("restored penalty lifecycle is impossible"));
     let snapshot_bytes = exact_snapshot_payload_bytes(state);

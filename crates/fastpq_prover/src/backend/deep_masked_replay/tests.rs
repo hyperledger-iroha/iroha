@@ -146,7 +146,8 @@ fn masked_selected_rows_cover_frontiers_duplicates_and_budget_failures() {
         assert_eq!(row, &[horner(&coefficients[0], domain.point(index))]);
     }
     assert!(replay.selected_rows(&[512]).is_err());
-    assert!(replay.selected_rows(&[0; 129]).is_err());
+    assert_eq!(QUERY_COUNT, 77);
+    assert!(replay.selected_rows(&[0; 2 * QUERY_COUNT + 1]).is_err());
     assert_eq!(replay.selected_rows(&[]).unwrap().rows().count(), 0);
     assert_eq!(replay.remaining_passes, 1);
     assert!(
@@ -159,11 +160,45 @@ fn masked_selected_rows_cover_frontiers_duplicates_and_budget_failures() {
 }
 
 #[test]
+fn selected_rows_and_stripes_accept_the_exact_query_plus_sibling_boundary() {
+    assert_eq!(QUERY_COUNT, 77);
+    let (mut replay, _) = small(4, 1, 4, 2);
+    let coefficients = explicit_columns(&replay);
+    let domain = replay.plan.domain;
+    // Duplicate rows still consume the bounded receiver but preserve caller order.
+    let duplicate_rows = [511; 2 * QUERY_COUNT];
+    let selected = replay.selected_rows(&duplicate_rows).unwrap();
+    assert_eq!(selected.rows().count(), 154);
+    for row in selected.rows() {
+        assert_eq!(row, &[horner(&coefficients[0], domain.point(511))]);
+    }
+    // The canonical sorted path accepts all 154 distinct current/sibling rows.
+    let indices = (0..2 * QUERY_COUNT).collect::<Vec<_>>();
+    let mut checked = 0;
+    replay
+        .visit_selected_stripes(&indices, |stripe| {
+            for &index in &indices {
+                if index % 128 == stripe.stripe_index() {
+                    let mut row = [0];
+                    stripe.fill_row(index / 128, &mut row)?;
+                    assert_eq!(row[0], horner(&coefficients[0], domain.point(index)));
+                    checked += 1;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(checked, 154);
+    assert!(replay.ensure_pass_available().is_err());
+}
+
+#[test]
 fn masked_replay_highest_coefficients_and_fresh_entropy_are_retained() {
     let (replay, _) = small(256, 1, TRACE_MASK_COEFFICIENTS, 1);
-    assert_eq!(replay.coefficient_extent(), 392);
-    assert_eq!(replay.coefficient(0, 391), replay.entropy.trace[135]);
-    assert_ne!(replay.coefficient(0, 391), 0);
+    assert_eq!(TRACE_MASK_COEFFICIENTS, 162);
+    assert_eq!(replay.coefficient_extent(), 418);
+    assert_eq!(replay.coefficient(0, 417), replay.entropy.trace[161]);
+    assert_ne!(replay.coefficient(0, 417), 0);
     assert_ne!(replay.coefficient(0, 255), 0);
     assert_eq!(replay.composition_mask().len(), 512);
     assert_eq!(replay.quotient_mask().len(), 3);
@@ -222,9 +257,11 @@ fn masked_entropy_is_unbiased_bounded_and_preflight_precedes_reads() {
     assert_eq!(plan.coefficient_bytes, 301 * 65_536 * 8);
     assert_eq!(plan.stripe_bytes, plan.coefficient_bytes);
     assert_eq!(plan.source_bytes, 342 * 65_536 * 8);
-    assert_eq!(plan.entropy_bytes, 301 * 136 * 8 + 65 * 32 + 131_072 * 32);
-    assert_eq!(plan.selected_bytes, 128 * 301 * 8);
-    assert_eq!(plan.payload_bytes, 499_759_968);
+    assert_eq!(plan.entropy_bytes, 301 * 162 * 8 + 78 * 32 + 131_072 * 32);
+    // 77 queried rows and at most 77 leaf siblings retain 301 values each.
+    assert_eq!(plan.max_selected, 154);
+    assert_eq!(plan.selected_bytes, 154 * 301 * 8);
+    assert_eq!(plan.payload_bytes, 499_885_600);
     assert_eq!(plan.maximum_column_transforms, 301 * (1 + 4 * 128));
     assert!(
         MaskedReplayPlan::new(ReplayLimits {
@@ -309,7 +346,9 @@ fn nested_replay_refuses_foreign_dimensions_and_small_fixture_is_not_a_candidate
 
 #[test]
 fn masked_stripe_fft_matches_fp4_and_horner_at_the_parallel_threshold() {
-    use crate::backend::polynomial_transform::PolynomialDomain;
+    use crate::backend::{
+        polynomial_field::PolynomialField, polynomial_transform::PolynomialDomain,
+    };
 
     for rows in [16, 64, 4096] {
         let (mut replay, _) = small(rows, 1, 3, 1);
@@ -407,7 +446,7 @@ fn selected_leaf_and_sibling_stripes_preserve_masked_bytes_and_pass_limits() {
         vec![0, 0],
         vec![3, 1],
         vec![plan.lde_rows()],
-        (0..129).collect(),
+        (0..2 * QUERY_COUNT + 1).collect(),
     ] {
         assert!(
             replay

@@ -472,7 +472,7 @@ fn applied_wait_result_has_one_exact_v1_key_set() {
 #[test]
 fn contract_artifact_route_requires_canonical_scoped_path_fields() {
     let hash = hex::encode(iroha_crypto::Hash::new(b"canonical scoped artifact").as_ref());
-    for dataspace_id in [7, u64::MAX] {
+    for dataspace_id in [0, 7, u64::MAX] {
         let scope = dataspace_id.to_string();
         let args = norito::json!({
             "path": { "dataspace_id": (scope.clone()), "code_hash": (hash.clone()) }
@@ -494,6 +494,7 @@ fn contract_artifact_route_requires_canonical_scoped_path_fields() {
         norito::json!({ "code_hash": (hash.clone()), "dataspace_id": "7" }),
         norito::json!({ "hash": (hash.clone()), "dataspace_id": "7" }),
         norito::json!({ "path": { "code_hash": (hash.clone()) } }),
+        norito::json!({ "path": { "dataspace_id": "7" } }),
         norito::json!({ "path": { "dataspace_id": "7", "hash": (hash.clone()) } }),
         norito::json!({ "path": { "dataspace_id": "07", "code_hash": (hash.clone()) } }),
         norito::json!({ "path": { "dataspace_id": "7", "code_hash": "cafebabe" } }),

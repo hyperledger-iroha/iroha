@@ -94,7 +94,7 @@ public sealed class FeeQuoteResponseValidationTests
                 QuoteNetworkId,
                 AuthorityAccountId,
                 requestedIntent)
-            .TransferDomain("wonderland", AuthorityAccountId)
+            .TransferDomain("wonderland.universal", AuthorityAccountId)
             .SetCreationTimeMilliseconds(1_735_000_000_123)
             .SetTimeToLiveMilliseconds(60_000);
 
@@ -105,7 +105,7 @@ public sealed class FeeQuoteResponseValidationTests
         await requestObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         transaction
-            .TransferDomain("mutated", AuthorityAccountId)
+            .TransferDomain("mutated.universal", AuthorityAccountId)
             .SetNonce(42)
             .SetMetadata("changed", JsonValue.Create(true));
         releaseResponse.SetResult();
@@ -115,7 +115,7 @@ public sealed class FeeQuoteResponseValidationTests
                 QuoteNetworkId,
                 AuthorityAccountId,
                 quote.Intent)
-            .TransferDomain("wonderland", AuthorityAccountId)
+            .TransferDomain("wonderland.universal", AuthorityAccountId)
             .SetCreationTimeMilliseconds(1_735_000_000_123)
             .SetTimeToLiveMilliseconds(60_000)
             .BuildSigned(AuthorityPrivateKeySeed);

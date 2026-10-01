@@ -77,6 +77,9 @@ def test_daemon_recoverable_workers_have_no_bare_blocking(relative: str) -> None
         "crates/iroha_core/src/executor_fastpq_rejection_tail/tests.rs",
         "crates/iroha_core/src/executor_fastpq_rejection_tail/sponsored_alias_tests.rs",
         "crates/iroha_core/src/executor/resource_return_tests.rs",
+        "crates/iroha_core/src/executor_asset_lock_admission_tests.rs",
+        "crates/iroha_core/src/executor/root_scope.rs",
+        "crates/iroha_core/src/executor/root_scope/tests.rs",
     ),
 )
 def test_core_recovery_support_seals_exact_permission_include(
@@ -125,6 +128,69 @@ def test_core_recovery_support_rejects_undeclared_permission_sibling(
         "the audited source roots: executor_unreviewed_permission.rs"
     ]
 
+
+
+def test_core_recovery_seals_transitive_root_scope_and_asset_lock_sources(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    root_scope = parent / "executor/root_scope.rs"
+    root_scope.parent.mkdir(parents=True)
+    scope_tests = parent / "executor/root_scope/tests.rs"
+    scope_tests.parent.mkdir()
+    asset_tests = parent / "executor_asset_lock_admission_tests.rs"
+    (parent / "executor.rs").write_text(
+        'pub(crate) mod root_scope;\n'
+        '#[cfg(test)] mod tests { include!("executor_asset_lock_admission_tests.rs"); }\n',
+        encoding="utf-8",
+    )
+    root_scope.write_text("#[cfg(test)] mod tests;\n", encoding="utf-8")
+    scope_tests.write_text("fn immutable_scope_control() {}\n", encoding="utf-8")
+    asset_tests.write_text("fn asset_custody_control() {}\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert {root_scope.resolve(), scope_tests.resolve(), asset_tests.resolve()} <= set(sources)
+    records, _, counts = module.torii_boundary_inventory(tmp_path)
+    for path in (root_scope, scope_tests, asset_tests):
+        relative = path.relative_to(tmp_path).as_posix()
+        assert relative in {str(p) for p in module.CORE_RECOVERY_SUPPORT_PATHS}
+        assert any(record.startswith(relative + "\t") for record in records)
+        original = path.read_text(encoding="utf-8")
+        path.write_text(original + "fn changed_custody() {}\n", encoding="utf-8")
+        observed = module.torii_boundary_inventory(tmp_path)
+        assert observed[2] == counts
+        errors = module.closed_torii_boundary_inventory_failures(
+            tmp_path, records, observed_inventory=observed,
+        )
+        assert any("source inventory drifted" in error for error in errors), errors
+        path.write_text(original, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("owner_relative", "unreviewed_relative"),
+    (
+        ("executor.rs", "executor/unreviewed.rs"),
+        ("executor/root_scope.rs", "executor/root_scope/unreviewed.rs"),
+    ),
+)
+def test_core_recovery_root_scope_does_not_admit_unreviewed_module_neighbors(
+    tmp_path: Path, owner_relative: str, unreviewed_relative: str,
+) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    owner = parent / owner_relative
+    owner.parent.mkdir(parents=True)
+    unknown = parent / unreviewed_relative
+    unknown.parent.mkdir(parents=True, exist_ok=True)
+    owner.write_text("mod unreviewed;\n", encoding="utf-8")
+    unknown.write_text("fn unreviewed_custody() {}\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert unknown.resolve() not in sources
+    assert failures == [
+        f"crates/iroha_core/src/{owner_relative}:1: mod source path escapes "
+        "the audited source roots: unreviewed.rs"
+    ]
 
 def test_shared_signer_fixture_is_an_exact_audited_source(tmp_path: Path) -> None:
     module = load_guard_module()

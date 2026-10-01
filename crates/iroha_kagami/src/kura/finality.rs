@@ -157,3 +157,7 @@ mod tests {
         assert!(error.to_string().contains("invalid wire length"));
     }
 }
+
+#[cfg(test)]
+#[path = "finality_native_fixture_tests.rs"]
+mod native_fixture_tests;

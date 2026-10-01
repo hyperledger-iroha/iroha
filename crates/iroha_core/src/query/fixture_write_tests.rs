@@ -313,12 +313,14 @@ fn fixture_attribution() -> EvidenceAttribution {
     let key =
         KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal).expect("fixture BLS key");
     EvidenceAttribution {
+        scope: iroha_data_model::block::consensus::EvidenceScope::Root,
         instance: [1; 32],
         height: 1,
         epoch: 0,
         context_id: [2; 32],
         authority_generation: [3; 32],
         offenders: vec![EvidenceOffender {
+            lane_stake: None,
             signer: 0,
             peer_id: PeerId::new(key.public_key().clone()),
         }],

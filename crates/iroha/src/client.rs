@@ -12173,12 +12173,14 @@ mod evidence_http_tests {
             ))
             .expect("native signed pair"),
             attribution: EvidenceAttribution {
+                scope: iroha_data_model::block::consensus::EvidenceScope::Root,
                 instance: [0x53; 32],
                 height: 10,
                 epoch: 0,
                 context_id: [0x54; 32],
                 authority_generation: [0x58; 32],
                 offenders: vec![EvidenceOffender {
+                    lane_stake: None,
                     signer: 0,
                     peer_id: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
                 }],

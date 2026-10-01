@@ -2314,6 +2314,7 @@ baseTest("ReportKaigiRelayHealth native instruction adapter preserves canonical 
 
 baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {
   const codeHashBytes = Buffer.alloc(32, 0xaa);
+  codeHashBytes[31] |= 1;
   const abiHashBytes = Buffer.alloc(32, 0xbb);
   const signer = `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`;
   const signature = `ed25519:${"22".repeat(64)}`;

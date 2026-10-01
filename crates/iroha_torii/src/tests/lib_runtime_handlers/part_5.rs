@@ -275,7 +275,9 @@ async fn pipeline_preflight_handler_returns_json_snapshot() {
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            HeaderValue::from_static("application/json"),
+        )),
     )
     .await
     .expect("ok");
@@ -779,10 +781,11 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
                             iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1 {
                                 segment_count: 1,
                                 segment_air_row_roots: vec![
-                                    iroha_data_model::privacy::GoldilocksDigest384V1::new(
-                                        [u64::from(batch_index) + 1; 6],
-                                    )
-                                    .unwrap(),
+                                    iroha_data_model::fastpq::FastpqCommitmentV1::from_bytes(
+                                        [u8::try_from(batch_index)
+                                            .expect("fixture batch index fits u8")
+                                            + 1; 32],
+                                    ),
                                 ],
                             },
                         ),
@@ -1088,8 +1091,14 @@ async fn trusted_internal_account_handler_rejects_credentials_from_untrusted_sou
         .trusted_proxy_nets = Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".to_owned()]));
     let mut nginx_headers = HeaderMap::new();
     nginx_headers.insert(
+        HeaderName::from_static(crate::limits::FORWARDED_FOR_HEADER),
+        HeaderValue::from_static("127.0.0.1, 198.51.100.9"),
+    );
+    // The proxy-observed external address must win over both a forged prefix
+    // and the ingress-owned header supplied by that external caller.
+    nginx_headers.insert(
         HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
-        HeaderValue::from_static("198.51.100.9"),
+        HeaderValue::from_static("127.0.0.1"),
     );
     assert!(
         !super::trusted_internal_read_source(
@@ -1161,7 +1170,7 @@ async fn trusted_internal_account_handler_emits_exact_json_and_norito_projection
         .with_metadata(metadata.clone())
         .with_uaid(Some(uaid))
         .build(&authority);
-    let app = mk_app_state_for_tests_with_world(World::with([domain], [account], []));
+    let app = native_ingress_app_with_world_for_test(World::with([domain], [account], []));
     let json_response = super::handler_internal_account_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -1794,15 +1803,25 @@ fn native_ingress_app_for_test(keys: &[&KeyPair]) -> SharedAppState {
     native_ingress_app_with_world_for_test(World::with([], accounts, []))
 }
 
-fn native_ingress_app_with_world_for_test(world: World) -> SharedAppState {
+/// Build a local authoritative reader from an executed four-validator genesis.
+pub(crate) fn native_ingress_app_with_world_for_test(world: World) -> SharedAppState {
+    native_ingress_app_with_world_at_time_for_test(world, 1_000)
+}
+
+/// Build the reader at an actual certified genesis timestamp for lease observations.
+pub(crate) fn native_ingress_app_with_world_at_time_for_test(
+    world: World,
+    genesis_time_ms: u64,
+) -> SharedAppState {
     use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, 1_000))
+    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, genesis_time_ms))
         .expect("prepare signed native ingress genesis");
     let validator = prepared.validator_keys[0].clone();
     let chain =
         CertifiedTestChain::from_prepared(prepared).expect("execute signed native ingress genesis");
     let mut app = mk_app_state_for_tests();
     let unique = Arc::get_mut(&mut app).unwrap();
+    unique.chain_id = Arc::new(chain.state().view().chain_id().clone());
     unique.state = chain.state().clone();
     unique.kura = chain.kura().clone();
     unique.local_peer_id = Some(PeerId::new(validator.public_key().clone()));
@@ -1921,7 +1940,10 @@ fn append_canonical_outcome_test_block(
 }
 #[tokio::test]
 async fn canonical_outcome_releases_state_snapshot_before_kura_authentication() {
-    let (app, hash, _chain) = canonical_outcome_test_fixture(false);
+    let (app, hash, chain) = canonical_outcome_test_fixture(false);
+    let expected_settled_at = UNIX_EPOCH
+        .checked_add(chain.committed(2).block().header().creation_time())
+        .expect("the genuine carrier has a representable settlement time");
     // Give this State a unique configuration allocation, then prove a real
     // StateView retains it. No timer, reclamation schedule, or global counter
     // is involved in the release assertion at the actual auth handoff.
@@ -1954,7 +1976,7 @@ async fn canonical_outcome_releases_state_snapshot_before_kura_authentication() 
     assert!(matches!(
         outcome,
         CanonicalTransactionOutcome::Applied { height, settled_at }
-            if height.get() == 2 && settled_at == UNIX_EPOCH + Duration::from_millis(1_002)
+            if height.get() == 2 && settled_at == expected_settled_at
     ));
     assert_eq!(Arc::strong_count(&crypto), baseline);
 }
@@ -2171,7 +2193,7 @@ async fn canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cac
     let error = pipeline_status_terminal_or_state_entry(&app, &hash)
         .expect_err("a cached terminal result must not mask canonical authentication failure");
     let unavailable = iroha_data_model::query::error::QueryExecutionFail::Conversion(
-        "canonical Network transaction history is inconsistent: finalized carrier is unavailable"
+        "canonical Network transaction history is inconsistent: Submitted block wire at existing canonical height `2` differs from durable canonical bytes"
             .to_owned(),
     );
     assert_eq!(
@@ -3231,7 +3253,10 @@ async fn ledger_headers_respect_from_and_limit() {
             from: Some(2),
             limit: Some(1),
         }),
-        HeaderMap::new(),
+        HeaderMap::from_iter([(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_static("application/json"),
+        )]),
     )
     .await
     .expect("ok");
@@ -3514,7 +3539,12 @@ fn assert_ledger_state_handler_status(error: Error, expected: StatusCode) {
 }
 #[tokio::test]
 async fn ledger_state_endpoints_require_exact_native_quorum() {
-    let (app, _) = native_ledger_state_app(iroha_core::sumeragi::test_chain::Signers::BelowQuorum);
+    let (app, block) = native_ledger_state_app(iroha_core::sumeragi::test_chain::Signers::Quorum);
+    // Original admission must succeed. Corrupt the durable QC after publication
+    // so this tests the read boundary rather than failing fixture construction.
+    tamper_native_ledger_certificate(&app, block, |qc| {
+        qc.signers = iroha_sumeragi::types::Bitmap::from_indices(4, [0, 1]).unwrap();
+    });
     for proof in [false, true] {
         let error = if proof {
             handler_ledger_state_proof(State(app.clone()), axum::extract::Path(2), HeaderMap::new())

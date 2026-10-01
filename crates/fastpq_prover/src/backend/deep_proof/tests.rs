@@ -10,10 +10,13 @@ fn fp4(seed: usize) -> Fp4 {
 }
 
 fn maximal_queries() -> Vec<usize> {
-    // Repeated six-bit windows place one query in each of the top 64 subtrees
+    // Repeated parity-first seven-bit windows maximize every linked frontier
     // at every committed depth. All per-tree maxima are attained together.
-    let mut queries: Vec<_> = (0..QUERY_COUNT)
-        .map(|index| (index | index << 6 | index << 12 | index << 18) & (LDE_ROWS - 1))
+    let mut queries: Vec<_> = (0usize..128)
+        .filter(|i| i.count_ones() % 2 == 1)
+        .chain((0usize..128).filter(|i| i.count_ones() % 2 == 0))
+        .take(QUERY_COUNT)
+        .map(|index| (index | index << 7 | index << 14 | index << 21) & (LDE_ROWS - 1))
         .collect();
     queries.sort_unstable();
     queries
@@ -21,7 +24,7 @@ fn maximal_queries() -> Vec<usize> {
 
 fn fixture(queries: &[usize]) -> DeepProof {
     let plans = OpeningPlans::new(queries).unwrap();
-    let digest = Digest::new([1, 2, 3, 4, 5, GOLDILOCKS_MODULUS - 1]).unwrap();
+    let digest = Digest::from_bytes(core::array::from_fn(|i| i as u8));
     DeepProof {
         row_root: digest,
         quotient_root: digest,
@@ -69,8 +72,11 @@ fn fixture(queries: &[usize]) -> DeepProof {
                     .iter()
                     .map(|&index| FriGroup {
                         index: u32::try_from(index).unwrap(),
-                        values: FriValues::new(
-                            (0..ARITIES[round]).map(|slot| fp4(index + slot)).collect(),
+                        values: FriValues::omit(
+                            &(0..ARITIES[round])
+                                .map(|slot| fp4(index + slot))
+                                .collect::<Vec<_>>(),
+                            plans.omitted_coordinate(round, index).unwrap(),
                         )
                         .unwrap(),
                     })
@@ -139,10 +145,10 @@ fn exact_linked_upper_frontier_encodes_below_512k_and_roundtrips() {
     let queries = maximal_queries();
     let proof = fixture(&queries);
     let plans = preflight(&proof, &queries).unwrap();
-    assert_eq!(plans.initial.work().siblings, 1088);
+    assert_eq!(plans.initial.work().siblings, 1283);
     assert_eq!(
         plans.rounds.each_ref().map(|plan| plan.work().siblings),
-        [832, 576, 384, 192, 64]
+        [975, 667, 436, 205, 51]
     );
     assert_eq!(plans.terminal.work().siblings, 0);
     assert_eq!(plans.terminal.work().parent_hashes, 1);
@@ -153,7 +159,7 @@ fn exact_linked_upper_frontier_encodes_below_512k_and_roundtrips() {
             .all(|indices| indices.len() == QUERY_COUNT)
     );
     let bytes = norito::encode_canonical(&proof).unwrap();
-    assert_eq!(bytes.len(), 502_895);
+    assert_eq!(bytes.len(), 500_084);
     assert_eq!(bytes.len(), MAX_FRAME_BYTES);
     assert_eq!(bytes.len(), maximum_frame_bytes());
     assert_eq!(
@@ -161,7 +167,7 @@ fn exact_linked_upper_frontier_encodes_below_512k_and_roundtrips() {
         bytes.len()
     );
     assert!(bytes.len() < PROOF_BYTE_TARGET);
-    assert_eq!(PROOF_BYTE_TARGET - bytes.len(), 21_393);
+    assert_eq!(PROOF_BYTE_TARGET - bytes.len(), 24_204);
     for offset in [0, 1, 7] {
         let mut storage = vec![0; offset];
         storage.extend(&bytes);
@@ -380,7 +386,7 @@ fn fixed_dimensions_sorted_unique_positions_and_minimal_frontiers_are_mandatory(
                 3 => {
                     let wrong_arity = if ARITIES[round] == 4 { 8 } else { 4 };
                     changed.rounds[round].groups[0].values =
-                        FriValues::new(vec![Fp4::ZERO; wrong_arity]).unwrap();
+                        FriValues::omit(&vec![Fp4::ZERO; wrong_arity], 0).unwrap();
                 }
                 4 => {
                     changed.rounds[round].siblings.pop();
@@ -393,16 +399,20 @@ fn fixed_dimensions_sorted_unique_positions_and_minimal_frontiers_are_mandatory(
     let mut other_queries = queries.clone();
     other_queries[0] = 1;
     assert!(preflight(&proof, &other_queries).is_err());
-    assert!(OpeningPlans::new(&queries[..63]).is_err());
-    assert!(OpeningPlans::new(&vec![0; 64]).is_err());
-    assert!(OpeningPlans::new(&vec![LDE_ROWS; 64]).is_err());
+    assert!(OpeningPlans::new(&queries[..QUERY_COUNT - 1]).is_err());
+    assert!(OpeningPlans::new(&vec![0; QUERY_COUNT]).is_err());
+    assert!(OpeningPlans::new(&vec![LDE_ROWS; QUERY_COUNT]).is_err());
 }
 
 #[test]
-fn each_scalar_family_and_digest_lane_rejects_noncanonical_wire_values() {
+fn each_scalar_family_rejects_noncanonical_wire_values_and_opaque_roots_accept_all_bits() {
     let original = bare(&fixture(&maximal_queries()));
-    let mut scalars = vec![field(&original, 0), field(&original, 1)];
-    scalars.push(element(&original, field(&original, 2), 0));
+    let mut opaque = vec![
+        field(&original, 0),
+        field(&original, 1),
+        element(&original, field(&original, 2), 0),
+    ];
+    let mut scalars = Vec::new();
     let ood = field(&original, 3);
     for part in 0..3 {
         scalars.push(element(
@@ -417,15 +427,22 @@ fn each_scalar_family_and_digest_lane_rejects_noncanonical_wire_values() {
     scalars.push(nested_field(&original, quotient.clone(), 1));
     scalars.push(nested_field(&original, quotient.clone(), 2));
     scalars.push(nested_field(&original, quotient, 3));
-    scalars.push(element(&original, field(&original, 6), 0));
-    scalars.push(element(&original, field(&original, 7), 0));
+    opaque.push(element(&original, field(&original, 6), 0));
+    opaque.push(element(&original, field(&original, 7), 0));
     let round = element(&original, field(&original, 8), 0);
     let group = element(&original, nested_field(&original, round.clone(), 0), 0);
     let mut fiber = nested_field(&original, group, 1);
     fiber.start += 1; // The fixed fiber's one-byte arity tag is not a field limb.
     scalars.push(fiber);
-    scalars.push(element(&original, nested_field(&original, round, 1), 0));
+    opaque.push(element(&original, nested_field(&original, round, 1), 0));
     scalars.push(element(&original, field(&original, 9), 0));
+    for span in opaque {
+        assert_eq!(span.len(), 32);
+        let mut changed = original.clone();
+        changed[span].fill(0xff);
+        // This tests the DTO only; changed opaque roots still need full authentication.
+        assert!(decode(&frame(&changed), PROOF_BYTE_TARGET).is_ok());
+    }
     for span in scalars {
         let words = span.len() / 8;
         for lane in 0..words.min(6) {
@@ -517,4 +534,58 @@ fn caller_allocation_ceiling_intersects_profile_and_parent_scopes() {
             max: 0
         })
     ));
+}
+
+#[test]
+fn current_row_disclosure_and_mask_closures_match_the_hiding_profile() {
+    use crate::backend::{
+        compact_public_columns::{COMMITTED_COLUMNS, PUBLIC_COLUMN_COUNT, PUBLIC_COLUMNS},
+        deep_geometry::{FRI_DEGREES, TRACE_ROWS},
+        deep_masked_replay::{QUOTIENT_MASK_COEFFICIENTS, TRACE_MASK_COEFFICIENTS},
+    };
+
+    let queries: Vec<_> = (0..QUERY_COUNT).collect();
+    let proof = fixture(&queries);
+    preflight(&proof, &queries).unwrap();
+    assert_eq!(QUERY_COUNT, 77);
+    assert_eq!(proof.rows.len(), QUERY_COUNT);
+    assert_eq!(proof.quotients.len(), QUERY_COUNT);
+    assert!(proof.rows.iter().zip(&queries).all(|(row, &index)| {
+        row.index as usize == index && row.values.len() == COMMITTED_COLUMN_COUNT
+    }));
+    assert_eq!(COMMITTED_COLUMN_COUNT + PUBLIC_COLUMN_COUNT, 342);
+    assert!(
+        COMMITTED_COLUMNS
+            .iter()
+            .all(|column| !PUBLIC_COLUMNS.contains(column))
+    );
+    assert_eq!(proof.ood.current.len(), COMMITTED_COLUMN_COUNT);
+    assert_eq!(proof.ood.next.len(), COMMITTED_COLUMN_COUNT);
+    assert_eq!(proof.ood.quotient.len(), 2);
+
+    let rotation = LDE_ROWS / TRACE_ROWS;
+    let closure: BTreeSet<_> = queries
+        .iter()
+        .copied()
+        .chain(queries.iter().map(|index| (index + rotation) % LDE_ROWS))
+        .collect();
+    let extension_degree = Fp4::BYTES / size_of::<u64>();
+    assert_eq!(extension_degree, 4);
+    assert_eq!(closure.len(), 2 * QUERY_COUNT);
+    assert_eq!(
+        TRACE_MASK_COEFFICIENTS,
+        closure.len() + 2 * extension_degree
+    );
+    assert_eq!(QUOTIENT_MASK_COEFFICIENTS, QUERY_COUNT + 1);
+    assert_eq!(FRI_DEGREES[0], 2 * TRACE_ROWS);
+
+    // An additional next-row disclosure is outside the authenticated schema,
+    // even though the algebraic analysis uses that larger interpolation closure.
+    let mut extra = proof.rows[0].clone();
+    extra.index = u32::try_from(rotation).unwrap();
+    let mut widened = proof;
+    widened.rows.push(extra);
+    assert!(preflight(&widened, &queries).is_err());
+    let bytes = norito::encode_canonical(&widened).unwrap();
+    assert!(decode(&bytes, PROOF_BYTE_TARGET).is_err());
 }

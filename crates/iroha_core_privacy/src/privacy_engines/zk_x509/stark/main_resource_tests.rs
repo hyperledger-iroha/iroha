@@ -159,6 +159,10 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         (plan.maximum_live_buffers + plan.remaining_source_and_runtime_envelope) as u64,
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
     );
+    // The maximum RFC registration also charges 102 Vec headers (2,448),
+    // eight borrowed column targets (128), fixed replay scratch (2,272),
+    // and the one-entry public denominator owner (48): 4,896 additional bytes.
+    // The larger FRI stage still determines the unchanged overall envelope.
     assert_eq!(plan.quotient_stage, 3_158_315_808);
     assert_eq!(plan.maximum_live_buffers, 3_697_993_152);
     assert_eq!(plan.remaining_source_and_runtime_envelope, 9_186_908_736);

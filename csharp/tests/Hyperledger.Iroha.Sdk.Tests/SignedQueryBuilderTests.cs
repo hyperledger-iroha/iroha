@@ -13,7 +13,7 @@ public sealed class SignedQueryBuilderTests
     private const string FixtureNetworkIdLiteral = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string AlternateNetworkIdLiteral = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-    private const string FixtureContractCodeHash = "0x00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEE00";
+    private const string FixtureContractCodeHash = "00112233445566778899aabbccddeeff00112233445566778899aabbccddee01";
     private const string FixtureProofHash = "0x111122223333444455556666777788889999AAAABBBBCCCCDDDDEEEEFFFF0000";
     private const string FixtureTwitterDigest = "0x1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDE0";
     private const string FixtureStorageTicket = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -46,7 +46,7 @@ public sealed class SignedQueryBuilderTests
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (singularDiscriminant, singularPayload) = ReadSingularQuery(envelope);
-        Assert.Equal(5u, singularDiscriminant);
+        Assert.Equal(8u, singularDiscriminant);
         Assert.Empty(ReadField(singularPayload, out _));
 
         AssertSignatureVerifies(envelope);
@@ -333,8 +333,8 @@ public sealed class SignedQueryBuilderTests
                 FixtureAccountId.Insert(8, "\t")));
         AssertArgumentException(
             "codeHash",
-            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindContractManifestByCodeHash(
-                FixtureContractCodeHash.Insert(10, " ")));
+            () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindContractManifestByArtifactId(
+                new ContractArtifactId(ulong.MaxValue, FixtureContractCodeHash.Insert(10, " "))));
         AssertArgumentException(
             "pepperId",
             () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindTwitterBindingByHash("pepper v1", FixtureTwitterDigest));
@@ -399,7 +399,7 @@ public sealed class SignedQueryBuilderTests
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (singularDiscriminant, singularPayload) = ReadSingularQuery(envelope);
-        Assert.Equal(2u, singularDiscriminant);
+        Assert.Equal(3u, singularDiscriminant);
 
         var structPayload = ReadField(singularPayload, out _);
         _ = ReadField(structPayload, out var offsetAfterAccountId);
@@ -420,7 +420,7 @@ public sealed class SignedQueryBuilderTests
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (assetDiscriminant, assetPayload) = ReadSingularQuery(assetEnvelope);
-        Assert.Equal(6u, assetDiscriminant);
+        Assert.Equal(9u, assetDiscriminant);
 
         var assetStruct = ReadField(assetPayload, out _);
         var assetId = ReadField(assetStruct, out _);
@@ -429,14 +429,14 @@ public sealed class SignedQueryBuilderTests
         var scopeBytes = ReadField(assetId[(offsetAfterAccountId + offsetAfterDefinitionId)..], out _);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(scopeBytes[..4]));
         var dataspacePayload = ReadField(scopeBytes[4..], out _);
-        Assert.Equal(9ul, BinaryPrimitives.ReadUInt64LittleEndian(dataspacePayload));
+        Assert.Equal(9ul, BinaryPrimitives.ReadUInt64LittleEndian(ReadField(dataspacePayload, out _)));
 
         var definitionEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAssetDefinitionById(FixtureAssetDefinitionId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (definitionDiscriminant, definitionPayload) = ReadSingularQuery(definitionEnvelope);
-        Assert.Equal(7u, definitionDiscriminant);
+        Assert.Equal(10u, definitionDiscriminant);
         var definitionStruct = ReadField(definitionPayload, out _);
         var definitionIdBytes = ReadField(definitionStruct, out _);
         AssertCanonicalAssetDefinitionId(definitionIdBytes);
@@ -449,15 +449,17 @@ public sealed class SignedQueryBuilderTests
     public void BuildSignedEncodesContractManifestAndDataspaceOwnerQueries()
     {
         var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
-            .FindContractManifestByCodeHash(FixtureContractCodeHash)
+            .FindContractManifestByArtifactId(new ContractArtifactId(ulong.MaxValue, FixtureContractCodeHash))
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (manifestDiscriminant, manifestPayload) = ReadSingularQuery(manifestEnvelope);
-        Assert.Equal(4u, manifestDiscriminant);
+        Assert.Equal(7u, manifestDiscriminant);
         var manifestStruct = ReadField(manifestPayload, out _);
-        var manifestHashBytes = ReadField(manifestStruct, out _);
-        var expectedHashBytes = Convert.FromHexString(FixtureContractCodeHash[2..]);
-        expectedHashBytes[^1] |= 0x01;
+        var artifactStruct = ReadField(manifestStruct, out _);
+        var artifactScope = ReadField(artifactStruct, out var scopeEnd);
+        Assert.Equal(ulong.MaxValue, BinaryPrimitives.ReadUInt64LittleEndian(ReadField(artifactScope, out _)));
+        var manifestHashBytes = ReadField(artifactStruct[scopeEnd..], out _);
+        var expectedHashBytes = Convert.FromHexString(FixtureContractCodeHash);
         Assert.Equal(expectedHashBytes, manifestHashBytes);
 
         var dataspaceEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
@@ -465,41 +467,118 @@ public sealed class SignedQueryBuilderTests
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (dataspaceDiscriminant, dataspacePayload) = ReadSingularQuery(dataspaceEnvelope);
-        Assert.Equal(17u, dataspaceDiscriminant);
+        Assert.Equal(83u, dataspaceDiscriminant);
         var dataspaceStruct = ReadField(dataspacePayload, out _);
         var dataspaceIdBytes = ReadField(dataspaceStruct, out _);
-        Assert.Equal(42ul, BinaryPrimitives.ReadUInt64LittleEndian(dataspaceIdBytes));
+        Assert.Equal(42ul, BinaryPrimitives.ReadUInt64LittleEndian(ReadField(dataspaceIdBytes, out _)));
 
         AssertSignatureVerifies(manifestEnvelope);
         AssertSignatureVerifies(dataspaceEnvelope);
+    }
+
+    [Theory]
+    [InlineData("banka")]
+    [InlineData(".universal")]
+    [InlineData("banka.")]
+    [InlineData("a.b.c")]
+    [InlineData("BANKA.universal")]
+    [InlineData("banka.UNIVERSAL")]
+    [InlineData("bad!.universal")]
+    [InlineData("-banka.universal")]
+    [InlineData("banka-.universal")]
+    [InlineData("ab--cd.universal")]
+    [InlineData("xn--.universal")]
+    [InlineData("xn--a.universal")]
+    [InlineData("xn--abc.universal")]
+    [InlineData("bücher.universal")]
+    public void DomainQueriesRequireBothNativeIdentityComponents(string domainId)
+    {
+        AssertArgumentException("domainId", () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsements(domainId));
+        AssertArgumentException("domainId", () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsementPolicy(domainId));
+    }
+
+    [Fact]
+    public void DomainQueriesRejectLabelsBeyondNativeDnsLengthBound()
+    {
+        foreach (var domainId in new[] { new string('a', 64) + ".universal", "banka." + new string('b', 64) })
+        {
+            AssertArgumentException("domainId", () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsements(domainId));
+            AssertArgumentException("domainId", () => new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsementPolicy(domainId));
+        }
+    }
+
+    [Theory]
+    [InlineData("xn--bcher-kva.universal")]
+    [InlineData("banka.xn--bcher-kva")]
+    [InlineData("bank_a.universal")]
+    [InlineData("_banka.universal")]
+    [InlineData("banka_.universal")]
+    public void DomainQueriesPreserveNativeCanonicalLabels(string domainId)
+    {
+        AssertNativeDomainQueryLabels(domainId);
+    }
+
+    [Fact]
+    public void DomainQueriesAdmitTwoMaximumLengthNativeLabels()
+    {
+        AssertNativeDomainQueryLabels(new string('a', 63) + "." + new string('b', 63));
+    }
+
+    private static void AssertNativeDomainQueryLabels(string domainId)
+    {
+        var seed = Convert.FromHexString(FixtureSeedHex);
+        try
+        {
+            foreach (var builder in new[] {
+                new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsements(domainId),
+                new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId).FindDomainEndorsementPolicy(domainId),
+            })
+            {
+                var envelope = builder.BuildSigned(seed);
+                var (_, payload) = ReadSingularQuery(envelope);
+                var domain = ReadField(ReadField(payload, out _), out _);
+                var name = ReadNoritoString(ReadField(domain, out var offset));
+                var dataspace = ReadNoritoString(ReadField(domain[offset..], out _));
+                Assert.Equal(domainId, name + "." + dataspace);
+                AssertSignatureVerifies(envelope);
+            }
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+        }
     }
 
     [Fact]
     public void BuildSignedEncodesDomainEndorsementQueries()
     {
         var endorsementsEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
-            .FindDomainEndorsements("banka")
+            .FindDomainEndorsements("banka.universal")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (endorsementsDiscriminant, endorsementsPayload) = ReadSingularQuery(endorsementsEnvelope);
-        Assert.Equal(9u, endorsementsDiscriminant);
+        Assert.Equal(19u, endorsementsDiscriminant);
         var endorsementsStruct = ReadField(endorsementsPayload, out _);
-        var endorsementsDomain = ReadNoritoString(ReadField(endorsementsStruct, out _));
+        var endorsementsDomainId = ReadField(endorsementsStruct, out _);
+        var endorsementsDomain = ReadNoritoString(ReadField(endorsementsDomainId, out var endorsementsOffset));
         Assert.Equal("banka", endorsementsDomain);
+        Assert.Equal("universal", ReadNoritoString(ReadField(endorsementsDomainId[endorsementsOffset..], out _)));
 
         var policyEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
-            .FindDomainEndorsementPolicy("banka")
+            .FindDomainEndorsementPolicy("banka.universal")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (policyDiscriminant, policyPayload) = ReadSingularQuery(policyEnvelope);
-        Assert.Equal(10u, policyDiscriminant);
+        Assert.Equal(20u, policyDiscriminant);
         var policyStruct = ReadField(policyPayload, out _);
-        var policyDomain = ReadNoritoString(ReadField(policyStruct, out _));
+        var policyDomainId = ReadField(policyStruct, out _);
+        var policyDomain = ReadNoritoString(ReadField(policyDomainId, out var policyOffset));
         Assert.Equal("banka", policyDomain);
+        Assert.Equal("universal", ReadNoritoString(ReadField(policyDomainId[policyOffset..], out _)));
 
         var committeeEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDomainCommittee("committee-7")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (committeeDiscriminant, committeePayload) = ReadSingularQuery(committeeEnvelope);
-        Assert.Equal(11u, committeeDiscriminant);
+        Assert.Equal(21u, committeeDiscriminant);
         var committeeStruct = ReadField(committeePayload, out _);
         var committeeId = ReadNoritoString(ReadField(committeeStruct, out _));
         Assert.Equal("committee-7", committeeId);
@@ -516,8 +595,8 @@ public sealed class SignedQueryBuilderTests
             .FindProofRecordById("halo2/ipa", FixtureProofHash)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (proofDiscriminant, proofPayload) = ReadSingularQuery(proofEnvelope);
-        Assert.Equal(3u, proofDiscriminant);
-        var proofStruct = ReadField(proofPayload, out _);
+        Assert.Equal(6u, proofDiscriminant);
+        var proofStruct = ReadField(ReadField(proofPayload, out _), out _);
         var proofBackend = ReadNoritoString(ReadField(proofStruct, out var proofOffsetAfterBackend));
         var proofHash = ReadField(proofStruct[proofOffsetAfterBackend..], out _);
         Assert.Equal("halo2/ipa", proofBackend);
@@ -527,8 +606,8 @@ public sealed class SignedQueryBuilderTests
             .FindTwitterBindingByHash("pepper-v1", FixtureTwitterDigest)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (twitterDiscriminant, twitterPayload) = ReadSingularQuery(twitterEnvelope);
-        Assert.Equal(8u, twitterDiscriminant);
-        var twitterStruct = ReadField(twitterPayload, out _);
+        Assert.Equal(13u, twitterDiscriminant);
+        var twitterStruct = ReadField(ReadField(twitterPayload, out _), out _);
         var pepperId = ReadNoritoString(ReadField(twitterStruct, out var twitterOffsetAfterPepperId));
         var digestBytes = ReadField(twitterStruct[twitterOffsetAfterPepperId..], out _);
         var expectedDigestBytes = Convert.FromHexString(FixtureTwitterDigest[2..]);
@@ -585,23 +664,23 @@ public sealed class SignedQueryBuilderTests
             .FindDaPinIntentByTicket(FixtureStorageTicket)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (ticketDiscriminant, ticketPayload) = ReadSingularQuery(ticketEnvelope);
-        Assert.Equal(12u, ticketDiscriminant);
+        Assert.Equal(22u, ticketDiscriminant);
         var ticketStruct = ReadField(ticketPayload, out _);
-        Assert.Equal(Convert.FromHexString(FixtureStorageTicket[2..]), ReadField(ticketStruct, out _));
+        Assert.Equal(Convert.FromHexString(FixtureStorageTicket[2..]), ReadField(ReadField(ticketStruct, out _), out _));
 
         var manifestEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDaPinIntentByManifest(FixtureManifestDigest)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (manifestDiscriminant, manifestPayload) = ReadSingularQuery(manifestEnvelope);
-        Assert.Equal(13u, manifestDiscriminant);
+        Assert.Equal(23u, manifestDiscriminant);
         var manifestStruct = ReadField(manifestPayload, out _);
-        Assert.Equal(Convert.FromHexString(FixtureManifestDigest[2..]), ReadField(manifestStruct, out _));
+        Assert.Equal(Convert.FromHexString(FixtureManifestDigest[2..]), ReadField(ReadField(manifestStruct, out _), out _));
 
         var aliasEnvelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindDaPinIntentByAlias("manifest-root")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (aliasDiscriminant, aliasPayload) = ReadSingularQuery(aliasEnvelope);
-        Assert.Equal(14u, aliasDiscriminant);
+        Assert.Equal(24u, aliasDiscriminant);
         var aliasStruct = ReadField(aliasPayload, out _);
         Assert.Equal("manifest-root", ReadNoritoString(ReadField(aliasStruct, out _)));
 
@@ -609,12 +688,12 @@ public sealed class SignedQueryBuilderTests
             .FindDaPinIntentByLaneEpochSequence(7, 11, 13)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (laneDiscriminant, lanePayload) = ReadSingularQuery(laneEnvelope);
-        Assert.Equal(15u, laneDiscriminant);
+        Assert.Equal(25u, laneDiscriminant);
         var laneStruct = ReadField(lanePayload, out _);
         var laneId = ReadField(laneStruct, out var laneOffsetAfterLaneId);
         var epoch = ReadField(laneStruct[laneOffsetAfterLaneId..], out var laneOffsetAfterEpoch);
         var sequence = ReadField(laneStruct[(laneOffsetAfterLaneId + laneOffsetAfterEpoch)..], out _);
-        Assert.Equal(7u, BinaryPrimitives.ReadUInt32LittleEndian(laneId));
+        Assert.Equal(7u, BinaryPrimitives.ReadUInt32LittleEndian(ReadField(laneId, out _)));
         Assert.Equal(11ul, BinaryPrimitives.ReadUInt64LittleEndian(epoch));
         Assert.Equal(13ul, BinaryPrimitives.ReadUInt64LittleEndian(sequence));
 
@@ -622,9 +701,9 @@ public sealed class SignedQueryBuilderTests
             .FindSorafsProviderOwner(FixtureProviderId)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (providerDiscriminant, providerPayload) = ReadSingularQuery(providerEnvelope);
-        Assert.Equal(16u, providerDiscriminant);
+        Assert.Equal(30u, providerDiscriminant);
         var providerStruct = ReadField(providerPayload, out _);
-        Assert.Equal(Convert.FromHexString(FixtureProviderId[2..]), ReadField(providerStruct, out _));
+        Assert.Equal(Convert.FromHexString(FixtureProviderId[2..]), ReadField(ReadField(providerStruct, out _), out _));
 
         AssertSignatureVerifies(ticketEnvelope);
         AssertSignatureVerifies(manifestEnvelope);

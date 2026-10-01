@@ -18,17 +18,51 @@ use crate::{
 };
 
 fn queries(spread: bool) -> Vec<usize> {
-    let mut result: Vec<_> = (0..QUERY_COUNT)
-        .map(|index| {
-            if spread {
-                (index | index << 6 | index << 12 | index << 18) & (LDE_ROWS - 1)
-            } else {
-                index
-            }
-        })
-        .collect();
-    result.sort_unstable();
-    result
+    let mut values = if spread {
+        (0usize..128)
+            .filter(|i| i.count_ones() % 2 == 1)
+            .chain((0usize..128).filter(|i| i.count_ones() % 2 == 0))
+            .take(QUERY_COUNT)
+            .map(|index| (index | index << 7 | index << 14 | index << 21) & (LDE_ROWS - 1))
+            .collect::<Vec<_>>()
+    } else {
+        (0..QUERY_COUNT).collect()
+    };
+    values.sort_unstable();
+    values
+}
+// Algebra fixtures deliberately contain unauthenticated roots; this helper has
+// no access to VerifiedDeepProof and is absent from every normal build. The full
+// commitment test below invokes the normal authentication path independently.
+fn check_chains(
+    geometry: &DeepGeometry,
+    composition: &DeepComposition,
+    lambda: F,
+    betas: &[F; 5],
+    queries: &[usize],
+    proof: &DeepProof,
+) -> Result<usize> {
+    let plans = OpeningPlans::new(queries)?;
+    let binding = Context::new(b"algebra-only compressed fibers").unwrap();
+    let (checks, _, _) = super::walk_chains(
+        geometry,
+        composition,
+        lambda,
+        betas,
+        queries,
+        proof,
+        &binding,
+        &plans,
+        |round, _, digests| {
+            assert_eq!(digests.len(), plans.round_indices[round].len());
+            Ok(0)
+        },
+    )?;
+    Ok(checks)
+}
+fn transmitted_coordinate(plans: &OpeningPlans, round: usize, index: usize, wire: usize) -> usize {
+    let omitted = plans.omitted_coordinate(round, index).unwrap();
+    if wire < omitted { wire } else { wire + 1 }
 }
 
 /// Narrow a fixture position or level; every fixture value stays below `LDE_ROWS`.
@@ -38,7 +72,7 @@ fn narrow_u32(value: usize) -> u32 {
 
 fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposition) {
     let plans = OpeningPlans::new(queries).unwrap();
-    let digest = WireDigest::new([1, 2, 3, 5, 7, 11]).unwrap();
+    let digest = WireDigest::from_bytes([0x37; 32]);
     let ood = OodAnswers {
         current: vec![F::ONE; COMMITTED_COLUMN_COUNT],
         next: vec![F::ONE; COMMITTED_COLUMN_COUNT],
@@ -87,7 +121,11 @@ fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposit
                     .iter()
                     .map(|&index| FriGroup {
                         index: narrow_u32(index),
-                        values: FriValues::new(vec![F::ZERO; FRI_ARITIES[round]]).unwrap(),
+                        values: FriValues::omit(
+                            &vec![F::ZERO; FRI_ARITIES[round]],
+                            plans.omitted_coordinate(round, index).unwrap(),
+                        )
+                        .unwrap(),
                     })
                     .collect(),
                 siblings: vec![digest; plans.rounds[round].work().siblings],
@@ -119,7 +157,7 @@ fn all_initial_indices_follow_their_exact_strided_fibers() {
                 &proof
             )
             .unwrap(),
-            320
+            QUERY_COUNT * 5
         );
     }
 }
@@ -152,10 +190,20 @@ fn nonconstant_coefficient_chain_checks_fiber_coordinates_cosets_and_challenges(
     let betas = betas();
     let mut coefficients = vec![lambda, F::ZERO, lambda.mul(lambda)];
     let mut domain = geometry.domain();
+    let plans = OpeningPlans::new(
+        &proof
+            .rows
+            .iter()
+            .map(|r| r.index as usize)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     for round in 0..5 {
         for group in &mut proof.rounds[round].groups {
             for (position, value) in group.values.iter_mut().enumerate() {
-                let index = group.index as usize + position * FRI_LENGTHS[round + 1];
+                let index = group.index as usize
+                    + transmitted_coordinate(&plans, round, group.index as usize, position)
+                        * FRI_LENGTHS[round + 1];
                 let x = domain.point(index);
                 *value = coefficients
                     .iter()
@@ -184,7 +232,7 @@ fn nonconstant_coefficient_chain_checks_fiber_coordinates_cosets_and_challenges(
     deep_proof::preflight(&proof, &queries).unwrap();
     assert_eq!(
         check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).unwrap(),
-        320
+        QUERY_COUNT * 5
     );
     proof.rounds[0].groups[0].values.swap(0, 1);
     assert!(check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).is_err());
@@ -244,12 +292,21 @@ fn independent_mask_highest_degree_flows_through_every_fold_and_full_terminal() 
     // is exactly R, including its highest permitted coefficient at 2N-1.
     let betas = betas();
     let mut domain = geometry.domain();
+    let plans = OpeningPlans::new(&queries).unwrap();
     for (round, &arity) in FRI_ARITIES.iter().enumerate() {
         for group in &mut proof.rounds[round].groups {
             for (coordinate, value) in group.values.iter_mut().enumerate() {
                 *value = evaluate(
                     &coefficients,
-                    domain.point(group.index as usize + coordinate * FRI_LENGTHS[round + 1]),
+                    domain.point(
+                        group.index as usize
+                            + transmitted_coordinate(
+                                &plans,
+                                round,
+                                group.index as usize,
+                                coordinate,
+                            ) * FRI_LENGTHS[round + 1],
+                    ),
                 );
             }
         }
@@ -269,7 +326,7 @@ fn independent_mask_highest_degree_flows_through_every_fold_and_full_terminal() 
     deep_proof::preflight(&proof, &queries).unwrap();
     assert_eq!(
         check_chains(&geometry, &composition, F::ONE, &betas, &queries, &proof).unwrap(),
-        320
+        QUERY_COUNT * 5
     );
     proof.quotients[0].composition_mask = proof.quotients[0].composition_mask.add(F::ONE);
     assert!(check_chains(&geometry, &composition, F::ONE, &betas, &queries, &proof).is_err());
@@ -377,13 +434,23 @@ fn fill_high_degree_rounds(
     let mut coefficients = vec![initial_coefficients];
     let mut domain = geometry.domain();
     let mut domains = Vec::with_capacity(5);
+    let plans = OpeningPlans::new(
+        &proof
+            .rows
+            .iter()
+            .map(|r| r.index as usize)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     for round in 0..5 {
         domains.push(domain);
         assert_eq!(coefficients[round].len(), DEGREES[round] + 1);
         assert_ne!(coefficients[round][DEGREES[round]], F::ZERO);
         for group in &mut proof.rounds[round].groups {
             for (coordinate, value) in group.values.iter_mut().enumerate() {
-                let index = group.index as usize + coordinate * FRI_LENGTHS[round + 1];
+                let index = group.index as usize
+                    + transmitted_coordinate(&plans, round, group.index as usize, coordinate)
+                        * FRI_LENGTHS[round + 1];
                 *value = layer_value(initial, &coefficients, round, domain.point(index));
             }
         }
@@ -452,16 +519,18 @@ fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
     deep_proof::preflight(&proof, &queries).unwrap();
     assert_eq!(
         check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).unwrap(),
-        320
+        QUERY_COUNT * 5
     );
 
     // Query zero passes through group zero in every round. Keep all other rounds
     // fixed so each corruption must be rejected by the actual joined checker.
+    // The parity-first maximum set includes zero among the added even words.
     assert_eq!(queries[0], 0);
+    let plans = OpeningPlans::new(&queries).unwrap();
     for round in 0..5 {
         assert_eq!(proof.rounds[round].groups[0].index, 0);
         let correct = proof.rounds[round].groups[0].values.clone();
-        for coordinate in 0..FRI_ARITIES[round] {
+        for coordinate in 0..FRI_ARITIES[round] - 1 {
             proof.rounds[round].groups[0].values[coordinate] = correct[coordinate].add(F::ONE);
             assert!(
                 check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).is_err(),
@@ -480,7 +549,12 @@ fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
         for (coordinate, value) in proof.rounds[round].groups[0].values.iter_mut().enumerate() {
             // Evaluate the same polynomial on a different coset, preserving the
             // within-fiber root orientation and every coefficient and challenge.
-            let x = mul_mod(domains[round].point(coordinate * FRI_LENGTHS[round + 1]), 2);
+            let x = mul_mod(
+                domains[round].point(
+                    transmitted_coordinate(&plans, round, 0, coordinate) * FRI_LENGTHS[round + 1],
+                ),
+                2,
+            );
             *value = layer_value(initial, &coefficients, round, x);
         }
         assert_ne!(
@@ -510,7 +584,7 @@ fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
     }
     assert_eq!(
         check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).unwrap(),
-        320
+        QUERY_COUNT * 5
     );
 }
 
@@ -524,7 +598,7 @@ fn changed_composition_and_every_fiber_coordinate_fail_linkage() {
     assert!(check_chains(&geometry, &composition, lambda, &betas(), &queries, &proof).is_err());
     proof.quotients[0].composition_mask = F::ZERO;
     for (round, &arity) in FRI_ARITIES.iter().enumerate() {
-        for coordinate in 0..arity {
+        for coordinate in 0..arity - 1 {
             proof.rounds[round].groups[0].values[coordinate] = F::ONE;
             assert!(
                 check_chains(&geometry, &composition, lambda, &betas(), &queries, &proof).is_err(),
@@ -658,7 +732,7 @@ fn root_from_frontier(
 fn all_commitments_authenticate_under_their_exact_statement_and_role() {
     let binding = Context::new(b"independent authentication-only fixture").unwrap();
     let queries = queries(true);
-    let (mut proof, plans, _) = constant_fixture(&queries);
+    let (mut proof, plans, composition) = constant_fixture(&queries);
     let row_bytes: Vec<_> = (0..COMMITTED_COLUMN_COUNT)
         .flat_map(|_| 1_u64.to_le_bytes())
         .collect();
@@ -727,9 +801,47 @@ fn all_commitments_authenticate_under_their_exact_statement_and_role() {
         &[],
     );
     let (leaves, parents) = authenticate(&binding, &proof, &plans).unwrap();
-    assert_eq!(leaves, 449);
-    assert_eq!(parents, 4666);
-    assert_eq!(leaves + parents + 10, 5125);
+    assert_eq!(leaves, 2 * QUERY_COUNT + 1);
+    assert_eq!(parents, 2 * plans.initial.work().parent_hashes + 1);
+    let (checks, fri_leaves, fri_parents) = super::check_chains(
+        &DeepGeometry::new().unwrap(),
+        &composition,
+        F::ONE,
+        &betas(),
+        &queries,
+        &proof,
+        &binding,
+        &plans,
+    )
+    .unwrap();
+    assert_eq!(checks, QUERY_COUNT * 5);
+    assert_eq!(fri_leaves, QUERY_COUNT * 5);
+    assert_eq!(
+        fri_parents,
+        plans
+            .rounds
+            .iter()
+            .map(|p| p.work().parent_hashes)
+            .sum::<usize>()
+    );
+    for round in 0..5 {
+        let saved = proof.fri_roots[round];
+        proof.fri_roots[round] = WireDigest::from_bytes([0xff; 32]);
+        assert!(
+            super::check_chains(
+                &DeepGeometry::new().unwrap(),
+                &composition,
+                F::ONE,
+                &betas(),
+                &queries,
+                &proof,
+                &binding,
+                &plans
+            )
+            .is_err()
+        );
+        proof.fri_roots[round] = saved;
+    }
     proof.quotients[0].composition_mask = F::ONE;
     assert!(authenticate(&binding, &proof, &plans).is_err());
     proof.quotients[0].composition_mask = F::ZERO;
@@ -829,7 +941,7 @@ fn committed_policy_checks_every_segment_dimension_before_decoding() {
         max_batch_bytes: relation.statement_bytes().len(),
         max_proof_bytes: bytes.len(),
         max_fri_layers: 6,
-        max_queries: 64,
+        max_queries: QUERY_COUNT,
         max_query_chunk_values: 2,
         max_query_path_len: 23,
         max_fri_round_values: 16,
@@ -846,7 +958,7 @@ fn committed_policy_checks_every_segment_dimension_before_decoding() {
             l.max_proof_bytes = v
         }),
         ("max_fri_layers", 6, |l, v| l.max_fri_layers = v),
-        ("max_queries", 64, |l, v| l.max_queries = v),
+        ("max_queries", QUERY_COUNT, |l, v| l.max_queries = v),
         ("max_query_chunk_values", 2, |l, v| {
             l.max_query_chunk_values = v
         }),
@@ -940,4 +1052,252 @@ fn producer_preflight_rejects_the_fixed_statement_envelope_before_private_work()
         preflight(&oversized, deep_proof::MAX_FRAME_BYTES, policy),
         Err(Error::InvalidTraceShape { .. })
     ));
+}
+
+#[test]
+fn shared_fibers_check_every_incoming_coordinate_before_authentication_or_deduplication() {
+    let mut queries = (0..QUERY_COUNT - 1).collect::<Vec<_>>();
+    queries.push(FRI_LENGTHS[1]);
+    let (mut proof, plans, composition) = constant_fixture(&queries);
+    let geometry = DeepGeometry::new().unwrap();
+    let binding = Context::new(b"shared incoming edge regression").unwrap();
+    assert_eq!(plans.round_indices[0].len(), QUERY_COUNT - 1);
+    assert_eq!(plans.omitted_coordinate(0, 0).unwrap(), 0);
+    let mut visited = 0;
+    let (checks, _, _) = super::walk_chains(
+        &geometry,
+        &composition,
+        F::ONE,
+        &[F::ZERO; 5],
+        &queries,
+        &proof,
+        &binding,
+        &plans,
+        |_, _, _| {
+            visited += 1;
+            Ok(0)
+        },
+    )
+    .unwrap();
+    assert_eq!(visited, 5);
+    assert_eq!(checks, QUERY_COUNT + 4 * (QUERY_COUNT - 1));
+    // Index L/16 enters coordinate one of the same fiber as index zero.
+    // That coordinate remains on wire, and beta=0 cannot excuse its equality.
+    proof.rounds[0].groups[0].values[0] = F::ONE;
+    visited = 0;
+    assert!(
+        super::walk_chains(
+            &geometry,
+            &composition,
+            F::ONE,
+            &[F::ZERO; 5],
+            &queries,
+            &proof,
+            &binding,
+            &plans,
+            |_, _, _| {
+                visited += 1;
+                Ok(0)
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(visited, 0);
+}
+
+/// Exact authenticated algebra fixture; never constructs a verifier success token.
+fn retirement_authentication_fixture() -> (
+    Context,
+    Vec<usize>,
+    DeepProof,
+    OpeningPlans,
+    DeepComposition,
+) {
+    let binding = Context::new(b"independent authentication-only fixture").unwrap();
+    let queries = queries(true);
+    let (mut proof, plans, composition) = constant_fixture(&queries);
+    let row_bytes: Vec<_> = (0..COMMITTED_COLUMN_COUNT)
+        .flat_map(|_| 1_u64.to_le_bytes())
+        .collect();
+    let leaves = queries
+        .iter()
+        .map(|&index| {
+            binding
+                .hash_leaf(Oracle::Row, narrow_u32(index), &row_bytes)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    proof.row_root = root_from_frontier(
+        &binding,
+        Oracle::Row,
+        LDE_ROWS,
+        &queries,
+        &plans.initial,
+        &leaves,
+        &proof.row_siblings,
+    );
+    let leaves = queries
+        .iter()
+        .map(|&index| {
+            binding
+                .hash_leaf(Oracle::QuotientAndMask, narrow_u32(index), &[0; 96])
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    proof.quotient_root = root_from_frontier(
+        &binding,
+        Oracle::QuotientAndMask,
+        LDE_ROWS,
+        &queries,
+        &plans.initial,
+        &leaves,
+        &proof.quotient_siblings,
+    );
+    for round in 0..5 {
+        let oracle = Oracle::Fri(u8::try_from(round).expect("five FRI rounds fit u8"));
+        let leaves = plans.round_indices[round]
+            .iter()
+            .map(|&index| {
+                binding
+                    .hash_leaf(oracle, narrow_u32(index), &vec![0; FRI_ARITIES[round] * 32])
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        proof.fri_roots[round] = root_from_frontier(
+            &binding,
+            oracle,
+            FRI_LENGTHS[round + 1],
+            &plans.round_indices[round],
+            &plans.rounds[round],
+            &leaves,
+            &proof.rounds[round].siblings,
+        );
+    }
+    let terminal = binding.hash_leaf(Oracle::Terminal, 0, &[0; 4096]).unwrap();
+    proof.fri_roots[5] = root_from_frontier(
+        &binding,
+        Oracle::Terminal,
+        1,
+        &[0],
+        &plans.terminal,
+        &[terminal],
+        &[],
+    );
+    (binding, queries, proof, plans, composition)
+}
+
+#[test]
+fn every_current_root_frontier_byte_and_extension_lane_is_authenticated() {
+    let (binding, queries, mut proof, plans, composition) = retirement_authentication_fixture();
+    let check = |proof: &DeepProof| {
+        authenticate(&binding, proof, &plans)?;
+        super::check_chains(
+            &DeepGeometry::new()?,
+            &composition,
+            F::ONE,
+            &betas(),
+            &queries,
+            proof,
+            &binding,
+            &plans,
+        )?;
+        Ok::<_, Error>(())
+    };
+    check(&proof).unwrap();
+    fn changed(value: WireDigest, byte: usize) -> WireDigest {
+        let mut bytes = value.into_bytes();
+        bytes[byte] ^= 1;
+        WireDigest::from_bytes(bytes)
+    }
+    for root in 0..8 {
+        let saved = match root {
+            0 => proof.row_root,
+            1 => proof.quotient_root,
+            _ => proof.fri_roots[root - 2],
+        };
+        for byte in 0..32 {
+            let value = changed(saved, byte);
+            match root {
+                0 => proof.row_root = value,
+                1 => proof.quotient_root = value,
+                _ => proof.fri_roots[root - 2] = value,
+            }
+            assert!(check(&proof).is_err(), "root={root}, byte={byte}");
+        }
+        match root {
+            0 => proof.row_root = saved,
+            1 => proof.quotient_root = saved,
+            _ => proof.fri_roots[root - 2] = saved,
+        }
+    }
+    fn frontier(proof: &mut DeepProof, which: usize) -> &mut Vec<WireDigest> {
+        match which {
+            0 => &mut proof.row_siblings,
+            1 => &mut proof.quotient_siblings,
+            _ => &mut proof.rounds[which - 2].siblings,
+        }
+    }
+    for which in 0..7 {
+        let count = frontier(&mut proof, which).len();
+        assert!(count > 0);
+        for index in [0, count / 2, count - 1] {
+            let saved = frontier(&mut proof, which)[index];
+            for byte in 0..32 {
+                frontier(&mut proof, which)[index] = changed(saved, byte);
+                assert!(
+                    check(&proof).is_err(),
+                    "frontier={which}, sibling={index}, byte={byte}"
+                );
+            }
+            frontier(&mut proof, which)[index] = saved;
+        }
+    }
+    let increment = |value: F, lane: usize| {
+        let mut words = value.coefficients();
+        words[lane] = crate::backend::add_mod(words[lane], 1);
+        F::new(words).unwrap()
+    };
+    for half in 0..3 {
+        let saved = match half {
+            0 => proof.quotients[0].low,
+            1 => proof.quotients[0].high,
+            _ => proof.quotients[0].composition_mask,
+        };
+        for lane in 0..4 {
+            let value = increment(saved, lane);
+            match half {
+                0 => proof.quotients[0].low = value,
+                1 => proof.quotients[0].high = value,
+                _ => proof.quotients[0].composition_mask = value,
+            }
+            assert!(check(&proof).is_err(), "quotient/mask={half}, lane={lane}");
+        }
+        match half {
+            0 => proof.quotients[0].low = saved,
+            1 => proof.quotients[0].high = saved,
+            _ => proof.quotients[0].composition_mask = saved,
+        }
+    }
+    for round in 0..5 {
+        for coordinate in 0..FRI_ARITIES[round] - 1 {
+            let saved = proof.rounds[round].groups[0].values[coordinate];
+            for lane in 0..4 {
+                proof.rounds[round].groups[0].values[coordinate] = increment(saved, lane);
+                assert!(
+                    check(&proof).is_err(),
+                    "round={round}, coordinate={coordinate}, lane={lane}"
+                );
+            }
+            proof.rounds[round].groups[0].values[coordinate] = saved;
+        }
+    }
+    for index in 0..128 {
+        let saved = proof.terminal[index];
+        for lane in 0..4 {
+            proof.terminal[index] = increment(saved, lane);
+            assert!(check(&proof).is_err(), "terminal={index}, lane={lane}");
+        }
+        proof.terminal[index] = saved;
+    }
+    check(&proof).unwrap();
 }

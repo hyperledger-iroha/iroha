@@ -61,10 +61,10 @@ impl LaneRecord {
 
     /// Move exact owners into untrusted restoration input and the independently verified QC path.
     /// The owning store must call `check_context`; Core must verify the returned certificate.
-    pub(in crate::sumeragi) fn into_restoration(
+    pub(in crate::sumeragi) fn into_restoration<Source: std::borrow::Borrow<AvailabilitySource>>(
         self,
-        source: AvailabilitySource,
-    ) -> (BodyRestoration, Qc) {
+        source: Source,
+    ) -> (BodyRestoration<Source>, Qc) {
         (
             BodyRestoration::new(source, self.header, self.availability, self.payload),
             self.commit_qc,

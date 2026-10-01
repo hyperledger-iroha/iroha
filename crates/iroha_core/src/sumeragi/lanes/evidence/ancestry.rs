@@ -8,7 +8,7 @@ use std::borrow::Borrow;
 
 use iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier;
 use iroha_sumeragi::{
-    availability::AvailableBody,
+    availability::{AvailabilitySource, AvailableBody},
     crypto::{AttestationVerifier, Crypto, Verifier},
     message::Qc,
     topology::demotion_window,
@@ -119,6 +119,16 @@ impl<Config: Borrow<HeightConfig>> LaneAncestry<Config> {
             .then_some(self.expected.height)
     }
 
+    /// Exact next branch identity beneath the independently authenticated frontier.
+    pub(in crate::sumeragi) fn next_frontier(&self) -> Option<SumeragiLaneFrontier> {
+        self.next_height().map(|_| self.expected)
+    }
+
+    /// Borrow the retained original configuration owner without detaching its custody.
+    pub(in crate::sumeragi) fn configuration_owner(&self) -> &Config {
+        &self.config
+    }
+
     /// Native parent height; never a global evidence-age or stake-tenure boundary.
     #[must_use]
     pub fn parent_height(&self) -> u64 {
@@ -143,11 +153,11 @@ impl<Config: Borrow<HeightConfig>> LaneAncestry<Config> {
     ///
     /// # Errors
     /// Already complete, wrong source/hash/result/ancestry, or an invalid original commit QC.
-    pub fn advance(
+    pub fn advance<Source: Borrow<AvailabilitySource>>(
         &mut self,
         crypto: &dyn Crypto,
         attestations: &dyn AttestationVerifier,
-        body: &AvailableBody,
+        body: &AvailableBody<Source>,
         qc: &Qc,
     ) -> Result<(), LaneAncestryError> {
         let height = self.next_height().ok_or(LaneAncestryError::Complete)?;

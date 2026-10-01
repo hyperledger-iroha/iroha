@@ -3413,20 +3413,30 @@ pub mod nexus {
         /// Each optional peer's compact bytes hold a separate original charge.
         pub type ConsensusPenaltyPendingEntry = (
             iroha_crypto::Hash,
+            iroha_data_model::block::consensus::EvidenceScope,
             u64,
+            u64,
+            [u8; 32],
             Option<(
                 iroha_data_model::block::consensus::ValidatorIndex,
                 iroha_model_base::peer::PeerId,
+                Option<iroha_data_model::sumeragi_lanes::SumeragiLaneStakeBinding>,
                 iroha_allocation::AllocationCharge,
             )>,
         );
         /// Exact fixed backing for the maximum retained pending penalty plan.
-        pub const CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES: usize =
-            4 * 31 * 31 * core::mem::size_of::<ConsensusPenaltyPendingEntry>();
-        /// Maximum compact peer-key bytes in one pending plan. Actual plans
-        /// reserve each present key's exact tag-plus-payload length instead.
-        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES: usize =
-            4 * 31 * 31 * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+        pub const CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES: usize = 4
+            * 31
+            * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS
+            * core::mem::size_of::<ConsensusPenaltyPendingEntry>();
+        /// Sole native BLS-normal compact signer owner: one algorithm tag and 48 key bytes.
+        /// Core validates this exact geometry before retaining a pending signer.
+        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES: usize = 1 + 48;
+        /// Maximum native peer-key backing in one pending plan, including fixed lane committees.
+        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES: usize = 4
+            * 31
+            * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS
+            * CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES;
         /// Minimum pool able to retain one maximum prune plan and one pending plan.
         pub const CONSENSUS_EVIDENCE_ONE_PLAN_BYTES: usize = CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES
             + CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES

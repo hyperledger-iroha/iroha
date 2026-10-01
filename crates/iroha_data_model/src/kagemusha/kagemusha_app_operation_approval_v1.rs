@@ -7,8 +7,7 @@
 //! signing an already admitted offline operation.
 
 use super::{
-    KagemushaAppAttestHardwareTransitionSelectionV1, KagemushaDevicePublicKeyV1,
-    KagemushaDeviceSignatureV1, KagemushaHardwareTransitionSelectionV1,
+    KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareTransitionSelectionV1,
     KagemushaVerifiedOrdinaryAppCredentialV1,
 };
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, account::AccountId};
@@ -350,69 +349,19 @@ impl KagemushaAppOperationApprovalV1 {
         {
             return Err("native app approval original binding differs".into());
         }
-        let counter = match (&self.evidence, selection.platform_class) {
-            (
-                KagemushaAppOperationApprovalEvidenceV1::AndroidKeystore { signature_der },
-                super::KagemushaHardwarePlatformClassV1::AndroidKeyMint,
-            ) => {
-                if original_app_attest_counter_floor.is_some()
-                    || !(8..=72).contains(&signature_der.len())
-                {
-                    return Err("Android approval contains Apple counter or invalid DER".into());
-                }
-                KagemushaDeviceSignatureV1::from_der_normalizing_low_s(signature_der)
-                    .map_err(|e| e.to_string())?
-                    .verify(&selection.app_public_key, &message)
-                    .map_err(|e| e.to_string())?;
-                None
-            }
-            (
-                KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion },
-                super::KagemushaHardwarePlatformClassV1::AppleAppAttest,
-            ) => {
-                if raw_assertion.len() > KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1 {
-                    return Err("App Attest original oversized".into());
-                }
-                let original = KagemushaAppAttestHardwareTransitionSelectionV1 {
-                    subject: *subject,
-                    raw_assertion: raw_assertion.clone(),
-                };
-                let (auth_data, der) = original
-                    .original_assertion_components()
-                    .map_err(|e| e.to_string())?;
-                let floor = original_app_attest_counter_floor
-                    .ok_or("App Attest original counter floor absent")?;
-                let counter = u32::from_be_bytes(
-                    auth_data[33..37]
-                        .try_into()
-                        .map_err(|_| "App Attest counter malformed")?,
-                );
-                if floor < selection.app_attest_counter_floor
-                    || counter <= floor
-                    || auth_data[..32] != selection.app_signing_identity_digest
-                    || auth_data.len() != 37
-                    || auth_data[32] != 0x40
-                {
-                    return Err("App Attest application, original floor or counter differs".into());
-                }
-                // Standard assertion without release extensions. Distribution identity is
-                // checked in the independently governed original credential, not guessed here.
-                let mut nonce = Sha256::new();
-                nonce.update(auth_data);
-                nonce.update(Sha256::digest(&message));
-                let nonce: [u8; 32] = nonce.finalize().into();
-                KagemushaDeviceSignatureV1::from_der_normalizing_low_s(der)
-                    .map_err(|e| e.to_string())?
-                    .verify(&selection.app_public_key, &nonce)
-                    .map_err(|e| e.to_string())?;
-                Some(counter)
-            }
-            _ => {
-                return Err(
-                    "app approval platform equation differs from original credential".into(),
-                );
-            }
-        };
+        let counter = self.evidence.authenticate_signature(
+            selection.platform_class,
+            &selection.app_public_key,
+            selection.app_signing_identity_digest,
+            original_app_attest_counter_floor,
+            &message,
+        )?;
+        if counter.is_some_and(|_| {
+            original_app_attest_counter_floor
+                .is_none_or(|floor| floor < selection.app_attest_counter_floor)
+        }) {
+            return Err("App Attest retained floor precedes credential".into());
+        }
         let original = norito::encode_canonical(self).map_err(|e| e.to_string())?;
         if original.len() > KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1 {
             return Err("native app approval original oversized".into());
@@ -429,5 +378,80 @@ impl KagemushaAppOperationApprovalV1 {
         };
         verified.recheck_at_trusted_time(trusted_now_ms)?;
         Ok(verified)
+    }
+}
+
+impl KagemushaAppOperationApprovalEvidenceV1 {
+    /// Verify the original platform signature over one independently selected message.
+    /// No financial authority, enrollment trust or durable counter ownership is established.
+    /// # Errors
+    /// Rejects another platform equation, original key, application, counter floor or signature.
+    pub fn authenticate_signature(
+        &self,
+        platform: super::KagemushaHardwarePlatformClassV1,
+        key: &KagemushaDevicePublicKeyV1,
+        app_identity: [u8; 32],
+        original_app_attest_counter_floor: Option<u32>,
+        message: &[u8],
+    ) -> Result<Option<u32>, String> {
+        key.validate().map_err(|e| e.to_string())?;
+        if message.is_empty()
+            || message.len() > KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1
+            || app_identity == [0; 32]
+        {
+            return Err("app approval message or identity absent".into());
+        }
+        match (self, platform) {
+            (
+                Self::AndroidKeystore { signature_der },
+                super::KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+            ) => {
+                if original_app_attest_counter_floor.is_some()
+                    || !(8..=72).contains(&signature_der.len())
+                {
+                    return Err("Android approval contains Apple counter or invalid DER".into());
+                }
+                KagemushaDeviceSignatureV1::from_der_normalizing_low_s(signature_der)
+                    .map_err(|e| e.to_string())?
+                    .verify(key, message)
+                    .map_err(|e| e.to_string())?;
+                Ok(None)
+            }
+            (
+                Self::AppleAppAttest { raw_assertion },
+                super::KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            ) => {
+                if raw_assertion.len() > KAGEMUSHA_APP_OPERATION_APPROVAL_MAX_BYTES_V1 {
+                    return Err("App Attest original oversized".into());
+                }
+                let (auth_data, der) =
+                    super::kagemusha_v1::parse_app_attest_assertion(raw_assertion)
+                        .map_err(|e| e.to_string())?;
+                let floor = original_app_attest_counter_floor
+                    .ok_or("App Attest original counter floor absent")?;
+                if auth_data.len() != 37 || auth_data[32] != 0x40 || auth_data[..32] != app_identity
+                {
+                    return Err("App Attest application or authenticator shape differs".into());
+                }
+                let counter = u32::from_be_bytes(
+                    auth_data[33..37]
+                        .try_into()
+                        .map_err(|_| "App Attest counter malformed")?,
+                );
+                if counter <= floor {
+                    return Err("App Attest original counter did not advance".into());
+                }
+                let mut nonce = Sha256::new();
+                nonce.update(auth_data);
+                nonce.update(Sha256::digest(message));
+                let nonce: [u8; 32] = nonce.finalize().into();
+                KagemushaDeviceSignatureV1::from_der_normalizing_low_s(der)
+                    .map_err(|e| e.to_string())?
+                    .verify(key, &nonce)
+                    .map_err(|e| e.to_string())?;
+                Ok(Some(counter))
+            }
+            _ => Err("app approval platform equation differs".into()),
+        }
     }
 }

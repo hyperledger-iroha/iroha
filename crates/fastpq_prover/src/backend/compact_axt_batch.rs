@@ -815,7 +815,7 @@ mod tests {
         root_chain: &[[u8; 32]],
         fixture: &Fixture,
         original: &AxtTransferBatch,
-        original_roots: &[fastpq_isi::GoldilocksDigest384V1],
+        original_roots: &[fastpq_isi::keccak256::Sha3Digest256V1],
     ) {
         use crate::axt_binding::source_occurrence::test_occurrences;
         use crate::backend::deep_relation::tests as deep;
@@ -876,7 +876,7 @@ mod tests {
     /// A longer bundle shares the first statement but binds its whole root chain.
     fn assert_quantity_axt_longer_chain_rebinds(
         original: &AxtTransferBatch,
-        original_roots: &[fastpq_isi::GoldilocksDigest384V1],
+        original_roots: &[fastpq_isi::keccak256::Sha3Digest256V1],
     ) {
         use crate::backend::deep_relation::tests as deep;
         use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;

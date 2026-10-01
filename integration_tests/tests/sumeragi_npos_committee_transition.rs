@@ -96,6 +96,92 @@ const WAIT: Duration = Duration::from_secs(600);
 const POLL: Duration = Duration::from_millis(150);
 const TAIRA_XOR: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 
+/// Preserve the server's backpressure delay within the original test read deadline.
+fn committee_read_retry_delay(error: &iroha::Error, remaining: Duration) -> Option<Duration> {
+    let iroha::Error::Http {
+        status: 429,
+        retry_after,
+        ..
+    } = error
+    else {
+        return None;
+    };
+    let delay = retry_after.unwrap_or(POLL).max(POLL);
+    (delay < remaining).then_some(delay)
+}
+
+/// Retry only an explicitly refused public read; submitted transactions are never replayed.
+async fn read_validator_committee(
+    client: &Client,
+    target_epoch: u64,
+) -> Result<iroha::data_model::nexus::ValidatorCommitteeStatusV1> {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let result = tokio::time::timeout_at(
+            deadline,
+            client
+                .client()
+                .nexus()
+                .validator_committee(Some(target_epoch)),
+        )
+        .await
+        .wrap_err("committee status exceeded its original read deadline")?;
+        match result {
+            Ok(status) => return Ok(status),
+            Err(error) => {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Some(delay) = committee_read_retry_delay(&error, remaining) else {
+                    return Err(error.into());
+                };
+                sleep(delay).await;
+            }
+        }
+    }
+}
+
+#[test]
+fn committee_read_backoff_honors_server_delay_without_extending_deadline() {
+    let error = |status, retry_after| iroha::Error::Http {
+        operation: "nexus.validator_committee.read",
+        status,
+        retry_after,
+        body: Vec::new(),
+    };
+    assert_eq!(
+        committee_read_retry_delay(&error(429, None), WAIT),
+        Some(POLL)
+    );
+    assert_eq!(
+        committee_read_retry_delay(&error(429, Some(Duration::ZERO)), WAIT),
+        Some(POLL)
+    );
+    assert_eq!(
+        committee_read_retry_delay(&error(429, Some(Duration::from_secs(3))), WAIT),
+        Some(Duration::from_secs(3)),
+    );
+    assert_eq!(
+        committee_read_retry_delay(&error(429, Some(WAIT)), WAIT),
+        None
+    );
+    assert_eq!(committee_read_retry_delay(&error(429, None), POLL), None);
+    assert_eq!(
+        committee_read_retry_delay(&error(429, None), Duration::ZERO),
+        None
+    );
+    for status in [400, 401, 403, 404, 500, 503] {
+        assert_eq!(committee_read_retry_delay(&error(status, None), WAIT), None);
+    }
+    assert_eq!(
+        committee_read_retry_delay(
+            &iroha::Error::Timeout {
+                operation: "nexus.validator_committee.read",
+            },
+            WAIT
+        ),
+        None
+    );
+}
+
 #[derive(Clone)]
 struct Operator {
     account: AccountId,
@@ -916,11 +1002,7 @@ async fn execute_rotation_preparation(
     let network_id = network.network_id();
     let target_epoch = preparation.target_epoch;
     let transition_id = Hash::prehashed(preparation.transition_id().map_err(|error| eyre!(error))?);
-    let status = admin
-        .client()
-        .nexus()
-        .validator_committee(Some(target_epoch))
-        .await?;
+    let status = read_validator_committee(&admin, target_epoch).await?;
     let observed = status
         .latest_finality
         .decode_block(finality_limits())
@@ -1044,11 +1126,7 @@ async fn execute_rotation_preparation(
     })
     .await
     .wrap_err("rotation finalization worker failed")?;
-    let finalized_status = admin
-        .client()
-        .nexus()
-        .validator_committee(Some(target_epoch))
-        .await?;
+    let finalized_status = read_validator_committee(&admin, target_epoch).await?;
     let session = finalized_status
         .pending_beacon_session
         .as_ref()
@@ -1100,11 +1178,7 @@ async fn execute_rotation_preparation(
     })
     .await
     .wrap_err("rotation credential preparation worker failed")?;
-    let prepared_status = admin
-        .client()
-        .nexus()
-        .validator_committee(Some(target_epoch))
-        .await?;
+    let prepared_status = read_validator_committee(&admin, target_epoch).await?;
     let prepared_transition = prepared_status
         .selected
         .as_ref()
@@ -1216,11 +1290,7 @@ async fn execute_rotation_preparation(
         .await
         .wrap_err("target seat readiness admission worker failed")?;
     }
-    let readiness = admin
-        .client()
-        .nexus()
-        .validator_committee(Some(target_epoch))
-        .await?;
+    let readiness = read_validator_committee(&admin, target_epoch).await?;
     ensure!(
         readiness.selected.as_ref().is_some_and(|selected| {
             selected.transition.readiness.len()
@@ -1369,7 +1439,7 @@ async fn run_custody_or_activation_scenario(
                     == genesis_voters.iter().collect::<BTreeSet<_>>(),
             "one genuinely absent target custodian must force certified four-seat retention"
         );
-        let progress = admin.client().nexus().validator_committee(Some(2)).await?;
+        let progress = read_validator_committee(&admin, 2).await?;
         let transition = &progress
             .selected
             .as_ref()
@@ -1419,7 +1489,7 @@ async fn run_custody_or_activation_scenario(
         seven.commitment().schedule.current.authority.generation == 1,
         "seven-seat activation did not publish the new Pasta generation"
     );
-    let status = admin.client().nexus().validator_committee(Some(3)).await?;
+    let status = read_validator_committee(&admin, 3).await?;
     let return_preparation = status
         .selected
         .as_ref()
@@ -1767,7 +1837,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         ensure!(initial_height < SELECTION, "candidate pool did not enter the selecting prestate");
         let initial_roster = network.validators().iter().map(|peer| peer.id()).collect::<Vec<_>>();
         advance_to_height(&network, &initial_roster, SELECTION).await?;
-        let before = admin.client().nexus().validator_committee(Some(2)).await?;
+        let before = read_validator_committee(&admin, 2).await?;
         let selected = before.selected.as_ref().ok_or_else(|| eyre!("boundary did not freeze E+2"))?;
         let preparation = selected.transition.preparation.clone();
         preparation.validate().map_err(|error| eyre!(error))?;
@@ -1837,7 +1907,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         })
         .await
         .wrap_err("candidate key publication worker failed")?;
-        let progress = admin.client().nexus().validator_committee(Some(2)).await?;
+        let progress = read_validator_committee(&admin, 2).await?;
         ensure!(
             progress.candidate_keys.len() == seats - usize::from(withheld.is_some())
                 && progress.selected.as_ref().is_some_and(|row| row.transition.preparation == preparation),
@@ -1912,7 +1982,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
                     != preparation.beacon_session_id().map_err(|error| eyre!(error))?,
             "cancelled preparation cannot be shrunk or reused as the next attempt"
         );
-        let terminal = admin.client().nexus().validator_committee(Some(2)).await?;
+        let terminal = read_validator_committee(&admin, 2).await?;
         ensure!(
             terminal.selected.as_ref().is_some_and(|row| {
                 row.transition.preparation == preparation

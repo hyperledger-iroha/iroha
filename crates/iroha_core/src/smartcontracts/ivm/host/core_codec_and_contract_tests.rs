@@ -643,6 +643,14 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
     let domain = Domain::new(fixture_domain_id()).build(authority);
     let account = build_fixture_account(authority, authority);
     let world = World::with([domain], [account], []);
+    // Exercise the real execution boundary with committed, validated global authority.
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
