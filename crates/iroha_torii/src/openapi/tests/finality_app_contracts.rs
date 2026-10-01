@@ -315,7 +315,7 @@ fn current_finality_schemas_match_portable_wire_bounds() {
     scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "block_wire").get("maxItems") => Unsigned(iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES as u64); }
     scalar_contracts! { contract_property(&schemas, "SumeragiFinalityProof", "committee").get("maxItems") => Unsigned(iroha_data_model::block::consensus::MAX_VALIDATORS_PER_HEIGHT as u64); }
     let body = contract_schema(&schemas, "SumeragiFinalityAttestationBody");
-    assert_eq!(schema_string_field_set(body, "required", "attestation body"), contract_words("challenge network_id node_id node_fingerprint build_fingerprint config_fingerprint genesis_block_hash genesis_finality_proof status finality_proof").into_iter().collect());
+    assert_eq!(schema_string_field_set(body, "required", "attestation body"), contract_words("challenge observed_at_unix_ms network_id node_id node_fingerprint build_fingerprint config_fingerprint genesis_block_hash genesis_finality_proof status finality_proof").into_iter().collect());
     property_refs!(&schemas;
         "SumeragiFinalityAttestation", "body", "#/components/schemas/SumeragiFinalityAttestationBody";
         "SumeragiFinalityAttestationBody", "status", "#/components/schemas/SumeragiStatusResponse";

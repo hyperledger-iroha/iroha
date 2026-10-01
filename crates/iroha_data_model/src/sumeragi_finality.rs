@@ -859,6 +859,9 @@ impl SumeragiFinalityVerifier {
 pub struct SumeragiFinalityAttestationBody {
     /// Fresh, nonzero caller challenge.
     pub challenge: [u8; 32],
+    /// Fresh Unix milliseconds sampled by the installed reporting node immediately before signing.
+    /// This is a signed software-clock observation, distinct from the certified block timestamp.
+    pub observed_at_unix_ms: u64,
     /// Genesis-derived selected network.
     pub network_id: NetworkId,
     /// Signing node's BLS identity.
@@ -894,6 +897,7 @@ impl SumeragiFinalityAttestationBody {
     pub fn validate_consistency(&self) -> Result<(), FinalityError> {
         need(
             self.challenge != [0; 32]
+                && self.observed_at_unix_ms != 0
                 && self.node_fingerprint == Hash::new(self.node_id.encode())
                 && self.node_id.public_key().algorithm() == Algorithm::BlsNormal
                 && self.network_id == NetworkId::from_genesis_hash(self.genesis_block_hash)

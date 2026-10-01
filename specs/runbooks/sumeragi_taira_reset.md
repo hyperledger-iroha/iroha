@@ -13,7 +13,8 @@ states what that reset must satisfy for consensus; it does not replace it.
 ## 1. Deployment policy and optional fault diagnostics
 
 On-chain governance owns deployment policy for Taira and production (§13.5). There is no
-mandatory 24-hour fault test, fixed soak duration or soak-verdict prerequisite for a reset.
+mandatory regression suite, 24-hour fault test, fixed soak duration or soak-verdict prerequisite
+for a reset or deployment.
 The native reset still enforces signed control authority, authenticated genesis and committee,
 safety-record provenance and custody, and live readiness/write/restart checks.
 

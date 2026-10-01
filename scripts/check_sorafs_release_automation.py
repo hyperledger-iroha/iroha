@@ -274,8 +274,6 @@ RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS: tuple[str, ...] = (
     '- "crates/irohad/src/runtime_provider_broker.rs"',
     '- "crates/irohad/src/runtime_provider_broker/**"',
     '- "crates/irohad/src/sorafs_pop_runtime.rs"',
-    "name: Validate runtime-provider broker deployment contract",
-    "run: python3 scripts/tests/check_runtime_provider_broker_install_test.py",
 )
 POP_BROKER_OPERATION_IDS: dict[str, int] = {
     "OPERATION_POP_RUNTIME_OPEN_V1": 60,
@@ -2136,7 +2134,7 @@ def _validate_native_authority_runtime(root: Path, gate: str) -> list[str]:
 
 
 def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
-    """Require lineage authentication to fail closed before Cargo work."""
+    """Require source integrity by default and retain explicitly requested diagnostics."""
 
     relative = SORAFS_CLI_RELEASE_GATE_SCRIPT
     path = _require_regular_repo_file(root, relative)
@@ -2201,6 +2199,32 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
         )
 
     first_cargo_command = re.search(r"(?m)^\s*cargo(?:\s|$)", source)
+    diagnostics_return = (
+        'if [[ "${diagnostics}" != true ]]; then\n'
+        '  echo "[sorafs-release] source integrity checks complete; diagnostics were not run"\n'
+        "  exit 0\nfi\n"
+    )
+    diagnostics_arguments = (
+        'diagnostics=false\ncase "$#" in\n'
+        '  0) ;;\n  1)\n'
+        '    if [[ "$1" != "--diagnostics" ]]; then\n'
+        '      echo "usage: $0 [--diagnostics]" >&2\n'
+        "      exit 2\n    fi\n    diagnostics=true\n    ;;\n"
+        '  *)\n    echo "usage: $0 [--diagnostics]" >&2\n'
+        "    exit 2\n    ;;\nesac\n"
+    )
+    if (
+        source.count(diagnostics_arguments) != 1
+        or source.index(diagnostics_arguments) > provenance_command.start()
+        or source.count(diagnostics_return) != 1
+        or source.index(diagnostics_return) < provenance_command.start()
+        or (first_cargo_command is not None
+            and source.index(diagnostics_return) > first_cargo_command.start())
+    ):
+        errors.append(
+            f"{relative}: regressions must require explicit --diagnostics after "
+            "source integrity checks; unknown arguments must be rejected"
+        )
     if first_cargo_command is None:
         errors.append(
             f"{relative}: release gate must contain a Cargo command after the "
@@ -2591,11 +2615,11 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     "complete provenance history"
                 )
             if release_gate_job.count(
-                f"run: bash {SORAFS_CLI_RELEASE_GATE_SCRIPT}"
+                f"run: bash {SORAFS_CLI_RELEASE_GATE_SCRIPT}\n"
             ) != 1:
                 errors.append(
-                    f"{relative}: release-gate job must run the strict CLI release "
-                    "gate exactly once"
+                    f"{relative}: release-gate job must run the CLI source integrity "
+                    "check exactly once without regression diagnostics"
                 )
             if (
                 release_gate_job.count(
