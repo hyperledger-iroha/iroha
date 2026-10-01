@@ -5257,7 +5257,9 @@ function assertEvidenceRecord(entry) {
     assert.match(entry[field], /^[0-9a-f]{64}$/u);
   }
   assert.equal(typeof entry.safety_violation, "boolean");
-  assert.ok(Array.isArray(entry.offenders) && entry.offenders.length >= 1 && entry.offenders.length <= 1024);
+  assert.ok(Array.isArray(entry.offenders) && entry.offenders.length <= 1024);
+  assert.ok(entry.offenders.length > 0 ||
+    (entry.class === "conflicting_certificates" && entry.safety_violation === true));
   let previous = -1;
   const peers = new Set();
   for (const offender of entry.offenders) {

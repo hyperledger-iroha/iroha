@@ -330,9 +330,15 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
     /// Rejects changed held journals or absent native production release authority.
     pub fn authenticated_release(
         &self,
-    ) -> Result<Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, KagemushaStateErrorV1> {
+    ) -> Result<
+        Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+        KagemushaStateErrorV1,
+    > {
         self.journals.validate_pair(&self.machine)?;
-        let release = self.machine.guard_verifier.authenticated_release()
+        let release = self
+            .machine
+            .guard_verifier
+            .authenticated_release()
             .map_err(|error| KagemushaStateErrorV1::GuardRejected(error.to_string()))?;
         self.journals.validate_pair(&self.machine)?;
         Ok(release)

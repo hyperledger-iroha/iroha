@@ -618,7 +618,7 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 781_697, modules: 129 }],
+    ["toriiClient.js", { bytes: 781_825, modules: 129 }],
     ["transactionCodec.js (browser)", { bytes: 222_615, modules: 63 }],
     ["nexusApp.js (browser)", { bytes: 224_886, modules: 72 }],
     ["canonicalRequest.js (browser)", { bytes: 92_163, modules: 47 }],
@@ -685,8 +685,8 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        25_215,
-        "Torii hard ceiling must retain the measured 25,215-byte eager headroom",
+        25_087,
+        "Torii hard ceiling must retain the measured 25,087-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
@@ -695,7 +695,7 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
           { specifier: "./sumeragiTyped.js", bytes: 9_342 },
         ],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_008_585);
+      assert.equal(splitMetrics.combinedBytes, 1_008_713);
       assert.equal(splitMetrics.combinedLimitKb, 1_078);
       assert.equal(target.reviewedEagerBytes, 806_184);
       assert.equal(target.reviewedCombinedBytes, 1_101_362);

@@ -48,10 +48,26 @@ impl VerifiedNativeExecutionCarrier {
     /// Match the complete original native execution cut without turning local certificate
     /// bytes into a new State tip capability.
     pub(crate) fn matches_original_tip(&self, tip: super::NativeExecutionTip) -> bool {
-        self.block.header().height().get() == tip.height()
-            && self.block.hash() == tip.iroha_hash()
-            && self.core_hash == tip.core_hash()
-            && self.result == tip.result()
+        self.matches_claimed_cut(
+            tip.height(),
+            tip.iroha_hash(),
+            tip.core_hash(),
+            tip.result(),
+        )
+    }
+    /// Compare a claimed historical cut only after authenticating its actual carrier. This
+    /// predicate never constructs a State tip or substitutes for the independent prefix anchor.
+    pub(crate) fn matches_claimed_cut(
+        &self,
+        height: u64,
+        carrier: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+        core_hash: iroha_sumeragi::types::Hash32,
+        result: iroha_sumeragi::types::Hash32,
+    ) -> bool {
+        self.block.header().height().get() == height
+            && self.block.hash() == carrier
+            && self.core_hash == core_hash
+            && self.result == result
     }
     /// Borrow the complete post-execution global lane state committed in this carrier's R.
     pub fn lanes(&self) -> &SumeragiLaneState {

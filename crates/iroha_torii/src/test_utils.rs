@@ -376,18 +376,37 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
             + subject_permissions.len(),
     );
     for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
-        instructions.push(InstructionBox::from(UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
+        instructions.push(InstructionBox::from(UploadSmartContractCodeChunk {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                verified.code_hash,
+            ),
             total_size,
             chunk_index: u32::try_from(index).expect("chunk index fits u32"),
             chunk_count,
             chunk: chunk.to_vec(),
         }));
     }
-    instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, verified.code_hash),
+    instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            verified.code_hash,
+        ),
         total_size,
         chunk_count,
     }));
-    instructions.push(InstructionBox::from({ let scoped_manifest = manifest; RegisterSmartContractCode { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, scoped_manifest.code_hash.unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash"))), manifest: scoped_manifest } }));
+    instructions.push(InstructionBox::from({
+        let scoped_manifest = manifest;
+        RegisterSmartContractCode {
+            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                scoped_manifest
+                    .code_hash
+                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"missing test manifest hash")),
+            ),
+            manifest: scoped_manifest,
+        }
+    }));
     instructions.push(InstructionBox::from(Register::account(Account::new(
         contract_address.subject_id(),
     ))));
@@ -619,7 +638,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
             p2p_outbound_frame_queue_max_low_frames:
                 defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap: nonzero!(128usize),
+            p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
             consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
             consensus_ingress_bytes_per_sec: defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
@@ -661,7 +680,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             allow_cidrs: Vec::new(),
             deny_cidrs: Vec::new(),
             disconnect_on_post_overflow: false,
-            max_frame_bytes: 256 * 1024,
+            // The encrypted cap must cover every plaintext topic plus nonce/tag bytes.
+            max_frame_bytes: 512 * 1024 + defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
             tcp_nodelay: true,
             tcp_keepalive: None,
             max_frame_bytes_consensus: 128 * 1024,

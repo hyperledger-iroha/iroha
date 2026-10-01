@@ -19,7 +19,7 @@ use crate::{
 use iroha_allocation::{AllocationBudget, ChargedBuffer};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, SignedBlock, consensus::LaneEvidenceScope},
     sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
 };
 use iroha_model_base::topology::LaneId;
@@ -46,6 +46,15 @@ pub(in crate::sumeragi) struct HistoryCapture {
     network: iroha_data_model::NetworkId,
     chain_id: iroha_model_base::chain::ChainId,
     policy: Option<(u64, u64)>,
+}
+impl std::fmt::Debug for HistoryCapture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryCapture")
+            .field("generation", &self.generation)
+            .field("height", &self.original_tip.height())
+            .field("network", &self.network)
+            .finish_non_exhaustive()
+    }
 }
 impl HistoryCapture {
     // The caller samples this generation before acquiring this exact original State view.
@@ -140,6 +149,8 @@ pub(in crate::sumeragi) struct HistoryScan {
     current_bytes: Option<ChargedBuffer<u8>>,
     artifacts: Option<PrefixArtifactsRead>,
     genesis_bytes: Option<ChargedBuffer<u8>>,
+    evidence_cut: Option<LaneEvidenceScope>,
+    completed: bool,
 }
 
 impl HistoryScan {
@@ -157,16 +168,65 @@ impl HistoryScan {
             HistoryCapture::from_view(state, &view, generation)?
         };
         capture
-            .map(|capture| Self::open_captured(capture, lane, incarnation))
+            .map(|capture| {
+                Self::open_captured(capture, lane, incarnation).map_err(|(_, error)| error)
+            })
             .transpose()
     }
 
     /// The original World guard is gone before opening or reading any lane/global artifact.
+    /// Opening failure returns the unchanged captured State cut and original pool.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return original capture without allocating on refusal"
+    )]
     pub(in crate::sumeragi) fn open_captured(
         capture: HistoryCapture,
         lane: LaneId,
         incarnation: [u8; 32],
-    ) -> io::Result<Self> {
+    ) -> Result<Self, (HistoryCapture, io::Error)> {
+        let prepared = (|| {
+            let height = capture.original_tip.height();
+            if height < 2 {
+                return Err(invalid(
+                    "native history requires a genesis/successor interval",
+                ));
+            }
+            let state_bound = u64::try_from(capture.kura.native_context_archive_max_bytes().get())
+                .map_err(invalid)?;
+            let block_bound = MAX_FINALITY_BLOCK_BYTES as u64;
+            let retained = block_bound
+                .checked_add(state_bound)
+                .and_then(|bytes| bytes.checked_mul(height))
+                .ok_or_else(|| invalid("native authority history bound overflow"))?;
+            let archive = NativeContextArchive::open_existing(
+                &capture.kura,
+                capture.budget.clone(),
+                capture.kura.native_context_archive_max_bytes(),
+            )
+            .map_err(archive_error)?;
+            let instance = crate::sumeragi::lanes::incarnation_instance(
+                &crate::sumeragi::crypto::BlsCrypto::new(),
+                &capture.network,
+                capture.chain_id.as_str(),
+                lane,
+                &incarnation,
+            );
+            Ok((
+                archive,
+                instance,
+                NativeExecutionEvidenceLimits {
+                    max_carriers: height,
+                    max_carrier_bytes: block_bound,
+                    max_context_bytes: state_bound,
+                    max_retained_bytes: retained,
+                },
+            ))
+        })();
+        let (archive, instance, limits) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return Err((capture, error)),
+        };
         let HistoryCapture {
             generation,
             original_tip,
@@ -178,37 +238,10 @@ impl HistoryScan {
         } = capture;
         let height = original_tip.height();
         let carrier = original_tip.iroha_hash();
-        let archive = NativeContextArchive::open_existing(
-            &kura,
-            budget.clone(),
-            kura.native_context_archive_max_bytes(),
-        )
-        .map_err(archive_error)?;
-        let state_bound =
-            u64::try_from(kura.native_context_archive_max_bytes().get()).map_err(invalid)?;
-        let block_bound = MAX_FINALITY_BLOCK_BYTES as u64;
-        let retained = block_bound
-            .checked_add(state_bound)
-            .and_then(|bytes| bytes.checked_mul(height))
-            .ok_or_else(|| invalid("native authority history bound overflow"))?;
-        let instance = crate::sumeragi::lanes::incarnation_instance(
-            &crate::sumeragi::crypto::BlsCrypto::new(),
-            &network,
-            chain_id.as_str(),
-            lane,
-            &incarnation,
-        );
-        let verifier = NativeExecutionEvidenceVerifier::new(
-            chain_id,
-            network,
-            NativeExecutionEvidenceLimits {
-                max_carriers: height,
-                max_carrier_bytes: block_bound,
-                max_context_bytes: state_bound,
-                max_retained_bytes: retained,
-            },
-        )
-        .map_err(invalid)?;
+        // The checked positive bounds above admit at least two complete carriers and contexts.
+        // No fallible opening remains after moving the original chain identity into its verifier.
+        let verifier = NativeExecutionEvidenceVerifier::new(chain_id, network, limits)
+            .expect("positive complete genesis/successor bounds checked before consuming capture");
         Ok(Self {
             lane,
             incarnation,
@@ -232,7 +265,41 @@ impl HistoryScan {
             current_bytes: None,
             artifacts: None,
             genesis_bytes: None,
+            evidence_cut: None,
+            completed: false,
         })
+    }
+
+    /// Select a claimed original admission parent inside the independently captured prefix.
+    /// The claim grants no authority: completion verifies all four identities and original row.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return original capture without allocating on refusal"
+    )]
+    pub(in crate::sumeragi) fn open_for_evidence(
+        capture: HistoryCapture,
+        scope: LaneEvidenceScope,
+    ) -> Result<Self, (HistoryCapture, io::Error)> {
+        if scope.admission_parent_height > capture.original_tip.height()
+            || scope
+                .created_at
+                .checked_add(2)
+                .is_none_or(|active| active > scope.admission_parent_height)
+            || scope.admission_parent_height.checked_add(1).is_none()
+        {
+            return Err((
+                capture,
+                invalid("lane evidence parent is outside its original root lifetime"),
+            ));
+        }
+        let mut scan = Self::open_captured(capture, scope.lane, scope.incarnation)?;
+        scan.evidence_cut = Some(scope);
+        Ok(scan)
+    }
+
+    fn selected_height(&self) -> u64 {
+        self.evidence_cut
+            .map_or(self.height, |scope| scope.admission_parent_height)
     }
 
     pub(super) fn matches(&self, lane: LaneId, incarnation: &[u8; 32]) -> bool {
@@ -246,15 +313,24 @@ impl HistoryScan {
     // Local archive admission refusal leaves the verified prefix, selected original record,
     // exact current carrier and retained directory descriptor untouched for the next call.
     pub(in crate::sumeragi) fn complete(&mut self) -> io::Result<()> {
+        self.completed = false;
         while self.next <= self.height {
             if self.current.is_none() {
                 let index = usize::try_from(self.next)
                     .ok()
                     .and_then(NonZeroUsize::new)
                     .ok_or_else(|| invalid("native carrier height overflow"))?;
-                let block = self.kura.get_block(index).ok_or_else(|| {
-                    invalid(format!("native carrier {} is unreadable", self.next))
-                })?;
+                let Some(block) = self.kura.get_block(index) else {
+                    if self.kura.native_consensus_gate().is_closed() {
+                        return Err(io::Error::other(
+                            "original native storage gate is closed; recovery is required",
+                        ));
+                    }
+                    // Kura's Option API cannot distinguish resource refusal from missing
+                    // bytes. Neither outcome proves corrupt authority. Keep this original
+                    // cut/cursor pending; a typed Kura read remains a separate prerequisite.
+                    return Err(io::ErrorKind::WouldBlock.into());
+                };
                 let length = norito::canonical_frame_len(block.as_ref())
                     .map_err(invalid)?
                     .checked_add(1)
@@ -271,6 +347,12 @@ impl HistoryScan {
                 return Err(invalid(
                     "native authority prefix differs from captured State tip",
                 ));
+            }
+            if self.evidence_cut.is_some_and(|scope| {
+                self.next == scope.admission_parent_height
+                    && block.hash() != scope.admission_parent_hash
+            }) {
+                return Err(invalid("lane evidence admission parent carrier differs"));
             }
             if self.current_bytes.is_none() {
                 if self.read.is_none() {
@@ -322,6 +404,7 @@ impl HistoryScan {
                 None
             };
             let bytes = self.current_bytes.take().expect("original context bytes");
+            let selected_height = self.selected_height();
             let selected = &mut self.selected;
             let authority = &mut self.authority;
             let budget = &self.budget;
@@ -363,6 +446,19 @@ impl HistoryScan {
                         "verified authority prefix differs from original native execution result",
                     ));
                 }
+                if let Some(scope) = self.evidence_cut
+                    && self.next == scope.admission_parent_height
+                    && !receipt.matches_claimed_cut(
+                        scope.admission_parent_height,
+                        scope.admission_parent_hash,
+                        iroha_sumeragi::types::Hash32(scope.admission_parent_core_hash),
+                        iroha_sumeragi::types::Hash32(scope.admission_parent_result),
+                    )
+                {
+                    return Err(invalid(
+                        "lane evidence parent differs from its original execution",
+                    ));
+                }
                 if selected.observe(receipt.block().header().height().get(), receipt.lanes())? {
                     *authority = Some(AuthorityRead::Payload(LanePayloadRead::from_verified(
                         bytes,
@@ -370,7 +466,7 @@ impl HistoryScan {
                         network,
                         &receipt,
                     )));
-                } else if self.next == self.height {
+                } else if self.next == selected_height {
                     self.tip_payload = Some(TipPayloadRead::Pending(
                         LanePayloadRead::from_verified(bytes, budget.clone(), network, &receipt),
                     ));
@@ -389,8 +485,9 @@ impl HistoryScan {
             .expect("complete namespace")
             .recheck_namespace()
             .map_err(archive_error)?;
-        if !self.selected.is_active(self.height) {
+        if !self.selected.is_active(self.selected_height()) {
             self.authority = None;
+            self.completed = true;
             return Ok(());
         }
         if matches!(self.tip_payload, Some(TipPayloadRead::Pending(_))) {
@@ -438,22 +535,123 @@ impl HistoryScan {
                     };
                     self.authority = Some(AuthorityRead::Ready(owner));
                     validation.map_err(payload_error)?;
-                    return self
-                        .archive
+                    self.archive
                         .as_ref()
                         .expect("same completed namespace")
                         .recheck_namespace()
-                        .map_err(archive_error);
+                        .map_err(archive_error)?;
+                    self.completed = true;
+                    return Ok(());
                 }
             }
         }
     }
 
     pub(super) fn finish(self) -> Option<LaneAuthority> {
+        if !self.completed {
+            return None;
+        }
         match self.authority {
             Some(AuthorityRead::Ready(owner)) => Some(owner),
             _ => None,
         }
+    }
+}
+
+/// A complete original global prefix and its selected original lane admission context.
+/// Retaining this value keeps both source payloads and the prepaid configuration alive.
+pub(in crate::sumeragi) struct LaneEvidenceContext {
+    pub(in crate::sumeragi) authority: LaneAuthority,
+    pub(in crate::sumeragi) payload: LanePayload,
+    pub(in crate::sumeragi) scope: LaneEvidenceScope,
+    pub(in crate::sumeragi) instance: iroha_sumeragi::types::Hash32,
+    pub(in crate::sumeragi) original_tip: crate::state::NativeExecutionTip,
+    pub(in crate::sumeragi) generation: u64,
+    pub(in crate::sumeragi) network: iroha_data_model::NetworkId,
+    pub(in crate::sumeragi) budget: AllocationBudget,
+    pub(in crate::sumeragi) kura: Arc<Kura>,
+}
+impl HistoryScan {
+    /// Validate the complete borrowed handoff before moving any original funded owner.
+    /// Zero-copy field inspection still observes the ambient decoder field ceiling.
+    fn validate_evidence_completion(&self) -> io::Result<()> {
+        if !self.completed {
+            return Err(invalid(
+                "lane evidence history has not completed authentication",
+            ));
+        }
+        let scope = self
+            .evidence_cut
+            .ok_or_else(|| invalid("missing original evidence cut"))?;
+        let Some(AuthorityRead::Ready(authority)) = self.authority.as_ref() else {
+            return Err(invalid(
+                "original lane was not active at evidence admission",
+            ));
+        };
+        let Some(TipPayloadRead::Ready(payload)) = self.tip_payload.as_ref() else {
+            return Err(invalid("original admission payload is missing"));
+        };
+        if authority.created_at() != scope.created_at {
+            return Err(invalid(
+                "lane evidence creation differs from original authority",
+            ));
+        }
+        let row = payload
+            .custody_record(&scope.incarnation)
+            .map_err(payload_error)?
+            .ok_or_else(|| invalid("lane evidence has no original custody obligation"))?;
+        if row.identity()
+            != (
+                scope.lane,
+                scope.incarnation,
+                self.instance.0,
+                scope.created_at,
+            )
+            || !row
+                .admits_at(
+                    scope
+                        .admission_parent_height
+                        .checked_add(1)
+                        .ok_or_else(|| invalid("lane evidence carrier height overflows"))?,
+                )
+                .map_err(payload_error)?
+        {
+            return Err(invalid(
+                "lane evidence admission is outside its original custody lifetime",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the original completed history owner whenever handoff refuses locally.
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the original funded history without allocating on refusal"
+    )]
+    pub(in crate::sumeragi) fn finish_evidence(
+        self,
+    ) -> Result<LaneEvidenceContext, (Self, io::Error)> {
+        if let Err(error) = self.validate_evidence_completion() {
+            return Err((self, error));
+        }
+        let scope = self.evidence_cut.expect("validated original evidence cut");
+        let Some(AuthorityRead::Ready(authority)) = self.authority else {
+            unreachable!("validated original authority")
+        };
+        let Some(TipPayloadRead::Ready(payload)) = self.tip_payload else {
+            unreachable!("validated original payload")
+        };
+        Ok(LaneEvidenceContext {
+            authority,
+            payload,
+            scope,
+            instance: self.instance,
+            original_tip: self.original_tip,
+            generation: self.generation,
+            network: self.network,
+            budget: self.budget,
+            kura: self.kura,
+        })
     }
 }
 
@@ -754,5 +952,188 @@ mod capture_tests {
                 .kind(),
             io::ErrorKind::InvalidData,
         );
+    }
+}
+
+#[cfg(test)]
+mod evidence_cut_tests {
+    use super::*;
+    use iroha_data_model::sumeragi_lanes::SumeragiLaneRecord;
+    use iroha_sumeragi::types::Hash32;
+
+    fn scope(
+        record: &SumeragiLaneRecord,
+        tip: crate::state::NativeExecutionTip,
+    ) -> LaneEvidenceScope {
+        LaneEvidenceScope {
+            lane: record.lane,
+            incarnation: record.incarnation,
+            created_at: record.created_at,
+            admission_parent_height: tip.height(),
+            admission_parent_hash: tip.iroha_hash(),
+            admission_parent_core_hash: tip.core_hash().0,
+            admission_parent_result: tip.result().0,
+        }
+    }
+
+    fn capture(state: &State) -> HistoryCapture {
+        let generation = state.state_view_generation();
+        HistoryCapture::from_view(state, &state.view(), generation)
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn original_lane_admission_cut_survives_successor_publication_without_changing_its_pool() {
+        let (mut chain, record, _epoch) = super::super::tests::npos_fixed_lane_chain_at(3);
+        let original = chain.state().view().native_execution_tip().unwrap();
+        let claim = scope(&record, original);
+        chain.commit(Vec::new());
+        let state = chain.state();
+        let current = state.view().native_execution_tip().unwrap();
+        assert!(current.height() > claim.admission_parent_height);
+        let budget = state.ivm_execution_budget();
+        let baseline = budget.reserved_bytes();
+        let mut read = HistoryScan::open_for_evidence(capture(state), claim).unwrap();
+        read.complete().unwrap();
+        let context = read
+            .finish_evidence()
+            .unwrap_or_else(|(_, error)| panic!("{error}"));
+        assert_eq!(context.scope, claim);
+        assert_eq!(context.original_tip, current);
+        assert_eq!(context.payload.carrier().1, original.height());
+        assert_eq!(context.payload.carrier().2, original.iroha_hash());
+        assert_eq!(
+            context.authority.demotion_window(),
+            record.params.demotion_window.get()
+        );
+        assert_eq!(context.authority.created_at(), record.created_at);
+        assert!(context.authority.belongs_to(&budget));
+        assert!(context.payload.belongs_to(&budget));
+        assert!(context.budget.same_pool(&budget));
+        assert!(Arc::ptr_eq(&context.kura, &state.kura_handle()));
+        assert_eq!(context.network, *state.network_id_ref());
+        assert_eq!(context.generation, state.state_view_generation());
+        let row = context
+            .payload
+            .custody_record(&claim.incarnation)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.identity(),
+            (
+                claim.lane,
+                claim.incarnation,
+                context.instance.0,
+                claim.created_at
+            )
+        );
+        assert!(row.admits_at(original.height() + 1).unwrap());
+        assert_eq!(
+            row.binding(0).unwrap(),
+            None,
+            "unfunded fixed signer remains forensic-only"
+        );
+        drop(context);
+        assert_eq!(budget.reserved_bytes(), baseline);
+    }
+
+    #[test]
+    fn claimed_lane_cut_cannot_substitute_carrier_result_creation_or_future_height() {
+        let (mut chain, record, _epoch) = super::super::tests::npos_fixed_lane_chain_at(4);
+        let original = chain.state().view().native_execution_tip().unwrap();
+        let claim = scope(&record, original);
+        chain.commit(Vec::new());
+        let current = chain.state().view().native_execution_tip().unwrap();
+        let mut changed = claim;
+        changed.admission_parent_hash = current.iroha_hash();
+        let mut claims = vec![changed];
+        changed = claim;
+        changed.admission_parent_core_hash = Hash32([0x98; 32]).0;
+        claims.push(changed);
+        changed = claim;
+        changed.admission_parent_result = Hash32([0x99; 32]).0;
+        claims.push(changed);
+        changed = claim;
+        changed.created_at += 1;
+        claims.push(changed);
+        changed = claim;
+        changed.admission_parent_height = current.height() + 1;
+        claims.push(changed);
+        for claim in claims {
+            let result = HistoryScan::open_for_evidence(capture(chain.state()), claim);
+            match result {
+                Err((_, error)) => assert_eq!(error.kind(), io::ErrorKind::InvalidData),
+                Ok(mut read) => {
+                    if let Err(error) = read.complete() {
+                        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+                    }
+                    assert!(read.finish_evidence().is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn historical_store_authority_without_positive_policy_cannot_grant_evidence_custody() {
+        let (chain, record, _epoch) = super::super::tests::fixed_lane_chain();
+        let claim = scope(
+            &record,
+            chain.state().view().native_execution_tip().unwrap(),
+        );
+        let mut read = HistoryScan::open_for_evidence(capture(chain.state()), claim).unwrap();
+        read.complete().unwrap();
+        assert_eq!(
+            read.finish_evidence().err().unwrap().1.kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn failed_custody_validation_cannot_extract_prepared_configuration() {
+        let (chain, record, _epoch) = super::super::tests::npos_fixed_lane_chain_at(4);
+        let claim = scope(
+            &record,
+            chain.state().view().native_execution_tip().unwrap(),
+        );
+        let mut read = HistoryScan::open_for_evidence(capture(chain.state()), claim).unwrap();
+        read.complete().unwrap();
+        assert!(matches!(read.authority, Some(AuthorityRead::Ready(_))));
+        // A ready graph alone is not a completed capability: a rejected policy or final
+        // namespace check must revoke completion before a consuming call can extract it.
+        read.policy = None;
+        assert_eq!(
+            read.complete().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(read.finish().is_none());
+    }
+
+    #[test]
+    fn original_cut_refusal_retains_job_and_completion_is_unavailable_until_retry() {
+        let (chain, record, _epoch) = super::super::tests::npos_fixed_lane_chain_at(4);
+        let state = chain.state();
+        let claim = scope(&record, state.view().native_execution_tip().unwrap());
+        let budget = state.ivm_execution_budget();
+        let baseline = budget.reserved_bytes();
+        let limit = budget.limit_bytes();
+        let mut read = HistoryScan::open_for_evidence(capture(state), claim).unwrap();
+        budget.set_limit_bytes(budget.reserved_bytes());
+        assert_eq!(
+            read.complete().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(!read.completed);
+        assert_eq!(read.evidence_cut, Some(claim));
+        assert_eq!(read.next, 1);
+        assert!(read.read.is_some());
+        budget.set_limit_bytes(limit);
+        read.complete().unwrap();
+        let context = read
+            .finish_evidence()
+            .unwrap_or_else(|(_, error)| panic!("{error}"));
+        assert_eq!(context.scope, claim);
+        drop(context);
+        assert_eq!(budget.reserved_bytes(), baseline);
     }
 }

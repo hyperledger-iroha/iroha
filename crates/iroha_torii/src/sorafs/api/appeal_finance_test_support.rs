@@ -971,10 +971,16 @@ fn commit_appeal_finance_instruction(
     )
     .with_instructions([instruction])
     .sign(signer.private_key());
+    let applied = chain.commit(vec![transaction]);
+    let committed = chain.committed(chain.height());
     assert_eq!(
-        chain.commit(vec![transaction]),
+        applied,
         vec![true],
-        "actual asset-lock instruction must execute"
+        "actual asset-lock instruction must execute: {:?}",
+        committed
+            .block()
+            .network_output_at(0)
+            .map(|(_, output)| &output.result),
     );
 }
 fn seed_appeal_finance_asset_lock(

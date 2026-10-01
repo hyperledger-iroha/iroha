@@ -2307,11 +2307,13 @@ async fn drops_plaintext_control_after_approve() {
         proto::FrameKind::Control(proto::ConnectControlV1::Approve { .. })
     ));
     // Now send plaintext Close after approval; should be dropped.
-    // This is the first App->Wallet frame in this test, so seq must start at 1.
+    // Open consumed App->Wallet sequence 1; use the next sequence so the
+    // plaintext policy, rather than replay protection, rejects this frame.
+    assert_eq!(bus.status().await.plaintext_control_drops_total, 0);
     let close = proto::ConnectFrameV1 {
         sid,
         dir: proto::Dir::AppToWallet,
-        seq: 1,
+        seq: 2,
         kind: proto::FrameKind::Control(proto::ConnectControlV1::Close {
             who: proto::Role::App,
             code: 1000,
@@ -2327,7 +2329,9 @@ async fn drops_plaintext_control_after_approve() {
             .is_err()
     );
     let st = bus.status().await;
-    assert!(st.plaintext_control_drops_total >= 1);
+    assert_eq!(st.plaintext_control_drops_total, 1);
+    assert_eq!(st.monotonic_drops_total, 0);
+    assert!(bus.inner.read().await.contains_key(&sid.to_vec()));
 }
 #[tokio::test]
 async fn wrong_network_open_is_rejected_before_wallet_delivery() {

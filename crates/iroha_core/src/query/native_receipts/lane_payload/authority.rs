@@ -32,16 +32,19 @@ impl LaneAuthorityRead {
         }
     }
 
-    fn prepare(&self, budget: &AllocationBudget) -> Result<AuthorityConfig, LanePayloadError> {
-        if !self.source.belongs_to(budget) {
+    fn prepare_source(
+        source: &LanePayload,
+        incarnation: &[u8; 32],
+        budget: &AllocationBudget,
+    ) -> Result<AuthorityConfig, LanePayloadError> {
+        if !source.belongs_to(budget) {
             return Err(LanePayloadError::Source);
         }
-        let encoded = self
-            .source
-            .lane_record(&self.incarnation)?
+        let encoded = source
+            .lane_record(incarnation)?
             .ok_or(LanePayloadError::Source)?;
         let raw = RawAuthority::parse(encoded)?;
-        if raw.created != self.source.carrier().1 {
+        if raw.created != source.carrier().1 {
             return Err(LanePayloadError::Source);
         }
         let context = raw.context()?;
@@ -49,9 +52,9 @@ impl LaneAuthorityRead {
             height: 0,
             block_hash: iroha_crypto::Hash::new_from_chunks(&[
                 crate::sumeragi::lanes::LANE_GENESIS_TAG,
-                self.source.carrier().0.as_bytes(),
+                source.carrier().0.as_bytes(),
                 &raw.lane.as_u32().to_be_bytes(),
-                &self.incarnation,
+                incarnation,
             ])
             .into(),
             result: context.0,
@@ -96,7 +99,12 @@ impl LaneAuthorityRead {
             config,
             lane: raw.lane,
             genesis,
+            demotion_window: raw.demotion_window,
         })
+    }
+
+    fn prepare(&self, budget: &AllocationBudget) -> Result<AuthorityConfig, LanePayloadError> {
+        Self::prepare_source(&self.source, &self.incarnation, budget)
     }
 
     /// Retain the same source and selection on every error; no graph is allocated before its
@@ -124,6 +132,7 @@ struct AuthorityConfig {
     config: RetainedPayload<HeightConfig>,
     lane: LaneId,
     genesis: SumeragiLaneFrontier,
+    demotion_window: u64,
 }
 
 /// Exact prepaid selected configuration and original immutable creation/proof bytes.
@@ -142,6 +151,14 @@ impl LaneAuthority {
     pub(crate) fn genesis(&self) -> SumeragiLaneFrontier {
         self.authority.genesis
     }
+    /// The native instance's immutable demotion constant from its actual creation record.
+    pub(crate) fn demotion_window(&self) -> u64 {
+        self.authority.demotion_window
+    }
+    /// Original root creation height, distinct from any native subject height.
+    pub(crate) fn created_at(&self) -> u64 {
+        self.source.carrier().1
+    }
     pub(crate) fn config(&self) -> &HeightConfig {
         self.authority.config.get()
     }
@@ -151,6 +168,20 @@ impl LaneAuthority {
     pub(crate) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
         self.source.belongs_to(budget) && self.authority.config.belongs_to(budget)
     }
+    /// Acquire a second exact configuration from these same original creation bytes. No
+    /// generic clone occurs; every key/vector/epoch and ledger allocation is prepaid in the
+    /// same source pool before materialization. Refusal keeps this original authority intact.
+    pub(crate) fn copy_config(
+        &self,
+        budget: &AllocationBudget,
+    ) -> Result<RetainedPayload<HeightConfig>, LanePayloadError> {
+        if !self.belongs_to(budget) {
+            return Err(LanePayloadError::Source);
+        }
+        LaneAuthorityRead::prepare_source(&self.source, &self.incarnation, budget)
+            .map(|authority| authority.config)
+    }
+
     /// Verify the latest retained custody against this exact original creation. Historical
     /// store reads may outlive custody reclamation; absence grants no stake authority. Every
     /// present row must retain its creation-time signer bindings and immutable signed policy.

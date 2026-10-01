@@ -271,6 +271,7 @@ mod app_api_integration_tests {
         );
         let req_body = json_string(crate::json_object(vec![
             json_entry("filter", Value::Null),
+            json_entry("count_mode", "exact"),
             json_entry(
                 "pagination",
                 crate::json_object(vec![json_entry("limit", 10u64)]),
@@ -2084,8 +2085,8 @@ mod app_api_integration_tests {
         }
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            1,
-            "the first missing shard manifest may be verified before capability rejection",
+            0,
+            "missing request-bound capability must reject before any remote fetch",
         );
         let second_error = match invoke().await {
             Err(error) => error,
@@ -2100,9 +2101,18 @@ mod app_api_integration_tests {
         ));
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            2,
-            "a rejected remote payload must not populate the local cache",
+            0,
+            "a retry without capability must still perform no remote fetch",
         );
+        for (archive, _) in &published {
+            assert!(
+                query_projection_archive_from_hot_cache(&query_projection_archive_cache_key(
+                    archive
+                ))
+                .is_none(),
+                "capability rejection must not populate any shard cache entry",
+            );
+        }
         remote_server.abort();
         clear_query_projection_archive_cache_for_tests();
     }

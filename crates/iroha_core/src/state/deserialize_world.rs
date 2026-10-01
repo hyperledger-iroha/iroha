@@ -9256,6 +9256,9 @@ fn build_state(
         native_world_cut: parking_lot::Mutex::new(None),
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
+        native_evidence_admission: parking_lot::Mutex::new(
+            crate::sumeragi::evidence::admission::AdmissionCache::default(),
+        ),
         evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
             evidence_preparation_bytes,
         ),
@@ -9300,7 +9303,7 @@ fn build_state(
         *state.lane_manifests.get_mut() = projection.manifests;
         *state.lane_privacy_registry.get_mut() = projection.privacy;
     }
-    crate::sumeragi::evidence::validate_persisted_records(&state.view()).map_err(|error| {
+    crate::sumeragi::evidence::validate_persisted_records(&state).map_err(|error| {
         MergeLedgerCommitError::ExecutionStatePublication(format!(
             "restored native evidence is invalid: {error}"
         ))

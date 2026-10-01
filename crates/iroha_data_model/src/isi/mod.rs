@@ -1874,6 +1874,7 @@ pub mod nexus;
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
 pub mod privacy;
+pub mod private_dataspace;
 /// Atomic private cross-dataspace settlement carrier instructions.
 pub mod private_settlement;
 /// Generic RAM-LFE program-policy instructions.
@@ -1909,7 +1910,6 @@ pub mod space_directory;
 pub mod staking;
 /// AMX two-phase-commit instructions of the global chain.
 pub mod sumeragi_amx;
-pub mod private_dataspace;
 /// Asset, account, and value transfer instructions.
 pub mod transfer;
 mod transparent;

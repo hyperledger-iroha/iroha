@@ -9912,7 +9912,8 @@ mod cli_integration_harness {
         pub executor_data_model: Option<ExecutorDataModel>,
         pub parameters: Option<Parameters>,
         pub proof_records: BTreeMap<ProofId, ProofRecord>,
-        pub manifests: BTreeMap<iroha::data_model::smart_contract::ContractArtifactId, ContractManifest>,
+        pub manifests:
+            BTreeMap<iroha::data_model::smart_contract::ContractArtifactId, ContractManifest>,
         pub abi_version: Option<AbiVersion>,
         pub assets: BTreeMap<AssetId, Asset>,
     }
@@ -10091,7 +10092,9 @@ mod cli_integration_harness {
                     .get(&req.artifact_id)
                     .cloned()
                     .map(SingularQueryOutputBox::ContractManifest)
-                    .ok_or_else(|| eyre!("contract manifest not found for supplied artifact identity")),
+                    .ok_or_else(|| {
+                        eyre!("contract manifest not found for supplied artifact identity")
+                    }),
                 SingularQueryBox::FindAbiVersion(_) => self
                     .abi_version
                     .clone()
@@ -10964,7 +10967,9 @@ mod cli_integration_harness {
             provenance: None,
         };
         let artifact_id = iroha::data_model::smart_contract::ContractArtifactId::new(
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash);
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        );
         server.manifests.insert(artifact_id, manifest.clone());
         let out = server
             .execute_singular_query(SingularQueryBox::FindContractManifestByArtifactId(

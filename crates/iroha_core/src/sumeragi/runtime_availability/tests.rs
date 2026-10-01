@@ -75,6 +75,72 @@ pub(super) fn fixed_lane_chain_at(
     iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
     crossbeam_epoch::Guard,
 ) {
+    fixed_lane_chain_with_policy(height, false)
+}
+
+pub(in crate::sumeragi) fn npos_fixed_lane_chain_at(
+    height: u64,
+) -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
+    crossbeam_epoch::Guard,
+) {
+    fixed_lane_chain_with_policy(height, true)
+}
+
+fn fixed_lane_chain_with_policy(
+    height: u64,
+    npos: bool,
+) -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
+    crossbeam_epoch::Guard,
+) {
+    fixed_lane_chain_with_source(
+        height,
+        npos,
+        Arc::new(crate::sumeragi::lanes::merge::NoLanes),
+    )
+}
+
+pub(in crate::sumeragi) fn fixed_lane_chain_with_source(
+    height: u64,
+    npos: bool,
+    source: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
+) -> (
+    CertifiedTestChain,
+    iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
+    crossbeam_epoch::Guard,
+) {
+    fixed_lane_chain_with_source_and_policy(
+        height,
+        npos.then(iroha_data_model::parameter::system::SumeragiNposParameters::default),
+        source,
+    )
+}
+
+pub(in crate::sumeragi) fn fixed_lane_chain_with_source_and_policy(
+    height: u64,
+    npos: Option<iroha_data_model::parameter::system::SumeragiNposParameters>,
+    source: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
+) -> (
+    CertifiedTestChain,
+    iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
+    crossbeam_epoch::Guard,
+) {
+    fixed_lane_chain_with_config(height, npos, source, |_| {})
+}
+
+pub(in crate::sumeragi) fn fixed_lane_chain_with_config(
+    height: u64,
+    npos: Option<iroha_data_model::parameter::system::SumeragiNposParameters>,
+    source: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
+    configure: fn(&mut TestChainConfig),
+) -> (
+    CertifiedTestChain,
+    iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
+    crossbeam_epoch::Guard,
+) {
     // Fixture publications retire charged State generations into the shared collector.
     // Retain their real EBR lifetime through each exact baseline assertion, including when
     // unrelated Rayon work collects epochs. Reader buffers/shared controls reclaim directly.
@@ -110,9 +176,18 @@ pub(super) fn fixed_lane_chain_at(
         autoscale: None,
     };
     let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.lane_blocks = source;
+    if let Some(parameters) = npos {
+        use iroha_data_model::parameter::system::SumeragiConsensusMode;
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        config
+            .genesis_parameters
+            .push(Parameter::Custom(parameters.into_custom_parameter()));
+    }
     config
         .genesis_parameters
         .push(Parameter::Custom(policy.into_custom_parameter()));
+    configure(&mut config);
     let mut chain = CertifiedTestChain::start(config).unwrap();
     for _ in 1..height {
         chain.commit(Vec::new());

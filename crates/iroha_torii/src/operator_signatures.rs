@@ -1425,6 +1425,11 @@ mod tests {
         );
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("first use ok");
+        let replay = auth
+            .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+            .err()
+            .expect("the identical signed request must be rejected as replay");
+        assert_eq!(replay.code, "operator_signature_replay");
         headers.insert(
             HEADER_OPERATOR_PUBLIC_KEY,
             format!("ed25519:{}", key_pair.public_key())
@@ -1434,8 +1439,8 @@ mod tests {
         let err = auth
             .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .err()
-            .expect("alternate spelling of the same key cannot evade replay detection");
-        assert_eq!(err.code, "operator_signature_replay");
+            .expect("retired key spelling must be rejected before replay lookup");
+        assert_eq!(err.code, "operator_signature_invalid");
     }
     #[test]
     fn operator_and_proxy_signatures_reject_foreign_exact_network() {

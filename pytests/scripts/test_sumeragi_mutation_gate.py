@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +20,14 @@ assert SPEC is not None and SPEC.loader is not None
 gate = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = gate
 SPEC.loader.exec_module(gate)
+
+
+def test_duplicate_mutation_id_cannot_select_a_different_kill_test():
+    original = gate.MUTATIONS[0]
+    duplicate = gate.m(original.id, "another rule", ["unrelated_test"])
+    with pytest.raises(ValueError, match=f"duplicate mutation id {original.id}"):
+        gate.index_mutations([original, duplicate])
+    assert gate.index_mutations([original]) == {original.id: original}
 
 
 def test_every_registered_mutation_has_a_current_source_switch_and_named_test():
@@ -162,3 +172,194 @@ def test_scenario_timeout_is_an_execution_error_even_when_named_test_was_killed(
     result = gate.evaluate(args, tmp_path, gate.BY_ID["MS1"])
     assert result["verdict"] == "error"
     assert result["reason"] == "scenarios: timeout"
+
+
+@pytest.mark.parametrize("core", [False, True])
+def test_package_mutation_environment_is_confined_to_its_actual_owner(monkeypatch, tmp_path, core):
+    captured = {}
+    class Process:
+        returncode = 0
+        def communicate(self, timeout):
+            captured["timeout"] = timeout
+            return "test result: ok. 1 passed; 0 failed;", None
+    def popen(command, **options):
+        captured["command"] = command
+        captured["env"] = options["env"]
+        return Process()
+    monkeypatch.setenv("SUMERAGI_MUTATION", "foreign-protocol-hook")
+    monkeypatch.setenv("SUMERAGI_CORE_MUTATION", "foreign-core-hook")
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    args = SimpleNamespace(core=core)
+    mutation = "HC1" if core else "MS1"
+    code, _, _ = gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0, tmp_path / "log")
+    crate, features, environment = gate.package_options(args)
+    assert code == 0
+    assert captured["command"][:9] == ["cargo", "test", "-p", crate, "--release", "--features", features, "--lib", "--"]
+    assert captured["env"][environment] == mutation
+    foreign = "SUMERAGI_MUTATION" if core else "SUMERAGI_CORE_MUTATION"
+    assert foreign not in captured["env"]
+    assert captured["timeout"] is None
+
+
+def test_core_table_is_separate_from_protocol_scenario_hooks(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", "--core", "--list"])
+    assert gate.main() == 0
+    listing = capsys.readouterr().out
+    assert "HC1" in listing
+    assert "MS1" not in listing
+    assert "f01" not in listing
+
+
+@pytest.mark.parametrize("arguments", [["--core", "--only", "MS1"], ["--only", "HC1"]])
+def test_mutation_ids_cannot_select_a_different_implementation_owner(monkeypatch, arguments):
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", *arguments])
+    with pytest.raises(SystemExit) as error:
+        gate.main()
+    assert error.value.code == 2
+
+
+def test_registered_core_rules_have_real_hooks_and_named_core_regressions():
+    source = gate.REPO / "crates" / "iroha_core" / "src"
+    text = "\n".join(path.read_text() for path in source.rglob("*.rs"))
+    functions = set(re.findall(r"\bfn\s+(\w+)\s*\(", text))
+    ids = [mutation.id for mutation in gate.CORE_MUTATIONS]
+    assert len(ids) == len(set(ids))
+    for mutation in gate.CORE_MUTATIONS:
+        assert gate.has_switch(mutation.id, core=True)
+        assert not gate.has_switch(mutation.id)
+        assert mutation.tests and not mutation.scenarios
+        assert all(name.rsplit("::", 1)[-1] in functions for name in mutation.tests)
+
+
+@pytest.mark.parametrize("test_build,mutation_feature,accepted", [
+    (False, False, True), (True, False, True),
+    (True, True, True), (False, True, False),
+])
+def test_core_guard_rejects_mutation_feature_in_non_test_builds(
+    tmp_path, test_build, mutation_feature, accepted
+):
+    guard = ROOT / "crates/iroha_core/src/mutation_guard.rs"
+    assert "mod mutation_guard;" in (guard.parent / "lib.rs").read_text()
+    command = ["rustc", "--edition=2024", "--crate-type=lib", "--emit=metadata",
+               str(guard), "-o", str(tmp_path / "guard.rmeta")]
+    if test_build:
+        command += ["--cfg", "test"]
+    if mutation_feature:
+        command += ["--cfg", 'feature="mutation-testing"']
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == accepted, result.stderr
+    if not accepted:
+        assert "mutation-testing is test-only" in result.stderr
+
+
+@pytest.mark.parametrize("status", ["execution-error", "missing-test", "timeout"])
+def test_core_gate_preserves_strict_failed_execution_classification(monkeypatch, tmp_path, status):
+    monkeypatch.setattr(gate, "has_switch", lambda _, *, core: core)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    monkeypatch.setattr(gate, "run_step", lambda *args: gate.Step(status=status))
+    args = SimpleNamespace(core=True, target_dir=tmp_path, timeout_test=0, fast=True)
+    result = gate.evaluate(args, tmp_path, gate.CORE_MUTATIONS[0])
+    assert result["verdict"] == "error"
+    assert result["reason"] == f"named tests: {status}"
+
+
+@pytest.fixture(scope="module")
+def core_build_script(tmp_path_factory):
+    executable = tmp_path_factory.mktemp("core-mutation-build") / "build-script"
+    result = subprocess.run(
+        ["rustc", "--edition=2024", str(ROOT / "crates/iroha_core/build.rs"),
+         "-o", str(executable)], capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return executable
+
+
+@pytest.mark.parametrize("feature,mutation,flags,accepted,emitted", [
+    (False, "HC1", "", True, False),
+    (False, None, '--cfg\x1fsumeragi_core_mutation="HC1"', False, False),
+    (True, "HC1", "", True, True),
+    (True, None, "", True, False),
+    (True, "unknown_rule", "", False, False),
+    (True, 'HC1"', "", False, False),
+])
+def test_core_build_script_never_treats_environment_as_a_production_fault_switch(
+    core_build_script, feature, mutation, flags, accepted, emitted
+):
+    environment = dict(os.environ)
+    for key in ("CARGO_FEATURE_MUTATION_TESTING", "SUMERAGI_CORE_MUTATION"):
+        environment.pop(key, None)
+    environment["SUMERAGI_MUTATION"] = "foreign-protocol-rule"
+    environment["CARGO_ENCODED_RUSTFLAGS"] = flags
+    if feature:
+        environment["CARGO_FEATURE_MUTATION_TESTING"] = "1"
+    if mutation is not None:
+        environment["SUMERAGI_CORE_MUTATION"] = mutation
+    result = subprocess.run(
+        [str(core_build_script)], cwd=ROOT / "crates/iroha_core", env=environment,
+        capture_output=True, text=True, check=False,
+    )
+    assert (result.returncode == 0) == accepted, result.stderr
+    assert ('cargo:rustc-cfg=sumeragi_core_mutation="HC1"' in result.stdout) == emitted
+    assert "cargo:rustc-cfg=sumeragi_mutation=" not in result.stdout
+    if not feature and mutation:
+        assert "ignored" in result.stdout
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--core-profile", "test"], ["--core", "--core-profile", "dev"],
+    ["--core", "--core-profile", "bogus"], ["--core", "--core-profile", ""],
+])
+def test_core_profile_rejects_invalid_values_and_protocol_overrides(monkeypatch, arguments):
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", *arguments, "--list"])
+    with pytest.raises(SystemExit) as error:
+        gate.main()
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("profile", ["release", "test"])
+def test_core_profile_is_identical_for_baseline_and_mutant_and_recorded(monkeypatch, tmp_path, profile):
+    captured = []
+    class Process:
+        returncode = 0
+        def communicate(self, timeout):
+            assert timeout is None
+            return "test result: ok. 1 passed; 0 failed;", None
+    def popen(command, **options):
+        captured.append(command)
+        return Process()
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    args = SimpleNamespace(core=True, core_profile=profile)
+    for mutation in (None, "HC1"):
+        assert gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0,
+                               tmp_path / f"{mutation}.log")[0] == 0
+    assert captured[0] == captured[1]
+    assert captured[0][4:6] == ["--profile", profile]
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", "--core", "--core-profile", profile,
+                                     "--only", "HC1", "--strict", "--fast", "--target-dir", str(tmp_path)])
+    monkeypatch.setattr(gate, "evaluate_baseline", lambda *_: {"id": "baseline", "verdict": "pass"})
+    monkeypatch.setattr(gate, "evaluate", lambda *_: {"id": "HC1", "verdict": "killed_by_test"})
+    assert gate.main() == 0
+    import json
+    assert json.loads((tmp_path / "report.json").read_text())["profile"] == profile
+
+
+def test_hc10_selects_only_the_original_query_scratch_owner():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC10"]
+    assert rule.tests == (
+        "sumeragi::certified_chain::tests::state_certificate::"
+        "state_certificate_signed_availability_scratch_uses_original_query_allowance",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC10", core=True)
+    assert not gate.has_switch("HC10")
+
+
+def test_hc12_selects_only_the_original_beacon_scratch_owner():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC12"]
+    assert rule.tests == (
+        "beacon::validation::tests::"
+        "beacon_verification_reserves_exact_buffers_and_refuses_before_unfunded_work",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC12", core=True)
+    assert not gate.has_switch("HC12")

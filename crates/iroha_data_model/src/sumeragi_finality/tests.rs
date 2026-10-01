@@ -958,3 +958,82 @@ fn signed_genesis_layout_reaches_the_native_epoch_exactly() {
     assert_eq!(epoch.da_layout, signed.sumeragi_context.da_layout);
     assert_eq!(core_epoch(&epoch).unwrap().da_layout, epoch.da_layout);
 }
+
+#[test]
+fn availability_scratch_refusal_preserves_signed_source_for_retry() {
+    let fixture = Fixture::new();
+    let block = decode_versioned_signed_block(&fixture.second.block_wire).unwrap();
+    let certificate = block.commit_certificate().unwrap();
+    let header: CoreHeader = norito::decode_canonical(certificate.consensus_header()).unwrap();
+    let table: AvailabilityFrame = norito::decode_canonical(certificate.availability()).unwrap();
+    let epoch = genesis_epoch(&fixture.genesis).unwrap();
+    let config = ScheduledConfig {
+        height: header.height,
+        epoch,
+        params: ChainParamsRecord::from_core(&ChainParams::default()),
+    }
+    .height_config()
+    .unwrap();
+    let payload = proposal_wire(&block).unwrap();
+    let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
+    let verified = iroha_sumeragi::availability::verify_availability(
+        header.instance,
+        &config,
+        &header,
+        table.as_slice(),
+        &crypto,
+    )
+    .unwrap();
+    let shape = verified.shape();
+    let scratch = shape.encoded_bytes() + shape.workspace_words() * size_of::<u16>();
+    let check = |budget| {
+        norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, budget, 128),
+            || {
+                verify_payload_availability_with_admission(
+                    header.instance,
+                    &config,
+                    &header,
+                    &table,
+                    &payload,
+                    &crypto,
+                    |bytes| {
+                        norito::core::reserve_decode_allocation(bytes).map_err(|error| {
+                            error
+                                .decode_resource_error()
+                                .expect("allocation admission error")
+                        })
+                    },
+                )
+            },
+        )
+    };
+    assert_eq!(
+        check(scratch - 1),
+        Err(PayloadAvailabilityError::Resource(
+            norito::core::DecodeResourceError::TotalAllocationExceeded {
+                attempted: scratch as u64,
+                limit: (scratch - 1) as u64,
+            },
+        )),
+        "signed availability scratch must be admitted before allocation"
+    );
+    check(scratch).expect("same signed source retries at its exact scratch allowance");
+}
+
+#[test]
+fn availability_scratch_resource_keeps_its_exact_category() {
+    let resource =
+        PayloadAvailabilityError::Resource(norito::core::DecodeResourceError::AllocationFailed {
+            bytes: 37,
+        });
+    assert_eq!(
+        FinalityError::from(resource),
+        FinalityError("failed to allocate 37 bytes while decoding".into())
+    );
+    let invalid = FinalityError("invalid signed source".into());
+    assert_eq!(
+        FinalityError::from(PayloadAvailabilityError::from(invalid.clone())),
+        invalid
+    );
+}

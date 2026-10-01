@@ -1330,6 +1330,18 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
+    // Generic locks debit only the signed opener. Core checks the destination or
+    // release authority for drawdowns, the opener for cancellation, exact
+    // remaining amounts, and the committed deadline for permissionless expiry.
+    // Admit every terminal path while retaining those native custody checks.
+    if is_any!(
+        iroha_data_model::isi::escrow::OpenAssetLock,
+        iroha_data_model::isi::escrow::DrawdownAssetLock,
+        iroha_data_model::isi::escrow::CancelAssetLock,
+        iroha_data_model::isi::escrow::ExpireAssetLock,
+    ) {
+        return true;
+    }
     // Admit the complete native VPN escrow lifecycle so every lease retains
     // its settlement and timeout-refund terminal paths.
     if is_any!(

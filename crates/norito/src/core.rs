@@ -3234,6 +3234,103 @@ pub enum Error {
     #[error("{0}")]
     Message(String),
 }
+/// Exact decode resource refusal, retained without allocating an error message.
+///
+/// This copyable value lets an enclosing error preserve the original refusal and
+/// reconstruct [`Error`] at a nested codec boundary. It is not a wire type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeResourceError {
+    /// Archive byte length exceeds the admitted limit.
+    ArchiveLengthExceeded {
+        /// Declared archive byte length.
+        length: u64,
+        /// Admitted archive byte limit.
+        limit: u64,
+    },
+    /// Sequence element count exceeds the admitted limit.
+    SequenceLengthExceeded {
+        /// Declared element count.
+        length: u64,
+        /// Admitted element limit.
+        limit: u64,
+    },
+    /// Field byte length exceeds the admitted limit.
+    FieldLengthExceeded {
+        /// Declared field byte length.
+        length: u64,
+        /// Admitted field byte limit.
+        limit: u64,
+    },
+    /// Cumulative decoded elements exceed the admitted budget.
+    TotalElementsExceeded {
+        /// Attempted cumulative element count.
+        attempted: u64,
+        /// Admitted cumulative element limit.
+        limit: u64,
+    },
+    /// Cumulative decode allocations exceed the admitted budget.
+    TotalAllocationExceeded {
+        /// Attempted cumulative allocation bytes.
+        attempted: u64,
+        /// Admitted cumulative allocation byte limit.
+        limit: u64,
+    },
+    /// An admitted fallible allocation was refused.
+    AllocationFailed {
+        /// Requested allocation byte length.
+        bytes: u64,
+    },
+    /// Recursive decoding exceeds the admitted depth.
+    NestingDepthExceeded {
+        /// Attempted absolute recursive depth.
+        depth: usize,
+        /// Admitted recursive depth limit.
+        limit: usize,
+        /// Statically named value family.
+        context: &'static str,
+    },
+}
+
+impl From<DecodeResourceError> for Error {
+    fn from(error: DecodeResourceError) -> Self {
+        match error {
+            DecodeResourceError::ArchiveLengthExceeded { length, limit } => {
+                Self::ArchiveLengthExceeded { length, limit }
+            }
+            DecodeResourceError::SequenceLengthExceeded { length, limit } => {
+                Self::SequenceLengthExceeded { length, limit }
+            }
+            DecodeResourceError::FieldLengthExceeded { length, limit } => {
+                Self::FieldLengthExceeded { length, limit }
+            }
+            DecodeResourceError::TotalElementsExceeded { attempted, limit } => {
+                Self::TotalElementsExceeded { attempted, limit }
+            }
+            DecodeResourceError::TotalAllocationExceeded { attempted, limit } => {
+                Self::TotalAllocationExceeded { attempted, limit }
+            }
+            DecodeResourceError::AllocationFailed { bytes } => Self::AllocationFailed { bytes },
+            DecodeResourceError::NestingDepthExceeded {
+                depth,
+                limit,
+                context,
+            } => Self::NestingDepthExceeded {
+                depth,
+                limit,
+                context,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for DecodeResourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&Error::from(*self), f)
+    }
+}
+
+impl std::error::Error for DecodeResourceError {}
+
 /// Errors returned by [`to_bytes_bounded`].
 #[derive(Debug, thiserror::Error)]
 pub enum BoundedEncodeError {
@@ -3263,16 +3360,40 @@ impl Error {
     #[doc(hidden)]
     #[must_use]
     pub const fn is_decode_resource_limit(&self) -> bool {
-        matches!(
-            self,
-            Self::ArchiveLengthExceeded { .. }
-                | Self::SequenceLengthExceeded { .. }
-                | Self::FieldLengthExceeded { .. }
-                | Self::TotalElementsExceeded { .. }
-                | Self::TotalAllocationExceeded { .. }
-                | Self::NestingDepthExceeded { .. }
-                | Self::AllocationFailed { .. }
-        )
+        self.decode_resource_error().is_some()
+    }
+
+    /// Copy the exact resource refusal without formatting or allocating.
+    #[must_use]
+    pub const fn decode_resource_error(&self) -> Option<DecodeResourceError> {
+        Some(match *self {
+            Self::ArchiveLengthExceeded { length, limit } => {
+                DecodeResourceError::ArchiveLengthExceeded { length, limit }
+            }
+            Self::SequenceLengthExceeded { length, limit } => {
+                DecodeResourceError::SequenceLengthExceeded { length, limit }
+            }
+            Self::FieldLengthExceeded { length, limit } => {
+                DecodeResourceError::FieldLengthExceeded { length, limit }
+            }
+            Self::TotalElementsExceeded { attempted, limit } => {
+                DecodeResourceError::TotalElementsExceeded { attempted, limit }
+            }
+            Self::TotalAllocationExceeded { attempted, limit } => {
+                DecodeResourceError::TotalAllocationExceeded { attempted, limit }
+            }
+            Self::AllocationFailed { bytes } => DecodeResourceError::AllocationFailed { bytes },
+            Self::NestingDepthExceeded {
+                depth,
+                limit,
+                context,
+            } => DecodeResourceError::NestingDepthExceeded {
+                depth,
+                limit,
+                context,
+            },
+            _ => return None,
+        })
     }
 }
 impl From<String> for Error {

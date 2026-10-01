@@ -466,3 +466,32 @@ test("native evidence requires every attribution field and accepts each native c
     assert.equal((await client.listSumeragiEvidence()).items[0].class, nativeClass);
   }
 });
+
+test("listSumeragiEvidence preserves unattributed certificate safety violations", async () => {
+  const evidence = canonicalSumeragiEvidenceRecord({
+    class: "conflicting_certificates", safety_violation: true, offenders: [],
+  });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 200, jsonData: { total: 1, items: [evidence] } }),
+  });
+  const result = await client.listSumeragiEvidence();
+  assert.equal(result.items[0].class, "conflicting_certificates");
+  assert.equal(result.items[0].safety_violation, true);
+  assert.deepEqual(result.items[0].offenders, []);
+  assert.equal(result.items[0].native_frame_hash, evidence.native_frame_hash);
+});
+
+
+test("empty offenders require an exact conflicting-certificate safety violation", async () => {
+  for (const overrides of [
+    { class: "conflicting_certificates", safety_violation: false },
+    { class: "conflicting_certificates", safety_violation: 1 },
+    { class: "phase_vote", safety_violation: true },
+  ]) {
+    const record = canonicalSumeragiEvidenceRecord({ ...overrides, offenders: [] });
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200, jsonData: { total: 1, items: [record] } }),
+    });
+    await assert.rejects(() => client.listSumeragiEvidence(), /offenders must contain/);
+  }
+});

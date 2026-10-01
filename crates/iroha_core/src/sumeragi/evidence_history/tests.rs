@@ -47,12 +47,16 @@ fn original_genesis_authenticates_current_height_report_and_exact_signer_interse
         verified
             .offenders()
             .iter()
-            .map(|(signer, _)| *signer)
+            .map(|offender| offender.signer)
             .collect::<Vec<_>>(),
         [1, 2]
     );
-    for (signer, peer) in verified.offenders() {
-        assert_eq!(peer, &chain.validators()[*signer as usize].0);
+    for offender in verified.offenders() {
+        assert_eq!(
+            &offender.peer_id,
+            &chain.validators()[offender.signer as usize].0
+        );
+        assert!(offender.lane_stake.is_none());
     }
     let config = view
         .world()

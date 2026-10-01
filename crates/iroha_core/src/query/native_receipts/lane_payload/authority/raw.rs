@@ -37,6 +37,7 @@ pub(super) struct RawAuthority<'a> {
     pub(super) created: u64,
     pub(super) layout: DataAvailabilityLayout,
     pub(super) params: ChainParamsRecord,
+    pub(super) demotion_window: u64,
 }
 impl<'a> RawAuthority<'a> {
     pub(super) fn parse(bytes: &'a [u8]) -> Result<Self, LanePayloadError> {
@@ -102,6 +103,7 @@ impl<'a> RawAuthority<'a> {
             created,
             layout,
             params,
+            demotion_window: window,
         };
         let mut previous = [0; iroha_sumeragi::types::MAX_PUBLIC_KEY_LEN];
         let mut length: Option<usize> = None;

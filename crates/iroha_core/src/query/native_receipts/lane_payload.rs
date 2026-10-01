@@ -57,6 +57,7 @@ impl LanePayloadError {
             }
         }
         match self {
+            Self::Codec(error) => error.is_decode_resource_limit(),
             Self::Admission(error) => admission(error),
             Self::Materialization(PrepaidBufferError::Allocation(error))
             | Self::Proof(NativeLaneStateProofError::Scratch(error)) => materialization(error),

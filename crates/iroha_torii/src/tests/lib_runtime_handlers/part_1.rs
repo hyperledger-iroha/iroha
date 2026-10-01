@@ -1611,11 +1611,13 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
     let dataspace_selector =
         iroha_core::sns::selector_for_dataspace_alias(canonical_name.dataspace.as_ref())
             .expect("dynamic dataspace selector");
-    let alias_selector = iroha_data_model::sns::NameSelectorV1::new(
-        iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
-        alias_literal,
-    )
-    .expect("dynamic account alias selector");
+    // Account selectors carry the canonical scoped alias, whose separators are
+    // deliberately excluded by the generic DNS-label constructor.
+    let alias_selector = iroha_data_model::sns::NameSelectorV1 {
+        version: iroha_data_model::sns::NameSelectorV1::VERSION,
+        suffix_id: iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+        label: canonical_name.canonical_text(),
+    };
     let account_address =
         AccountAddress::from_account_id(account_id).expect("address from account id");
     let controllers = vec![iroha_data_model::sns::NameControllerV1::account(
@@ -2570,7 +2572,9 @@ async fn runtime_handlers_ok_without_token_and_rate_limit() {
         State(app.clone()),
         headers.clone(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static("application/json"),
+        )),
     )
     .await
     .expect("ok");
@@ -2580,10 +2584,16 @@ async fn runtime_handlers_ok_without_token_and_rate_limit() {
         norito::json::from_slice(&bytes).expect("decode json");
     assert_eq!(active.abi_version, 1);
     // ABI hash
-    let resp =
-        super::handler_runtime_abi_hash(State(app), headers, crate::loopback_connect_info(), None)
-            .await
-            .expect("ok");
+    let resp = super::handler_runtime_abi_hash(
+        State(app),
+        headers,
+        crate::loopback_connect_info(),
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static("application/json"),
+        )),
+    )
+    .await
+    .expect("ok");
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     let bytes = torii_body_bytes(resp, "body").await;
     let hash: crate::runtime::RuntimeAbiHashResponse =
@@ -2805,10 +2815,12 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(IrohaState::new_for_testing(
+    let state = Arc::new(IrohaState::new_with_chain_and_network_id_for_testing(
         World::default(),
         kura.clone(),
         query,
+        ChainId::from("tx-rate-test"),
+        signed_query_test_network_id(),
     ));
     let queue_cfg = iroha_config::parameters::actual::Queue {
         capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
@@ -2874,10 +2886,12 @@ async fn torii_ram_lfe_uses_config_runtime() {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(IrohaState::new_for_testing(
+    let state = Arc::new(IrohaState::new_with_chain_and_network_id_for_testing(
         World::default(),
         kura.clone(),
         query,
+        ChainId::from("identifier-resolver-config-test"),
+        signed_query_test_network_id(),
     ));
     let queue_cfg = iroha_config::parameters::actual::Queue {
         capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),

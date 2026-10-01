@@ -1068,8 +1068,9 @@ mod tests {
         let manifest = records[0].manifest_hash;
         // An external holder retains the historical proof independently of the
         // active-lane index, which intentionally drops removed lanes.
-        let historical_proof = build_da_commitment_proof(&DaCommitmentBundle::new(records.clone()), 1, 0)
-            .expect("proof of the exact historical signed bundle");
+        let historical_proof =
+            build_da_commitment_proof(&DaCommitmentBundle::new(records.clone()), 1, 0)
+                .expect("proof of the exact historical signed bundle");
         let app = app_with_historical_commitments(records, nexus_for_records(&[]));
         install_uncommitted_autoscale_overlay(&app, lane);
         let JsonBody(list_response) = super::handler_list_commitments(
@@ -1334,8 +1335,9 @@ mod tests {
         let records = vec![sample_record(stale_lane.as_u32(), 1, 1)];
         // An external holder retains the historical proof independently of the
         // active-lane index, which intentionally drops removed lanes.
-        let historical_proof = build_da_commitment_proof(&DaCommitmentBundle::new(records.clone()), 1, 0)
-            .expect("proof of the exact historical signed bundle");
+        let historical_proof =
+            build_da_commitment_proof(&DaCommitmentBundle::new(records.clone()), 1, 0)
+                .expect("proof of the exact historical signed bundle");
         let app = app_with_historical_commitments(records, nexus_for_records(&[]));
         let proof = historical_proof;
         install_stale_runtime_lane_geometry(&app, stale_lane);

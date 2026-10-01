@@ -19,9 +19,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node20.19",
     // Norito-heavy validation, Kagemusha, and route governance stay behind the
-    // optional boundary. The eager path is 781,697 bytes with shared manifest
+    // optional boundary. The eager path is 781,825 bytes with shared manifest
     // validation, within the reviewed 806,184-byte baseline. The
-    // 788 KiB ceiling leaves 25,215 bytes; the optional closure includes exact Kagemusha release
+    // 788 KiB ceiling leaves 25,087 bytes; the optional closure includes exact Kagemusha release
     // governance schemas and remains independently inventoried below.
     limitKb: 788,
     reviewedEagerBytes: 806_184,

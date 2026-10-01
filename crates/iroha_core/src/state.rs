@@ -2777,6 +2777,12 @@ pub enum EvidencePreparationError {
         /// Maximum cumulative bytes permitted by the active decode scope.
         limit_bytes: u64,
     },
+    /// Exact local Norito ceiling or allocator refusal while decoding an original proof.
+    #[error("consensus evidence decoder resource refusal: {0}")]
+    DecodeResource(norito::core::DecodeResourceError),
+    /// Original native history or its funded read owner cannot complete yet.
+    #[error("original native evidence history is pending")]
+    OriginalHistoryPending,
     /// A bounded append violated the count proved by the borrowed scan.
     #[error("consensus penalty preparation plan exceeded its fixed capacity")]
     Invariant,
@@ -3987,7 +3993,8 @@ pub struct WorldData {
     /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
     pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -4662,7 +4669,8 @@ pub struct WorldBlockFields<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6335,7 +6343,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) sumeragi_amx:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellTransaction<'block, 'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces: CellTransaction<
+        'block,
+        'world,
+        iroha_data_model::private_dataspace::PrivateDataspaceRegistry,
+    >,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -8856,7 +8868,8 @@ pub struct WorldView<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -12042,6 +12055,9 @@ pub struct State {
     /// Process-lived finite owner for committed-evidence preparation allocations.
     /// Funded slices cover fixed prune keys and pending penalty metadata only.
     evidence_preparation_budget: iroha_allocation::AllocationBudget,
+    /// One bounded pristine-parent evidence read, retaining original jobs across local refusal.
+    pub(crate) native_evidence_admission:
+        parking_lot::Mutex<crate::sumeragi::evidence::admission::AdmissionCache>,
     /// Original process-local owner for flat consensus stake-index key backing.
     stake_index_budget: iroha_allocation::AllocationBudget,
     /// Tiered state backend coordinating hot/cold snapshots.
@@ -27613,6 +27629,9 @@ impl State {
             evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
             ),
+            native_evidence_admission: parking_lot::Mutex::new(
+                crate::sumeragi::evidence::admission::AdmissionCache::default(),
+            ),
             stake_index_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
             ),
@@ -42482,7 +42501,11 @@ impl StateTransaction<'_, '_> {
                     } else {
                         crate::smartcontracts::code::with_code_bytes(
                             self,
-                            &ContractArtifactId::for_address(&identity.contract_address, identity.code_hash).map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
+                            &ContractArtifactId::for_address(
+                                &identity.contract_address,
+                                identity.code_hash,
+                            )
+                            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
                             |bytecode| {
                                 cache.summarize_program_with_hash(identity.code_hash, bytecode)
                             },

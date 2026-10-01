@@ -157,15 +157,31 @@ authenticated tip payload checks retained custody identity, immutable policy fen
 sparse signer bindings and retirement against the original creation owner. A missing reclaimed
 row grants historical storage authority only; it supplies no monetary authority.
 
-**Open H3 boundary:** the custody ledger, withdrawal fences and reverse branch cursor are
-prerequisites. `LaneAncestry` checks exact signed-RS16 source, native QC, hash/result and every
-parent link from a separately authenticated frontier without cloning source owners. Its caller
-must still connect this original global creation/current-cut authority to offence admission,
-retain complete demotion-header owners through resource refusal, and install native-scope
-attribution and exact original
-custody penalty effects. Raw lane heights must never enter the global verifier or slashing
-clock. The sparse ledger backing and World clones also still require complete original-pool
-allocation ownership. This slice does not qualify lane offences or resource accounting.
+The production lane observer retains only bounded local reports. Proposer selection and follower
+admission use the same retained original-cut reader: authenticate the global creation and
+admission-parent carriers, restore the signed native branch backwards from the globally merged
+frontier, and keep the original payload and demotion-header owners until verification finishes.
+The installed attribution records a distinct lane scope and the original creation-time signer
+custody. Native lane heights remain native subject identifiers; global admission height starts
+the immutable penalty delay. Monetary effects revalidate the exact original registration,
+activation height, peer and escrow. An originally unbound member remains forensic-only even if
+that key later registers stake. A retired routing owner may still owe its original retained
+liability, while a later registration never inherits it.
+
+Pending and terminal records are authenticated against their original admission carrier when
+restoring an existing State. Live incarnations keep terminal replay fences; retired incarnations
+admit through the inclusive retirement-plus-horizon deadline, and only terminal records strictly
+past that deadline can be pruned. Unknown or reclaimed custody rows cannot reopen admission.
+The canonical 124-record and 16 MiB proof caps impose deterministic backpressure without eviction;
+this bound does not establish sufficient offence availability for every native committee.
+
+**Open H3 boundary:** complete decoded-proof and prefix/result graphs, header/QC metadata,
+RS16/BLS scratch and caches, sparse custody backing, output model graphs and World clones still
+require complete original-pool allocation ownership. Existing-State restoration retains its
+reader across local refusal, but the outer whole-State deserializer still does not retain a
+partially initialized State; authenticated accelerated startup restoration remains H4 work.
+Nonempty snapshot caches remain prohibited as consensus initialization authority. The connected
+component path and its focused checks do not establish the complete H3 or whole-node gate.
 
 ### 2.2 States
 

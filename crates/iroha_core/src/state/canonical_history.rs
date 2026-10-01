@@ -214,10 +214,28 @@ impl<'a> CanonicalHistorySource<'a> {
         self,
         first: NonZeroUsize,
         last: NonZeroUsize,
-        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
         mut visit: impl FnMut(
             crate::sumeragi::certified_chain::CommittedBlock,
         ) -> Result<(), QueryExecutionFail>,
+    ) -> Result<(), QueryExecutionFail> {
+        self.visit_executed_backwards_while(first, last, before_read, |receipt| {
+            visit(receipt)?;
+            Ok(true)
+        })
+    }
+
+    /// The same original-tip walk, stopping after an authenticated visitor returns false.
+    /// The visitor may choose an older target from a newly verified certificate without
+    /// reading or decoding the already authenticated prefix a second time.
+    pub(crate) fn visit_executed_backwards_while(
+        self,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        mut visit: impl FnMut(
+            crate::sumeragi::certified_chain::CommittedBlock,
+        ) -> Result<bool, QueryExecutionFail>,
     ) -> Result<(), QueryExecutionFail> {
         if first > last {
             return Err(QueryExecutionFail::Conversion(
@@ -275,8 +293,8 @@ impl<'a> CanonicalHistorySource<'a> {
                         invalid("native successor omits Iroha parent hash".into())
                     })?;
             }
-            if source_height <= selected_last {
-                visit(receipt)?;
+            if source_height <= selected_last && !visit(receipt)? {
+                return Ok(());
             }
             if source_height == target {
                 return Ok(());

@@ -71,8 +71,7 @@ mod accounts_query_tests {
         assert_eq!(doc["total"].as_u64(), Some(4));
     }
     #[tokio::test]
-    async fn accounts_query_filter_accepts_canonical_and_alias_and_rejects_non_canonical_i105_literals()
-     {
+    async fn accounts_query_filter_requires_canonical_ids_even_when_alias_is_bound() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let domain_id: iroha_model_base::domain::DomainId =
@@ -125,45 +124,18 @@ mod accounts_query_tests {
             fetch_size: None,
             count_mode: None,
         };
-        let alias_result = handle_v1_accounts_query(
+        let alias_error = handle_v1_accounts_query(
             state.clone(),
             crate::utils::extractors::NoritoJson(alias_env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
         .await
-        .expect("alias handler ok")
-        .into_response();
-        assert_eq!(
-            alias_result.status(),
-            StatusCode::OK,
-            "alias literal `{alias_literal}` should resolve to the canonical account id"
-        );
-        let alias_body = alias_result
-            .into_body()
-            .collect()
-            .await
-            .expect("alias body bytes")
-            .to_bytes();
-        let alias_doc: norito::json::Value =
-            norito::json::from_slice(&alias_body).expect("valid alias JSON");
-        let alias_ids: Vec<String> = alias_doc
-            .get("items")
-            .and_then(norito::json::Value::as_array)
-            .expect("alias items array")
-            .iter()
-            .filter_map(|item| {
-                item.get("id")
-                    .and_then(norito::json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect();
+        .err()
+        .expect("generic ID filters cannot perform permissioned alias resolution");
         assert!(
-            alias_ids.iter().any(|id| id == &expected),
-            "alias literal `{alias_literal}` should resolve to `{expected}`, got {alias_ids:?}"
-        );
-        assert!(
-            alias_ids.iter().all(|id| !id.contains('@')),
-            "alias queries must still return canonical account ids, got {alias_ids:?}"
+            matches!(alias_error, Error::Query(dm::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)
+        )) if message.contains("canonical I105 literal"))
         );
         let canonical_env = crate::filter::QueryEnvelope {
             query: None,
@@ -249,7 +221,7 @@ mod accounts_query_tests {
         );
     }
     #[tokio::test]
-    async fn accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids() {
+    async fn accounts_list_filter_requires_canonical_ids_even_when_alias_is_bound() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let domain_id: iroha_model_base::domain::DomainId =
@@ -301,6 +273,32 @@ mod accounts_query_tests {
             sort: None,
             count_mode: None,
         };
+        let alias_error = handle_v1_accounts(
+            state.clone(),
+            crate::NoritoQuery(params),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .err()
+        .expect("generic ID filters cannot resolve a bound alias without a caller-aware grant");
+        assert!(
+            matches!(alias_error, Error::Query(dm::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)
+        )) if message.contains("canonical I105 literal"))
+        );
+        let canonical_filter = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("id".to_owned()),
+            Value::String(expected.clone()),
+        );
+        let params = ListFilterParams {
+            filter: Some(
+                norito::json::to_string(&canonical_filter).expect("canonical filter JSON"),
+            ),
+            limit: Some(8),
+            offset: 0,
+            sort: None,
+            count_mode: None,
+        };
         let response = handle_v1_accounts(
             state,
             crate::NoritoQuery(params),
@@ -312,7 +310,7 @@ mod accounts_query_tests {
         assert_eq!(
             response.status(),
             StatusCode::OK,
-            "alias literal `{alias_literal}` should resolve on GET /v1/accounts"
+            "canonical literal `{expected}` must be accepted on GET /v1/accounts"
         );
         let body = response
             .into_body()
@@ -334,7 +332,7 @@ mod accounts_query_tests {
             .collect();
         assert!(
             ids.iter().any(|id| id == &expected),
-            "alias literal `{alias_literal}` should resolve to `{expected}`, got {ids:?}"
+            "canonical filter must return `{expected}`, got {ids:?}"
         );
         assert!(
             ids.iter().all(|id| !id.contains('@')),
@@ -383,7 +381,7 @@ mod accounts_query_tests {
         }
     }
     #[tokio::test]
-    async fn accounts_query_aggregate_groups_by_primary_alias_domain() {
+    async fn accounts_query_aggregation_does_not_expose_bound_alias_domains() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let domain_id: iroha_model_base::domain::DomainId =
@@ -400,7 +398,13 @@ mod accounts_query_tests {
         let ubl_id = ubl_authority.clone();
         let state = Arc::new(State::new_for_testing(
             World::with(
-                [domain],
+                [
+                    domain,
+                    dm::Domain::new(DomainId::try_new("hbl", "universal").unwrap())
+                        .build(&hbl_authority),
+                    dm::Domain::new(DomainId::try_new("ubl", "universal").unwrap())
+                        .build(&ubl_authority),
+                ],
                 [
                     dm::Account::new(exec_id.account().clone()).build(&exec_authority),
                     dm::Account::new(hbl_id.account().clone()).build(&hbl_authority),
@@ -450,6 +454,28 @@ mod accounts_query_tests {
             fetch_size: None,
             count_mode: Some("exact".to_owned()),
         };
+        let filtered = handle_v1_accounts_query(
+            state.clone(),
+            crate::utils::extractors::NoritoJson(env.clone()),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("alias fields stay hidden in generic filters")
+        .into_response();
+        let bytes = filtered.into_body().collect().await.unwrap().to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(doc["total"].as_u64(), Some(0));
+        assert!(doc["items"].as_array().unwrap().is_empty());
+        // A canonical ID filter still aggregates both real accounts, but an
+        // unsigned generic query must not infer their private alias domains.
+        let mut env = env;
+        env.filter = Some(crate::filter::FilterExpr::In(
+            crate::filter::FieldPath("id".into()),
+            vec![
+                Value::from(hbl_id.to_string()),
+                Value::from(ubl_id.to_string()),
+            ],
+        ));
         let response = handle_v1_accounts_query(
             state,
             crate::utils::extractors::NoritoJson(env),
@@ -466,22 +492,13 @@ mod accounts_query_tests {
             .expect("response bytes")
             .to_bytes();
         let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
-        assert_eq!(doc["total"].as_u64(), Some(2));
+        assert_eq!(doc["total"].as_u64(), Some(1));
         assert!(doc["indexed_height"].as_u64().is_some());
         assert!(doc["indexed_block_hash"].is_string() || doc["indexed_block_hash"].is_null());
         let items = doc["items"].as_array().expect("items array");
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            items[0]["primary_alias_domain"].as_str(),
-            Some("hbl.universal")
-        );
-        assert_eq!(items[0]["row_count"].as_u64(), Some(1));
-        assert_eq!(items[0]["user_count"].as_u64(), Some(1));
-        assert_eq!(
-            items[1]["primary_alias_domain"].as_str(),
-            Some("ubl.universal")
-        );
-        assert_eq!(items[1]["row_count"].as_u64(), Some(1));
-        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
+        assert_eq!(items.len(), 1);
+        assert!(items[0]["primary_alias_domain"].is_null());
+        assert_eq!(items[0]["row_count"].as_u64(), Some(2));
+        assert_eq!(items[0]["user_count"].as_u64(), Some(2));
     }
 }

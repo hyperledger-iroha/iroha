@@ -41,6 +41,10 @@ pub enum PayloadError {
     /// Original parent-state staking preparation failed.
     #[error("staking effect preparation failed: {0}")]
     Staking(String),
+    /// The versioned decoder stopped at a local resource ceiling or allocation refusal.
+    /// Its public error preserves the category but does not carry the nested limit fields.
+    #[error("payload decoding was refused by local resources")]
+    DecodeResource,
     /// The payload bytes are not a canonical block proposal.
     #[error("payload is not a canonical block proposal: {0}")]
     NotCanonical(String),
@@ -206,10 +210,17 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
 ///
 /// # Errors
 /// The bytes do not decode, are not canonical, carry a result, a certificate or a signature,
-/// or the decoded block has no transactions.
+/// or the decoded block has no transactions. Local decoder resource refusal remains
+/// [`PayloadError::DecodeResource`], rather than a deterministic property of the bytes.
 pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
-    let block = iroha_data_model::block::decode_versioned_signed_block(payload)
-        .map_err(|error| PayloadError::NotCanonical(error.to_string()))?;
+    let block =
+        iroha_data_model::block::decode_versioned_signed_block(payload).map_err(|error| {
+            if error.is_decode_resource_limit() {
+                PayloadError::DecodeResource
+            } else {
+                PayloadError::NotCanonical(error.to_string())
+            }
+        })?;
     if !has_work(&block) {
         return Err(PayloadError::EmptyBlock);
     }

@@ -30118,8 +30118,12 @@ function normalizeSumeragiEvidenceRecord(value, context) {
   if (!EVIDENCE_CLASS_VALUES.has(evidenceClass)) {
     rejectRange(`${context}.class must be one of ${Array.from(EVIDENCE_CLASS_VALUES).join(", ")}`);
   }
-  if (!Array.isArray(record.offenders) || record.offenders.length < 1 || record.offenders.length > 1024) {
-    rejectRange(`${context}.offenders must contain between 1 and 1024 entries`);
+  // Different-view CommitQC conflicts establish a safety violation without attributing signers.
+  const permitsUnattributedSafetyViolation =
+    evidenceClass === "conflicting_certificates" && record.safety_violation === true;
+  if (!Array.isArray(record.offenders) || record.offenders.length > 1024 ||
+      (record.offenders.length === 0 && !permitsUnattributedSafetyViolation)) {
+    rejectRange(`${context}.offenders must contain between 1 and 1024 entries, or be empty for a conflicting-certificate safety violation`);
   }
   let previousSigner = -1;
   const peers = new Set();
