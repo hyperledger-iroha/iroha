@@ -135,6 +135,8 @@ impl MainSmallSourceShapeV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MainProverBufferPlanV1 {
     pub(super) masks: usize,
+    pub(super) retained_cuts: usize,
+    pub(super) selected_replay: usize,
     pub(super) joined_streams: usize,
     pub(super) replay_batch: usize,
     pub(super) composition: usize,
@@ -380,6 +382,7 @@ impl MainProverBufferPlanV1 {
             .map_err(map_aggregate_error_v1)?;
         let charged = sum(&[
             self.masks,
+            self.retained_cuts,
             self.replay_batch,
             registration_quotient_payload_v1(layout, registration, degree_cap)?,
         ])?;
@@ -432,6 +435,17 @@ impl MainProverBufferPlanV1 {
                 crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
             >(),
         ])?;
+        let retained_cuts = product(&[
+            2,
+            aggregate::retained_commitment::RetainedMerkleCutV1::payload_bound_v1(rows)
+                .map_err(map_aggregate_error_v1)?,
+        ])?;
+        let selected_replay = aggregate::retained_commitment::selected_payload_bound_v1(
+            rows,
+            total_width,
+            AGGREGATE_PARAMETERS_V1.query_count,
+        )
+        .map_err(map_aggregate_error_v1)?;
         // Eight original coefficient owners and eight common-domain FFT outputs;
         // two native columns cover source/interpolation or mask-replacement
         // overlap. The latter is smaller than two maximum native columns.
@@ -503,6 +517,8 @@ impl MainProverBufferPlanV1 {
         // reuse. Within each stage the accounting remains conservative.
         let mut plan = Self {
             masks,
+            retained_cuts,
+            selected_replay,
             joined_streams,
             replay_batch,
             composition,
@@ -522,6 +538,36 @@ impl MainProverBufferPlanV1 {
                 plan.openings,
             ])?),
         ])?;
+        // Preserve the previous arithmetic envelope. Cut roots coexist with
+        // sampling, every registration/cache, DEEP, FRI and final row assembly.
+        // Query replay now owns only its selected hash states, not all LDE rows.
+        for stage in [
+            sum(&[
+                plan.masks,
+                plan.retained_cuts,
+                plan.joined_streams,
+                plan.replay_batch,
+            ])?,
+            sum(&[
+                plan.masks,
+                plan.retained_cuts,
+                plan.quotient_stage,
+                plan.replay_batch,
+            ])?,
+            sum(&[
+                plan.masks,
+                plan.retained_cuts,
+                plan.selected_replay,
+                plan.replay_batch,
+                plan.composition,
+                plan.fri_stage,
+                plan.openings,
+            ])?,
+        ] {
+            if stage > plan.maximum_live_buffers {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
+        }
         // Joined finalization runs after its coefficient/FFT batch has dropped.
         // Its bounded digest tile, exact-level prefixes and named worker
         // temporaries reuse this unchanged reservation, never a second matrix.

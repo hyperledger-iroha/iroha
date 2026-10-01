@@ -828,6 +828,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             MainTraceColumnKindV1::Base,
             &opening_indices,
+            self.trace_groups
+                .first()
+                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
+                .base_root,
             self.assembly.allocated_payload_bytes_v1(),
             &sources,
         )?;
@@ -835,6 +839,10 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             &self.layout,
             MainTraceColumnKindV1::Aux,
             &opening_indices,
+            self.trace_groups
+                .first()
+                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
+                .aux_root,
             self.assembly.allocated_payload_bytes_v1(),
             &sources,
         )?;

@@ -370,7 +370,7 @@ impl State {
         budget: &AllocationBudget,
         consume: impl FnOnce(ProviderAdmissionSnapshotOriginalsV1<'_>) -> Result<T, String>,
     ) -> Result<T, String> {
-        self.with_native_world_snapshot_cut_v1(tip, budget, |snapshot, world| {
+        self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
             let (council_head, council_predecessor) =
                 admission_originals(snapshot, world, None, budget)?;
             let (provider_head, provider_predecessor) =
@@ -421,7 +421,7 @@ impl State {
         {
             return Err("SNS lease selector is not canonical".into());
         }
-        self.with_native_world_snapshot_cut_v1(tip, budget, |snapshot, world| {
+        self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
             if crate::sumeragi::lanes::routing::committed_root_scope(world)
                 != Some(SumeragiRootScope::Global)
             {
@@ -469,11 +469,7 @@ impl State {
             &KagemushaGovernedVerifierRegistryV1,
         ) -> Result<T, String>,
     ) -> Result<T, String> {
-<<<<<<< HEAD
-        self.with_native_world_snapshot_cut_v1(tip, budget, |snapshot, world| {
-=======
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
->>>>>>> origin/optimizations
             let definition = world
                 .asset_definitions
                 .get(asset_id)
@@ -482,29 +478,6 @@ impl State {
                 .axt_asset_incarnations
                 .get(asset_id)
                 .ok_or("World snapshot exact asset incarnation is absent")?;
-<<<<<<< HEAD
-            require_target(
-                snapshot,
-                "world.asset_definitions",
-                WorldStateElementKindV1::Table,
-                Some(hash_value(asset_id)?),
-                hash_value(definition)?,
-            )?;
-            require_target(
-                snapshot,
-                "world.axt_asset_incarnations",
-                WorldStateElementKindV1::Table,
-                Some(hash_value(asset_id)?),
-                hash_value(incarnation)?,
-            )?;
-            require_target(
-                snapshot,
-                "world.kagemusha_verifier_registry",
-                WorldStateElementKindV1::Cell,
-                None,
-                hash_value(world.kagemusha_verifier_registry.get())?,
-            )?;
-=======
             for (field, kind, key, value) in [
                 (
                     "world.asset_definitions",
@@ -527,7 +500,6 @@ impl State {
             ] {
                 require_target(snapshot, field, kind, key, value)?;
             }
->>>>>>> origin/optimizations
             consume(
                 snapshot,
                 definition,
@@ -537,13 +509,6 @@ impl State {
         })
     }
 
-<<<<<<< HEAD
-    // This callback is data publication only. Each typed wrapper must prove its
-    // selected original preimages against the reconstructed pre-tail snapshot.
-    fn with_native_world_snapshot_cut_v1<T>(
-        &self,
-        tip: &CommittedBlock,
-=======
     /// Publish complete canonical alias bindings and smart-contract key originals
     /// to a currently registered native ledger-wide reader at one certified cut.
     ///
@@ -646,7 +611,6 @@ impl State {
         &self,
         tip: &CommittedBlock,
         read_authority: Option<&AccountId>,
->>>>>>> origin/optimizations
         budget: &AllocationBudget,
         consume: impl FnOnce(&WorldStateSnapshotV1, &WorldBlock<'_>) -> Result<T, String>,
     ) -> Result<T, String> {
@@ -689,12 +653,9 @@ impl State {
             if expected.root()? != cut.applied_root || expected.entries() != cut.applied_entries {
                 return Err("World snapshot acquired another complete applied World".into());
             }
-<<<<<<< HEAD
-=======
             if let Some(authority) = read_authority {
                 require_names_read_authority(&world, authority)?;
             }
->>>>>>> origin/optimizations
             let captured = capture(&world, expected, budget)?;
             let certified = reconstruct(&captured, &cut, budget)?;
             consume(&certified.snapshot, &world)
@@ -711,7 +672,6 @@ impl State {
     }
 }
 
-<<<<<<< HEAD
 fn admission_originals<'a>(
     snapshot: &WorldStateSnapshotV1,
     world: &'a WorldBlock<'_>,
@@ -789,10 +749,9 @@ fn stream_token_originals<'a>(
     ))?;
     Ok(Some((head, record)))
 }
-=======
+
 #[path = "world_state_snapshot/authority_originals.rs"]
 mod authority_originals;
->>>>>>> origin/optimizations
 
 #[cfg(test)]
 #[path = "world_state_snapshot_tests.rs"]

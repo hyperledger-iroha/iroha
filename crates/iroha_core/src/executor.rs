@@ -21581,22 +21581,7 @@ seiyaku ReviewedValue {
         let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-<<<<<<< HEAD
-        let world = World::with([domain], [account], []);
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ));
-        parameters.commit();
-        let state = State::new_with_chain(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-            chain_id,
-        );
-=======
         let state = state_after_genesis(World::with([domain], [account], []));
->>>>>>> origin/optimizations
         let mut program = ivm::ProgramMetadata {
             max_cycles: 100,
             ..ivm::ProgramMetadata::default()
@@ -21619,9 +21604,6 @@ seiyaku ReviewedValue {
             .sign(ALICE_KEYPAIR.private_key())
         };
         let generic_metadata = Metadata::default();
-<<<<<<< HEAD
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-=======
         let mut block = state.block(BlockHeader::new(
             nonzero!(2_u64),
             Some(
@@ -21634,7 +21616,6 @@ seiyaku ReviewedValue {
             0,
             0,
         ));
->>>>>>> origin/optimizations
         let signed = transaction(generic_metadata.clone());
         let mut state_transaction =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));

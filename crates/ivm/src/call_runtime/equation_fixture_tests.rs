@@ -19,7 +19,7 @@ fn operands(vm: &IVM) -> Value {
 
 fn runtime_capture() -> Value {
     let code = Compiler::new().compile_source(
-        "seiyaku NativeFrameCapture { fn leaf(value: bool) -> bool { value } view fn main() -> bool { leaf(true) } }"
+        "seiyaku NativeFrameCapture { fn leaf(bool value) -> bool { value } view fn main() -> bool { leaf(value: true) } }"
     ).unwrap();
     let metadata = ProgramMetadata::parse(&code).unwrap();
     let interface = metadata.contract_interface.as_ref().unwrap();

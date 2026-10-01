@@ -1706,7 +1706,7 @@ privacy_sdk_provision_ci_cargo_lock() {
 
   {
     printf 'IROHA_PRIVACY_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
-    printf 'IROHA_JS_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
+    printf 'IROHA_JS_CARGO_LOCKFILE_PATH=%s\n' "${canonical_repository_root}/Cargo.lock"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH=%s\n' "${resolved_lock}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL=%s\n' "${resolved_lock_seal}"
     printf 'IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE=%s\n' \

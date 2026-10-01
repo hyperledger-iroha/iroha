@@ -2023,8 +2023,8 @@ mod tests {
             &f.certificate.subject.canonical_signing_bytes().unwrap(),
         );
         assert_eq!(
-            admit(&f, 300).unwrap_err(),
-            "ordinary issuer original/profile differs"
+            admit(&f, 300).err().as_deref(),
+            Some("ordinary issuer original/profile differs")
         );
         resign(&mut f);
         admit(&f, 300).unwrap();
@@ -2039,8 +2039,8 @@ mod tests {
         f.certificate.circuit_admission.signature =
             super::super::KagemushaDeviceSignatureV1::from_raw_bytes(&sig.to_bytes()).unwrap();
         assert_eq!(
-            admit(&f, 300).unwrap_err(),
-            "ordinary circuit issuer signature rejected"
+            admit(&f, 300).err().as_deref(),
+            Some("ordinary circuit issuer signature rejected")
         );
     }
     fn approval(

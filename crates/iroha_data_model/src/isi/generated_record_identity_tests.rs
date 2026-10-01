@@ -121,11 +121,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-<<<<<<< HEAD
-                "ee93acbddab4069f2b38e0c9687af9bf99c5a0e140f3425f7fa06216e50961dd",
-=======
-                "c7a0e0f06c43820de8941a363fb420e694cb00dbfaa1b5bf203b303d2f4b2d91",
->>>>>>> origin/optimizations
+                "89c611e853909b5c79ee7ff5ac1dc0bb41190e4c4cfa17d3012fb77428388f43",
                 "instruction record capture digest drift"
             );
             let capture: Value =
@@ -149,7 +145,7 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 367, "complete populated record case inventory");
+            assert_eq!(case_count, 373, "complete populated record case inventory");
             capture
         })
         .as_array()

@@ -434,14 +434,7 @@ fn generic_native_envelopes_cannot_bypass_closed_lifecycle_contracts() {
     assert!(from_json(&object([("UnknownInstruction", Value::Null)])).is_none());
     let other: InstructionBox =
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
-<<<<<<< HEAD
-            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                Hash::new(b"other"),
-            ),
-=======
             artifact_id: ContractArtifactId::new(DataSpaceId::new(7), Hash::new(b"other")),
->>>>>>> origin/optimizations
         }
         .into();
     assert!(!is_activation_instruction(&other));

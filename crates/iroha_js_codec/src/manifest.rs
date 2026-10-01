@@ -204,16 +204,8 @@ mod tests {
     }
 
     fn instruction_json(manifest: &ContractManifest) -> String {
-<<<<<<< HEAD
-        let hash = manifest
-            .code_hash
-            .unwrap_or_else(|| iroha_crypto::Hash::new(b"manifest schema fixture"));
-        let artifact_id = norito::json!({ "dataspace_id": "0", "code_hash": hash });
-        json::to_json(&norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact_id, "manifest": manifest } }))
-=======
         let artifact = artifact_json();
         json::to_json(&norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact, "manifest": manifest } }))
->>>>>>> origin/optimizations
             .expect("manifest instruction JSON")
     }
 
@@ -262,17 +254,7 @@ mod tests {
         // frame/archive remain canonical and checksummed, so rejection exercises
         // the native decoded-manifest schema boundary rather than CRC handling.
         let instruction: InstructionBox = RegisterSmartContractCode {
-<<<<<<< HEAD
-            artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                manifest
-                    .clone()
-                    .code_hash
-                    .unwrap_or_else(|| iroha_crypto::Hash::new(b"manifest schema fixture")),
-            ),
-=======
             artifact_id: artifact_id(),
->>>>>>> origin/optimizations
             manifest: manifest.clone(),
         }
         .into();
@@ -384,13 +366,8 @@ mod tests {
                         entrypoint.insert((*field).to_owned(), Value::Null);
                     }
                 }
-<<<<<<< HEAD
-                let hash = iroha_crypto::Hash::new(b"manifest schema fixture");
-                let artifact_id = norito::json!({ "dataspace_id": "0", "code_hash": hash });
-=======
                 let artifact_id = crate::lifecycle_instructions::render_artifact_id(&artifact_id())
                     .expect("artifact JSON");
->>>>>>> origin/optimizations
                 let source = json::to_json(
                     &norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact_id, "manifest": manifest } }),
                 )
@@ -483,41 +460,18 @@ mod tests {
         malformed.entrypoints.as_mut().unwrap()[0].return_schema = None;
         let instructions: [InstructionBox; 3] = [
             RegisterSmartContractCode {
-<<<<<<< HEAD
-                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                    manifest
-                        .code_hash
-                        .unwrap_or_else(|| iroha_crypto::Hash::new(b"manifest schema fixture")),
-                ),
-=======
                 artifact_id: artifact_id(),
->>>>>>> origin/optimizations
                 manifest,
             }
             .into(),
             RegisterSmartContractCode {
-<<<<<<< HEAD
-                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                    malformed
-                        .code_hash
-                        .unwrap_or_else(|| iroha_crypto::Hash::new(b"manifest schema fixture")),
-                ),
-=======
                 artifact_id: artifact_id(),
->>>>>>> origin/optimizations
                 manifest: malformed,
             }
             .into(),
             CancelSmartContractCodeUpload {
-<<<<<<< HEAD
-                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-=======
                 artifact_id: ContractArtifactId::new(
                     DataSpaceId::new(u64::MAX),
->>>>>>> origin/optimizations
                     iroha_crypto::Hash::new(b"manifest codec cancellation"),
                 ),
             }

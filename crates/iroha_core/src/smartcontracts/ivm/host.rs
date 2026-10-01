@@ -15380,9 +15380,6 @@ seiyaku StaleRuntimeBinding {
         ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<iroha_data_model::ValidationFail>>
     {
-<<<<<<< HEAD
-        let next_height = u64::try_from((state.view().height() + 1).max(2))
-=======
         // This helper executes ordinary signed calls after the fixture's bootstrap.
         // Committing only a world overlay does not advance the durable block height.
         if state.view().height() == 0 {
@@ -15396,7 +15393,6 @@ seiyaku StaleRuntimeBinding {
             .dataspace_id()
             .expect("fixture contract address identifies its execution dataspace");
         let next_height = u64::try_from(state.view().height() + 1)
->>>>>>> origin/optimizations
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
@@ -15453,17 +15449,7 @@ seiyaku StaleRuntimeBinding {
         let code = view
             .world()
             .contract_code()
-<<<<<<< HEAD
-            .get(
-                &iroha_data_model::smart_contract::ContractArtifactId::for_address(
-                    contract_address,
-                    code_hash,
-                )
-                .expect("valid fixture address"),
-            )
-=======
             .get(&artifact_id)
->>>>>>> origin/optimizations
             .expect("installed contract code");
         let parsed = ivm::ProgramMetadata::parse(code).expect("parse installed contract");
         let descriptor = parsed
@@ -19683,10 +19669,12 @@ seiyaku HeldCallee {
 "#,
             1,
         );
-        state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
-            .commit_empty_block_for_testing()
-            .expect("commit the execution-height bootstrap block");
+        assert_eq!(
+            state.view().height(),
+            1,
+            "original signed genesis is retained"
+        );
+        assert!(state.view().latest_block_hash().is_some());
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         {
             let mut tx = block.transaction();
@@ -19951,22 +19939,11 @@ seiyaku EffectfulView {
             .expect("next block height must fit in u64 and be non-zero");
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
-<<<<<<< HEAD
-        tx.world.contract_manifests.insert(
-            iroha_data_model::smart_contract::ContractArtifactId::for_address(
-                &callee,
-                record.code_hash,
-            )
-            .expect("valid callee address"),
-            malicious_manifest,
-        );
-=======
         let artifact_id = ContractArtifactId::for_address(&callee, record.code_hash)
             .expect("callee retains its exact artifact dataspace");
         tx.world
             .contract_manifests
             .insert(artifact_id, malicious_manifest);
->>>>>>> origin/optimizations
         tx.apply();
         block
             .commit_world_overlay_for_testing()
@@ -20887,16 +20864,12 @@ seiyaku Callee {
             vec![caller_contract.subject_id(), callee_contract.subject_id()],
             "root and nested effects retain their respective contract subjects"
         );
-<<<<<<< HEAD
-        let next_height = u64::try_from((state.view().height() + 1).max(2))
+        // Apply these component artifacts in ordinary execution, with no
+        // claim to an authenticated genesis source capability.
+        let next_height = u64::try_from(state.view().height() + 1)
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
-=======
-        // Apply these component artifacts in ordinary execution, with no
-        // claim to an authenticated genesis source capability.
-        let next_height = core::num::NonZeroU64::new(2).unwrap();
->>>>>>> origin/optimizations
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let source = artifact_test_signed_root(*block.network_id(), &authority);
         let source_call = Hash::from(source.hash_as_entrypoint());
@@ -21842,23 +21815,12 @@ seiyaku Callee {
                 .into_execution_artifacts(None)
                 .expect("export actual artifact");
             assert_eq!(artifacts.queued_instructions().len(), 1);
-<<<<<<< HEAD
-            let next_height = core::num::NonZeroU64::new(
-                u64::try_from((state.view().height() + 1).max(2)).unwrap(),
-            )
-            .unwrap();
+            // This is ordinary component artifact execution against the fixture's
+            // original genesis, not a fabricated genesis execution capability.
+            let next_height =
+                core::num::NonZeroU64::new(u64::try_from(state.view().height() + 1).unwrap())
+                    .unwrap();
             let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
-=======
-            // This is an ordinary component artifact test, not authenticated
-            // genesis execution. Keep both signed-budget cases at height two.
-            let mut block = state.block(BlockHeader::new(
-                core::num::NonZeroU64::new(2).unwrap(),
-                None,
-                None,
-                0,
-                0,
-            ));
->>>>>>> origin/optimizations
             let fragments = block.committed_fragment_count();
             let mut tx = block.transaction();
             if bind_root {

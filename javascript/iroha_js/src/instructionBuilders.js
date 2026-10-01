@@ -4889,13 +4889,8 @@ export function buildSubmitAgendaProposalInstruction(options) {
 
 /**
  * Build a `RegisterSmartContractCode` instruction payload.
-<<<<<<< HEAD
- * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, manifest: object}} options
- * @returns {{RegisterSmartContractCode: {artifact_id: object, manifest: object}}}
-=======
  * @param {{artifactId: {dataspaceId: number|bigint|string, codeHash: string|Buffer}, manifest: object}} options
  * @returns {{RegisterSmartContractCode: {artifact_id: {dataspace_id: string, code_hash: string}, manifest: object}}}
->>>>>>> origin/optimizations
  */
 export function buildRegisterSmartContractCodeInstruction(options) {
   if (!options || typeof options !== "object") {
@@ -4920,13 +4915,8 @@ export function buildRegisterSmartContractCodeInstruction(options) {
 
 /**
  * Build a `RegisterSmartContractBytes` instruction payload.
-<<<<<<< HEAD
- * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, code: ArrayBufferView|ArrayBuffer|Buffer|string}} options
- * @returns {{RegisterSmartContractBytes: {artifact_id: object, code: string}}}
-=======
  * @param {{artifactId: {dataspaceId: number|bigint|string, codeHash: string|Buffer}, code: ArrayBufferView|ArrayBuffer|Buffer|string}} options
  * @returns {{RegisterSmartContractBytes: {artifact_id: {dataspace_id: string, code_hash: string}, code: string}}}
->>>>>>> origin/optimizations
  */
 export function buildRegisterSmartContractBytesInstruction(options) {
   if (!options || typeof options !== "object") {
@@ -5177,13 +5167,8 @@ export function buildCommitContractDeploymentInstruction(options) {
 
 /**
  * Build a `RemoveSmartContractBytes` instruction payload.
-<<<<<<< HEAD
- * @param {{artifactId: {dataspaceId: bigint|string|number, codeHash: string|Buffer}, reason?: string | null}} options
- * @returns {{RemoveSmartContractBytes: {artifact_id: object, reason?: string}}}
-=======
  * @param {{artifactId: {dataspaceId: number|bigint|string, codeHash: string|Buffer}, reason?: string | null}} options
  * @returns {{RemoveSmartContractBytes: {artifact_id: {dataspace_id: string, code_hash: string}, reason?: string}}}
->>>>>>> origin/optimizations
  */
 export function buildRemoveSmartContractBytesInstruction(options) {
   const source = assertPlainObject(options, "removeSmartContractBytes");

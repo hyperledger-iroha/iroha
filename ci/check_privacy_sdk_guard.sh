@@ -908,10 +908,10 @@ def _check_cargo_workflow(
                 "name": "Install host-qualified privacy N-API Rust toolchain",
             },
             {
-                "name": "Prime privacy N-API dependencies from the frozen lock",
+                "name": "Prime privacy N-API dependencies from the authenticated root lock",
                 "run": (
-                    "RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked "
-                    '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+                    'env -u RUSTC_BOOTSTRAP "$(rustup which --toolchain 1.93.1 cargo)" '
+                    'fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"'
                 ),
             },
         ),
@@ -931,7 +931,7 @@ def _check_cargo_workflow(
         "privacy_swift_sdk_parse": "9f21b1c3414e662110e381aad729623e28757ed88960c328361315d3e9ff0d8c",
         "privacy_jvm_sdk_tests": "c13ae0b599d0b239db3e99cb48ce6435b4fc69cde02340a577f38f1cabb5d593",
         "privacy_csharp_sdk_tests": "47e765abe385d96b004bf5cecb507e2ec10e0c9cfd7edfb11ccdcca4002f1aee",
-        "privacy_javascript_sdk_tests": "1c5e640048a9cf698a0cb2a36f72263e72fe7bf8b6c2c9a99088051643c60c1b",
+        "privacy_javascript_sdk_tests": "dd983bb5147d763b8edecc420e7d02503b6a0095e10be32563c2a63c1381e33c",
     }
 
     require(
@@ -2901,16 +2901,15 @@ if [[ -n "${MODE}" || "${PRIVACY_SDK_GUARD_SKIP_RUNTIME:-0}" == "1" ]]; then
   exit 0
 fi
 
-# Runtime SDK checks resolve Rust dependencies only through one explicitly
-# selected authenticated non-workspace lock. Normalize the shared selection
-# once and pass the same canonical path to every SDK-specific guard.
+# Retain the authenticated external graph evidence for SDK wrapper consumers.
+# The JS-owned stock Cargo boundary selects the byte-identical original root lock.
 # shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
 source "${ROOT_DIR}/ci/privacy_sdk_cargo_lockfile.sh"
 PRIVACY_SDK_CARGO_LOCKFILE="$(
   privacy_sdk_resolve_cargo_lockfile "${ROOT_DIR}" "${PYTHON_BIN}"
 )"
 export IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${PRIVACY_SDK_CARGO_LOCKFILE}"
-export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_SDK_CARGO_LOCKFILE}"
+export IROHA_JS_CARGO_LOCKFILE_PATH="${ROOT_DIR}/Cargo.lock"
 
 PRIVACY_SDK_CARGO_LOCK_SEAL="$(
   privacy_sdk_file_seal "${PRIVACY_SDK_CARGO_LOCKFILE}" "${PYTHON_BIN}"

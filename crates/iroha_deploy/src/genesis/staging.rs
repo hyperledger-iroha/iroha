@@ -836,12 +836,7 @@ mod tests {
         },
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-<<<<<<< HEAD
-    use iroha_model_base::chain::ChainId;
-    use iroha_model_base::peer::PeerId;
-=======
     use iroha_model_base::{chain::ChainId, peer::PeerId};
->>>>>>> origin/optimizations
 
     fn default_test_topology() -> Vec<GenesisTopologyEntry> {
         let mut entries = (0x40..=0x43)

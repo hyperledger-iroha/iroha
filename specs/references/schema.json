@@ -814,7 +814,6 @@
       }
     ]
   },
-<<<<<<< HEAD
   "AmxWriteProofV1": {
     "Struct": [
       {
@@ -827,8 +826,6 @@
       }
     ]
   },
-=======
->>>>>>> origin/optimizations
   "AnchorPrivateDataspace": {
     "Struct": [
       {
@@ -20205,7 +20202,6 @@
       }
     ]
   },
-<<<<<<< HEAD
   "PrivateDataspaceRecordProof": {
     "Struct": [
       {
@@ -20230,8 +20226,6 @@
       }
     ]
   },
-=======
->>>>>>> origin/optimizations
   "PrivateDataspaceRegistration": {
     "Struct": [
       {
@@ -20268,7 +20262,6 @@
       }
     ]
   },
-<<<<<<< HEAD
   "PrivateRootFeePolicy": {
     "Struct": [
       {
@@ -20293,8 +20286,6 @@
       }
     ]
   },
-=======
->>>>>>> origin/optimizations
   "ProofAttachment": {
     "Struct": [
       {
@@ -21378,7 +21369,6 @@
       }
     ]
   },
-<<<<<<< HEAD
   "RegisteredAccountReadV1": {
     "Struct": [
       {
@@ -21407,8 +21397,6 @@
       }
     ]
   },
-=======
->>>>>>> origin/optimizations
   "RemoteSpendIntent": {
     "Struct": [
       {

@@ -918,7 +918,6 @@ def test_koto_receives_the_authenticated_source_through_an_inherited_fd(
     assert binding == "test-binding"
 
 
-<<<<<<< HEAD
 def test_current_koto_closure_covers_cli_compiler_abi_and_admission_inputs() -> None:
     """Follow actual Cargo manifests so another CLI split cannot silently omit its producer."""
     repo = MODULE.REPOSITORY_ROOT
@@ -960,7 +959,7 @@ def test_current_koto_closure_covers_cli_compiler_abi_and_admission_inputs() -> 
     assert MODULE._build_package_paths(
         producer_inputs | non_build_inputs, packages
     ) == frozenset(producer_inputs)
-=======
+
 
 def test_default_package_closure_binds_the_current_koto_producer(
     monkeypatch: pytest.MonkeyPatch,
@@ -1012,7 +1011,6 @@ def test_default_package_closure_binds_the_current_koto_producer(
     assert not MODULE._is_build_package_path(
         Path("crates/kotodama_lang/tests/parser.rs"), packages
     )
->>>>>>> origin/optimizations
 
 
 def test_local_package_closure_follows_workspace_build_and_patch_dependencies(

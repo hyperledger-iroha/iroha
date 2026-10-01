@@ -361,7 +361,12 @@ fn funded_original_result_witness_is_borrowed_without_redecoding() {
         panic!("actual authenticated parent authorizes the boundary");
     };
     let config = scheduled.height_config().unwrap();
-    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 10).unwrap();
+    let authority = VerifiedAuthority::new(
+        scheduled.epoch.clone(),
+        10,
+        &mut iroha_data_model::sumeragi_finality::EpochValidationScope::new(),
+    )
+    .unwrap();
     let budget = AllocationBudget::new(1 << 26);
     let artifacts = read(Arc::clone(&original), &budget);
     let witness = artifacts
@@ -447,7 +452,12 @@ fn original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_grap
         panic!("authenticated predecessor authorizes H10");
     };
     let config = scheduled.height_config().unwrap();
-    let authority = VerifiedAuthority::new(scheduled.epoch.clone(), 10).unwrap();
+    let authority = VerifiedAuthority::new(
+        scheduled.epoch.clone(),
+        10,
+        &mut iroha_data_model::sumeragi_finality::EpochValidationScope::new(),
+    )
+    .unwrap();
     let budget = AllocationBudget::new(1 << 26);
     let outcome = reader
         .verification_context()

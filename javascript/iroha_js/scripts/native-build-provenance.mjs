@@ -493,6 +493,9 @@ function selectedCargoLock(repoRoot, env) {
       "Native build Cargo.lock path must be canonical and contain no symbolic-link components",
     );
   }
+  if (cargoLockPath !== join(resolve(repoRoot), "Cargo.lock")) {
+    throw new Error("Native build Cargo.lock must be the authenticated repository root Cargo.lock.");
+  }
   const metadata = lstatSync(cargoLockPath, { bigint: true });
   if (
     !metadata.isFile() ||

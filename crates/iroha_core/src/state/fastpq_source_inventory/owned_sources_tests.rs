@@ -184,6 +184,31 @@ fn fixture_with_effects(
         Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut tx)
             .unwrap();
+        // This component starts after real genesis, so domain registration must
+        // consume an active canonical lease owned by its registered authority.
+        let selector = crate::sns::selector_for_domain(&domain).expect("domain selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&ALICE_ID)
+            .expect("registered authority address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            ALICE_ID.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_model_base::metadata::Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        assert_eq!(
+            crate::sns::active_domain_owner(&tx.world, &domain, tx.block_unix_timestamp_ms())
+                .expect("canonical active domain lease"),
+            Some(ALICE_ID.clone()),
+        );
         Register::domain(Domain::new(domain))
             .execute(&ALICE_ID, &mut tx)
             .unwrap();

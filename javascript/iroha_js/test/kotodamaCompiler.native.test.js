@@ -195,7 +195,6 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
   const signature = "fn combine(int _ value, int minimum, int maximum)";
   const call = "combine(amount, maximum: 10, minimum: 0)";
   assert.equal(source.split(signature).length, 2);
-<<<<<<< HEAD
   // Ordinary parameters accept positional values as well as their names.
   const ordinaryRaw = await nativeBinding.compileKotodama({
     ...request,
@@ -221,35 +220,7 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
       .map((diagnostic) => diagnostic.code),
     ["E_POSITIONAL_ARGUMENT_REQUIRED"],
   );
-});
 
-nativeTest("native Kotodama preserves required argument names for builtins", async () => {
-  const source = `seiyaku NativeBuiltinLabels {
-    view fn update() {
-      var List<int, 2> values = [1];
-      let _ = values.try_set(index: 0, value: 1);
-    }
-  }`;
-  const request = { source, sourceName: "contracts/native-builtin-labels.ko", zk: false };
-  const raw = await nativeBinding.compileKotodama(request);
-  assert.equal(raw.ok, true, raw.diagnosticsJson);
-  assert.equal(raw.diagnosticsJson, null);
-  assert.equal(normalizeCompilerResult(raw).ok, true);
-
-  const rejectedRaw = await nativeBinding.compileKotodama({
-    ...request,
-    source: source.replace("values.try_set(index: 0, value: 1)", "values.try_set(0, 1)"),
-  });
-  assert.equal(rejectedRaw.ok, false);
-  assert.equal(rejectedRaw.output, null);
-  const rejected = normalizeCompilerResult(rejectedRaw);
-  assert.equal(rejected.ok, false);
-  assert.deepEqual(
-    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
-      .map((diagnostic) => diagnostic.code),
-    ["E_NAMED_ARGUMENTS_REQUIRED"],
-  );
-=======
   assert.equal(source.split(call).length, 2);
   for (const acceptedCall of [call, "combine(amount, 0, 10)", "combine(value: amount, maximum: 10, minimum: 0)"]) {
     const acceptedRaw = await nativeBinding.compileKotodama({
@@ -284,5 +255,32 @@ nativeTest("native Kotodama preserves required argument names for builtins", asy
       replacement,
     );
   }
->>>>>>> origin/optimizations
+});
+
+nativeTest("native Kotodama preserves required argument names for builtins", async () => {
+  const source = `seiyaku NativeBuiltinLabels {
+    view fn update() {
+      var List<int, 2> values = [1];
+      let _ = values.try_set(index: 0, value: 1);
+    }
+  }`;
+  const request = { source, sourceName: "contracts/native-builtin-labels.ko", zk: false };
+  const raw = await nativeBinding.compileKotodama(request);
+  assert.equal(raw.ok, true, raw.diagnosticsJson);
+  assert.equal(raw.diagnosticsJson, null);
+  assert.equal(normalizeCompilerResult(raw).ok, true);
+
+  const rejectedRaw = await nativeBinding.compileKotodama({
+    ...request,
+    source: source.replace("values.try_set(index: 0, value: 1)", "values.try_set(0, 1)"),
+  });
+  assert.equal(rejectedRaw.ok, false);
+  assert.equal(rejectedRaw.output, null);
+  const rejected = normalizeCompilerResult(rejectedRaw);
+  assert.equal(rejected.ok, false);
+  assert.deepEqual(
+    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => diagnostic.code),
+    ["E_NAMED_ARGUMENTS_REQUIRED"],
+  );
 });

@@ -355,53 +355,43 @@ test("synchronous source-state reader accepts only the exact dirty debug provena
   });
 });
 
-test("selected Cargo lock is snapshotted, fingerprinted, and monitored", () => {
+test("original root Cargo lock is snapshotted, fingerprinted, and monitored", () => {
   withSourceRepository((repoRoot) => {
-    const privateDirectory = path.join(repoRoot, "target", "private-lock");
-    const privateLock = path.join(privateDirectory, "Cargo.lock");
     const rootLock = path.join(repoRoot, "Cargo.lock");
-    mkdirSync(privateDirectory, { recursive: true });
-    writeFileSync(privateLock, "version = 4\n# selected private lock\n");
-    const env = {
-      ...process.env,
-      [NATIVE_BUILD_CARGO_LOCK_ENV]: privateLock,
-    };
-
+    const env = { ...process.env, [NATIVE_BUILD_CARGO_LOCK_ENV]: rootLock };
     const selected = readNativeBuildSourceState(repoRoot, { env });
-    writeFileSync(rootLock, "version = 4\n# unrelated root lock change\n");
-    assert.deepEqual(
-      readNativeBuildSourceState(repoRoot, { env }),
-      selected,
-    );
-    writeFileSync(privateLock, "version = 4\n# changed selected lock\n");
-    assert.notEqual(
-      readNativeBuildSourceState(repoRoot, { env }).sourceTreeSha256,
-      selected.sourceTreeSha256,
-    );
-
+    writeFileSync(rootLock, "version = 4\n# changed root lock\n");
+    assert.notEqual(readNativeBuildSourceState(repoRoot, { env }).sourceTreeSha256, selected.sourceTreeSha256);
     writeFileSync(rootLock, "version = 4\n");
-    writeFileSync(privateLock, "version = 4\n# selected private lock\n");
     const snapshot = createNativeBuildSourceSnapshot(
-      repoRoot,
-      path.join(repoRoot, "target", "selected-lock-snapshot"),
-      { env },
+      repoRoot, path.join(repoRoot, "target", "selected-lock-snapshot"), { env },
     );
     try {
-      assert.equal(
-        readFileSync(path.join(snapshot.snapshotRoot, "Cargo.lock"), "utf8"),
-        "version = 4\n# selected private lock\n",
-      );
-      assert.deepEqual(
-        verifyNativeBuildSourceSnapshot(snapshot),
-        snapshot.sourceState,
-      );
-      writeFileSync(privateLock, "version = 4\n# drifted selected lock\n");
-      assert.throws(
-        () => verifyNativeBuildSourceSnapshot(snapshot),
-        /Cargo\.lock changed while it was in use/u,
-      );
+      assert.equal(readFileSync(path.join(snapshot.snapshotRoot, "Cargo.lock"), "utf8"), "version = 4\n");
+      assert.deepEqual(verifyNativeBuildSourceSnapshot(snapshot), snapshot.sourceState);
+      writeFileSync(rootLock, "version = 4\n# drifted root lock\n");
+      assert.throws(() => verifyNativeBuildSourceSnapshot(snapshot), /Cargo\.lock changed while it was in use/u);
     } finally {
       cleanupNativeBuildSourceSnapshot(snapshot);
+    }
+  });
+});
+
+test("source provenance rejects byte-identical ignored and foreign lockfiles", () => {
+  withSourceRepository((repoRoot) => {
+    const external = realpathSync(mkdtempSync(path.join(os.tmpdir(), "iroha-js-foreign-lock-")));
+    try {
+      const nested = path.join(repoRoot, "target", "private-lock");
+      mkdirSync(nested, { recursive: true });
+      for (const directory of [nested, external]) {
+        const lock = path.join(directory, "Cargo.lock");
+        writeFileSync(lock, readFileSync(path.join(repoRoot, "Cargo.lock")));
+        assert.throws(() => readNativeBuildSourceState(repoRoot, {
+          env: { ...process.env, [NATIVE_BUILD_CARGO_LOCK_ENV]: lock },
+        }), /Cargo.lock must be the authenticated repository root Cargo.lock/u);
+      }
+    } finally {
+      rmSync(external, { recursive: true, force: true });
     }
   });
 });

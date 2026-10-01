@@ -63,7 +63,8 @@ fn owner_capture(result_words: usize, shift: u64, root_return: bool) -> Value {
     let top = memory.stack_top();
     let root_callable = callable(128 * 1024 + 32, if root_return { result_words } else { 1 });
     let root_result = Memory::HEAP_START + shift;
-    memory.grow_heap(65552).unwrap();
+    assert_eq!(memory.alloc(65552).unwrap(), Memory::HEAP_START);
+    assert_eq!(memory.heap_allocated_len(), 65552);
     memory
         .call_frames
         .enter_root(

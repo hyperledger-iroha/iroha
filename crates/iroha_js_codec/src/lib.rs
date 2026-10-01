@@ -1716,23 +1716,10 @@ fn governance_instruction_from_envelope(
         return Some(register_smart_contract_code_from_json(map, fields));
     }
     if let Some(json::Value::Object(fields)) = map.remove("RegisterSmartContractBytes") {
-<<<<<<< HEAD
-        return Some(
-            require_exact_json_fields(map, &[], "RegisterSmartContractBytes envelope")
-                .and_then(|()| register_smart_contract_bytes_from_json(fields)),
-        );
-    }
-    if let Some(json::Value::Object(fields)) = map.remove("RemoveSmartContractBytes") {
-        return Some(
-            require_exact_json_fields(map, &[], "RemoveSmartContractBytes envelope")
-                .and_then(|()| remove_smart_contract_bytes_from_json(fields)),
-        );
-=======
         return Some(register_smart_contract_bytes_from_json(map, fields));
     }
     if let Some(json::Value::Object(fields)) = map.remove("RemoveSmartContractBytes") {
         return Some(remove_smart_contract_bytes_from_json(map, fields));
->>>>>>> origin/optimizations
     }
     None
 }
@@ -3249,20 +3236,16 @@ fn register_smart_contract_code_from_json(
 }
 
 /// Admit the strict `RegisterSmartContractBytes` instruction payload.
-<<<<<<< HEAD
-fn register_smart_contract_bytes_from_json(mut fields: json::Map) -> CodecResult<InstructionBox> {
-    require_exact_json_fields(
-        &fields,
-        &["artifact_id", "code"],
-        "RegisterSmartContractBytes",
-    )?;
-=======
 fn register_smart_contract_bytes_from_json(
     envelope: &json::Map,
     mut fields: json::Map,
 ) -> CodecResult<InstructionBox> {
     require_exact_json_fields(envelope, &[], "RegisterSmartContractBytes envelope")?;
->>>>>>> origin/optimizations
+    require_exact_json_fields(
+        &fields,
+        &["artifact_id", "code"],
+        "RegisterSmartContractBytes",
+    )?;
     let artifact_id = lifecycle_instructions::parse_artifact_id(
         required_value(&mut fields, "artifact_id", "RegisterSmartContractBytes")?,
         "RegisterSmartContractBytes.artifact_id",
@@ -3275,31 +3258,24 @@ fn register_smart_contract_bytes_from_json(
 }
 
 /// Admit the strict `RemoveSmartContractBytes` instruction payload.
-<<<<<<< HEAD
-fn remove_smart_contract_bytes_from_json(mut fields: json::Map) -> CodecResult<InstructionBox> {
+fn remove_smart_contract_bytes_from_json(
+    envelope: &json::Map,
+    mut fields: json::Map,
+) -> CodecResult<InstructionBox> {
+    require_exact_json_fields(envelope, &[], "RemoveSmartContractBytes envelope")?;
     let expected = if fields.contains_key("reason") {
         &["artifact_id", "reason"][..]
     } else {
         &["artifact_id"][..]
     };
     require_exact_json_fields(&fields, expected, "RemoveSmartContractBytes")?;
-=======
-fn remove_smart_contract_bytes_from_json(
-    envelope: &json::Map,
-    mut fields: json::Map,
-) -> CodecResult<InstructionBox> {
-    require_exact_json_fields(envelope, &[], "RemoveSmartContractBytes envelope")?;
->>>>>>> origin/optimizations
     let artifact_id = lifecycle_instructions::parse_artifact_id(
         required_value(&mut fields, "artifact_id", "RemoveSmartContractBytes")?,
         "RemoveSmartContractBytes.artifact_id",
     )?;
     let reason =
         parse_optional_string_value(fields.remove("reason"), "RemoveSmartContractBytes.reason")?;
-<<<<<<< HEAD
-=======
     require_exact_json_fields(&fields, &[], "RemoveSmartContractBytes")?;
->>>>>>> origin/optimizations
     let instruction = RemoveSmartContractBytes {
         artifact_id,
         reason,

@@ -156,7 +156,6 @@ function createFixture(t, { profile = "debug", toolchainDirectory = "rust-1.93.1
     IROHA_JS_CARGO_LOCKFILE_PATH: path.join(repoRoot, "Cargo.lock"),
     IROHA_JS_CARGO_PATH: cargoPath,
     RUSTC: rustcPath,
-    RUSTC_BOOTSTRAP: "1",
     RUSTDOC: rustdocPath,
     ...(profile === "debug"
       ? {}
@@ -343,7 +342,7 @@ test("native build rejects unpinned, mixed, or unverifiable toolchains before Ca
   }), /must come from one pinned toolchain/u);
 });
 
-test("native build uses the live root, root lock, pinned Cargo, and shared target", (t) => {
+test("native build uses stock Cargo with exact live root manifest, root lock, and source target", (t) => {
   const fixture = createFixture(t);
   const state = sourceState();
   let invalidated;
@@ -373,6 +372,8 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
       assert.equal(options.cargoEnv.CARGO, fixture.cargoPath);
       assert.equal(options.cargoEnv.RUSTC, fixture.env.RUSTC);
       assert.equal(options.cargoEnv.RUSTDOC, fixture.env.RUSTDOC);
+      assert.equal(options.cargoEnv.RUSTC_BOOTSTRAP, undefined);
+      assert.equal(options.cargoEnv.IROHA_JS_CARGO_LOCKFILE_PATH, path.join(fixture.repoRoot, "Cargo.lock"));
       assert.equal(
         options.cargoEnv.IROHA_GIT_COMMIT_HASH,
         SOURCE_REVISION,
@@ -383,10 +384,6 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
         "--offline",
         "--jobs",
         "1",
-        "-Z",
-        "unstable-options",
-        "--lockfile-path",
-        path.join(fixture.repoRoot, "Cargo.lock"),
         "--manifest-path",
         path.join(fixture.repoRoot, "Cargo.toml"),
         "--package",
@@ -761,7 +758,7 @@ test("the live build rejects incomplete or redirected build envelopes", async (t
       },
     },
     {
-      label: /external Cargo.lock must remain outside the source tree/u,
+      label: /Cargo.lock must be the authenticated repository root Cargo.lock/u,
       mutate(env) {
         const nested = path.join(fixture.repoRoot, "private-lock");
         mkdirSync(nested);
@@ -798,39 +795,37 @@ test("the live build rejects incomplete or redirected build envelopes", async (t
   }
 });
 
-test("the live build accepts an authenticated external Cargo.lock", (t) => {
+test("the live build rejects a byte-identical foreign Cargo.lock before Cargo", (t) => {
   const fixture = createFixture(t);
   const lockDirectory = realpathSync(
     mkdtempSync(path.join(os.tmpdir(), "iroha-js-release-lock-")),
   );
   t.after(() => rmSync(lockDirectory, { recursive: true, force: true }));
   const externalLock = path.join(lockDirectory, "Cargo.lock");
-  writeFileSync(externalLock, "version = 4\n");
-  const env = {
-    ...fixture.env,
-    IROHA_JS_CARGO_LOCKFILE_PATH: externalLock,
-  };
-  let cargoRuns = 0;
-
-  const status = runNativeBuild({
+  fs.copyFileSync(path.join(fixture.repoRoot, "Cargo.lock"), externalLock);
+  assert.deepEqual(readFileSync(externalLock), readFileSync(path.join(fixture.repoRoot, "Cargo.lock")));
+  assert.throws(() => runNativeBuild({
     runTool: fixture.runTool,
     repoRoot: fixture.repoRoot,
-    env,
+    env: { ...fixture.env, IROHA_JS_CARGO_LOCKFILE_PATH: externalLock },
     platform: "linux",
     readSourceState: () => sourceState(),
-    runCargo(_cargo, args) {
-      cargoRuns += 1;
-      assert.deepEqual(
-        args.slice(args.indexOf("--lockfile-path"), args.indexOf("--lockfile-path") + 2),
-        ["--lockfile-path", externalLock],
-      );
-      return { status: 7, stdout: "" };
-    },
-  });
-
-  assert.equal(status, 7);
-  assert.equal(cargoRuns, 1);
+    runCargo() { assert.fail("foreign lock must fail before Cargo"); },
+  }), /Cargo.lock must be the authenticated repository root Cargo.lock/u);
 });
+
+for (const bootstrap of ["1", "0", "-1", "iroha_js_host"]) {
+  test("native build rejects RUSTC_BOOTSTRAP=" + bootstrap + " before any compiler probe", (t) => {
+    const fixture = createFixture(t);
+    assert.throws(() => runNativeBuild({
+      repoRoot: fixture.repoRoot,
+      env: { ...fixture.env, RUSTC_BOOTSTRAP: bootstrap },
+      platform: "linux",
+      runTool() { assert.fail("bootstrap must fail before compiler probes"); },
+      runCargo() { assert.fail("bootstrap must fail before Cargo"); },
+    }), /forbids RUSTC_BOOTSTRAP/u);
+  });
+}
 
 test("failed Cargo leaves the output unauthenticated", (t) => {
   const fixture = createFixture(t);
@@ -1075,19 +1070,15 @@ test("exact canonical ROOT/target is admitted as the generated cache", (t) => {
   }), 0);
 });
 
-test("privacy native build passes an external lock and disjoint target to Cargo", (t) => {
+test("privacy native build uses the original root lock and a disjoint target with stock Cargo", (t) => {
   const fixture = createFixture(t);
   const corridor = realpathSync(
     mkdtempSync(path.join(os.tmpdir(), "iroha-js-privacy-build-")),
   );
   t.after(() => rmSync(corridor, { recursive: true, force: true }));
-  const lock = path.join(corridor, "lock", "Cargo.lock");
-  mkdirSync(path.dirname(lock), { recursive: true });
-  fs.copyFileSync(path.join(fixture.repoRoot, "Cargo.lock"), lock);
-  chmodSync(lock, 0o400);
   fixture.targetRoot = path.join(corridor, "js-native", "target");
   fixture.env.CARGO_TARGET_DIR = fixture.targetRoot;
-  fixture.env.IROHA_JS_CARGO_LOCKFILE_PATH = lock;
+  fixture.env.IROHA_JS_CARGO_LOCKFILE_PATH = path.join(fixture.repoRoot, "Cargo.lock");
   fixture.nativePath = nativeBuildOutputPath({
     repoRoot: fixture.repoRoot,
     sourceState: sourceState(),
@@ -1097,10 +1088,14 @@ test("privacy native build passes an external lock and disjoint target to Cargo"
   });
   assert.equal(buildFixture(fixture, {
     runCargo(_cargo, args, { cargoEnv }) {
+      assert.equal(args.includes("-Z"), false);
+      assert.equal(args.includes("--lockfile-path"), false);
+      assert.equal(args.includes("--locked"), true);
       assert.deepEqual(
-        args.slice(args.indexOf("--lockfile-path"), args.indexOf("--lockfile-path") + 2),
-        ["--lockfile-path", lock],
+        args.slice(args.indexOf("--manifest-path"), args.indexOf("--manifest-path") + 2),
+        ["--manifest-path", path.join(fixture.repoRoot, "Cargo.toml")],
       );
+      assert.equal(cargoEnv.IROHA_JS_CARGO_LOCKFILE_PATH, path.join(fixture.repoRoot, "Cargo.lock"));
       assert.equal(cargoEnv.CARGO_TARGET_DIR, path.dirname(path.dirname(fixture.nativePath)));
       writeNativeOutput(fixture);
       return { status: 0, stdout: successfulCargoJson(fixture) };
@@ -1118,7 +1113,7 @@ test("privacy native build rejects an ignored source-tree lock before Cargo", (t
   assert.throws(() => buildFixture(fixture, {
     env: { ...fixture.env, IROHA_JS_CARGO_LOCKFILE_PATH: lock },
     runCargo() { assert.fail("source-tree lock must fail before Cargo"); },
-  }), /external Cargo.lock must remain outside the source tree/u);
+  }), /Cargo.lock must be the authenticated repository root Cargo.lock/u);
 });
 
 for (const location of ["root", "ancestor", "source-subdirectory", "target-descendant"]) {

@@ -42,14 +42,11 @@ test("public manifest builder preserves the Rust fixture and canonical instructi
   assert.notEqual(instruction.RegisterSmartContractCode.manifest.entrypoints, manifest.entrypoints);
 
   const encoded = noritoEncodeInstruction(instruction, 753);
-<<<<<<< HEAD
-  const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
-  const schemaFixture = noritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest: fixture.manifest } }), 753);
-  assert.notEqual(schemaFixture.indexOf(rustManifest), -1, "scoped schema fixture must contain exact Rust manifest bytes");
-=======
   const rustManifest = Buffer.from(fixture.registration_manifest_compact_hex, "hex");
   assert.notEqual(encoded.indexOf(rustManifest), -1, "instruction must contain exact Rust manifest bytes");
->>>>>>> origin/optimizations
+  const schemaManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
+  const schemaFixture = noritoEncodeInstruction(universalArtifactInstruction({ RegisterSmartContractCode: { manifest: fixture.manifest } }), 753);
+  assert.notEqual(schemaFixture.indexOf(schemaManifest), -1, "scoped schema fixture must contain exact Rust manifest bytes");
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded, instruction);
   assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
@@ -67,11 +64,7 @@ test("entrypoint getters retain their validation order", () => {
   for (const field of fields) observe(entrypoint, field, events);
   const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest }));
   assert.deepEqual(events, fields);
-<<<<<<< HEAD
-  assert.deepEqual(instruction.RegisterSmartContractCode.manifest, { ...fixture.manifest, code_hash: canonicalHashLiteral(Buffer.alloc(32, 0x11)) });
-=======
   assert.deepEqual(instruction.RegisterSmartContractCode.manifest, fixture.registration_manifest);
->>>>>>> origin/optimizations
 });
 
 test("an entrypoint getter failure stops before later entrypoint fields", () => {

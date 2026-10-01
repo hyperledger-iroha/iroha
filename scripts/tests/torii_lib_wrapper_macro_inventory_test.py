@@ -268,13 +268,8 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-<<<<<<< HEAD
-ROUTE_ROW_COUNT = 572
-ROUTE_TUPLE_SHA256 = "2c973dacd8c3a148b148bc41138dfd78447bd74b34ac4f5d0af63d3221056dfc"
-=======
-ROUTE_ROW_COUNT = 569
-ROUTE_TUPLE_SHA256 = "3fa65bc2f86f7f68fe9228727323fa141b1457dc8f5a060aae5e6881401b0a83"
->>>>>>> origin/optimizations
+ROUTE_ROW_COUNT = 575
+ROUTE_TUPLE_SHA256 = "b1e568b285d3834bfeb4f007b41cec3f8e951aa3d8c892427fb2918564135d8f"
 
 
 def _normalized_tokens(source: str) -> bytes:

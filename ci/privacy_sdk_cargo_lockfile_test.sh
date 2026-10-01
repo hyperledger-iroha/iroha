@@ -4585,7 +4585,7 @@ run_artifact_set_negative_control symlink
 grep -Fq 'source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 grep -Fq '${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 expect_no_match -Eq '^(FROZEN|TRACKED_ROOT)_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${WORKSPACE_CARGO_LOCKFILE}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 expect_no_match -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 expect_no_match -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 
@@ -4927,7 +4927,7 @@ private = {
     "privacy-sdk-guard": ("privacy SDK", "Python SDK Cargo", "ci/check_privacy_sdk_guard.sh", "privacy-python", 5, False),
 }
 artifact = {
-    "privacy_javascript_sdk_tests": ("Prime privacy N-API dependencies from the frozen lock", "ci/check_privacy_js_sdk.sh"),
+    "privacy_javascript_sdk_tests": ("Prime privacy N-API dependencies from the authenticated root lock", "ci/check_privacy_js_sdk.sh"),
     "privacy_swift_sdk_parse": ("Install Apple Rust targets and prime frozen dependencies", "ci/check_privacy_swift_sdk.sh"),
 }
 def job_match(source: str, name: str) -> re.Match[str]:

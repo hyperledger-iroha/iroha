@@ -1381,19 +1381,11 @@ mod tests {
         assert_eq!(identity.contract_address, contract_address);
         assert_eq!(identity.code_hash, code_hash);
         assert_eq!(identity.contract_alias, None);
-<<<<<<< HEAD
-        let borrowed = with_code_bytes(
-            &view,
-            &ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
-            |bytes| (bytes.as_ptr(), bytes.to_vec()),
-        )
-=======
         let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
             .expect("contract address retains its exact artifact dataspace");
         let borrowed = with_code_bytes(&view, &artifact_id, |bytes| {
             (bytes.as_ptr(), bytes.to_vec())
         })
->>>>>>> origin/optimizations
         .expect("borrow stored bytes");
         assert_eq!(borrowed.1, code);
         let stored_ptr = view

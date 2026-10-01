@@ -495,6 +495,8 @@ run_javascript_parity() {
     native_rustc="$(rustup which rustc)"
     native_rustdoc="$(rustup which rustdoc)"
 
+    # The shared Apple job envelope is not the stock JavaScript compiler envelope.
+    unset RUSTC_BOOTSTRAP
     cd "${sdk_root}"
     npm ci
     "${node_binary}" --test "${REPO_ROOT}/scripts/tests/sorafs_javascript_child_contract_test.mjs" "${sdk_root}/test/sorafsNativeSuiteStructure.test.js"
@@ -505,7 +507,6 @@ run_javascript_parity() {
       IROHA_JS_CARGO_LOCKFILE_PATH="${REPO_ROOT}/Cargo.lock" \
       IROHA_JS_CARGO_PATH="${native_cargo}" \
       RUSTC="${native_rustc}" \
-      RUSTC_BOOTSTRAP=1 \
       RUSTDOC="${native_rustdoc}" \
       IROHA_JS_NATIVE_BUILD_PROFILE=release npm run build:native
   )

@@ -183,6 +183,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             scheduled.epoch.clone(),
             height,
             BlsCrypto::with_aggregate_scratch(scratch),
+            &mut EpochValidationScope::new(),
         )?;
         let certified = self
             .verification_context()

@@ -1563,11 +1563,8 @@ pub fn build_runtime_package(
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
     build::build_runtime_package(
         config,
-<<<<<<< HEAD
         registry_config,
         registry_resolver,
-=======
->>>>>>> origin/optimizations
         manifest,
         package,
         contract,

@@ -754,21 +754,10 @@ def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, .
 
     rendered: list[RenderedFile] = []
     for destination in sorted(sources, key=lambda value: value.as_posix()):
-<<<<<<< HEAD
-        payload, metadata = _read_sealed_regular(
-            sources[destination], "staged generated output"
-        )
-        mode = stat.S_IMODE(metadata.st_mode)
-        if mode != 0o600:
-            raise GoldenError(
-                f"staged generated output must use mode 0600: {sources[destination]}"
-            )
+        payload = read_compiler_output(sources[destination])
         # Compiler and admission work products stay owner-private. This owner explicitly
         # publishes public checked-in fixtures; the descriptor-bound publisher creates
         # separate files in the declared public mode without relaxing staging custody.
-=======
-        payload = read_compiler_output(sources[destination])
->>>>>>> origin/optimizations
         rendered.append(RenderedFile(destination, 0o644, payload))
     return tuple(rendered)
 

@@ -470,16 +470,6 @@ fn applied_wait_result_has_one_exact_v1_key_set() {
     assert!(!object.contains_key("submit"));
 }
 #[test]
-<<<<<<< HEAD
-fn artifact_route_requires_canonical_path_scope_and_hash() {
-    let hash = hex::encode(iroha_crypto::Hash::new(b"MCP path fixture").as_ref());
-    let args = norito::json!({
-        "path": { "dataspace_id": "7", "code_hash": (hash.clone()) }
-    });
-    let path = contract_artifact_route(args.as_object().expect("object"), false)
-        .expect("scoped artifact path");
-    assert_eq!(path, format!("/v1/contracts/artifacts/7/{hash}"));
-=======
 fn contract_artifact_route_requires_canonical_scoped_path_fields() {
     let hash = hex::encode(iroha_crypto::Hash::new(b"canonical scoped artifact").as_ref());
     for dataspace_id in [0, 7, u64::MAX] {
@@ -512,7 +502,6 @@ fn contract_artifact_route_requires_canonical_scoped_path_fields() {
         contract_artifact_route(retired.as_object().expect("object"), false)
             .expect_err("missing scope, retired hash aliases and noncanonical artifact IDs reject");
     }
->>>>>>> origin/optimizations
 }
 #[test]
 fn extract_contract_address_argument_requires_canonical_path_field() {
@@ -548,15 +537,13 @@ fn extract_block_identifier_argument_requires_canonical_path_field() {
 }
 #[test]
 fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 11] = [
-<<<<<<< HEAD
+    let cases: [(Value, fn(&Map) -> Result<String, String>); 13] = [
         (norito::json!({ "code_hash": "cafebabe" }), |args| {
             contract_artifact_route(args, false)
         }),
         (norito::json!({ "hash": "cafebabe" }), |args| {
             contract_artifact_route(args, false)
         }),
-=======
         (
             norito::json!({ "dataspace_id": "0", "code_hash": ("11".repeat(32)) }),
             |arguments| contract_artifact_route(arguments, false),
@@ -565,7 +552,6 @@ fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
             norito::json!({ "dataspace_id": "0", "hash": ("11".repeat(32)) }),
             |arguments| contract_artifact_route(arguments, false),
         ),
->>>>>>> origin/optimizations
         (
             norito::json!({ "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw" }),
             extract_contract_address_argument,

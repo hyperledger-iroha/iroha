@@ -60761,7 +60761,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-<<<<<<< HEAD
     "/v1/contracts/artifacts/{dataspace_id}/{code_hash}": {
       "get": {
         "description": "Fetch the complete canonical ContractManifest and optional derived hash conveniences by exact dataspace and content hash. Canonical account signing and current dataspace visibility are required. Private roots additionally require the owner listener API token. The response binds the exact network and artifact identity; manifest code_hash must match artifact_id.code_hash.",
@@ -61004,20 +61003,10 @@
         "parameters": [
           {
             "description": "Exact full-width dataspace identifier as canonical unsigned decimal; no leading zeroes.",
-=======
-    "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes": {
-      "get": {
-        "description": "Fetch the canonical base64 contract artifact by its exact dataspace and code hash. Canonical account request signing is required.",
-        "operationId": "contractArtifactBytesGet",
-        "parameters": [
-          {
-            "description": "Exact owning dataspace identifier.",
->>>>>>> origin/optimizations
             "in": "path",
             "name": "dataspace_id",
             "required": true,
             "schema": {
-<<<<<<< HEAD
               "maxLength": 20,
               "pattern": "^(0|[1-9][0-9]{0,19})$",
               "type": "string"
@@ -61025,24 +61014,11 @@
           },
           {
             "description": "Exact lowercase 64-digit hexadecimal contract content hash.",
-=======
-              "format": "uint64",
-              "maximum": 18446744073709551615,
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Contract code hash (hex).",
->>>>>>> origin/optimizations
             "in": "path",
             "name": "code_hash",
             "required": true,
             "schema": {
-<<<<<<< HEAD
               "pattern": "^[0-9a-f]{64}$",
-=======
->>>>>>> origin/optimizations
               "type": "string"
             }
           },
@@ -61097,11 +61073,7 @@
             "content": {
               "application/json": {
                 "schema": {
-<<<<<<< HEAD
                   "$ref": "#/components/schemas/ContractArtifactBytesResponse"
-=======
-                  "$ref": "#/components/schemas/JsonValue"
->>>>>>> origin/optimizations
                 }
               }
             },
@@ -61125,11 +61097,7 @@
                 }
               }
             },
-<<<<<<< HEAD
             "description": "The dataspace or contract content hash is not canonical.",
-=======
-            "description": "The contract code hash is invalid.",
->>>>>>> origin/optimizations
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -61178,7 +61146,6 @@
               }
             }
           },
-<<<<<<< HEAD
           "403": {
             "content": {
               "application/json": {
@@ -61199,8 +61166,6 @@
               }
             }
           },
-=======
->>>>>>> origin/optimizations
           "404": {
             "content": {
               "application/json": {
@@ -61209,11 +61174,7 @@
                 }
               }
             },
-<<<<<<< HEAD
             "description": "No registered artifact exists in the exact requested dataspace.",
-=======
-            "description": "No contract artifact exists for the code hash.",
->>>>>>> origin/optimizations
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -61257,11 +61218,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-<<<<<<< HEAD
         "summary": "Fetch contract code bytes.",
-=======
-        "summary": "Fetch scoped contract artifact bytes.",
->>>>>>> origin/optimizations
         "tags": [
           "Contracts"
         ],

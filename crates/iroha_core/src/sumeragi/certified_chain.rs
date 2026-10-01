@@ -574,21 +574,19 @@ struct VerifiedAuthority {
 }
 
 impl VerifiedAuthority {
-<<<<<<< HEAD
     fn new(
         material: ValidatorEpochContextV1,
         height: u64,
         validation: &mut EpochValidationScope,
-=======
-    fn new(material: ValidatorEpochContextV1, height: u64) -> Result<Self, ChainReadError> {
-        Self::with_crypto(material, height, BlsCrypto::new())
+    ) -> Result<Self, ChainReadError> {
+        Self::with_crypto(material, height, BlsCrypto::new(), validation)
     }
 
     fn with_crypto(
         material: ValidatorEpochContextV1,
         height: u64,
         crypto: BlsCrypto,
->>>>>>> origin/optimizations
+        validation: &mut EpochValidationScope,
     ) -> Result<Self, ChainReadError> {
         let malformed = |reason: String| ChainReadError::Committee { height, reason };
         let epoch = validation
@@ -1445,18 +1443,13 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .is_some_and(|next| next < height)
         {
             let next_height = prefix.tip.height + 1;
-<<<<<<< HEAD
             let next = read_frame_with_validation(
                 self.source.block(next_height)?,
                 next_height,
                 &mut prefix.validation,
             )?;
-            self.verification_context().advance_prefix(prefix, next)?;
-=======
-            let next = read_frame(self.source.block(next_height)?, next_height)?;
             self.verification_context()
                 .advance_prefix(prefix, next, None)?;
->>>>>>> origin/optimizations
         }
         self.verification_context()
             .advance_prefix(prefix, committed, None)

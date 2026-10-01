@@ -104,18 +104,17 @@ key replay pass. Its maximum proof passes fresh verification and byte/RSS limits
 proving takes 2,368.35 seconds against 300 seconds, and observed virtual size
 exceeds the literal 32 GiB limit.
 
-The corrected normal Core/Kagami/SDK build and genuine 54-role producer pass.
-Paired finalized-execution captures and consumers agree byte for byte. Authentic
-canonical fixtures, managed verifier corrections, bounded retail-journal recovery,
-IVM descriptor/copyback/partial-dispatch/publication controls and the new X509
-private SHA/RFC bridge are integrated. Normal privacy builds and regenerated pins
-pass, but the expanded selection has 1,039 passes and 19 failures; repairs require
-native rerunning. Successive SDK producer builds expose IVM fixture imports and
-JSON-array serialization errors; their corrections await a fresh build. The
-actual release-evidence Python suite passes 130 tests. The last native
-identity selection failed cold Recover/Recover before the repair. Full bridge,
-Kotlin, Swift, workspace and four-validator checks on the combined candidate,
-physical-device evidence and signed release artifacts remain incomplete.
+Before merge `c09adfff`, the corrected normal Core/Kagami/SDK build, genuine
+fixture producers, all 1,061 privacy controls and all 674 native bridge controls
+pass. The Core run records 30 fixture failures; its last group overlaps the merge
+and 66 planned controls remain unrun. Source guards refuse subsequent stages.
+The merge changes 504 source paths and commits conflict markers in 63 files.
+Reviewed merge repairs pass normal privacy builds, three authentic pins and 1,061
+selected controls. Two additional model-test compilation corrections are applied.
+The subsequent stock-Cargo JavaScript and X509 query-replay changes require a fresh
+integrated build; earlier passes do not qualify those changes. Kotlin, Swift, workspace, four-validator,
+physical-device and signed release qualification remain incomplete. Detailed
+current boundaries are in the [ZK goals](specs/zk_first_release_goals.md).
 
 Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and

@@ -393,10 +393,6 @@ impl ExecutionResultCommitment {
                 32,
             ),
         )
-<<<<<<< HEAD
-        .map_err(|error| CommitmentError::Encoding(error.to_string()))?;
-        decoded.validate_with_validation(validation)?;
-=======
         .map_err(|error| {
             if (outer_scope || matches!(error, norito::Error::AllocationFailed { .. }))
                 && let Some(resource) = error.decode_resource_error()
@@ -405,8 +401,7 @@ impl ExecutionResultCommitment {
             }
             CommitmentError::Encoding(error.to_string())
         })?;
-        decoded.validate()?;
->>>>>>> origin/optimizations
+        decoded.validate_with_validation(validation)?;
         Ok(decoded)
     }
 

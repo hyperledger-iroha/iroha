@@ -237,13 +237,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         Some(metadata.sumeragi_context.root_scope),
     );
     let world = State::new_with_chain_and_network_id_for_testing(
-<<<<<<< HEAD
         routing_world,
-=======
-        crate::sumeragi::lanes::routing::test_support::world(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ),
->>>>>>> origin/optimizations
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
         "sumeragi-certified-test-chain".parse().unwrap(),

@@ -329,36 +329,6 @@ fn stream_token_custody_debug_syscalls_cannot_mutate_delete_or_disclose_native_s
 fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_typed_values() {
     let paths = custody_namespace_paths();
     let user: StatePath = "sorafs_stream_token_custody_v1x".parse().unwrap();
-<<<<<<< HEAD
-    // Slash descendants are namespace probes, not valid Kotodama declaration identifiers.
-    // Keep their real syscall denials below without building an invalid CNTR declaration.
-    let namespace_descendants: BTreeSet<_> = paths
-        .iter()
-        .filter(|path| path.as_ref().contains('/'))
-        .cloned()
-        .collect();
-    assert!(
-        namespace_descendants.contains(
-            &"sorafs_final_promotion_account_custody_v1/descendant"
-                .parse::<StatePath>()
-                .unwrap()
-        )
-    );
-    assert!(
-        namespace_descendants
-            .iter()
-            .any(|path| path.as_ref().starts_with("sorafs/provider_admission/"))
-    );
-    let mut declarations = paths
-        .iter()
-        .filter(|path| !namespace_descendants.contains(*path))
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(
-        declarations.len() + namespace_descendants.len(),
-        paths.len()
-    );
-=======
     // Slash paths are real native namespace probes, but cannot be scalar CNTR
     // declarations. Prove admission rejects every such program before testing
     // all original paths at the real syscall boundary with a valid interface.
@@ -373,8 +343,38 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         .collect::<Vec<_>>();
     assert_eq!(
         namespace_only.len(),
-        14,
-        "all provider-admission paths and the custody descendant"
+        29,
+        "all provider-admission, custody and gateway descendant paths"
+    );
+    assert!(
+        namespace_only.contains(
+            &"sorafs_final_promotion_account_custody_v1/descendant"
+                .parse::<StatePath>()
+                .unwrap()
+        )
+    );
+    assert!(
+        namespace_only
+            .iter()
+            .any(|path| path.as_ref().starts_with("sorafs/provider_admission/"))
+    );
+    let gateway_prefix = format!(
+        "{}/",
+        crate::query::stream_token_gateway::storage::STATE_ROOT
+    );
+    assert_eq!(
+        namespace_only
+            .iter()
+            .filter(|path| path.as_ref().starts_with(&gateway_prefix))
+            .count(),
+        15
+    );
+    assert_eq!(
+        namespace_only
+            .iter()
+            .filter(|path| !path.as_ref().starts_with(&gateway_prefix))
+            .count(),
+        14
     );
     for path in &namespace_only {
         assert!(path.as_ref().contains('/'));
@@ -399,18 +399,13 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(declarations.len() + namespace_only.len(), paths.len());
->>>>>>> origin/optimizations
     declarations.push(user.clone());
     let value = custody_namespace_bytes_record();
     let mut vm = custody_namespace_vm(&declarations);
     let mut host = custody_namespace_scoped_host();
     for path in &paths {
         let typed_value = ivm::host::validate_declared_state_value_payload(&vm, path, &value);
-<<<<<<< HEAD
-        if namespace_descendants.contains(path) {
-=======
         if namespace_only.contains(path) {
->>>>>>> origin/optimizations
             assert_eq!(
                 typed_value,
                 Err(ivm::VMError::NoritoInvalid),
@@ -438,11 +433,7 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
             vm.set_register(11, value_ptr);
             // Reads validate declarations first; writes apply the namespace guard first.
             // Every declarable native key must reach the opaque namespace denial instead.
-<<<<<<< HEAD
-            let expected = if namespace_descendants.contains(path)
-=======
             let expected = if namespace_only.contains(path)
->>>>>>> origin/optimizations
                 && matches!(
                     syscall,
                     ivm_sys::SYSCALL_STATE_GET
@@ -461,11 +452,7 @@ fn stream_token_custody_contract_syscalls_reject_logical_shadows_with_valid_type
         }
         vm.set_register(10, path_ptr);
         let count = host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm);
-<<<<<<< HEAD
-        if namespace_descendants.contains(path) {
-=======
         if namespace_only.contains(path) {
->>>>>>> origin/optimizations
             assert_eq!(count, Err(ivm::VMError::NoritoInvalid));
         } else {
             assert!(count.is_ok());

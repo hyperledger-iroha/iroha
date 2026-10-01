@@ -186,6 +186,16 @@ fn fixture_config() -> (
         world.accounts.insert(id, account);
     }
     let mut config = TestChainConfig::new(world, 0);
+    // The original genesis signs the consensus-key registrations below. Grant
+    // that exact signer its required permission before native genesis execution;
+    // the alias payer retains only its existing parameter-management permission.
+    let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
+    config.world.account_permissions_mut_for_testing().insert(
+        genesis_authority,
+        BTreeSet::from([Permission::from(
+            iroha_executor_data_model::permission::governance::CanManageConsensusKeys,
+        )]),
+    );
     config.nexus = Some(nexus);
     config.genesis_instructions = validators
         .into_iter()

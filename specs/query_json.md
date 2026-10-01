@@ -33,14 +33,10 @@ Singular requests identify the query by name and optionally include a payload:
   "singular": {
     "type": "FindContractManifestByArtifactId",
     "payload": {
-<<<<<<< HEAD
-      "artifact_id": { "dataspace_id": 18446744073709551615, "code_hash": "hash:<64-uppercase-hex>#<checksum>" }
-=======
       "artifact_id": {
-        "dataspace_id": 0,
+        "dataspace_id": 18446744073709551615,
         "code_hash": "hash:BAF171AF0123F8A6C0BFAD9A4CA03A80C678DA21355E484320E2E5C667408D2F#0BB7"
       }
->>>>>>> origin/optimizations
     }
   }
 }
@@ -58,11 +54,7 @@ The following singular queries are supported:
 - `FindParameters`
 - `FindAssetDefinitionById` with `{ "asset": "<base58-asset-definition-id>" }`
 - `FindAssetById` with `{ "asset": "<base58-asset-definition-id>", "account_id": "<canonical-i105>", "scope": { "kind": "Global" } }`
-<<<<<<< HEAD
-- `FindContractManifestByArtifactId` (requires `artifact_id` with the exact full-width dataspace and canonical checksummed code hash)
-=======
 - `FindContractManifestByArtifactId` (requires `artifact_id` with an explicit unsigned 64-bit `dataspace_id` and a canonical checksummed Norito `code_hash` literal)
->>>>>>> origin/optimizations
 
 Example singular asset-definition lookup:
 
