@@ -39,7 +39,7 @@ use std::{
 use std::{fs, fs::OpenOptions};
 use zeroize::Zeroizing;
 
-const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 50;
+const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 54;
 const _: [(); KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1] = [(); KagemushaArtifactRoleV1::ALL.len()];
 const EXPERIMENTAL_ARTIFACT_INVENTORY_JSON_MAX_BYTES_V1: usize = 64 * 1024;
 const AUTHORITY_REVIEW_PROJECTION_MAX_BYTES_V1: usize = 128 * 1024 * 1024;
@@ -192,7 +192,7 @@ enum Command {
     /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence.
     #[command(name = "authenticate-release-v1")]
     AuthenticateReleaseV1(AuthenticateReleaseV1Args),
-    /// Authenticate one signed proof-only testnet release and its exact 50 artifacts.
+    /// Authenticate one signed proof-only testnet release and its exact 54 artifacts.
     #[command(name = "authenticate-experimental-release-v1")]
     AuthenticateExperimentalReleaseV1(AuthenticateExperimentalReleaseV1Args),
     /// Sign one experimental release approval with one owner-held authority key.
@@ -220,7 +220,7 @@ struct AuthenticateReleaseV1Args {
     /// Canonical JSON recursive-verifier profile consumed by Core.
     #[arg(long, value_name = "PATH")]
     recursive_profile: PathBuf,
-    /// Absolute directory containing all 50 SHA-256-addressed release artifacts.
+    /// Absolute directory containing all 54 SHA-256-addressed release artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// Canonical output from the separately pinned authority-review verifier.
@@ -268,10 +268,10 @@ struct PrepareExperimentalReleaseV1Args {
     /// Canonical Norito typed structural-evidence receipt from a trusted evidence producer.
     #[arg(long, value_name = "PATH")]
     validation_receipt: PathBuf,
-    /// Typed JSON array of all 50 role-to-content-address bindings.
+    /// Typed JSON array of all 54 role-to-content-address bindings.
     #[arg(long, value_name = "PATH")]
     artifact_inventory: PathBuf,
-    /// Canonical absolute directory of the 50 content-addressed proof artifacts.
+    /// Canonical absolute directory of the 54 content-addressed proof artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// Canonical absolute directory of all SHA-256-addressed receipt evidence files.
@@ -320,7 +320,7 @@ struct AuthenticateExperimentalReleaseV1Args {
     /// Canonical Norito threshold attestation over the experimental release.
     #[arg(long, value_name = "PATH")]
     attestation: PathBuf,
-    /// Canonical absolute directory containing all 50 signed artifacts.
+    /// Canonical absolute directory containing all 54 signed artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     #[command(flatten)]
@@ -360,7 +360,7 @@ struct SignExperimentalReleaseApprovalV1Args {
     /// Independently trusted canonical Norito release-authority policy.
     #[arg(long, value_name = "PATH")]
     authority_policy: PathBuf,
-    /// Canonical absolute directory containing all 50 signed artifacts.
+    /// Canonical absolute directory containing all 54 signed artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// One owner-held mode-0600 Kagami private-key record.
@@ -384,7 +384,7 @@ struct AssembleExperimentalReleaseV1Args {
     /// Independently trusted canonical Norito release-authority policy.
     #[arg(long, value_name = "PATH")]
     authority_policy: PathBuf,
-    /// Canonical absolute directory containing all 50 signed artifacts.
+    /// Canonical absolute directory containing all 54 signed artifacts.
     #[arg(long, value_name = "PATH")]
     artifact_root: PathBuf,
     /// One canonical Norito approval; repeat for each independent authority.
@@ -769,7 +769,11 @@ fn prepare_experimental_release_v1<T: Write>(
         "authority_policy_digest",
         &hex::encode(subject.authority_policy_digest),
     )?;
-    insert_json_field(&mut report, "artifact_count", &50_u64)?;
+    insert_json_field(
+        &mut report,
+        "artifact_count",
+        &u64::try_from(manifest.artifacts.len())?,
+    )?;
     insert_json_field(
         &mut report,
         "evidence_file_count",
@@ -1165,7 +1169,7 @@ fn validate_exact_release_inventory_v1(
             .zip(KagemushaArtifactRoleV1::ALL)
             .any(|(binding, expected)| binding.role != expected)
     {
-        bail!("KAGEMUSHA V1 release requires the exact ordered 50-role artifact inventory");
+        bail!("KAGEMUSHA V1 release requires the exact ordered 54-role artifact inventory");
     }
     for (index, binding) in artifacts.iter().enumerate() {
         if binding.sha256 == [0; 32]
@@ -2205,7 +2209,7 @@ mod tests {
         let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_dir.path())
             .expect("content-addressed artifact resolver");
         rehash_all_release_artifacts_v1(&artifacts, artifact_dir.path())
-            .expect("all 50 real artifact bindings match");
+            .expect("all 54 real artifact bindings match");
         let evidence_bytes = b"observed structural circuit rows";
         let evidence = KagemushaEvidenceFileV1 {
             sha256: sha256(evidence_bytes),
@@ -2464,7 +2468,14 @@ mod tests {
     #[test]
     fn exact_inventory_rejects_omission_reorder_and_duplicate_hash() {
         let inventory = artifact_inventory();
+        assert_eq!(inventory.len(), 54);
         validate_exact_release_inventory_v1(&inventory).expect("accept ordered inventory");
+        assert!(validate_exact_release_inventory_v1(&inventory[..50]).is_err());
+        for omitted in 50..54 {
+            let mut missing_new_role = inventory.clone();
+            missing_new_role.remove(omitted);
+            assert!(validate_exact_release_inventory_v1(&missing_new_role).is_err());
+        }
 
         let mut missing = inventory.clone();
         missing.pop();

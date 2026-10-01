@@ -423,12 +423,7 @@ fn main_deep_composition_v1(
                         word: log19.post_base.sha_word(),
                         call: log19.post_base.sha(),
                         rfc: log19.post_base.rfc5280(),
-                        terminal: *log19
-                            .claims
-                            .sha
-                            .segments
-                            .get(segment)
-                            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+                        segment: segment as u8,
                         ca_calls: &log19.claims.sha.ca_calls,
                     },
                 )?
@@ -458,6 +453,11 @@ pub(super) fn verify_main_deep_constraints_v1(
     point: E,
     alphas: &[Vec<Vec<E>>],
     link_alphas: &[E],
+    key_plan: &main_key_joins::MainKeyJoinPlanV1,
+    key_alphas: &[E],
+    key_openings: &[E; main_key_joins::OPENINGS_V1],
+    sha_union_plan: &main_sha_union::MainShaUnionPlanV1,
+    sha_union_alphas: &[E],
     p256: &MainP256Log5VerifierConstraintSourceV1<'_>,
     projection: &MainProjectionVerifierConstraintSourceV1,
     io: &MainIoVerifierConstraintSourceV1,
@@ -510,6 +510,14 @@ pub(super) fn verify_main_deep_constraints_v1(
             _error,
         );
     })?;
+    if !key_plan.admissible_v1(point, &shared)? {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    let expected = expected.add(key_plan.evaluate_v1(&groups, point, key_openings, key_alphas)?);
+    if sha_union_plan != &main_sha_union::MainShaUnionPlanV1::new_v1(layout)? {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let expected = expected.add(sha_union_plan.evaluate_v1(&groups, point, sha_union_alphas)?);
     verify_composition_v1(&shared, deep, point, expected)
 }
 

@@ -40,6 +40,7 @@ INTERNAL_HELPER_PROOF_LENGTHS = {
     "guard_bundle": (12_000, 12_032),
     "mint_hash_shard": (8_064, 8_096),
     "mint_hash_claim": (12_064, 12_096),
+    "ordinary_app_guard": (12_128, 12_160),
 }
 
 
@@ -80,7 +81,7 @@ def native_profile_fixture(protocols: dict[str, Any]) -> dict[str, Any]:
         }
     helpers = {row["helper"]: row for row in protocols["helper_protocols"]}
     for name in VERIFIER.NATIVE_PROFILE_DIGEST_TAGS:
-        if name == "mint_genesis_roster_id":
+        if name == "mint_genesis_authorization_id":
             result[name] = [3] * 32
         else:
             helper = ("mint_hash_shard" if name.startswith("mint_hash_shard_") else
@@ -448,8 +449,8 @@ def _fixture(
         "state_ep_protocol_digest": state_ep,
         "terminal_authorization_eq_protocol_digest": _digest(3),
         "terminal_authorization_ep_protocol_digest": _digest(4),
-        "commit_wrapper_eq_protocol_digest": _digest(17),
-        "commit_wrapper_ep_protocol_digest": _digest(18),
+        "commit_wrapper_eq_protocol_digest": _digest(5 + 2 * len(VERIFIER.HELPERS)),
+        "commit_wrapper_ep_protocol_digest": _digest(6 + 2 * len(VERIFIER.HELPERS)),
         "helper_protocols": helper_protocols,
     }
     artifact_projection = [
@@ -1126,7 +1127,7 @@ def test_release_artifact_ordinals_match_current_rust_model() -> None:
         for ordinal, role in enumerate(VERIFIER.ARTIFACT_ROLES)
     ]
     assert rust_roles == expected
-    assert len(rust_roles) == 50
+    assert len(rust_roles) == 54
 
 
 def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
@@ -1186,7 +1187,7 @@ def test_release_rejects_missing_inner_mint_artifacts(
     fixture.write_manifest()
     result = _run(fixture)
     assert result.returncode == 1
-    assert "artifact inventory must contain exactly the 50 V1 roles" in result.stderr
+    assert "artifact inventory must contain exactly the 54 V1 roles" in result.stderr
 
 
 def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
@@ -1308,7 +1309,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "terminal_authorization_vk_ep",
         "commit_wrapper_vk_ep",
     }
-    assert len(profile["helper_circuits"]) == 6
+    assert len(profile["helper_circuits"]) == 7
     assert [row["helper"] for row in profile["helper_circuits"]] == list(
         VERIFIER.HELPERS
     )
@@ -1327,7 +1328,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         VERIFIER.ACCEPTANCE_CASES
     )
     assert len(profile["acceptance_cases"]) == len(VERIFIER.ACCEPTANCE_CASES)
-    assert len(projection["artifact_inventory"]) == 50
+    assert len(projection["artifact_inventory"]) == 54
     assert [row["role"] for row in projection["artifact_inventory"]][2:10] == [
         "inner_state_pk_eq",
         "inner_state_vk_eq",
@@ -1363,6 +1364,12 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "mint_hash_claim_vk_eq",
         "mint_hash_claim_pk_ep",
         "mint_hash_claim_vk_ep",
+    ]
+    assert [row["role"] for row in projection["artifact_inventory"]][50:54] == [
+        "ordinary_app_guard_pk_eq",
+        "ordinary_app_guard_vk_eq",
+        "ordinary_app_guard_pk_ep",
+        "ordinary_app_guard_vk_ep",
     ]
     assert len(projection["verifier_commands"]) == len(fixture.commands)
     candidate_context_digest = projection["receipt_projection"]["evidence_closure"][
@@ -2024,7 +2031,7 @@ def test_native_profile_digest_matches_rust_tagged_golden_and_binds_all_fields()
         changed[name]["num_fixed"] += 1
         assert VERIFIER.rust_native_profile_digest(changed, protocols) != digest
     changed = json.loads(json.dumps(profile))
-    changed["mint_genesis_roster_id"][0] ^= 1
+    changed["mint_genesis_authorization_id"][0] ^= 1
     assert VERIFIER.rust_native_profile_digest(changed, protocols) != digest
 
 
@@ -2045,8 +2052,8 @@ def test_native_profile_digest_matches_rust_tagged_golden_and_binds_all_fields()
     ("mint_eq_protocol_digest", None, [255] * 32),
     ("mint_eq_protocol_digest", None, [True] + [0] * 31),
     ("mint_eq_protocol_digest", None, [2] + [0] * 31),
-    ("mint_genesis_roster_id", None, [0] * 32),
-    ("mint_genesis_roster_id", None, [1] * 31),
+    ("mint_genesis_authorization_id", None, [0] * 32),
+    ("mint_genesis_authorization_id", None, [1] * 31),
     ("opaque_native_profile_digest", None, "aa" * 32),
 ])
 def test_native_profile_rejects_malformed_layouts_and_role_substitution(
@@ -2241,3 +2248,63 @@ def test_per_observation_and_global_time_caps_fail_closed(tmp_path: Path) -> Non
     result = _run(fixture)
     assert result.returncode == 1
     assert "duration exceeds" in result.stderr
+
+
+def test_internal_helper_evidence_inventory_matches_current_rust_model() -> None:
+    """Keep private proof accounting aligned with the native release contract."""
+    source = (
+        ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs"
+    ).read_text()
+    implementation = source.split("const fn uses_internal_proof_evidence(self) -> bool {", 1)[1].split("\n    }", 1)[0]
+    native = set(re.findall(r"Self::([A-Za-z0-9]+)", implementation))
+    expected = {
+        "".join(part[:1].upper() + part[1:] for part in helper.split("_"))
+        for helper in VERIFIER.INTERNAL_PROOF_HELPERS
+    }
+    assert native == expected
+    assert "OrdinaryAppGuard" in native
+
+
+def test_native_profile_authorization_field_matches_current_rust_model() -> None:
+    """Bind tag 17 to authorization identity without changing its wire digest."""
+    native = (
+        ROOT / "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs"
+    ).read_text()
+    config = (ROOT / "crates/iroha_core/src/smartcontracts/isi/kagemusha.rs").read_text()
+    name = "mint_genesis_authorization_id"
+    assert VERIFIER.NATIVE_PROFILE_DIGEST_TAGS[name] == 17
+    assert f"pub {name}: [u8; 32]" in native
+    assert f"{name}: [u8; 32]" in config
+    digest_impl = native.split("impl KagemushaRecursiveVerifierProfileV1 {", 1)[1].split(
+        "    fn validate(&self)", 1
+    )[0]
+    assert re.search(rf"bytes\.push\(17\);\s*bytes\.extend_from_slice\(&self\.{name}\);", digest_impl)
+
+
+@pytest.mark.parametrize("retain_current", [False, True])
+def test_native_profile_rejects_retired_roster_identity(retain_current: bool) -> None:
+    protocols = native_golden_protocols()
+    profile = native_profile_fixture(protocols)
+    profile["mint_genesis_roster_id"] = profile["mint_genesis_authorization_id"]
+    if not retain_current:
+        del profile["mint_genesis_authorization_id"]
+    with pytest.raises(VERIFIER.KagemushaEvidenceError, match="fields must be exactly"):
+        VERIFIER.rust_native_profile_digest(profile, protocols)
+
+
+def test_release_rejects_retired_fifty_artifact_inventory(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["artifacts"] = fixture.manifest["artifacts"][:50]
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "artifact inventory must contain exactly the 54 V1 roles" in result.stderr
+
+
+def test_release_rejects_retired_six_helper_protocol_inventory(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["protocols"]["helper_protocols"] = fixture.manifest["protocols"]["helper_protocols"][:6]
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "compiled helper protocols must contain exactly 7 rows" in result.stderr

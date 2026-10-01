@@ -4,9 +4,10 @@
 //! decisions, never local artifact paths, trait-object addresses, or loaded key
 //! allocations. An authenticated local runtime must match the independently
 //! finalized release authority before it can replace the fail-closed verifier.
-//! State publication also accepts that built-in reject-all runtime while local
-//! artifacts are unavailable; it never grants monetary authority. Its commit
-//! check reads the borrowed runtime directly.
+//! State publication checks the immutable local cache without requiring successor
+//! artifacts to be loaded. Actual monetary execution separately checks the exact
+//! governed registry and defers unavailable/stale local artifacts before effects.
+//! The diagnostic projection below is not a complete-State commitment.
 
 use std::any::Any;
 
@@ -225,6 +226,43 @@ pub(crate) fn runtime_verifier_authority(
         .downcast_ref::<AuthenticatedKagemushaV1RuntimeVerifier>()
         .ok_or_else(|| "unrecognized Kagemusha verifier runtime cannot enter State".to_owned())?
         .semantic_authority()
+}
+
+/// Validate the immutable local artifact cache without granting governed authority.
+///
+/// A finalized registry transition may make a previously authenticated local cache stale.
+/// Publication must not depend on whether this process has loaded the successor artifacts.
+/// Every monetary execution separately checks the exact original governed registry and
+/// defers locally before effects when these artifacts are absent or stale. Reload still
+/// consumes State's exact opaque head and requires every governed identity and role.
+///
+/// This borrowed check allocates no projection/key copies on success. It accepts only the
+/// built-in implementations, and a loaded cache must remain structurally complete and on
+/// the original State network. It never supplies a complete-State commitment or admission.
+pub(crate) fn validate_runtime_cache_for_publication(
+    verifier: &dyn Any,
+    network_id: iroha_data_model::NetworkId,
+) -> Result<(), String> {
+    if verifier.is::<RejectAllKagemushaV1RuntimeVerifier>() {
+        return Ok(());
+    }
+    let runtime = verifier
+        .downcast_ref::<AuthenticatedKagemushaV1RuntimeVerifier>()
+        .ok_or_else(|| "unrecognized Kagemusha verifier runtime cannot enter State".to_owned())?;
+    runtime.lifecycle.validate()?;
+    if runtime.releases.is_empty() || runtime.releases.len() != runtime.lifecycle.statuses.len() {
+        return Err("Kagemusha verifier release and lifecycle sets differ".to_owned());
+    }
+    for (release_id, local) in &runtime.releases {
+        if runtime.lifecycle.status(*release_id).is_none()
+            || local.release_id != *release_id
+            || local.artifacts.recursion_artifacts().release_id != *release_id
+            || local.network_id != network_id
+        {
+            return Err("Kagemusha verifier cache has inconsistent original artifacts".to_owned());
+        }
+    }
+    Ok(())
 }
 
 /// Check local authenticated artifacts against independently finalized release authority.

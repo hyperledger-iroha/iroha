@@ -43,8 +43,8 @@ class KagemushaCoreCoordinatorFrameV1Test {
     @Test
     fun `coordinator methods agree with the shared current schema vectors`() {
         val cases = fixtures()
-        assertEquals((1..18).toSet(), cases.map { it.method.code }.toSet())
-        assertEquals(25, cases.size)
+        assertEquals((1..21).toSet(), cases.map { it.method.code }.toSet())
+        assertEquals(28, cases.size)
         cases.forEach { case ->
             val request = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
             val response = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)

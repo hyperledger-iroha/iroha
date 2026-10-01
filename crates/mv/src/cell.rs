@@ -18,6 +18,9 @@ pub use generations::{CellGenerationBacking, CellGenerationBackingError};
 
 #[path = "cell/frozen_read.rs"]
 mod frozen_read;
+#[path = "cell/original_read.rs"]
+mod original_read;
+pub use original_read::{CommittedCellReadError, CommittedCellView};
 #[path = "cell/successor.rs"]
 mod successor;
 pub use successor::{CellPublicationSuccessor, CellPublicationSuccessorError};

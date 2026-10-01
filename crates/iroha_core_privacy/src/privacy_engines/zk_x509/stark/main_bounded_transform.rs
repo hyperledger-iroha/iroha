@@ -54,6 +54,16 @@ impl MainBoundedTransformPolicyV1 {
                         ),
                     )
                 })
+                .and_then(|available| {
+                    available.checked_sub(
+                        super::main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1(),
+                    )
+                })
+                .and_then(|available| {
+                    available.checked_sub(
+                        super::main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1(),
+                    )
+                })
                 .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?,
             backend: fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(
             ),

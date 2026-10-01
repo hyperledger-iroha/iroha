@@ -1009,6 +1009,21 @@ pub(crate) struct AggregateDeepLaneMixV1 {
     /// Composition-chunk mixes.
     pub(crate) composition: Vec<E>,
 }
+/// A caller-derived additional opening of an existing authenticated base column.
+/// The caller binds the immutable point/column plan and all values before mixing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AggregateSupplementalDeepOpeningV1 {
+    /// Logical trace-group index.
+    pub(crate) group: usize,
+    /// Base column inside the logical group.
+    pub(crate) base_column: usize,
+    /// Nonzero out-of-domain point derived by the owning relation.
+    pub(crate) point: E,
+    /// Canonical claimed column value at that point.
+    pub(crate) value: E,
+    /// Independent post-opening batching coefficient for the sole FRI lane.
+    pub(crate) mix: E,
+}
 /// Canonical opened fields passed to a relation evaluator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateOpenedTraceGroupV1 {
@@ -6183,6 +6198,7 @@ pub(crate) fn verify_opened_query_relations_with_deep_v1<
         fri_betas,
         terminals,
         Some(evaluator),
+        &[],
     )
 }
 /// Bind every full DEEP trace/composition claim to authenticated current-only
@@ -6203,6 +6219,7 @@ pub(crate) fn verify_opened_query_relations_after_complete_oods_v1(
     expected_indices: &[usize],
     fri_betas: &[Vec<E>],
     terminals: &[Vec<E>],
+    supplemental: &[AggregateSupplementalDeepOpeningV1],
 ) -> Result<(), AggregateStarkErrorV1> {
     if layout.trace_layout == AggregateTraceLayoutV1::GroupedCurrentNext {
         return Err(AggregateStarkErrorV1::ConstraintOpening);
@@ -6218,6 +6235,7 @@ pub(crate) fn verify_opened_query_relations_after_complete_oods_v1(
         fri_betas,
         terminals,
         None,
+        supplemental,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -6232,7 +6250,22 @@ fn verify_deep_query_bindings_v1(
     fri_betas: &[Vec<E>],
     terminals: &[Vec<E>],
     mut evaluator: Option<&mut dyn AggregateOpenedRowEvaluatorV1>,
+    supplemental: &[AggregateSupplementalDeepOpeningV1],
 ) -> Result<(), AggregateStarkErrorV1> {
+    if (!supplemental.is_empty() && parameters.security_lanes != 1)
+        || supplemental.iter().any(|opening| {
+            opening.point == E::ZERO
+                || !opening.point.is_canonical()
+                || !opening.value.is_canonical()
+                || !opening.mix.is_canonical()
+                || layout
+                    .trace_groups
+                    .get(opening.group)
+                    .is_none_or(|group| opening.base_column >= group.base_width)
+        })
+    {
+        return Err(AggregateStarkErrorV1::DeepOpening);
+    }
     validate_proof_shape_v1(proof, parameters, layout)?;
     validate_deep_proof_shape_v1(deep, parameters, layout)?;
     validate_deep_lane_mixes_v1(deep_mixes, parameters, layout)?;
@@ -6300,7 +6333,7 @@ fn verify_deep_query_bindings_v1(
                     return Err(AggregateStarkErrorV1::ConstraintOpening);
                 }
             }
-            let fri_base = deep_ali_mixed_opening_v1(
+            let mut fri_base = deep_ali_mixed_opening_v1(
                 query_point,
                 deep_point,
                 layout,
@@ -6310,6 +6343,23 @@ fn verify_deep_query_bindings_v1(
                 &deep_compositions[lane],
                 &deep_mixes[lane],
             )?;
+            for extra in supplemental {
+                let value = opened_groups
+                    .get(extra.group)
+                    .and_then(|group| group.base_current.get(extra.base_column))
+                    .copied()
+                    .ok_or(AggregateStarkErrorV1::DeepOpening)?;
+                let inverse = query_point
+                    .sub(extra.point)
+                    .inv()
+                    .ok_or(AggregateStarkErrorV1::DeepOpening)?;
+                fri_base = fri_base.add(
+                    extra
+                        .mix
+                        .mul(E::from_base(value).sub(extra.value))
+                        .mul(inverse),
+                );
+            }
             let fri_mask = E::canonical(query.fri_mask_values[lane])
                 .ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
             verify_fri_query_v1(

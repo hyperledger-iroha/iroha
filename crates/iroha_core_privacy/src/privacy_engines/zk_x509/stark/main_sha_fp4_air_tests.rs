@@ -1,9 +1,7 @@
 //! Complete SHA registration Fp4 arithmetic, degree and public-context checks.
 
 use super::super::super::{
-    sha_call_bus_stark::{
-        ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallRoleV1, ZkX509ShaSegmentTerminalV1,
-    },
+    sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallRoleV1},
     sha256_word_air::{ZkX509WordMemoryChallengesV1, ZkX509WordMemoryLaneChallengesV1},
 };
 use super::*;
@@ -56,17 +54,12 @@ fn boundaries() -> [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V
     })
 }
 
-fn terminal(segment: u16) -> ZkX509ShaSegmentTerminalV1 {
-    ZkX509ShaSegmentTerminalV1 {
-        segment: segment as u8,
-        source_products: [F(17); 4],
-        digest_products: [F(19); 4],
-        rfc_stream_products: [[F(23); 4]; 4],
-    }
+fn terminal(segment: u16) -> u8 {
+    segment as u8
 }
 
 fn context(
-    terminal: ZkX509ShaSegmentTerminalV1,
+    terminal: u8,
     boundaries: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 ) -> ShaMainFp4AirContextV1<'_> {
     let (word, call, rfc) = challenges();
@@ -74,7 +67,7 @@ fn context(
         word,
         call,
         rfc,
-        terminal,
+        segment: terminal,
         ca_calls: boundaries,
     }
 }
@@ -126,7 +119,7 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
         let actual = evaluator
             .evaluate_residues_v1(&current, &next, context(terminal, &boundaries))
             .unwrap();
-        assert_eq!(actual.len(), 796);
+        assert_eq!(actual.len(), 772);
         let mut expected = vec![E::ZERO; actual.len()];
         // Total degree six includes fixed columns. Cubic cell substitution
         // therefore needs nineteen independent base-field samples.
@@ -245,20 +238,48 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_changed_terminal_claims(
         .evaluate_residues_v1(&current, &next, context(terminal, &boundaries))
         .unwrap();
     let mut wrong_instance = terminal;
-    wrong_instance.segment = (wrong_instance.segment + 1) % 4;
+    wrong_instance = (wrong_instance + 1) % 4;
     assert!(
         evaluator
             .evaluate_residues_v1(&current, &next, context(wrong_instance, &boundaries))
             .is_err()
     );
-    let mut changed_terminal = terminal;
-    changed_terminal.source_products[0] = changed_terminal.source_products[0].add(F::ONE);
-    assert_ne!(
-        evaluator
-            .evaluate_residues_v1(&current, &next, context(changed_terminal, &boundaries))
-            .unwrap(),
-        original
-    );
+    // Private RFC endpoints remain locally bound by all16 stream recurrences.
+    // The20 new joined quotient controls bind them across registrations.
+    for product in 0..16 {
+        let mut changed = next;
+        changed.aux[62 + product] = changed.aux[62 + product].add(E::ONE);
+        assert_ne!(
+            evaluator
+                .evaluate_residues_v1(&current, &changed, context(terminal, &boundaries))
+                .unwrap(),
+            original
+        );
+    }
+    // Every retained compact-CA input/digest start and call-product remains
+    // independently constrained after whole-segment totals leave the wire.
+    for call in 0..ZK_X509_SHA_CA_CALL_COUNT_V1 {
+        for family in 0..4 {
+            for lane in 0..4 {
+                let mut changed = boundaries;
+                let products = match family {
+                    0 => &mut changed[call].source_start_products,
+                    1 => &mut changed[call].digest_start_products,
+                    2 => &mut changed[call].source_products,
+                    3 => &mut changed[call].digest_products,
+                    _ => unreachable!(),
+                };
+                products[lane] = products[lane].add(F::ONE);
+                assert_ne!(
+                    evaluator
+                        .evaluate_residues_v1(&current, &next, context(terminal, &changed))
+                        .unwrap(),
+                    original,
+                    "CA call {call}, family {family}, lane {lane}"
+                );
+            }
+        }
+    }
     let mut changed_boundaries = boundaries;
     changed_boundaries[12].digest_start_products[3] =
         changed_boundaries[12].digest_start_products[3].add(F::ONE);
@@ -289,11 +310,9 @@ fn sha_fp4_rejects_wrong_instance_noncanonical_rows_and_changed_terminal_claims(
         )
         .is_err()
     );
-    let mut invalid_terminal = terminal;
-    invalid_terminal.rfc_stream_products[3][3] = F(GOLDILOCKS_MODULUS_V1);
     assert!(
         evaluator
-            .evaluate_residues_v1(&current, &next, context(invalid_terminal, &boundaries))
+            .evaluate_residues_v1(&current, &next, context(u8::MAX, &boundaries))
             .is_err()
     );
 }

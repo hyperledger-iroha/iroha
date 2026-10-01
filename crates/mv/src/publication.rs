@@ -289,6 +289,30 @@ impl Publication {
             .poisoning_guard(self.version.lock().expect("MV publication lock poisoned"))
     }
 
+    /// Observe the original identity with an optional protected-pointer check.
+    /// The private callback may only compare already retained pointers or return
+    /// true for a pure identity observation. Reader creation, collector pinning,
+    /// reclamation and payload code must remain outside this short lock. A map
+    /// reader brackets both physical reads with equal opaque observations.
+    pub(crate) fn try_capture_reads<E>(
+        &self,
+        still_current: impl FnOnce() -> bool,
+    ) -> Result<CapturedPublication, PublicationPreparationError<E>> {
+        let wait = self.released.observe();
+        let version = match self.version.try_lock() {
+            Ok(guard) => self.released.poisoning_guard(guard),
+            Err(TryLockError::WouldBlock) => return Err(PublicationPreparationError::Busy(wait)),
+            Err(TryLockError::Poisoned(_)) => return Err(PublicationPreparationError::Poisoned),
+        };
+        if !still_current() {
+            return Err(PublicationPreparationError::Changed);
+        }
+        Ok(CapturedPublication {
+            owner: self.owner.clone(),
+            version: (*version).clone(),
+        })
+    }
+
     // Call only after acquiring the original current and undo writers. The
     // published pair cannot change while those writers remain owned.
     pub(crate) fn capture(&self) -> CapturedPublication {
@@ -464,3 +488,7 @@ mod detached_publication_tests;
 #[cfg(test)]
 #[path = "publication_admission_tests.rs"]
 mod admission_tests;
+
+#[cfg(test)]
+#[path = "publication_original_read_tests.rs"]
+mod original_read_tests;

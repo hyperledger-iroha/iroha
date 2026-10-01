@@ -65,8 +65,8 @@ pub const KAGEMUSHA_NATIVE_HARDWARE_CAPABILITY_BITS_V1: [u16; 16] = [
 ///
 /// The digest is an ABI/tamper pin only and never grants monetary authority.
 pub const KAGEMUSHA_NATIVE_CONTRACT_VECTOR_DIGEST_V1: [u8; 32] = [
-    0x13, 0xb5, 0x11, 0x24, 0xf0, 0x32, 0x9f, 0xc4, 0x7b, 0x0a, 0xa3, 0xbf, 0x55, 0x1f, 0x83, 0xf1,
-    0x80, 0x69, 0x20, 0xc9, 0x89, 0x8e, 0x7c, 0x07, 0xcd, 0x7f, 0x07, 0x30, 0xeb, 0x57, 0xfb, 0xb9,
+    0x1c, 0xf1, 0xef, 0x5c, 0x68, 0x72, 0x24, 0x27, 0x9f, 0xc3, 0x58, 0x23, 0xb5, 0x00, 0x51, 0xd1,
+    0x6d, 0x86, 0xb6, 0x24, 0xe4, 0x31, 0xa1, 0x5e, 0x93, 0xac, 0x8d, 0x8a, 0x98, 0xd0, 0xdf, 0x8c,
 ];
 
 /// Closed validation failures for a native KAGEMUSHA contract vector.
@@ -655,7 +655,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(vector.contract_digest),
-            "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
+            "1cf1ef5c687224279fc35823b50051d16d86b624e431a15e93ac8d8a98d0df8c"
         );
         let encoded = vector.encode_canonical().expect("canonical encoding");
         assert!(encoded.len() <= KAGEMUSHA_NATIVE_CONTRACT_VECTOR_MAX_BYTES_V1);
@@ -742,7 +742,7 @@ mod tests {
             )));
         }
         assert!(compact.contains(
-            "CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1\\\"13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9\""
+            "CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1\\\"1cf1ef5c687224279fc35823b50051d16d86b624e431a15e93ac8d8a98d0df8c\""
         ));
         assert!(compact.contains("connect_norito_kagemusha_contract_vector_v1("));
     }

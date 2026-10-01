@@ -58,6 +58,18 @@ impl CapturedRuntimePolicy {
 mod acquisition;
 pub(super) use acquisition::{AcquiredRuntimeBlock, AcquiredRuntimeBlockFields};
 
+// TODO: complete-State capture must consume these originals with all World,
+// membership, policy and authenticated-history owners before publishing a root.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "complete-State producer retains committed undo before overlay initialization"
+    )
+)]
+#[path = "canonical_runtime/original_cells.rs"]
+mod original_cells;
+
 impl SnapshotNexusRuntime {
     pub(super) fn nexus_projection(
         &self,

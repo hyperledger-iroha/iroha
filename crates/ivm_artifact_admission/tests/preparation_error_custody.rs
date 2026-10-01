@@ -76,6 +76,7 @@ fn local_reasons_and_nested_metering_convert_without_allocating() {
     for original in [
         VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
         VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
+        VMError::ExecutionDeferred(ExecutionDeferral::VerifierArtifactsUnavailable),
         VMError::AllocationDeferred(AllocationRefusal::DemandOverflow),
         VMError::AllocationDeferred(AllocationRefusal::ExceedsLimit {
             requested_bytes: 9,

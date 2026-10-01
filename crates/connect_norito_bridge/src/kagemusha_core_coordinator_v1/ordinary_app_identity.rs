@@ -297,7 +297,8 @@ impl OrdinaryBackend {
                 *retail_started = true;
                 let root = self
                     .path
-                    .join(hex::encode(self.source.original_enrollment_id(&self.path)?));
+                    .join(hex::encode(self.source.original_enrollment_id(&self.path)?))
+                    .join("retail-enrollment");
                 let reserve = reservation.as_ref().ok_or(Error::Rejected)?;
                 *retail = Some(
                     match self.source.platform_disposition {
@@ -490,7 +491,8 @@ impl OrdinaryBackend {
                     .map_err(|_| Error::Rejected)?;
                 let root = self
                     .path
-                    .join(hex::encode(self.source.original_enrollment_id(&self.path)?));
+                    .join(hex::encode(self.source.original_enrollment_id(&self.path)?))
+                    .join("possession");
                 let result = match self.source.platform_disposition {
                     KagemushaOrdinaryEnrollmentDispositionV1::Fresh => {
                         Possession::create(&root, pending, now)
@@ -1102,11 +1104,32 @@ mod tests {
         .to_transport_bytes()
         .unwrap();
         let pending = call(&b, h, 6, vec![t, signed]).unwrap();
+        let enrollment_root = b.path.join(hex::encode(c.enrollment_id));
+        let c21_path = enrollment_root.join("ordinary-app-enrollment.wal");
+        let c21_original = std::fs::read(&c21_path).unwrap();
         // A stable enrollment ID cannot substitute for the sole SHA(full C) E selector.
         assert!(possession_call(&b, h, 1, vec![c.enrollment_id.to_vec()]).is_err());
         let fields =
             possession_call(&b, h, 1, vec![c.attestation_challenge().unwrap().to_vec()]).unwrap();
         assert_eq!(fields.len(), 14);
+        assert_eq!(std::fs::read(&c21_path).unwrap(), c21_original);
+        assert!(
+            enrollment_root
+                .join("possession/ordinary-app-possession.wal")
+                .is_file()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(enrollment_root.join("possession"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
         assert!(fields[8].is_empty());
         assert_eq!(fields[9], pending[0]);
         assert_eq!(fields[12], subject.app_signing_identity_digest);
@@ -1209,6 +1232,25 @@ mod tests {
             vec![et, challenge_original.clone(), message.to_vec()],
         )
         .unwrap();
+        assert_eq!(std::fs::read(&c21_path).unwrap(), c21_original);
+        assert!(
+            enrollment_root
+                .join("possession/ordinary-app-possession.wal")
+                .is_file()
+        );
+        assert!(enrollment_root.join("retail-enrollment").is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(enrollment_root.join("retail-enrollment"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
         assert_eq!(prepared_fi[1], challenge_original);
         assert_eq!(prepared_fi[2], message);
         let mut wrong = message;
@@ -1226,6 +1268,80 @@ mod tests {
             )
             .is_err()
         );
+        // Recreate the native owner with its explicit recovery policy. Both child journals
+        // must reopen their original tickets without changing any retained enrollment WAL.
+        let retained_wals = [
+            b.path
+                .join(format!("{}-preparation", hex::encode(c.enrollment_id)))
+                .join("ordinary-preparation.norito.wal"),
+            c21_path.clone(),
+            enrollment_root.join("possession/ordinary-app-possession.wal"),
+            enrollment_root.join("retail-enrollment/ordinary-retail-enrollment.wal"),
+        ];
+        let retained_before = retained_wals
+            .each_ref()
+            .map(|path| std::fs::read(path).unwrap());
+        b.close(h).unwrap();
+        assert!(
+            possession_call(&b, h, 1, vec![c.attestation_challenge().unwrap().to_vec()]).is_err()
+        );
+        let recovered_source = Arc::new(
+            KagemushaNativeOrdinaryAppIdentitySourceV1::from_native_selected_originals(
+                b.path.clone(),
+                b.source.selected.clone(),
+                KagemushaOrdinaryEnrollmentDispositionV1::Recover,
+                KagemushaOrdinaryEnrollmentDispositionV1::Recover,
+                b.source.integrity_policy_original.clone(),
+            )
+            .unwrap(),
+        );
+        let b = OrdinaryBackend {
+            path: b.path.clone(),
+            source: recovered_source,
+            owner: Mutex::new(Owner::default()),
+        };
+        let h = b.open(b.path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            possession_call(&b, h, 1, vec![c.attestation_challenge().unwrap().to_vec()]).unwrap(),
+            fields
+        );
+        assert_eq!(
+            possession_call(&b, h, 8, vec![fields[0].clone(), original.clone()]).unwrap(),
+            identity
+        );
+        assert_eq!(
+            possession_call(
+                &b,
+                h,
+                9,
+                vec![
+                    fields[0].clone(),
+                    challenge_original.clone(),
+                    message.to_vec()
+                ],
+            )
+            .unwrap(),
+            prepared_fi
+        );
+        for (path, original_wal) in retained_wals.iter().zip(&retained_before) {
+            assert_eq!(std::fs::read(path).unwrap(), *original_wal);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                assert_eq!(
+                    std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                assert_eq!(
+                    std::fs::metadata(path.parent().unwrap())
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+            }
+        }
         let ft = prepared_fi[0].clone();
         assert_eq!(
             possession_call(&b, h, 10, vec![ft.clone()]).unwrap(),

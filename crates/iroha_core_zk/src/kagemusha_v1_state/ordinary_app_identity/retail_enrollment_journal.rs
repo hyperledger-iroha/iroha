@@ -144,16 +144,7 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
             return Err(Rejected);
         }
         let mut journal = PrivateJournal::open_existing(root, FORMAT).map_err(|_| Custody)?;
-        let mut rows = Vec::new();
-        journal
-            .scan_complete(|_, raw| {
-                if rows.len() == MAX_ROWS {
-                    return Err(super::super::PrivateJournalError::Corrupt);
-                }
-                rows.push(raw.to_vec());
-                Ok(())
-            })
-            .map_err(|_| Custody)?;
+        let rows = replay_bounded(&mut journal)?;
         let records = rows
             .iter()
             .map(|r| decode_record(r))
@@ -554,10 +545,107 @@ fn decode_challenge(raw: &[u8]) -> Result<KagemushaOrdinaryRetailEnrollmentChall
     }
     Ok(value)
 }
+// Establish the authenticated recovery prefix before any complete scan. Read at most the
+// allowed rows plus one excess record; an extra row is refused without consuming its successor.
+fn replay_bounded(journal: &mut PrivateJournal) -> Result<Vec<Vec<u8>>> {
+    let mut rows = Vec::with_capacity(MAX_ROWS);
+    for index in 0..=MAX_ROWS {
+        let Some((sequence, raw)) = journal.replay_next().map_err(|_| Custody)? else {
+            return if rows.is_empty() {
+                Err(Custody)
+            } else {
+                Ok(rows)
+            };
+        };
+        if index == MAX_ROWS || sequence != index as u64 {
+            return Err(Custody);
+        }
+        rows.push(raw);
+    }
+    Err(Custody)
+}
 fn decode_record(raw: &[u8]) -> Result<Record> {
     let value: Record = norito::decode_from_bytes(raw).map_err(|_| Custody)?;
     if norito::encode_canonical(&value).map_err(|_| Custody)? != raw {
         return Err(Custody);
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retail_recovery_replays_original_rows_before_complete_scans() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("retail");
+        let originals = [
+            Record::Prepared {
+                ticket: 7,
+                pending_scope: [1; 32],
+                credential_digest: [2; 32],
+                challenge_original: vec![3; 32],
+                admitted_at_ms: 100,
+            },
+            Record::Invoked,
+            Record::AccountSignature([4; 64]),
+            Record::Certificate {
+                original: vec![5; 32],
+                authenticated_at_ms: 200,
+            },
+        ]
+        .map(|record| norito::encode_canonical(&record).unwrap());
+        let mut journal = PrivateJournal::create_new(&root, FORMAT).unwrap();
+        for original in &originals {
+            journal.append(original).unwrap();
+        }
+        drop(journal);
+        let path = root.join(FORMAT.filename);
+        let retained = std::fs::read(&path).unwrap();
+        let mut journal = PrivateJournal::open_existing(&root, FORMAT).unwrap();
+        let rows = replay_bounded(&mut journal).unwrap();
+        assert_eq!(rows, originals);
+        for row in &rows {
+            decode_record(row).unwrap();
+        }
+        let mut scanned = Vec::new();
+        journal
+            .scan_complete(|sequence, raw| {
+                scanned.push((sequence, raw.to_vec()));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            scanned,
+            originals
+                .into_iter()
+                .enumerate()
+                .map(|(i, raw)| (i as u64, raw))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), retained);
+    }
+
+    #[test]
+    fn retail_replay_bound_refuses_fifth_and_leaves_sixth_unread() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("retail");
+        let mut journal = PrivateJournal::create_new(&root, FORMAT).unwrap();
+        for _ in 0..5 {
+            journal
+                .append(&norito::encode_canonical(&Record::Invoked).unwrap())
+                .unwrap();
+        }
+        journal.append(b"sixth remains unread").unwrap();
+        drop(journal);
+        let retained = std::fs::read(root.join(FORMAT.filename)).unwrap();
+        let mut journal = PrivateJournal::open_existing(&root, FORMAT).unwrap();
+        assert!(replay_bounded(&mut journal).is_err());
+        assert_eq!(
+            journal.replay_next().unwrap(),
+            Some((5, b"sixth remains unread".to_vec()))
+        );
+        assert_eq!(std::fs::read(root.join(FORMAT.filename)).unwrap(), retained);
+    }
 }

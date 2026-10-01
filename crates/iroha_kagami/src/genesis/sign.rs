@@ -21,11 +21,10 @@ use iroha_deploy::genesis::staging::{
 };
 #[cfg(test)]
 use iroha_deploy::genesis::staging::{
-    build_signed_genesis, configured_initial_genesis_state, restage_signed_sumeragi_context_hashes,
-    retired_synthetic_stake_asset_id, staged_default_account_literal, staged_default_pipeline,
-    staged_lane_manifest_registry, staged_signed_native_genesis,
-    staged_signed_native_genesis_with_projection, staged_signed_sumeragi_context_hashes,
-    verify_final_signed_sumeragi_context,
+    build_signed_genesis, configured_initial_genesis_state, retired_synthetic_stake_asset_id,
+    staged_default_account_literal, staged_default_pipeline, staged_lane_manifest_registry,
+    staged_signed_native_genesis, staged_signed_native_genesis_with_projection,
+    staged_signed_sumeragi_context_hashes,
 };
 #[cfg(test)]
 use iroha_genesis::GenesisBlock;

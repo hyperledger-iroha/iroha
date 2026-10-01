@@ -145,6 +145,7 @@ mod tests {
         for reason in [
             ExecutionDeferral::AllocationUnavailable,
             ExecutionDeferral::ActiveMemoryCapacity,
+            ExecutionDeferral::VerifierArtifactsUnavailable,
         ] {
             let source = VMError::Metered {
                 gas: 99,

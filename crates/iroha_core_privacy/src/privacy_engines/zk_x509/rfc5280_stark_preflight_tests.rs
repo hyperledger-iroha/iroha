@@ -45,8 +45,13 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
     );
     let der_challenges = der_challenges_v1();
     let challenges = challenges_v1();
-    let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(material, der_challenges, challenges)
-        .expect("release RFC column provider and terminal claims");
+    let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+        material,
+        der_challenges,
+        challenges,
+        ZkX509ShaUnionCentersV1::identity_fixture_v1(),
+    )
+    .expect("release RFC column provider and terminal claims");
     let der_trace = build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), der_challenges)
         .expect("release DER complete native trace");
     let der_terminals =
@@ -255,6 +260,7 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
             der_challenges_v1(),
             challenges_v1(),
             column,
+            &ZkX509ShaUnionCentersV1::identity_fixture_v1(),
         )
         .expect("complete profile lookup includes the CRL-number INTEGER"),
         zeroize_fields_v1,
@@ -278,6 +284,7 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
             der_challenges_v1(),
             challenges_v1(),
             column,
+            &ZkX509ShaUnionCentersV1::identity_fixture_v1(),
         )
     });
     assert_eq!(
@@ -285,11 +292,24 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         Err(ZkX509Rfc5280StarkErrorV1::Semantic),
         "the old prefix-only producer flag cannot match the verifier's exact-end table"
     );
+    // Both independent owners created inside the observed scope must clear:
+    // the failed native column and the temporary sixteen private SHA centers.
+    let mut ownership_sizes = erased.iter().map(|entry| entry.cells).collect::<Vec<_>>();
+    ownership_sizes.sort_unstable();
+    assert_eq!(ownership_sizes, [16, ZK_X509_RFC5280_STARK_TRACE_SIZE_V1]);
     assert_eq!(
         erased.iter().map(|entry| entry.cells).sum::<usize>(),
-        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1
+        ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 + 16
     );
-    assert!(erased.iter().any(|entry| entry.nonzero_before > 0));
+    assert!(erased.iter().all(|entry| entry.nonzero_before > 0));
+    assert_eq!(
+        erased
+            .iter()
+            .find(|entry| entry.cells == 16)
+            .unwrap()
+            .nonzero_before,
+        16
+    );
     assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
 }
 

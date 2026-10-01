@@ -502,6 +502,7 @@ fn local_vm_refusal_publishes_no_network_result_or_fee_and_same_source_can_retry
     for reason in [
         ExecutionDeferral::AllocationUnavailable,
         ExecutionDeferral::ActiveMemoryCapacity,
+        ExecutionDeferral::VerifierArtifactsUnavailable,
     ] {
         let (state, asset) = priced_fixture(None);
         let mut program = ivm::ProgramMetadata {

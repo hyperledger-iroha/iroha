@@ -134,6 +134,10 @@ ARTIFACT_ROLES = (
     "mint_hash_claim_vk_eq",
     "mint_hash_claim_pk_ep",
     "mint_hash_claim_vk_ep",
+    "ordinary_app_guard_pk_eq",
+    "ordinary_app_guard_vk_eq",
+    "ordinary_app_guard_pk_ep",
+    "ordinary_app_guard_vk_ep",
 )
 
 RELATIONS = (
@@ -154,10 +158,11 @@ HELPERS = (
     "guard_bundle",
     "mint_hash_shard",
     "mint_hash_claim",
+    "ordinary_app_guard",
 )
 
 INTERNAL_PROOF_HELPERS = frozenset(
-    {"platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim"}
+    {"platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim", "ordinary_app_guard"}
 )
 
 ACCEPTANCE_CASES = (
@@ -343,7 +348,7 @@ NATIVE_PROFILE_LAYOUT_TAGS = {
 }
 NATIVE_PROFILE_DIGEST_TAGS = {
     "mint_eq_protocol_digest": 15, "mint_ep_protocol_digest": 16,
-    "mint_genesis_roster_id": 17,
+    "mint_genesis_authorization_id": 17,
     "mint_hash_shard_eq_protocol_digest": 26,
     "mint_hash_shard_ep_protocol_digest": 27,
     "mint_hash_claim_eq_protocol_digest": 28,
@@ -1137,7 +1142,7 @@ def rust_native_profile_digest(raw: object, protocols: Mapping[str, object]) -> 
         digest = bytes(_integer(value, f"native profile {name} byte", maximum=255) for value in values)
         if not any(digest):
             _fail(f"native profile {name} must be nonzero")
-        if name != "mint_genesis_roster_id":
+        if name != "mint_genesis_authorization_id":
             parity = "eq" if "_eq_" in name else "ep"
             low_modulus = (0x224698FC094CF91B992D30ED00000001 if parity == "eq" else
                            0x224698FC0994A8DD8C46EB2100000001)

@@ -687,8 +687,25 @@ mod tests {
     fn possession_once_only_retains_verifies_and_recovers_actual_signature() {
         let p = pending();
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("possession");
         let mut attempt = KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).unwrap();
+        assert!(KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(root.join(FORMAT.filename))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         let selector = p.possession_challenge(300).unwrap().enrollment_attempt_id;
         let fields = attempt.preparation_fields(&p, selector, 300).unwrap();
         assert_eq!(fields.len(), 14);
@@ -741,7 +758,7 @@ mod tests {
     fn possession_invalid_original_cannot_reset_or_resign() {
         let p = pending();
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("possession");
         let mut attempt = KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).unwrap();
         attempt.fence(&p, 300).unwrap();
         let raw = vec![1; 8];
@@ -754,7 +771,7 @@ mod tests {
     #[test]
     fn possession_replay_bound_refuses_sixth_and_leaves_seventh_unread() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("possession");
         let mut wal = PrivateJournal::create_new(&root, FORMAT).unwrap();
         for _ in 0..6 {
             wal.append(&encode(&Record::Invoked).unwrap()).unwrap();
@@ -822,7 +839,7 @@ mod tests {
     fn final_identity_requires_consumed_e_and_recovers_original_after_c_expiry() {
         let p = pending();
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("possession");
         let (mut a, raw, receipt, consumed_at) = consumed(&root, &p);
         assert!(a.final_identity(&p, consumed_at).is_err());
         let issued_at = consumed_at.max(400);
@@ -860,7 +877,7 @@ mod tests {
     fn final_identity_refuses_signed_evidence_counter_level_and_time_substitutions() {
         let p = pending();
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("possession");
         let (mut a, raw, _, consumed_at) = consumed(&root, &p);
         let issued_at = consumed_at.max(400);
         assert!(issued_at < a.challenge.expires_at_ms);
@@ -950,7 +967,7 @@ mod tests {
         );
         let fresh = tempfile::tempdir().unwrap();
         let mut unconsumed = KagemushaOrdinaryAppPossessionAttemptV1::create(
-            &fresh.path().canonicalize().unwrap(),
+            &fresh.path().canonicalize().unwrap().join("possession"),
             &p,
             300,
         )
@@ -987,7 +1004,7 @@ mod tests {
     fn consumed_original_recovery_after_c_expiry_never_resumes_incomplete_signing() {
         let p = pending();
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("possession");
         let (a, raw, receipt, consumed_at) = consumed(&root, &p);
         let issued_at = consumed_at.max(400);
         assert!(issued_at < a.challenge.expires_at_ms);
@@ -1017,7 +1034,7 @@ mod tests {
         );
         for retained_raw in [false, true] {
             let temp = tempfile::tempdir().unwrap();
-            let root = temp.path().canonicalize().unwrap();
+            let root = temp.path().canonicalize().unwrap().join("possession");
             let mut a = KagemushaOrdinaryAppPossessionAttemptV1::create(&root, &p, 300).unwrap();
             a.fence(&p, 300).unwrap();
             if retained_raw {

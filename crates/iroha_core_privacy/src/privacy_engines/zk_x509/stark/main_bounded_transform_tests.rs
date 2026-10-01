@@ -66,11 +66,21 @@ fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
     assert_eq!(mask_scratch, 32);
     assert_eq!(link_owner, 3 * 192 * 64 + 64 + 24 + 192 * 32);
     assert_eq!(source_limit, 596_974_144 - mask_scratch);
-    let limit = source_limit - link_owner;
-    assert_eq!(limit, 596_974_144 - mask_scratch - link_owner);
+    let key_owner = super::super::main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1();
+    assert_eq!(key_owner, 8 * 1024 * 1024);
+    let union_owner = super::super::main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1();
+    assert_eq!(union_owner, 6_416);
+    let limit = source_limit - link_owner - key_owner - union_owner;
+    assert_eq!(
+        limit,
+        596_974_144 - mask_scratch - link_owner - key_owner - union_owner
+    );
     assert_eq!(plan.maximum_live_buffers, 3_697_993_152 + mask_scratch);
     let policy = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 288_345_698).unwrap();
-    assert_eq!(policy.available, 308_628_446 - mask_scratch - link_owner);
+    assert_eq!(
+        policy.available,
+        308_628_446 - mask_scratch - link_owner - key_owner - union_owner
+    );
     assert_eq!(
         MainBoundedTransformPolicyV1 {
             backend: Some(Backend::Metal),
@@ -576,6 +586,8 @@ fn native_replay_metadata_respects_every_phase_residual_without_source_discharge
         308_628_446
             - core::mem::size_of::<E>()
             - super::super::main_terminal_links::MainTerminalLinkPlanV1::public_owner_charge_v1()
+            - super::super::main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1()
+            - super::super::main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1()
     );
 }
 

@@ -571,3 +571,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "call_runtime/equation_fixture_tests.rs"]
+mod equation_fixture_tests;

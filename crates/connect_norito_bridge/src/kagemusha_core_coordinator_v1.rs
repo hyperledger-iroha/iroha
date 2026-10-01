@@ -1787,74 +1787,23 @@ mod tests {
                 "candidate output directory must be canonical"
             );
             assert!(
-                output.starts_with(repository.join("output")),
-                "candidate output directory must be under ignored output"
+                output.starts_with(repository.join("dist")),
+                "candidate output directory must be under ignored dist"
             );
             assert!(
                 output.is_dir(),
                 "candidate output must be an existing directory"
             );
-            let root = repository.join("fixtures/offline");
             std::fs::write(
                 output.join("kagemusha_core_terminal_original_v1.json"),
                 norito::json::to_json_pretty(&generated).unwrap() + "\n",
             )
             .unwrap();
-            let fixture_path = root.join("kagemusha_core_coordinator_frame_v1.tsv");
-            let old = std::fs::read_to_string(&fixture_path).unwrap();
-            let archives: norito::json::Value = norito::json::from_str(include_str!(
-                "../../../fixtures/offline/kagemusha_core_coordinator_archives_v1.json"
-            ))
+            std::fs::write(
+                output.join("kagemusha_core_coordinator_frame_v1.tsv"),
+                canonical_shared_sdk_frames(&generated),
+            )
             .unwrap();
-            let request = kagemusha_core_coordinator_encode_request_v1(&[
-                hex::decode(archives["candidate"]["norito_hex"].as_str().unwrap()).unwrap(),
-                hex::decode(generated["signedResponseHex"].as_str().unwrap()).unwrap(),
-            ])
-            .unwrap();
-            let response =
-                kagemusha_core_coordinator_encode_response_v1(&[b"canonical-envelope".to_vec()])
-                    .unwrap();
-            let mut new = String::new();
-            for line in old.lines() {
-                if line.starts_with("terminal-envelope\t") {
-                    new.push_str(&format!(
-                        "terminal-envelope\t6\t{}\t{}\n",
-                        hex::encode(&request),
-                        hex::encode(&response)
-                    ));
-                } else if ![
-                    "incoming-prepare\t",
-                    "incoming-complete\t",
-                    "incoming-stage\t",
-                    "authenticated-hardware-policy\t",
-                    "app-approval-recheck\t",
-                    "app-possession-recheck\t",
-                    "ordinary-identity-recheck\t",
-                ]
-                .iter()
-                .any(|name| line.starts_with(name))
-                {
-                    new.push_str(line);
-                    new.push('\n');
-                }
-            }
-            for (method, name, fields) in mobile_request_cases()
-                .into_iter()
-                .filter(|(m, _, _)| m.code() >= 15)
-            {
-                let response = mobile_response_fields(method, &fields);
-                let request = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
-                let response = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
-                kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
-                    .unwrap();
-                new.push_str(&format!(
-                    "{name}\t{}\t{}\t{}\n",
-                    method.code(),
-                    hex::encode(request),
-                    hex::encode(response)
-                ));
-            }
-            std::fs::write(output.join("kagemusha_core_coordinator_frame_v1.tsv"), new).unwrap();
         } else {
             let fixture: norito::json::Value = norito::json::from_str(include_str!(
                 "../../../fixtures/offline/kagemusha_core_terminal_original_v1.json"
@@ -2035,10 +1984,74 @@ mod tests {
         }
     }
 
+    fn canonical_shared_sdk_frames(terminal: &norito::json::Value) -> String {
+        let cases = mobile_request_cases();
+        let mut rows: Vec<_> = cases
+            .iter()
+            .map(|(method, name, request)| {
+                (
+                    *method,
+                    *name,
+                    request.clone(),
+                    mobile_response_fields(*method, request),
+                )
+            })
+            .collect();
+        let (_, _, recovery) = cases
+            .iter()
+            .find(|(_, name, _)| *name == "recover-sender")
+            .unwrap();
+        rows.push((
+            KagemushaCoreCoordinatorMethodV1::RecoverSender,
+            "recover-missing",
+            recovery.clone(),
+            Vec::new(),
+        ));
+        let mut terminal_recovery = recovery.clone();
+        terminal_recovery[0] = vec![KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_TERMINAL_ID_V1];
+        terminal_recovery[2] = u32_field(KAGEMUSHA_CORE_COORDINATOR_REDEEM_SPLIT_V1);
+        let response = vec![
+            digest(0x61),
+            terminal_recovery[1].clone(),
+            b"canonical-preparation".to_vec(),
+        ];
+        rows.push((
+            KagemushaCoreCoordinatorMethodV1::RecoverSender,
+            "recover-terminal",
+            terminal_recovery,
+            response,
+        ));
+        assert_eq!(rows.len(), 28);
+        let mut rendered = String::from(
+            "# Structural native schema-2 frame vectors; opaque archive strings are not monetary proofs or qualification.\n# name\tmethod\trequest_hex\tresponse_hex\n",
+        );
+        for (method, name, mut request, response) in rows {
+            if method == KagemushaCoreCoordinatorMethodV1::BuildTerminalEnvelope {
+                request[1] = hex::decode(terminal["signedResponseHex"].as_str().unwrap()).unwrap();
+            }
+            let request = kagemusha_core_coordinator_encode_request_v1(&request).unwrap();
+            let response = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
+            kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+                .unwrap_or_else(|error| panic!("native fixture {name}: {error:?}"));
+            rendered.push_str(&format!(
+                "{name}\t{}\t{}\t{}\n",
+                method.code(),
+                hex::encode(request),
+                hex::encode(response)
+            ));
+        }
+        rendered
+    }
+
     #[test]
     fn shared_sdk_frames_match_every_native_method_and_recovery_selector() {
+        let generated = canonical_shared_sdk_frames(&generated_terminal_original_fixture());
         let fixture =
             include_str!("../../../fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv");
+        assert_eq!(
+            fixture, generated,
+            "shared fixture must match the complete native producer"
+        );
         let mut fixtures = std::collections::BTreeMap::new();
         for line in fixture
             .lines()
@@ -2060,7 +2073,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert_eq!(fixtures.len(), 25);
+        assert_eq!(fixtures.len(), 28);
         for (method, name, request_fields) in mobile_request_cases() {
             let (actual_method, request, response) =
                 fixtures.get(name).expect("shared method case");
@@ -2721,7 +2734,7 @@ mod tests {
     #[test]
     fn signed_android_and_ios_requests_have_one_exact_method_matrix() {
         let expected_counts = [
-            3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2, 2, 7, 1, 2, 4, 2, 0,
+            2, 2, 2, 3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2, 2, 7, 1, 2, 4, 2, 0,
         ];
         let cases = mobile_request_cases();
         assert_eq!(

@@ -150,11 +150,11 @@ fn rfc5280_fp4_binds_every_committed_terminal() {
     let gate = E::canonical([2, 3, 5, 7]).unwrap();
     assert_eq!(
         evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(gate, &aux, claims).unwrap(),
-        [E::ZERO; RFC5280_TERMINAL_CLAIM_RECORDS_V1]
+        [E::ZERO; RFC5280_TERMINAL_RESIDUES_V1]
     );
     // Discover the binding by perturbing every committed auxiliary cell. The
     // reference is the base-field result, scaled by a genuinely quartic gate.
-    let mut observed = [false; RFC5280_TERMINAL_CLAIM_RECORDS_V1];
+    let mut observed = [false; RFC5280_TERMINAL_RESIDUES_V1];
     for column in 0..aux.len() {
         let mut changed = aux;
         changed[column] = changed[column].add(E::ONE);
@@ -170,18 +170,25 @@ fn rfc5280_fp4_binds_every_committed_terminal() {
         }
         assert_eq!(
             evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(E::ZERO, &changed, claims).unwrap(),
-            [E::ZERO; RFC5280_TERMINAL_CLAIM_RECORDS_V1]
+            [E::ZERO; RFC5280_TERMINAL_RESIDUES_V1]
         );
     }
     assert!(observed.into_iter().all(|bound| bound));
-    let mut wrong_role = claims;
-    wrong_role.output_roles.swap(0, 1);
-    assert_eq!(
-        evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(gate, &aux, wrong_role),
-        Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
-    );
+    assert_eq!(claims.output_roles.len(), 1);
+    for role in OUTPUT_ROLES_V1 {
+        if role == ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor {
+            continue;
+        }
+        let mut wrong_role = claims;
+        wrong_role.output_roles[0].role = role;
+        assert_eq!(
+            evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(gate, &aux, wrong_role),
+            Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim),
+            "a private role cannot replace the sole public governed-root role: {role:?}"
+        );
+    }
     let mut wrong_product = claims;
-    wrong_product.output_roles[0].producer_products[1] = F(2);
+    wrong_product.output_roles[0].consumer_products[1] = F(GOLDILOCKS_MODULUS_V1);
     assert_eq!(
         evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(gate, &aux, wrong_product),
         Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
@@ -224,7 +231,7 @@ fn rfc5280_opened_air_rejects_malformed_fields_challenges_and_claims() {
     der.tuple[1] = der.tuple[0];
     assert!(evaluate(&rows, der, challenges(), claims).is_err());
     let mut malformed_claims = claims;
-    malformed_claims.relations[0][1] = F(GOLDILOCKS_MODULUS_V1);
+    malformed_claims.output_roles[0].consumer_products[1] = F(GOLDILOCKS_MODULUS_V1);
     assert_eq!(
         evaluate(&rows, der_challenges(), challenges(), malformed_claims),
         Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)

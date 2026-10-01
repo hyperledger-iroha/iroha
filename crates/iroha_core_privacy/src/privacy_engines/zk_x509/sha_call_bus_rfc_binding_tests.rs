@@ -156,7 +156,8 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         &assembly.rfc_base,
         binding.main_post_base().der(),
         binding.rfc5280(),
-    )
+crate::privacy_engines::zk_x509::rfc5280_stark::ZkX509ShaUnionCentersV1::identity_fixture_v1(),
+)
     .unwrap();
     let roles = [
         ZkX509Rfc5280OutputRoleV1::CertificateTbsSha,
@@ -175,7 +176,7 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         let trace = bind_zk_x509_sha_batch_call_base_with_initial_products_v1(
             source,
             binding,
-            ZkX509ShaSegmentProductStateV1::one_v1(),
+            &ZkX509ShaSegmentProductStateV1::one_v1(),
         )
         .unwrap();
         for (product, factor) in role_products[role_index]
@@ -185,14 +186,18 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
             *product = product.mul(factor);
         }
     }
-    for (role, products) in roles.into_iter().zip(role_products) {
-        assert_eq!(
-            products,
-            rfc.terminal_claims_v1()
-                .output_role_products_v1(role)
-                .consumer_products,
-            "actual RFC/SHA handoff for {role:?}",
-        );
+    let (_, consumer_columns) =
+        crate::privacy_engines::zk_x509::rfc5280_stark::zk_x509_rfc_sha_union_columns_v1();
+    for ((role, products), columns) in roles.into_iter().zip(role_products).zip(consumer_columns) {
+        for lane in 0..4 {
+            let values = zeroize::Zeroizing::new(rfc.build_aux_column_v1(columns[lane]).unwrap());
+            assert_eq!(values.len(), ZK_X509_SHA_SEGMENT_ROWS_V1);
+            assert_eq!(
+                products[lane],
+                *values.last().unwrap(),
+                "actual private RFC/SHA handoff for {role:?} lane {lane}"
+            );
+        }
     }
     let mut segments = Vec::new();
     let mut ca_calls = Vec::new();
@@ -265,31 +270,55 @@ fn maximum_credential_rfc_sha_handshake_matches_every_role_and_bound_segment() {
         segments.push(terminal.segment);
         ca_calls.extend(terminal.ca_call_boundaries);
     }
-    let claims = ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(
-        segments.try_into().unwrap(),
-        ca_calls.try_into().unwrap(),
-    )
-    .expect("four canonical segments and all thirteen compact-CA call boundaries");
+    let claims =
+        ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(ca_calls.try_into().unwrap())
+            .expect("four canonical segments and all thirteen compact-CA call boundaries");
     for (segment, rows) in boundary_rows.iter().enumerate() {
         assert_actual_sha_cyclic_boundaries_v1(
             segment,
             rows,
             binding,
-            claims.segments[segment],
+            segment as u8,
             &claims.ca_calls,
         );
     }
     for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
         assert_eq!(
-            claims
-                .segments
-                .iter()
-                .fold(F::ONE, |product, segment| product
-                    .mul(segment.combined_rfc_products()[lane])),
+            segments.iter().fold(F::ONE, |product, segment| product
+                .mul(segment.combined_rfc_products()[lane])),
             role_products
                 .iter()
                 .fold(F::ONE, |product, role| product.mul(role[lane])),
             "segment replay must preserve every role product in lane {lane}",
         );
+    }
+}
+
+#[test]
+fn private_sha_join_points_are_after_all_rfc_events_for_every_public_shape() {
+    for disclosed_attributes in 0..=4 {
+        let shape = ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes,
+        };
+        let schedule = ZkX509ShaCallScheduleV1::new(shape).unwrap();
+        let fixed = ZkX509ShaBatchFixedProviderV1::new_v1(shape).unwrap();
+        for (segment, expected_call) in [20_u8, 25, 9, 28].into_iter().enumerate() {
+            let row = ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[segment] - 1;
+            let (manifest, call_row) = schedule
+                .logical_row(segment * ZK_X509_SHA_SEGMENT_ROWS_V1 + row)
+                .unwrap();
+            assert_eq!(manifest.call, expected_call);
+            assert_eq!(call_row + 1, manifest.maximum_logical_rows());
+            // The final call of each segment has no RFC consumer channel at
+            // any row. Its before-row products are therefore the final products.
+            assert!(
+                sha_rfc_consumer_channels_v1(manifest.call, manifest.role, disclosed_attributes)
+                    .unwrap()
+                    .is_none()
+            );
+            let row_fixed = fixed.fixed_row_v1(segment, row).unwrap();
+            assert_eq!(row_fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1], F::ONE);
+            assert_eq!(row_fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1], F::ZERO);
+        }
     }
 }

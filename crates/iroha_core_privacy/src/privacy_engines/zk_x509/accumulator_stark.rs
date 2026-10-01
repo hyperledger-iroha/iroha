@@ -3329,6 +3329,7 @@ fn verify_ca_accumulator_and_binding_v1(
         &expected_indices,
         &fri_betas,
         &terminals,
+        &[],
     )
     .map_err(map_aggregate_proof_error_v1)?;
     Ok(binding)

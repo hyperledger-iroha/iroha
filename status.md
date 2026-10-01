@@ -83,14 +83,29 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
+Recorded `051df111` checks cover workspace all-targets, Core/Kagami,
 Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
 checks cover normal native/JS/Python frontends and dependency/codec guards.
-These results qualify their recorded source. The combined candidate still needs
-fresh compiler and focused-test validation, a merge-free workspace check, genuine
-private-terminal/quotient-mask profile regeneration, current native/SDK consumers
-and executable-metadata freshness. Full workspace tests, physical-device
-qualification and same-candidate release validation remain incomplete.
+These results qualify their recorded source. On merged base `222e30c4`, the
+recorded privacy candidate passes normal builds, all three authentic pins and all
+1,017 selected ordinary controls. Required-Metal coefficient parity and full RFC
+key replay pass. Its maximum proof passes fresh verification and byte/RSS limits;
+proving takes 2,368.35 seconds against 300 seconds, and observed virtual size
+exceeds the literal 32 GiB limit.
+
+The corrected normal Core/Kagami/SDK build and genuine 54-role producer pass.
+Paired finalized-execution captures and consumers agree byte for byte. Authentic
+canonical fixtures, managed verifier corrections, bounded retail-journal recovery,
+IVM descriptor/copyback/partial-dispatch/publication controls and the new X509
+private SHA/RFC bridge are integrated. Normal privacy builds and regenerated pins
+pass, but the expanded selection has 1,039 passes and 19 failures; repairs require
+native rerunning. Successive SDK producer builds expose IVM fixture imports and
+JSON-array serialization errors; their corrections await a fresh build. The
+actual release-evidence Python suite passes 130 tests. The last native
+identity selection failed cold Recover/Recover before the repair. Full bridge,
+Kotlin, Swift, workspace and four-validator checks on the combined candidate,
+physical-device evidence and signed release artifacts remain incomplete.
+
 Dependency ownership and pinned compiler-memory measurements remain gates; see
 the [architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
@@ -114,22 +129,18 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
-  pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
-  300 seconds. Verifier byte-source joins remain incomplete: host copies do not
-  bind P256/projection byte declarations to the shared trace. The selected-input
-  repair binds bytes to actual P256 values, but native comparison exposed a
-  missing selected-input multiplicity in the closed fixed-schedule compiler.
-  The post-pin privacy selection completes with 942 passes and 14 failures;
-  all 26 repaired IVM memory controls pass. Schedule, fixture and resource
-  corrections require a new native run. The partial private-terminal repair
-  leaves 492 public intermediate scalars requiring a zero-knowledge repair.
-  A new complete proof still needs to meet all limits. The current q77 maximum ordinary
-  and maximum AXT proofs pass byte/RSS limits with unchanged source; both exact
-  retained artifacts also pass fresh-process verification. RAM-LFE secure
-  encryption/full execution, IVM execution/finalized-State binding, protocol and
-  side-channel review, hardware/network evidence and final signing remain open
-  under the [ZK goals](specs/zk_first_release_goals.md).
+- **Privacy/crypto:** the recorded maximum X509 proof and fresh verifier pass
+  byte/RSS and cryptographic acceptance, but proving takes 2,368.35 seconds
+  against 300 seconds and observed virtual address space exceeds 32 GiB.
+  All 1,017 selected ordinary privacy controls, genuine pins and required-Metal
+  parity pass on that recorded source. The new private SHA/RFC bridge removes
+  112 further public values and needs native validation; 320 public intermediate
+  values and additional byte-source joins remain. Historical q77 maximum
+  ordinary/AXT proofs and fresh replay pass byte/RSS limits on their recorded
+  source. RAM-LFE secure encryption/full execution, IVM execution/finalized-State
+  binding, complete protocol/side-channel review, hardware/network evidence and
+  final signing remain open under the [ZK goals](specs/zk_first_release_goals.md).
+
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

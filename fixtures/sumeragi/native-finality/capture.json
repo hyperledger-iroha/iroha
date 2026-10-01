@@ -1,20 +1,28 @@
 {
   "format": "iroha.native-finality.checkpoint-fixture-capture",
   "version": 1,
-  "chain_id": "portable-native-fixture",
-  "network_id": "hash:CC5B7A93328338ED805FA7D5DA89B32BA4E2793A0F4019CE28887A1533B17659#EE57",
+  "chain_id": "iroha3-dev.local",
+  "network_id": "hash:7BC9B3B50AFB81CF61A471F681385CE3CA641FA84B4EF756A983229DAC9B4ABF#524E",
   "generator": {
-    "path": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
-    "source_sha256": "d90db6e81047bef5c72c0b82372665cd9a477d9b46209b2f9e4d87ecbb986543",
-    "test": "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
-    "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
-    "compiled_harness_path": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96",
-    "compiled_harness_sha256": "5949fba2100ed5dc0b9607cefdcdc91ab5a61ad34e22fb93807257d66fe82139",
-    "source_commit": "4032051e02fa9782cefe21e8f5b9761c9281cc34",
+    "path": "crates/iroha_kagami/src/kura/finality_native_fixture_tests.rs",
+    "source_sha256": "1b7085d99c3633ed1a3abb2d9003c833ce7ab3b90f9eee403e63828f311b0190",
+    "test": "kura::finality::native_fixture_tests::capture_current_native_execution_sdk_fixtures",
+    "command": [
+      "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-test",
+      "kura::finality::native_fixture_tests::capture_current_native_execution_sdk_fixtures",
+      "--exact",
+      "--ignored",
+      "--test-threads=1",
+      "--show-output"
+    ],
+    "compiled_harness_path": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-test",
+    "compiled_harness_sha256": "e2e1da2bf2921e31879c8d20d5764d823f5269ceacc682d8310302c3c5b70678",
+    "source_commit": "222e30c46d2a3f742ec4e514fca2821498012d42",
+    "source_tree_snapshot_sha256": "a2f42befd243035b662b40d6248792823049b13b3a73424ec3803c0f7fb92e74",
     "result_codec_sources": [
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
-        "sha256": "6f11b52173563e26f41784b20f05d9af7b2cd6d6e1706a47fc6c6bff4c176a7b"
+        "sha256": "7f76f89b4f09148fed39bfbaf02c02284b7d9401462ee5051ed37161ea5eb850"
       },
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/commitment/wire.rs",
@@ -25,38 +33,50 @@
   },
   "captures": [
     {
-      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-1.log",
-      "sha256": "19fa562bfa65ae48c460c79d652de075d092f79311ad2de33b06890018934b56",
-      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
-      "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
+      "log": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-capture-0.stdout",
+      "sha256": "49406fb1307df227634cb235c5a3a088588cda101077ade6de27893c83e1fede",
+      "capture_json": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-capture-0.json",
+      "capture_json_sha256": "b199eb7055789b6796c93495cc32ef4bee0cb2920b21fb0e50686d1a7b27b0ce",
+      "command": [
+        "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-test",
+        "kura::finality::native_fixture_tests::capture_current_native_execution_sdk_fixtures",
+        "--exact",
+        "--ignored",
+        "--test-threads=1",
+        "--show-output"
+      ],
+      "result": "1 passed; 0 failed; explicit native exporter, lane1 and lane4; current public SDK bridge consumer passed"
     },
     {
-      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-2.log",
-      "sha256": "e4e077ce33502195bf38869122375966bbfe72e48b4d2590c7e2baa3cd1d8b5a",
-      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
-      "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
-    },
-    {
-      "log": "target/codex-sumeragi-handoff/native-checkpoint-capture-3.log",
-      "sha256": "54c37c82fe8e50f6c4046396233124976a1ccd3904c76e9053809eca740d41ff",
-      "command": "target/codex-sumeragi-handoff/exporter-5949fba2100ed5dc0b96 --exact sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures --ignored --nocapture",
-      "result": "1 passed; 0 failed; explicit exporter invocation; complete capture log retained"
+      "log": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-capture-1.stdout",
+      "sha256": "d8a9d4e3b6f93ccada701bab669a41a7a826b9fa43674971c136a4b5aac319a7",
+      "capture_json": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-capture-1.json",
+      "capture_json_sha256": "b199eb7055789b6796c93495cc32ef4bee0cb2920b21fb0e50686d1a7b27b0ce",
+      "command": [
+        "/Users/takemiyamakoto/devstuff/iroha/dist/zk-remediation/2026-09-30/sdk-qualification/epoch14-sdk-producers3/kagami-test",
+        "kura::finality::native_fixture_tests::capture_current_native_execution_sdk_fixtures",
+        "--exact",
+        "--ignored",
+        "--test-threads=1",
+        "--show-output"
+      ],
+      "result": "1 passed; 0 failed; explicit native exporter, lane1 and lane4; current public SDK bridge consumer passed"
     }
   ],
-  "byte_identical_runs": 3,
+  "byte_identical_runs": 2,
   "artifacts": [
     {
       "path": "fixtures/sumeragi/native-finality/genesis-checkpoint.nrt",
       "height": 1,
-      "bytes": 27575,
-      "sha256": "d000307202e5b2daacb247b87c8d583dcdc361507213af9e183f5e13b74d1b19"
+      "bytes": 35978,
+      "sha256": "f37fb3a9bc85f74da0d8dcfcf0168b8e9735e4d41a321a6992c9cc7fa70d8216"
     },
     {
       "path": "fixtures/sumeragi/native-finality/height-2-checkpoint.nrt",
       "height": 2,
-      "bytes": 31792,
-      "sha256": "20e368bdec9749e164e0ad4ce06d919c2916f00bb533d110d9c66f41ffec4c0f"
+      "bytes": 36580,
+      "sha256": "6257e783fccb574edbfcbcdf0cb894986b24bec6e058b36e7e5d054672a69bd9"
     }
   ],
-  "scope": "Deterministic protocol fixtures: exact signed genesis and real native three-of-four BLS H2 certificate plus genuine signed RS16 availability over synthetic outputs, using the sole compact ExecutionResultCommitment schedule projection. Canonical roundtrip and contiguous checkpoint page verified by exporter. No World execution, monetary effect, production custody, network liveness or release qualification claim."
+  "scope": "Deterministic native execution fixtures: real World execution and replay, exact signed genesis and native three-of-four certificates with signed RS16 availability. Selected canonical files are lane1 heights1 and2; lane4 captures are retained separately. No distributed consensus, physical-device, monetary-authority or release qualification claim."
 }

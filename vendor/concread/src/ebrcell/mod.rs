@@ -826,6 +826,26 @@ where
         }
     }
 
+    /// Check that a retained read still names this cell's current allocation.
+    ///
+    /// This compares the original protected allocation, not payload equality.
+    /// It neither pins the collector nor clones a value. The read's existing
+    /// epoch guard protects both pointers from reclamation during comparison.
+    /// The caller must retain its joint publication boundary across comparisons
+    /// when more than one cell belongs to a single logical observation.
+    /// Zero-sized backing has no unique allocation address and always returns
+    /// false; a dangling pointer must never authenticate a foreign generation.
+    pub fn matches_read(&self, read: &EbrCellReadTxn<T>) -> bool {
+        if Self::allocation_layout().size() == 0 {
+            return false;
+        }
+        let active = self.active.load(Acquire, &read._guard);
+        // SAFETY: a live cell always has an initialized allocation, protected
+        // by the exact guard already retained in read. No reference escapes.
+        let current = unsafe { &active.deref().value as *const T };
+        std::ptr::eq(current, read.data)
+    }
+
     /// Begin a read transaction. The returned [`EbrCellReadTxn`] guarantees
     /// the data lives long enough via crossbeam's Epoch type. When this is
     /// dropped the data *may* be freed at some point in the future.
@@ -1376,3 +1396,7 @@ mod acquisition_tests;
 
 #[cfg(test)]
 mod commit_slot_tests;
+
+#[cfg(test)]
+#[path = "original_read_tests.rs"]
+mod original_read_tests;

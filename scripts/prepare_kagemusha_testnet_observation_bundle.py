@@ -127,8 +127,8 @@ def verify_report(report: Any, args: argparse.Namespace) -> list[tuple[str, int]
     ):
         raise BundleError("native artifact byte length is invalid")
     rows = report.get("artifacts")
-    if not isinstance(rows, list) or len(rows) != 50:
-        raise BundleError("Kagami report lacks the exact 50 release artifacts")
+    if not isinstance(rows, list) or len(rows) != 54:
+        raise BundleError("Kagami report lacks the exact 54 release artifacts")
     result: list[tuple[str, int]] = []
     for row in rows:
         if not isinstance(row, dict):
