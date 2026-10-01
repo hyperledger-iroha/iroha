@@ -178,9 +178,12 @@ fn verify_composition_v1(
         aggregate::canonical_fp4_fields_v1(&deep.composition_values[0], COMPOSITION_DEGREE_CHUNKS)
             .map_err(map_aggregate_error_v1)?;
     let power = point.pow(
-        layout
-            .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
-            .map_err(map_aggregate_error_v1)? as u128,
+        crate::privacy_engines::zk_x509::composition_masking::QuotientChunkGeometryV1::new_v1(
+            layout,
+            AGGREGATE_PARAMETERS_V1,
+        )
+        .map_err(map_aggregate_error_v1)?
+        .stride_v1() as u128,
     );
     let actual = chunks
         .iter()
@@ -322,6 +325,7 @@ fn main_deep_composition_v1(
     groups: &[aggregate::AggregateOpenedDeepTraceGroupV1],
     point: E,
     alphas: &[Vec<Vec<E>>],
+    link_alphas: &[E],
     p256: &MainP256Log5VerifierConstraintSourceV1<'_>,
     projection: &MainProjectionVerifierConstraintSourceV1,
     io: &MainIoVerifierConstraintSourceV1,
@@ -341,13 +345,9 @@ fn main_deep_composition_v1(
         }
         let residues = match evaluator {
             MainFp4AirEvaluatorV1::P256(evaluator) => {
-                let identity = p256_main_registration_from_main_layout_v1(registration)?;
+                p256_main_registration_from_main_layout_v1(registration)?;
                 let fixed = &prepared.rows[index];
-                let terminal = p256
-                    .terminals
-                    .get(identity.signature_v1())
-                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-                evaluator.evaluate_residues_v1(opening, fixed, p256.challenges, terminal)?
+                evaluator.evaluate_residues_v1(opening, fixed, p256.challenges)?
             }
             MainFp4AirEvaluatorV1::Projection(evaluator) => {
                 if registration != projection.registration {
@@ -375,7 +375,6 @@ fn main_deep_composition_v1(
                 DerMainFp4AirContextV1 {
                     challenges: log19.post_base.der(),
                     public: log19.der_public,
-                    terminals: log19.claims.der,
                 },
             )?,
             MainFp4AirEvaluatorV1::Rfc5280(evaluator) => evaluator.evaluate_residues_v1(
@@ -442,7 +441,13 @@ fn main_deep_composition_v1(
             &alphas[index][0],
         )?);
     }
-    Ok(expected)
+    Ok(expected.add(
+        main_terminal_links::MainTerminalLinkPlanV1::new_v1(layout)?.evaluate_v1(
+            groups,
+            point,
+            link_alphas,
+        )?,
+    ))
 }
 
 /// Check every complete MAIN relation using only verifier-owned context.
@@ -452,6 +457,7 @@ pub(super) fn verify_main_deep_constraints_v1(
     deep: &aggregate::AggregateDeepProofV1,
     point: E,
     alphas: &[Vec<Vec<E>>],
+    link_alphas: &[E],
     p256: &MainP256Log5VerifierConstraintSourceV1<'_>,
     projection: &MainProjectionVerifierConstraintSourceV1,
     io: &MainIoVerifierConstraintSourceV1,
@@ -486,7 +492,16 @@ pub(super) fn verify_main_deep_constraints_v1(
             );
         })?;
     let expected = main_deep_composition_v1(
-        layout, &groups, point, alphas, p256, projection, io, log19, &prepared,
+        layout,
+        &groups,
+        point,
+        alphas,
+        link_alphas,
+        p256,
+        projection,
+        io,
+        log19,
+        &prepared,
     )
     .inspect_err(|_error| {
         #[cfg(test)]

@@ -871,3 +871,125 @@ fn sponsor_business_capability_without_original_signed_source_cannot_capture() {
         );
     });
 }
+
+#[test]
+#[ignore = "explicit genuine fixture producer; retain its source-bound native output"]
+fn emit_genuine_signed_quantity_effect_capture() {
+    on_stack(|| {
+        let (state, alice, bob) = fixture();
+        let (source, call) = source(
+            &state,
+            vec![
+                Transfer::asset_quantity(alice.clone(), 1_u32, BOB_ID.clone()).into(),
+                Mint::asset_quantity(5_u32, alice.clone()).into(),
+                Burn::asset_quantity(1_u32, alice.clone()).into(),
+                Transfer::asset_quantity(alice.clone(), 2_u32, BOB_ID.clone()).into(),
+            ],
+        );
+        let (mut block, _recording) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &source,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .unwrap();
+        block.reserve_ordinary_execution_outputs(&source).unwrap();
+        block.execute_ordinary_output_plan(&source, None).unwrap();
+        assert_eq!(
+            block.world.assets.get(&alice).unwrap().as_ref(),
+            &Quantity::from(11_u32)
+        );
+        assert_eq!(
+            block.world.assets.get(&bob).unwrap().as_ref(),
+            &Quantity::from(3_u32)
+        );
+        assert_eq!(
+            block
+                .world
+                .asset_definition(alice.definition())
+                .unwrap()
+                .total_quantity(),
+            &Quantity::from(14_u32)
+        );
+        let candidate = &block.fastpq_quantity_candidate;
+        assert_eq!(candidate.issue, None);
+        assert_eq!(candidate.entries.len(), 1);
+        assert_exact_applied_measurement(candidate);
+        let entry = &candidate.entries[&call];
+        assert_eq!(entry.effects.len(), 4);
+        assert_eq!(entry.context.entry.entry_hash, call);
+        assert_eq!(entry.context.source.network_id, state.network_id);
+        assert_eq!(entry.context.source.height, source.header().height().get());
+        for (ordinal, effect) in entry.effects.iter().enumerate() {
+            assert_eq!(effect.ordinal, u32::try_from(ordinal).unwrap());
+            assert_eq!(
+                effect.authority_digest,
+                crate::fastpq::authority_digest(&ALICE_ID)
+            );
+        }
+        assert!(matches!(
+            entry.effects[0].kind,
+            FastpqExecutionEffectKindV1::Transfer(_)
+        ));
+        assert!(matches!(
+            entry.effects[1].kind,
+            FastpqExecutionEffectKindV1::Mint(_)
+        ));
+        assert!(matches!(
+            entry.effects[2].kind,
+            FastpqExecutionEffectKindV1::Burn(_)
+        ));
+        assert!(matches!(
+            entry.effects[3].kind,
+            FastpqExecutionEffectKindV1::Transfer(_)
+        ));
+        assert_eq!(
+            candidate.require_complete(),
+            Err(QuantityCaptureIssue::IncompleteCoverage)
+        );
+
+        let inputs = iroha_data_model::fastpq::FastpqPublicInputs {
+            dsid: crate::fastpq::dataspace_id_bytes(entry.context.entry.dataspace_id),
+            slot: source.header().creation_time_ms.saturating_mul(1_000_000),
+            old_root: [0; 32],
+            new_root: [0; 32],
+            perm_root: crate::fastpq::permission_table_root(block.world.roles.iter()),
+            tx_set_hash: iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                (0..source.network_entrypoint_count())
+                    .map(|index| source.network_entrypoint_at(index).unwrap()),
+            )
+            .unwrap()
+            .into(),
+        };
+        // The genuine transfer projection retains both occurrences. It must not
+        // hide the gap by splitting the entry or synthesizing mint/burn transfers.
+        let transfers = &block.fastpq_transcripts[&call];
+        assert_eq!(transfers.len(), 2);
+        let transfer_only_result = crate::fastpq::quantity_statement_from_finalized_transcripts(
+            inputs,
+            transfers,
+            fastpq_prover::gadgets::public_transfer_statement::PublicTransferLimits::default(),
+            fastpq_prover::gadgets::public_transfer_statement::TransferSmtBuildLimits::for_update_limit(8).unwrap(),
+        );
+        assert!(
+            matches!(transfer_only_result, Err(fastpq_prover::Error::TransferInvariant { details }) if details.contains("repeated-key"))
+        );
+
+        // Public disposable fixture only. This test-only diagnostic frame does
+        // not bypass require_complete or create a source/finality credential.
+        // The orchestration owner authenticates executable/source/log custody
+        // and retains these exact bytes for the separate prover test.
+        let bytes = norito::encode_canonical(&(entry.clone(), inputs)).unwrap();
+        assert!(bytes.len() <= 1_048_576);
+        let decoded: (
+            FastpqExecutionEffectsV1,
+            iroha_data_model::fastpq::FastpqPublicInputs,
+        ) = norito::decode_canonical(&bytes).unwrap();
+        assert_eq!(decoded, (entry.clone(), inputs));
+        println!(
+            "IROHA_FASTPQ_GENUINE_EFFECT_CAPTURE_V1 {} {}",
+            hex::encode(Hash::new(&bytes).as_ref()),
+            hex::encode(bytes)
+        );
+    });
+}

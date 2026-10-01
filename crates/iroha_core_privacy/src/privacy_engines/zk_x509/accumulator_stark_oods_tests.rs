@@ -207,9 +207,16 @@ fn ca_complete_deep_constraint_check_rejects_trace_and_composition_substitution(
     chunks[1] = [2, 3, 5, 7];
     chunks[0] = quotient
         .sub(
-            E::canonical(chunks[1])
-                .unwrap()
-                .mul(point.pow(layout.fri_degree_cap(CA_AGGREGATE_PARAMETERS_V1).unwrap() as u128)),
+            E::canonical(chunks[1]).unwrap().mul(
+                point.pow(
+                    super::super::composition_masking::QuotientChunkGeometryV1::new_v1(
+                        &layout,
+                        CA_AGGREGATE_PARAMETERS_V1,
+                    )
+                    .unwrap()
+                    .stride_v1() as u128,
+                ),
+            ),
         )
         .coefficients()
         .map(F::value);

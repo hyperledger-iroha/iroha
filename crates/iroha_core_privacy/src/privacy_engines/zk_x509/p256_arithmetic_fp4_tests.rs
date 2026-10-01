@@ -43,11 +43,11 @@ fn rows<A: PolynomialAirFieldV1>(mut cell: impl FnMut(usize) -> A) -> [Vec<A>; 5
     })
 }
 
-fn evaluate<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
+fn evaluate_registered<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
     let aux = input[2].as_slice().try_into().unwrap();
     let fixed = input[4].as_slice().try_into().unwrap();
     let (scalar, arithmetic_copy) = challenges();
-    let mut residues = evaluate_p256_arithmetic_aggregate_residues_over_field_v1(
+    evaluate_p256_arithmetic_aggregate_residues_over_field_v1(
         input[0].as_slice().try_into().unwrap(),
         input[1].as_slice().try_into().unwrap(),
         aux,
@@ -56,7 +56,13 @@ fn evaluate<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
         scalar,
         arithmetic_copy,
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn evaluate<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
+    let aux = input[2].as_slice().try_into().unwrap();
+    let fixed = input[4].as_slice().try_into().unwrap();
+    let mut residues = evaluate_registered(input);
     let selector = p256_arithmetic_last_selector_v1(fixed);
     residues.extend(evaluate_p256_terminal_claim_binding_v1(
         selector,
@@ -78,7 +84,17 @@ fn complete_arithmetic_fp4_residues_match_independent_polynomial_lifting() {
         E::canonical([i + 1, i + 3, i + 5, i + 7]).unwrap()
     });
     let actual = evaluate(&input);
-    assert_eq!(actual.len(), P256_ARITHMETIC_REGISTERED_CONSTRAINT_COUNT_V1);
+    // MAIN registers only the local AIR; its private cross-registration links
+    // are joined separately. Keep testing the independent diagnostic terminal
+    // checks below without counting them as registered/public claim constraints.
+    assert_eq!(
+        evaluate_registered(&input).len(),
+        P256_ARITHMETIC_REGISTERED_CONSTRAINT_COUNT_V1
+    );
+    assert_eq!(
+        actual.len(),
+        P256_ARITHMETIC_REGISTERED_CONSTRAINT_COUNT_V1 + 2 * P256_CROSS_TRACE_LANES_V1
+    );
     let w = E::canonical([0, 1, 0, 0]).unwrap();
     let mut expected = vec![E::ZERO; actual.len()];
     // The degree-four AIR on cubic input polynomials has degree at most twelve.

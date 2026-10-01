@@ -33,10 +33,10 @@ fn rows<A: PolynomialAirFieldV1>(mut cell: impl FnMut(usize) -> A) -> [Vec<A>; 5
     })
 }
 
-fn evaluate<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
+fn evaluate_registered<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
     let aux = input[2].as_slice().try_into().unwrap();
     let fixed = input[4].as_slice().try_into().unwrap();
-    let mut residues = evaluate_p256_binding_sink_aggregate_residues_over_field_v1(
+    evaluate_p256_binding_sink_aggregate_residues_over_field_v1(
         input[0].as_slice().try_into().unwrap(),
         input[1].as_slice().try_into().unwrap(),
         aux,
@@ -44,7 +44,13 @@ fn evaluate<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
         fixed,
         challenges(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn evaluate<A: PolynomialAirFieldV1>(input: &[Vec<A>; 5]) -> Vec<A> {
+    let aux = input[2].as_slice().try_into().unwrap();
+    let fixed = input[4].as_slice().try_into().unwrap();
+    let mut residues = evaluate_registered(input);
     residues.extend(evaluate_p256_terminal_claim_binding_v1(
         p256_binding_sink_last_selector_v1(fixed),
         p256_binding_sink_terminal_v1(aux).unwrap(),
@@ -60,9 +66,16 @@ fn complete_binding_sink_fp4_residues_match_independent_polynomial_lifting() {
         E::canonical([i + 1, i + 3, i + 5, i + 7]).unwrap()
     });
     let actual = evaluate(&input);
+    // MAIN registers only the local AIR; its private cross-registration links
+    // are joined separately. Keep testing the independent diagnostic terminal
+    // checks below without counting them as registered/public claim constraints.
+    assert_eq!(
+        evaluate_registered(&input).len(),
+        P256_BINDING_SINK_REGISTERED_CONSTRAINT_COUNT_V1
+    );
     assert_eq!(
         actual.len(),
-        P256_BINDING_SINK_REGISTERED_CONSTRAINT_COUNT_V1
+        P256_BINDING_SINK_REGISTERED_CONSTRAINT_COUNT_V1 + P256_CROSS_TRACE_LANES_V1
     );
     let w = E::canonical([0, 1, 0, 0]).unwrap();
     let mut expected = vec![E::ZERO; actual.len()];

@@ -52,8 +52,7 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
     let der_terminals =
         zk_x509_der_stark_terminal_claims_v1(&der_trace).expect("DER terminal claims");
     let claims = provider.terminal_claims_v1();
-    validate_zk_x509_der_rfc_terminal_equalities_v1(der_terminals, claims)
-        .expect("actual DER/RFC byte and node handoffs");
+    let private_der_fields = [der_terminals.input_byte, der_terminals.node].concat();
 
     // The first twelve sections constrain base/fixed rows independently of
     // auxiliary columns. Check every populated row before replaying columns,
@@ -194,19 +193,43 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
             .iter()
             .all(|residue| *residue == F::ZERO)
     );
-    let mut wrong_der = der_terminals;
-    wrong_der.node[0] = wrong_der.node[0].add(F::ONE);
+    let private_columns = zk_x509_rfc_der_terminal_columns_v1();
+    let rfc_private_fields = private_columns.map(|column| terminal_aux[column]);
     assert_eq!(
-        validate_zk_x509_der_rfc_terminal_equalities_v1(wrong_der, claims),
-        Err(ZkX509Rfc5280StarkErrorV1::TerminalClaim)
+        rfc_private_fields.as_slice(),
+        private_der_fields.as_slice(),
+        "actual strict-DER and RFC native owners have identical private endpoints"
     );
+    for slot in 0..private_columns.len() {
+        let mut wrong_der = private_der_fields.clone();
+        wrong_der[slot] = wrong_der[slot].add(F::ONE);
+        assert_ne!(rfc_private_fields.as_slice(), wrong_der.as_slice());
+        zeroize_fields_v1(&mut wrong_der);
+    }
     let mut wrong_terminal_aux = *terminal_aux;
     wrong_terminal_aux[AUX_DER_NODE_AFTER] = wrong_terminal_aux[AUX_DER_NODE_AFTER].add(F::ONE);
     assert!(
         evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(F::ONE, &wrong_terminal_aux, claims)
             .unwrap()
             .iter()
-            .any(|residue| *residue != F::ZERO)
+            .all(|residue| *residue == F::ZERO),
+        "private DER endpoints are not carried by the public output frame"
+    );
+    assert!(
+        evaluate_zk_x509_rfc5280_stark_residues_v1(
+            &material.base_row(last).unwrap(),
+            &material.base_row(0).unwrap(),
+            &wrong_terminal_aux,
+            &next_aux[checkpoints.binary_search(&last).unwrap()],
+            &material.fixed_row(last).unwrap(),
+            der_challenges,
+            challenges,
+            claims,
+        )
+        .unwrap()
+        .iter()
+        .any(|residue| *residue != F::ZERO),
+        "changing the private DER endpoint still violates the unchanged local AIR"
     );
     zeroize_fields_v1(&mut wrong_terminal_aux);
 }

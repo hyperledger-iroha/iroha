@@ -285,8 +285,11 @@ mod tests {
         let assembly_limit = cap - baseline;
         // The 12 GiB ceiling still reserves 6 GiB of native sources, 1 GiB
         // of source scratch and 1 GiB of runtime beyond the live transforms.
-        assert_eq!(assembly_limit, (12_usize << 30) - 3_697_993_152 - (8 << 30));
-        assert_eq!(assembly_limit, 596_974_144);
+        assert_eq!(
+            assembly_limit,
+            (12_usize << 30) - (3_697_993_152 + core::mem::size_of::<E>()) - (8 << 30)
+        );
+        assert_eq!(assembly_limit, 596_974_144 - core::mem::size_of::<E>());
         assert_eq!(
             select_metal_columns_v1(layout.common_lde_size(), assembly_limit - 288_345_698),
             2

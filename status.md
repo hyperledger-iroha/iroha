@@ -85,17 +85,18 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-Default daemon/CLI binaries have scoped compilation coverage after compiler and
-runtime-owner extraction. Historical epoch10 Core/Kagami, CLI and network builds
-pass, along with 1,144 default Core controls and two four-validator component
-checks. The workspace all-targets check fails on six fixture/API errors. Apple
-ABI-25 packaging passes; Swift host fixtures and physical-device qualification
-remain open. A subsequent merge changes compiled inputs, invalidating remaining
-in-flight Core, IVM and FASTPQ qualification. Reconciled repairs need normal builds
-and tests on the completed source. Full workspace and same-candidate release
-validation remain incomplete. Dependency ownership and measured compiler memory
-remain gates; see the [architecture plan](specs/first_release_architecture_redesign.md)
-and [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
+The last fixed-source normal build passes workspace all-targets checking,
+Core/Kagami, Torii/bridge, CLI/daemon and both network-test targets. The Kagami JSON
+fixture correction also passes genuine finalized-execution production and the
+public SDK bridge. All 1,145 default Core controls, eight optimized AXT controls
+and both four-validator component tests pass on that source. Current SDK
+consumers remain outstanding. The current private-terminal/quotient-mask
+repair candidate needs genuine profile regeneration and normal native validation;
+previous-source passes do not qualify it. Full workspace tests, physical-device
+qualification and same-candidate release validation remain incomplete.
+Dependency ownership and measured compiler memory remain gates; see the
+[architecture plan](specs/first_release_architecture_redesign.md) and
+[compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
 Memory qualification retains a 25% model-baseline reduction, measured limits for
 introduced units and a 13-GiB per-unit release ceiling. Core/Torii test and daemon
@@ -118,10 +119,17 @@ passes.
   with restart, rewards, exits and slashing.
 - **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
   pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
-  300 seconds. Public terminal claims also require a zero-knowledge repair.
-  Prepared transform and selective auxiliary replay changes need native parity
-  and a new complete proof. Historical q77 controls pass; the maximum ordinary
-  producer crosses source changes and cannot qualify the merge. RAM-LFE secure
+  300 seconds. Verifier byte-source joins remain incomplete: host copies do not
+  bind P256/projection byte declarations to the shared trace. The selected-input
+  repair binds bytes to actual P256 values, but native comparison exposed a
+  missing selected-input multiplicity in the closed fixed-schedule compiler.
+  The post-pin privacy selection completes with 942 passes and 14 failures;
+  all 26 repaired IVM memory controls pass. Schedule, fixture and resource
+  corrections require a new native run. The partial private-terminal repair
+  leaves 492 public intermediate scalars requiring a zero-knowledge repair.
+  A new complete proof still needs to meet all limits. The current q77 maximum ordinary
+  and maximum AXT proofs pass byte/RSS limits with unchanged source; both exact
+  retained artifacts also pass fresh-process verification. RAM-LFE secure
   encryption/full execution, IVM execution/finalized-State binding, protocol and
   side-channel review, hardware/network evidence and final signing remain open
   under the [ZK goals](specs/zk_first_release_goals.md).

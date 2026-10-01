@@ -88,9 +88,13 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // schedule digests in their opaque byte order. The manifest itself uses SHA-256.
 // This identifies the sole compiled AIR and geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
+// Native derivation and independent framing bind the private-terminal links,
+// quotient blinding, selected P256 inputs and RFC output metadata in this candidate.
+// TODO: complete credential binding, hiding review and resource qualification
+// before activating this profile.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x03, 0x12, 0xa2, 0x2a, 0xad, 0x46, 0x56, 0x1f, 0x42, 0xf2, 0x88, 0x31, 0xba, 0xff, 0x28, 0x0a,
-    0x07, 0x2f, 0x34, 0x89, 0x92, 0x84, 0xe3, 0x54, 0x93, 0x8c, 0x09, 0xa8, 0x2e, 0x7a, 0xdc, 0xdf,
+    0xc8, 0x13, 0x7b, 0x55, 0x17, 0x2d, 0x79, 0xe9, 0x5d, 0x69, 0x82, 0x1d, 0x4c, 0xc0, 0x86, 0x5d,
+    0x58, 0xc3, 0x38, 0xe2, 0x33, 0xe0, 0x8b, 0x02, 0x2a, 0x6c, 0xd5, 0xec, 0x92, 0x9f, 0x54, 0xbc,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -749,6 +753,68 @@ mod tests {
             independent
         );
     }
+    // Historical profile tests must use the exact old public descriptors,
+    // rather than accidentally mixing a new closure with an old SHA-padding pin.
+    fn restore_retired_public_terminal_profile_descriptors_v1(fields: &mut [Vec<u8>]) {
+        assert_eq!(fields.len(), COMPILED_PROFILE_FIELD_COUNT_V1);
+        fields[9] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log13-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=696|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=1-per-subproof-current+next-openings|ca-deep-constraints=all1379-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed102-constraints1681-degree4-authenticated72-times-73-relations-38bit-slack-affine-loglookup-30-relations|rbr-budget-bits=157|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9420938|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
+        fields[10] = b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay=complete:activation=governance-gated".to_vec();
+        fields[13] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification".to_vec();
+        fields[14] =
+            hex::decode("307915059aa0f173351facf134c2c08df720e365cfdb96c239eca44c07b654bb")
+                .unwrap();
+    }
+    #[test]
+    fn compiled_profile_binds_private_terminal_closure() {
+        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let profile = core::str::from_utf8(fields[9]).unwrap();
+        assert!(profile.contains("main-public-terminal-records=384-rfc80+sha304"));
+        assert!(profile.contains("main-claim-envelope-bytes=6180"));
+        assert!(profile.contains("quotient-chunk-stride=fri-degree-cap-minus137"));
+        assert!(profile.contains(
+            "quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation"
+        ));
+        assert!(profile.contains("main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root"));
+        assert!(
+            profile.contains(
+                "private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only"
+            )
+        );
+        assert!(
+            core::str::from_utf8(fields[10])
+                .unwrap()
+                .contains("no-unmasked-der-rfc-source-or-p256-terminal-scalars")
+        );
+        let components = core::str::from_utf8(fields[13]).unwrap();
+        assert!(components.contains("private-der-source-terminal-air-links=complete"));
+        assert!(components.contains("private-committed-terminal-air-links=complete"));
+    }
+    #[test]
+    fn compiled_profile_rejects_retired_public_terminal_exposure() {
+        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let mut retired = fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        restore_retired_public_terminal_profile_descriptors_v1(&mut retired);
+        let retired_fields = retired.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let old_digest = independent_compiled_profile_digest_v1(&retired_fields);
+        assert_eq!(
+            hex::encode(old_digest),
+            "0312a22aad46561f42f28831baff280a072f34899284e354938c09a82e7adcdf"
+        );
+        assert_ne!(
+            old_digest,
+            recompute_zk_x509_compiled_profile_digest_v1().unwrap()
+        );
+        assert_ne!(Some(old_digest), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
+        let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
+            .expect("current verifier profile");
+        supplied.compiled_profile_digest = old_digest;
+        assert!(super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err());
+    }
     #[test]
     fn compiled_profile_rejects_the_superseded_sha_padding_descriptor() {
         let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
@@ -757,6 +823,7 @@ mod tests {
             .iter()
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
+        restore_retired_public_terminal_profile_descriptors_v1(&mut superseded);
         let current = core::str::from_utf8(&superseded[17]).unwrap().to_owned();
         let word_boundary = "word-capacity-recurrence=local-compute+digest+memory-call-last:";
         let bus_boundary =

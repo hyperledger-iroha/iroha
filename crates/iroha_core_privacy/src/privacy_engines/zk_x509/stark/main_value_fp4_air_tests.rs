@@ -3,20 +3,9 @@
 use super::fp4_air_tests::{challenges, opening, rows};
 use super::*;
 
-fn terminals() -> P256TerminalRegistrationV1 {
-    let mut claims = super::fp4_air_tests::terminals();
-    claims.cross_sources.push(P256CrossTraceTerminalClaimV1 {
-        role: P256CrossTraceTerminalRoleV1::ValueWriter,
-        start: [F(31); 4],
-        terminal: [F(37); 4],
-    });
-    claims
-}
-
 #[test]
 fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
     let challenges = challenges();
-    let terminals = terminals();
     let w = E::canonical([0, 1, 0, 0]).unwrap();
     let mut count = 0;
     for registration in AggregateProofLayoutV1::for_full_profile_v1()
@@ -38,7 +27,7 @@ fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
         };
         let input = rows(registration);
         let actual = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges, &terminals)
+            .evaluate_residues_v1(opening(&input), &input[4], challenges)
             .unwrap();
         assert_eq!(actual.len(), registration.segment.constraint_count);
         let mut expected = vec![E::ZERO; actual.len()];
@@ -55,14 +44,9 @@ fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
                     })
                     .collect::<Vec<_>>()
             });
-            let scalar = p256_opened_residues_v1(
-                registration,
-                opening(&lifted),
-                &lifted[4],
-                challenges,
-                &terminals,
-            )
-            .unwrap();
+            let scalar =
+                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], challenges)
+                    .unwrap();
             let mut numerator = E::ONE;
             let mut denominator = F::ONE;
             for other in 0..10 {
@@ -81,12 +65,7 @@ fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
                     .map(|row| row.iter().copied().map(E::from_base).collect());
                 assert_eq!(
                     evaluator
-                        .evaluate_residues_v1(
-                            opening(&embedded),
-                            &embedded[4],
-                            challenges,
-                            &terminals
-                        )
+                        .evaluate_residues_v1(opening(&embedded), &embedded[4], challenges)
                         .unwrap(),
                     scalar.into_iter().map(E::from_base).collect::<Vec<_>>()
                 );
@@ -104,8 +83,12 @@ fn value_fp4_complete_registrations_match_independent_polynomial_lifting() {
 }
 
 #[test]
-fn value_fp4_binds_each_terminal_lane_and_rejects_malformed_inputs() {
+fn value_fp4_binds_each_private_terminal_column_and_rejects_malformed_inputs() {
+    use super::super::super::p256_aggregate_adapter::{
+        P256PrivateLinkFamilyV1 as Family, p256_private_link_columns_v1,
+    };
     let challenges = challenges();
+    let mut count = 0;
     for registration in AggregateProofLayoutV1::for_full_profile_v1()
         .unwrap()
         .registered_segments
@@ -121,62 +104,48 @@ fn value_fp4_binds_each_terminal_lane_and_rejects_malformed_inputs() {
         let Some(MainFp4AirEvaluatorV1::P256(evaluator)) =
             MainFp4AirEvaluatorV1::for_registration_v1(registration).unwrap()
         else {
-            panic!("value evaluator")
+            panic!("value evaluator");
         };
-        let (_, local) = p256_instance_parts_v1(registration.segment.instance).unwrap();
-        let terminal_count = if local == 0 { 12 } else { 4 };
+        let identity = p256_main_registration_from_main_layout_v1(registration).unwrap();
+        let families = if identity.local_instance_v1() == 0 {
+            [Family::Value, Family::Copy, Family::ChainTerminal].as_slice()
+        } else {
+            [Family::Value].as_slice()
+        };
         let input = rows(registration);
         let original = evaluator
-            .evaluate_residues_v1(opening(&input), &input[4], challenges, &terminals())
+            .evaluate_residues_v1(opening(&input), &input[4], challenges)
             .unwrap();
-        for terminal in 0..terminal_count {
-            let mut changed = terminals();
-            let lane = terminal % 4;
-            let claim = if local == 1 {
-                &mut changed.buses.value_sorted[lane]
-            } else {
-                match terminal / 4 {
-                    0 => &mut changed.buses.value_execution[lane],
-                    1 => &mut changed.buses.value_arithmetic_copy[lane],
-                    _ => &mut changed.cross_sources.last_mut().unwrap().terminal[lane],
-                }
-            };
-            *claim = claim.add(F::ONE);
-            let actual = evaluator
-                .evaluate_residues_v1(opening(&input), &input[4], challenges, &changed)
-                .unwrap();
-            assert_eq!(
-                &actual[..actual.len() - terminal_count],
-                &original[..original.len() - terminal_count]
-            );
-            assert_ne!(
-                actual[actual.len() - terminal_count + terminal],
-                original[original.len() - terminal_count + terminal]
-            );
+        for &family in families {
+            for column in p256_private_link_columns_v1(identity, family).unwrap() {
+                let mut changed = input.clone();
+                changed[2][column] = changed[2][column].add(E::ONE);
+                assert_ne!(
+                    evaluator
+                        .evaluate_residues_v1(opening(&changed), &changed[4], challenges)
+                        .unwrap(),
+                    original
+                );
+                changed[2][column] = E::from_base(F(u64::MAX));
+                assert!(
+                    evaluator
+                        .evaluate_residues_v1(opening(&changed), &changed[4], challenges)
+                        .is_err()
+                );
+            }
         }
         for component in 0..5 {
             let mut malformed = input.clone();
             malformed[component].pop();
             assert!(
                 evaluator
-                    .evaluate_residues_v1(
-                        opening(&malformed),
-                        &malformed[4],
-                        challenges,
-                        &terminals()
-                    )
+                    .evaluate_residues_v1(opening(&malformed), &malformed[4], challenges)
                     .is_err()
             );
         }
-        let mut malformed_claims = terminals();
-        malformed_claims.buses.value_sorted[0] =
-            F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
-        assert!(
-            evaluator
-                .evaluate_residues_v1(opening(&input), &input[4], challenges, &malformed_claims)
-                .is_err()
-        );
+        count += 1;
     }
+    assert_eq!(count, 10);
 }
 
 #[test]
@@ -203,14 +172,8 @@ fn value_execution_and_sorted_total_degree_remains_three_including_fixed_columns
                         .map(|value| value.coefficients()[0].add(t.mul(value.coefficients()[1])))
                         .collect::<Vec<_>>()
                 });
-                p256_opened_residues_v1(
-                    registration,
-                    opening(&lifted),
-                    &lifted[4],
-                    challenges,
-                    &terminals(),
-                )
-                .unwrap()
+                p256_opened_residues_v1(registration, opening(&lifted), &lifted[4], challenges)
+                    .unwrap()
             })
             .collect::<Vec<_>>();
         for _ in 0..3 {

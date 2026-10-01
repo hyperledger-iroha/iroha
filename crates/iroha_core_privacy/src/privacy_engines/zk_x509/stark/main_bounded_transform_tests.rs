@@ -57,11 +57,20 @@ fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
-    let limit = cap - plan.check_before_sources_v1(0).unwrap();
-    assert_eq!(limit, 596_974_144);
-    assert_eq!(plan.maximum_live_buffers, 3_697_993_152);
+    let source_limit = cap - plan.check_before_sources_v1(0).unwrap();
+    let mask_scratch = core::mem::size_of::<E>();
+    let link_owner =
+        super::super::main_terminal_links::MainTerminalLinkPlanV1::public_owner_charge_v1();
+    // Three 192-link plans, fixed transcript bytes, one Vec header and 192
+    // Fp4 link coefficients remain live in the bounded-transform owner.
+    assert_eq!(mask_scratch, 32);
+    assert_eq!(link_owner, 3 * 192 * 64 + 64 + 24 + 192 * 32);
+    assert_eq!(source_limit, 596_974_144 - mask_scratch);
+    let limit = source_limit - link_owner;
+    assert_eq!(limit, 596_974_144 - mask_scratch - link_owner);
+    assert_eq!(plan.maximum_live_buffers, 3_697_993_152 + mask_scratch);
     let policy = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 288_345_698).unwrap();
-    assert_eq!(policy.available, 308_628_446);
+    assert_eq!(policy.available, 308_628_446 - mask_scratch - link_owner);
     assert_eq!(
         MainBoundedTransformPolicyV1 {
             backend: Some(Backend::Metal),
@@ -231,7 +240,22 @@ fn transform_errors_bad_output_and_uncertain_completion_never_publish_batch() {
 fn quotient_metadata_and_log19_device_payload_fit_only_unreserved_bytes() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let policy = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 288_345_698).unwrap();
-    assert_eq!(required_v1(1 << 19, 8).unwrap(), 168_968_920);
+    // Independent live-owner census: one host word matrix, rollback and shared
+    // staging matrices, worst-case page padding, the whole idle pool, all 64
+    // factorized twiddle cache entries plus construction/returned owners, and
+    // dispatch metadata. These are logical payloads, not a measured RSS bound.
+    let words = (1_usize << 19) * 8 * 8;
+    let factorized_twiddles = (64 + 2) * (4 * 256) * 8;
+    let expected = 3 * words
+        + 8 * (16 * 1024 - 1)
+        + 64 * 1024 * 1024
+        + factorized_twiddles
+        + (1 << 20)
+        + 8 * core::mem::size_of::<Vec<u64>>()
+        + core::mem::size_of::<Words>();
+    assert_eq!(expected, 169_492_696);
+    assert_eq!(required_v1(1 << 19, 8).unwrap(), expected);
+    assert_eq!(factorized_twiddles - (64 + 2) * 32 * 8, 523_776);
     for registration in &layout.registered_segments {
         let adjusted = MainBoundedTransformPolicyV1 {
             backend: Some(Backend::Metal),
@@ -547,7 +571,12 @@ fn native_replay_metadata_respects_every_phase_residual_without_source_discharge
         assert_eq!(quotient.available - native.available, metadata);
         assert_eq!(native.columns_v1(1 << 19), 8);
     }
-    assert_eq!(original.available, 308_628_446);
+    assert_eq!(
+        original.available,
+        308_628_446
+            - core::mem::size_of::<E>()
+            - super::super::main_terminal_links::MainTerminalLinkPlanV1::public_owner_charge_v1()
+    );
 }
 
 #[test]

@@ -550,13 +550,16 @@ fn native_stores_match_ordered_alias_reads_exact_write_bytes_and_unchanged_regis
             for i in 0..4 {
                 vm.set_register(i, values[i]);
             }
+            let registers_before: [(u64, bool); 256] =
+                std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
+            assert_eq!(registers_before[31], (vm.memory.stack_top(), false));
             vm.memory.clear_tracking();
             vm.run().unwrap();
             assert_native_reads(&vm, &f);
             assert_native_write(&vm, &f);
-            for (i, v) in values.iter().enumerate() {
-                assert_eq!(vm.registers.get(i), *v);
-                assert!(!vm.registers.tag(i));
+            for (i, (value, tag)) in registers_before.into_iter().enumerate() {
+                assert_eq!(vm.registers.get(i), value, "unchanged register r{i}");
+                assert_eq!(vm.registers.tag(i), tag, "unchanged register tag r{i}");
             }
             assert_eq!(
                 vm.memory.load_u128(p.address).unwrap(),
@@ -627,6 +630,9 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
                 vm.set_register(i, values[i]);
                 vm.registers.set_tag(i, tags[i]);
             }
+            let registers_before: [(u64, bool); 256] =
+                std::array::from_fn(|i| (vm.registers.get(i), vm.registers.tag(i)));
+            assert_eq!(registers_before[31], (vm.memory.stack_top(), false));
             vm.memory.clear_tracking();
             let result = vm.run();
             let ok = f.control[COMMIT] == F::ONE;
@@ -644,9 +650,9 @@ fn native_late_privacy_and_permission_failures_keep_reads_but_no_store_effects()
                 (vm.gas_remaining, vm.pc(), vm.get_cycle_count()),
                 (95, if ok { 8 } else { 0 }, if ok { 2 } else { 0 })
             );
-            for i in 0..256 {
-                assert_eq!(vm.registers.get(i), values[i]);
-                assert_eq!(vm.registers.tag(i), tags[i]);
+            for (i, (value, tag)) in registers_before.into_iter().enumerate() {
+                assert_eq!(vm.registers.get(i), value, "unchanged register r{i}");
+                assert_eq!(vm.registers.tag(i), tag, "unchanged register tag r{i}");
             }
             if !ok {
                 assert_eq!(vm.memory.load_u128(address).unwrap().to_le_bytes(), OLD);

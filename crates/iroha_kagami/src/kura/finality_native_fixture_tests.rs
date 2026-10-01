@@ -308,24 +308,44 @@ fn native_capture(lane_count: u32) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
+fn native_sdk_captures() -> Vec<norito::json::Value> {
+    [1, 4]
+        .into_iter()
+        .map(|lane_count| {
+            let files = native_capture(lane_count)
+                .into_iter()
+                .map(|(name, bytes)| (name, hex::encode(bytes)))
+                .collect::<BTreeMap<_, _>>();
+            norito::json!({ "lane_count": lane_count, "files": files })
+        })
+        .collect()
+}
+
 #[test]
 fn current_native_execution_and_replay_capture_exact_finality_and_request_bytes() {
-    for lane_count in [1, 4] {
-        let files = native_capture(lane_count);
+    let captures = native_sdk_captures();
+    assert_eq!(captures.len(), 2);
+    for (capture, lane_count) in captures.iter().zip([1, 4]) {
+        assert_eq!(capture["lane_count"].as_u64(), Some(lane_count));
+        let files = capture["files"].as_object().unwrap();
         assert_eq!(files.len(), 10);
+        for value in files.values() {
+            let bytes = hex::decode(value.as_str().unwrap()).unwrap();
+            assert!(!bytes.is_empty());
+        }
     }
+    // Exercise the same owned collection and text codec as the ignored producer,
+    // preserving every exact emitted file and the independently selected roots.
+    let json = norito::json::to_json(&captures).unwrap();
+    assert!(!json.is_empty() && json.len() <= 64 * 1024 * 1024);
+    let decoded: Vec<norito::json::Value> = norito::json::from_str(&json).unwrap();
+    assert_eq!(decoded, captures);
 }
 
 #[test]
 #[ignore = "explicit genuine World execution capture for the SDK bridge consumer"]
 fn capture_current_native_execution_sdk_fixtures() {
-    let captures = [1, 4].map(|lane_count| {
-        let files = native_capture(lane_count)
-            .into_iter()
-            .map(|(name, bytes)| (name, hex::encode(bytes)))
-            .collect::<BTreeMap<_, _>>();
-        norito::json!({ "lane_count": lane_count, "files": files })
-    });
+    let captures = native_sdk_captures();
     println!(
         "KAGAMI_NATIVE_EXECUTION_CAPTURE={}",
         norito::json::to_json(&captures).unwrap()

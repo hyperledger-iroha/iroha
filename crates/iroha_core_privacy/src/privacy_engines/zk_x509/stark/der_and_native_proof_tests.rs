@@ -845,10 +845,6 @@ fn der_registration_claim_order_and_every_shape_field_are_bound() {
 }
 #[test]
 fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
-    let der = ZkX509DerStarkTerminalClaimsV1 {
-        input_byte: [F(3), F(5), F(7), F(11)],
-        node: [F(13), F(17), F(19), F(23)],
-    };
     let mut sha = ZkX509ShaSegmentTerminalClaimsV1::canonical_zero_for_test_v1();
     for segment in &mut sha.segments {
         for stream in &mut segment.rfc_stream_products {
@@ -856,11 +852,8 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
         }
     }
     let claims = ZkX509MainTerminalClaimsV1 {
-        der,
-        rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_for_der_test_v1(der)
-            .expect("canonical DER/RFC test claims"),
+        rfc5280: ZkX509Rfc5280StarkTerminalClaimsV1::canonical_test_v1(),
         sha,
-        p256: p256_main_terminal_claims_fixture_v1(),
     };
     let aggregate = b"X5S1aggregate";
     let encoded = encode_zk_x509_main_proof_envelope_v1(claims, aggregate).expect("canonical X5M1");
@@ -904,48 +897,19 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
         decode_zk_x509_main_proof_envelope_v1(&oversized_wire),
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
-    let mut internally_unequal = claims;
-    internally_unequal.p256.certificate_or_crl[0]
-        .buses
-        .value_execution[0] = F::ONE;
-    assert!(
-        internally_unequal.p256.encode_x5v1_v1().is_ok(),
-        "the standalone canonical codec intentionally checks shape, not AIR equality"
+    // Retired public DER/P-256 fields are not an alternate accepted layout.
+    let mut retired = encoded.clone();
+    retired.splice(
+        MAIN_PROOF_HEADER_BYTES_V1..MAIN_PROOF_HEADER_BYTES_V1,
+        [0_u8; 64],
     );
-    assert!(matches!(
-        encode_zk_x509_main_proof_envelope_v1(internally_unequal, aggregate),
-        Err(ZkX509StarkErrorV1::InternalInvariant)
-    ));
-    let mut transcript =
-        new_transcript_v1(&test_stark_digest_v1(0x92)).expect("MAIN terminal transcript fixture");
-    let transcript_before = transcript;
-    assert!(matches!(
-        absorb_zk_x509_main_terminal_claims_v1(&mut transcript, internally_unequal),
-        Err(ZkX509StarkErrorV1::InvalidStatement)
-    ));
-    assert_eq!(
-        transcript, transcript_before,
-        "internally unequal X5V1 claims must fail before transcript mutation"
+    assert!(decode_zk_x509_main_proof_envelope_v1(&retired).is_err());
+    let mut retired = encoded.clone();
+    retired.splice(
+        MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1..MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1,
+        [0_u8; 5580],
     );
-    let mut unequal_encoded = encoded.clone();
-    overwrite_main_terminal_record_value_v1(
-        &mut unequal_encoded,
-        MAIN_PROOF_P256_OFFSET_V1,
-        0,
-        F::ONE,
-    );
-    assert!(
-        ZkX509P256TerminalClaimsV1::decode_x5v1_v1(
-            &unequal_encoded[MAIN_PROOF_P256_OFFSET_V1
-                ..MAIN_PROOF_P256_OFFSET_V1 + ZK_X509_P256_TERMINAL_CLAIM_BYTES_V1],
-        )
-        .is_ok(),
-        "the adversary must remain canonically encoded"
-    );
-    assert!(matches!(
-        decode_zk_x509_main_proof_envelope_v1(&unequal_encoded),
-        Err(ZkX509StarkErrorV1::MalformedProof)
-    ));
+    assert!(decode_zk_x509_main_proof_envelope_v1(&retired).is_err());
     let terminal_challenge = |claims| {
         let mut transcript =
             new_transcript_v1(&test_stark_digest_v1(0x91)).expect("MAIN transcript");
@@ -967,40 +931,14 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
             "claim value at {offset} was not transcript-bound"
         );
     }
-    let mut changed_p256_claims = claims;
-    changed_p256_claims.p256.certificate_or_crl[0]
-        .buses
-        .value_execution[0] = F::ONE;
-    changed_p256_claims.p256.certificate_or_crl[0]
-        .buses
-        .value_sorted[0] = F::ONE;
-    let changed_p256 = encode_zk_x509_main_proof_envelope_v1(changed_p256_claims, aggregate)
-        .expect("internally equal changed P-256 claim");
-    let changed_p256_claims = decode_zk_x509_main_proof_envelope_v1(&changed_p256)
-        .expect("canonical changed P-256 claim")
-        .claims;
-    assert_ne!(
-        terminal_challenge(changed_p256_claims),
-        canonical_terminal_challenge,
-        "internally equal P-256 terminal mutation was not transcript-bound"
-    );
-    for offset in [
-        MAIN_PROOF_HEADER_BYTES_V1 + 7,
-        MAIN_PROOF_RFC_OFFSET_V1 + 23,
-    ] {
-        let mut changed = encoded.clone();
-        changed[offset] ^= 1;
-        assert!(
-            decode_zk_x509_main_proof_envelope_v1(&changed).is_err(),
-            "DER/RFC equality mutation at {offset} must fail before MAIN alphas"
-        );
-    }
-    // X5R1 encodes four aggregate relation products first. Keep its
+    // Private DER/P-256 endpoint tampering is checked through the closed
+    // masked-polynomial link tests; it has no scalar transcript slot.
+    // X5R1 encodes two aggregate output products first. Keep its
     // aggregate consumer relation consistent while corrupting each of the
     // four RFC roles consumed by SHA. The nested frame must remain valid;
     // only the cross-adapter MAIN equality may reject it.
-    const RFC_AGGREGATE_RECORDS_V1: usize = 4 * ZK_X509_DER_STARK_BUS_LANES_V1;
-    const RFC_AGGREGATE_CONSUMER_RELATION_V1: usize = 3;
+    const RFC_AGGREGATE_RECORDS_V1: usize = 2 * ZK_X509_DER_STARK_BUS_LANES_V1;
+    const RFC_AGGREGATE_CONSUMER_RELATION_V1: usize = 1;
     const RFC_OUTPUT_ENDPOINTS_V1: usize = 2;
     const RFC_CONSUMER_ENDPOINT_V1: usize = 1;
     for role in MAIN_RFC_SHA_CONSUMER_ROLES_V1 {
@@ -1192,11 +1130,7 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
             "header byte {offset} accepted"
         );
     }
-    for offset in [
-        MAIN_PROOF_RFC_OFFSET_V1,
-        MAIN_PROOF_SHA_OFFSET_V1,
-        MAIN_PROOF_P256_OFFSET_V1,
-    ] {
+    for offset in [MAIN_PROOF_RFC_OFFSET_V1, MAIN_PROOF_SHA_OFFSET_V1] {
         let mut changed = encoded.clone();
         changed[offset] ^= 1;
         assert!(
@@ -1205,13 +1139,13 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
         );
     }
     let mut noncanonical = encoded.clone();
-    noncanonical[MAIN_PROOF_HEADER_BYTES_V1..MAIN_PROOF_HEADER_BYTES_V1 + 8].copy_from_slice(
-        &crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1.to_be_bytes(),
+    overwrite_main_terminal_record_value_v1(
+        &mut noncanonical,
+        MAIN_PROOF_RFC_OFFSET_V1,
+        0,
+        F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1),
     );
-    assert!(matches!(
-        decode_zk_x509_main_proof_envelope_v1(&noncanonical),
-        Err(ZkX509StarkErrorV1::NonCanonicalField)
-    ));
+    assert!(decode_zk_x509_main_proof_envelope_v1(&noncanonical).is_err());
     for offset in MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1..MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 + 4 {
         let mut changed = encoded.clone();
         changed[offset] ^= 0x80;
@@ -1246,7 +1180,7 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     // ordered DER descriptors plus the constant public registration label.
     assert_eq!(
         hex::encode(digest.to_bytes()),
-        "28b87be1e1bf15664d657d1a2454e37bf190a320ce5bd07e4fc5348db1017e2ea928f47c77e01a310fb4d116fc805b96"
+        "d1e933aaa40c07fa7e389dff5afae8e8565f77f529d65c621f843a4f0408220a9dd6efbdcb1aa8f30d90d02281190c1c"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],

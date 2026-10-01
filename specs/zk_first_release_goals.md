@@ -46,14 +46,30 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The completed epoch10 native, SDK and network evidence below is historical. A
-subsequent merge on `optimizations` changed compiled inputs while three remaining
-control runs were active. Their native events and public artifacts are retained,
-but their source guards fail; they qualify no successor. Merge conflict resolution
-has finished and the reconciled repairs are applied. The merge remains uncommitted
-because the local signing executable is unavailable. The exact uncommitted
-candidate requires new normal builds, genuine fixtures, native proofs, SDK
-consumers and integrated checks. No partial selection closes a goal.
+The merged base is `051df111` on `optimizations`, with the Kagami JSON fixture
+correction. Its fixed-source normal build passes workspace all-targets checking,
+Core/Kagami, Torii/bridge, CLI/daemon and both network-test targets. Genuine
+finalized-execution capture, Kagami production, the public SDK bridge, schemas,
+query/native fixture exports and executable examples pass. All 1,145 selected
+Core controls, eight additional optimized AXT controls and both four-validator
+component scenarios pass. The original
+247-control mapping retains 246 exact names; the retired fixture control is
+replaced by three genuine current producer/consumer controls. All 251 later
+selected names are covered.
+
+On that fixed source, ordinary controls pass 1,312 FASTPQ, 1,026 IVM-library, 84 RAM-LFE,
+295 BFV, seven memory-request and 16 offline tests. The subsequent privacy repair
+candidate completed normal production and optimized test builds and genuine
+compiled-profile regeneration. Its complete 956-control selection has 942 passes
+and 14 failures, with every selected name accounted for and unchanged source.
+The profile gate, all 26 IVM memory controls, four source controls and 31 supporting
+controls pass; the 894 ordinary X509 controls have 880 passes and 14 failures.
+Failures identify a missing selected-input multiplicity in the closed P256 fixed
+schedule, stale registration/resource expectations, terminal-link challenge-vector
+over-allocation, and three protocol digest fixtures. Corrections and further source-join
+work require the next normal build and native rerun. Historical proof receipts
+and earlier SDK runs below qualify only their recorded source; no partial
+selection closes a goal.
 
 ### ZK01 — secret arithmetic
 
@@ -93,17 +109,23 @@ ordered scalar output including 256, clearing owners and explicit public
 policy/key/profile/context binding. They authenticate no submitted key or proof.
 Input and proof-envelope caps remain independently 1 MiB, with the configured
 proof cap at 192 KiB. Input and output ciphertexts do not share the same input
-frame; complete replacement proof encoding and total working memory remain open. Retained public arithmetic/parameter research
-does not establish a complete refresh or qualified encryption construction.
+frame; complete replacement proof encoding and total working memory remain open. A separate fixed-basis native RNS key-switch component passes ten native tests,
+nine complete public-fixture parity cases and 16 adversarial/public controls;
+independent review verifies its public roots, primes and exact division. Its
+3,031,040-byte owned allocation bound applies only to that component. Native
+policy/key/input ownership, complete refresh, secure parameters and the full
+program relation remain open; the component is not a qualified encryption
+construction.
 
-The historical IVM quick selection passes 114 native controls. Three of the 19
-separate scalar/AIR proof controls complete natively; the third crosses source
-changes, and the remaining 16 are unexecuted. No 133-control union is admitted.
-The owner-summary fixture has one native failure from a missing unit-result slot;
-its prepared correction requires current native validation. Reviewed LOAD/STORE
-banks preserve native logging, trap, alias and write-order behavior, but remain
-unregistered prerequisites. Memory authority, initialization/history, execution
-sequencing, integrated resource accounting and finalized State binding remain open.
+The recorded IVM library selection passes 1,026 controls, and all four selected
+frame-initialization controls pass. The repaired memory-bank selection passes all
+26 controls: seven initialization, ten LOAD and nine STORE. STORE fixtures now
+capture the VM's initialized register values and preserve byte, log, gas, PC and
+cycle assertions. The separate scalar/AIR
+proof controls have no complete current-source result. Reviewed LOAD/STORE banks
+remain unregistered prerequisites. Memory authority, initialization/history,
+execution sequencing, integrated resource accounting and finalized State binding
+remain open.
 
 ### ZK04 — FASTPQ
 
@@ -112,16 +134,27 @@ verifier. Expected statements derive from canonical authenticated context; proof
 consistency alone does not authorize remote spending. Development replay APIs and
 required-Metal readiness preserve their existing boundaries.
 
-The historical 77-query SHA3/SHAKE library selection passes 1,315 native controls,
-including all six known-answer controls; 16 offline ordinary controls also pass.
-The seeded CPU and required-Metal proofs pass positive/negative verification and
-authentic golden-byte checks, producing identical 485,219-byte proofs. Its evidence wrapper initially rejected the
-native diagnostic path spelling; a separate source-bound reevaluation preserves
-that wrapper failure and authenticates the real proof and receipt. One maximum ordinary producer completes natively and retains a 973,318-byte
-proof, but the source changes during that run. Its wrapper also rejects a stale
-child-frame expectation; a strict parser repair does not repair source provenance.
-Independent replay and the remaining maximum pairs are unexecuted. No earlier
-maximum result qualifies the new merged candidate.
+On the validated merged base, the library selection passes 1,312 ordinary controls,
+and all 16 offline ordinary controls pass. A required-Metal maximum ordinary proof passes
+production, self-verification and the native controls with unchanged source:
+973,755 proof bytes and 1,561,083,904 bytes peak RSS. Its native production and
+self-verification take 852.192443 seconds under concurrent work; this is not a
+quiet timing comparison. The maximum AXT producer also passes on
+unchanged source: 1,014,530 artifact bytes, 1,514,307,584 bytes peak RSS and
+2,263.745643 seconds including self-verification. Concurrent work and a one-second
+public stack sample preclude a quiet timing comparison. Both remain under the
+unchanged byte, memory and work ceilings. Separate fresh verifier processes pass
+both exact retained artifacts without reproving, with unchanged source and no
+failed or skipped controls. Earlier source-drifted maximum runs remain failures
+of source qualification.
+
+Two actual-Metal controls on that source also pass scalar parity: all 63 continuation
+prefix/body boundary combinations and leaf batches for all eight proof oracle
+kinds. This covers the available Metal device, not the complete hardware matrix.
+
+Historical seeded CPU and required-Metal proofs produce identical 485,219-byte
+artifacts and pass positive/negative controls. Historical known-answer controls
+and maximum artifacts do not qualify a changed candidate.
 
 [FASTPQ readiness](fastpq_production_readiness.md) owns unchanged proof, payload
 and work limits. Dedicated derivations provide conditional classical-ROM and
@@ -132,11 +165,27 @@ and current hardware coverage remain open.
 
 ### ZK05 — ZK-X509
 
-MAIN retains all 49 registrations and certificate, CRL, disclosure and ownership
-coverage. The maximum encoding is 9,420,938 bytes against the unchanged
-9,437,184-byte ceiling. Geometry remains 285 base / 280 auxiliary / 102 fixed
-columns, 1,681 constraints and degree four; native temporal and padding repairs
-preserve the supported relation and rejection of superseded profiles.
+MAIN retains all 49 registrations and the intended certificate, CRL, disclosure
+and ownership coverage, but the complete credential relation is not yet proved.
+Source review identifies missing verifier equations between P256/projection byte
+declarations and the shared byte-I/O trace. The selected P256 tuple now has
+80 fixed pair-to-limb events binding its bytes to actual initial arithmetic
+writers and the digest-reduction input. The repair preserves existing widths and
+degree bounds. Native comparison exposed the missing selected-input reads in
+its closed fixed-schedule compiler; the compiler and boundary controls are being
+repaired. RFC output metadata has six verifier-fixed field equalities; the next
+candidate adds authenticated DER key-output reads. Real certificate/RFC/SHA/IO
+value extraction and byte-source joins remain incomplete.
+
+The private terminal repair removes 364 public scalars through 192 MAIN endpoint
+equations. RFC retains 285 base / 280 auxiliary / 102 fixed columns and 1,702 local
+degree-four constraints. Canonical quotient chunks use 137 independent Fp4 mask
+coefficients with unchanged FRI caps. Revised codec arithmetic is 9,415,166 bytes
+against the unchanged 9,437,184-byte ceiling. The current compiled profile was
+generated and its independent pin passes natively. Subsequent fixed-schedule
+and source-join changes require another generation and native proof run;
+384 MAIN and 108 accumulator public scalars remain. Neither this partial repair nor local proof acceptance qualifies the
+complete credential relation.
 
 The historical normal optimized binary passes 184 focused native executions over
 183 distinct tests, with no failures or skips. The complete maximum credential
@@ -162,9 +211,10 @@ limits remain unchanged; native parity and another full maximum run are required
 The historical exact-root CPU/Metal parity diagnostic passes at native19/common22
 geometry; its timings do not establish the successor's speedup.
 
-Public terminal-product claims expose values not covered by trace masking. A
-protocol repair and artifact-bound zero-knowledge review are required alongside
-performance work. A faster proof alone cannot clear activation.
+The remaining public terminal-product claims expose values not covered by trace
+masking. Complete the numeric byte-source joins, terminal privacy, whole-transcript
+hiding review and performance work before activation. A faster proof alone cannot
+clear these independent blockers.
 
 ### ZK06 — cryptographic qualification
 
@@ -173,7 +223,7 @@ recorded against exact protocol artifacts. Their scope is explicit: component
 arithmetic, conditional soundness/hiding bounds and authentic native verification
 do not establish complete soundness, zero-knowledge, transcript security,
 side-channel resistance or release qualification. RAM-LFE construction and full
-IVM semantics remain absent; X509 has the terminal-claim privacy and time blockers.
+IVM semantics remain absent; X509 has missing byte-source joins, terminal-claim privacy and time blockers.
 Physical hardware and authenticated final release artifacts require actual runs.
 
 ### ZK07 — developer workflow
@@ -191,7 +241,8 @@ Normal Kotodama generation and all 57 official sample mappings pass.
 
 All five Apple slices and the ABI-25 package/resource checks pass. Swift host
 compilation fails on two missing `try` expressions in fixtures; the prepared
-repair is present in the incoming merge but requires native rerunning. The historical JavaScript suite records 3,634
+repair is present in the merged source but requires native rerunning. The historical
+JavaScript suite records 3,634
 passes and 15 failures in bundle accounting, manifest fields, scope and artifact
 identity. Reviewed corrections retain strict parsing and unchanged bundle caps;
 the reconciled manifest and bundle/replication proposals pass five and 35 focused
@@ -200,54 +251,55 @@ managed controls. Full integrated/native rerunning remains required.
 Historical Android native arm64/x86_64 libraries and diagnostic APK packaging
 pass source, native-payload, signature, manifest and six-method DEX census checks.
 Dependency resolution recovered the original offline-cache packaging failure,
-which remains retained. No physical tests have run; a connected Android device
-has been requested. The diagnostic APK's debug signature is not release signing.
+which remains retained. Physical testing requires rebuilt current packages and
+a connected device. The diagnostic APK's debug signature is not release signing.
 
-A genuine Core/Kagami finalized-execution fixture producer and public SDK bridge
-consumer are prepared. Actual generation, consumer execution, current installed
-packages, physical Apple/Android evidence and signed final artifacts remain open.
+A genuine merged-base Core/Kagami finalized-execution fixture producer and public SDK
+bridge consumer pass. Paired schema, query/native fixture generation and the
+executable examples also pass. All 185 maintained golden-generation commands pass;
+both sets of 61 outputs are byte-identical and match canonical files. The
+top-up producer's two executions and eight consumer controls pass. Current installed
+consumers and packages,
+physical Apple/Android evidence and signed final artifacts remain open.
 The candidate RAM interfaces and stable unavailable errors confer no encryption
 qualification. Public guidance belongs in `iroha-docs`; this checkout's build and
 validation do not depend on that sibling repository.
 
 ### ZK08 — current source contracts
 
-Normal historical Core/Kagami, CLI, daemon and network-test builds pass. The
-default Core selection passes 1,144 executions before the merge. All eight
-separately optimized AXT controls complete natively, but source changes during
-that run; its failed source guard prevents a successor union. The original
-247-control mapping retains historical coverage; the replacement genuine producer
-remains unexecuted.
+The last validated merged-base build passes workspace all-targets checking and Core/Kagami,
+Torii/bridge, CLI/daemon and both network-test targets. The default Core selection
+passes 1,145 tests across 70 groups with no failures or ignored tests. The original
+247-control map has 246 exact-name passes and three genuine producer/consumer
+controls replacing its retired fixture control; all 251 later selected names
+also pass. A separate normal optimized Core build and all eight AXT proof
+controls pass on unchanged source, for a 1,153-execution union. The original
+retained selection accounts for 1,152 executions; the extra current test covers
+authenticated-genesis successor ordering and rejected-interval poisoning. The
+earlier source-drifted run remains unqualified.
 
-The historical workspace all-targets check fails on six fixture/API diagnostics
-in JavaScript host, network proofs and Torii tests. The incoming merge supersedes
-some prepared corrections; the reconciled remainder needs a normal workspace
-check. The panic-boundary inventory also detects new executor module roots that
-require explicit review. Compiler artifact recovery never converts a failed
-command into a pass.
+Both four-validator component controls pass on that unchanged source:
+transaction commitment and lane transactions across a full network restart.
+Each observes exactly four concurrent daemons. These are component scenarios;
+finalized FASTPQ authority, wallet workflows and full release qualification
+remain open. Compiler artifact recovery never converts a failed command into a
+pass.
 
-Both historical four-validator component controls pass: transaction commitment
-and lane transactions across a full network restart. Each observes exactly four
-concurrent daemons. These controls do not qualify the merged source, finalized
-FASTPQ authority, wallet workflows or release readiness.
-
-The applied reconciled patch preserves incoming fixes and substantive assertions.
-The unregistered initialization bank additionally binds successful STORE effects
-to exact bytes in absolute cells and the same frame generation; eleven native
-regressions remain pending. Frame lifecycle, permissions, initial history and
-complete execution authority remain unfinished. Regenerate genuine fixtures and
-run normal builds, native proofs, SDK consumers, formatting, codec guards,
-workspace and four-validator checks on the recorded candidate. Retain all protocol
-and resource limits; old native outcomes do not qualify changed source.
+The current repair candidate changes privacy source, fixtures and profile commitments.
+It requires normal compilation, genuine profile derivation and native reruns,
+followed by current SDK consumers, formatting, codec guards and applicable
+workspace/network qualification. The complete workspace test suite and strict
+Clippy gate remain unexecuted on that final candidate. Preserve all protocol
+and resource limits; previous native outcomes do not qualify changed source.
 
 ## Remaining execution sequence
 
 1. Replace the insecure RAM-LFE encryption construction, retire diagnostic public
    surfaces, and complete its semantic relation and current SDK/consumer controls.
-2. Rerun corrected FASTPQ fixtures and native regressions, then produce
-   maximum ordinary/AXT proofs; qualify finalized-source network and hardware
-   behavior without changing proof or resource limits.
-3. Repair X509 terminal-claim privacy and the measured proving-time failure, with
+2. Preserve the clean FASTPQ maximum ordinary/AXT production and replay evidence;
+   qualify finalized-source network and hardware behavior without changing proof
+   or resource limits. Rerun affected proofs after any protocol/source changes.
+3. Complete X509 verifier byte-source joins, repair terminal-claim privacy and the measured proving-time failure, with
    native parity, independent review and another complete maximum proof under
    unchanged coverage, byte, memory and time limits.
 4. Complete IVM G3's native execution relation and finalized authority. Validate

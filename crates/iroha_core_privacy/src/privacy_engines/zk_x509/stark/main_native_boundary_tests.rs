@@ -7,9 +7,11 @@ use crate::privacy_engines::zk_x509::{
         zk_x509_der_stark_aggregate_base_row_v1,
     },
     main_assembly::build_zk_x509_main_trace_assembly_v1,
-    p256_aggregate_adapter::P256_INPUT_SELECTION_BYTES_V1,
     p256_air::P256_ARITHMETIC_ROWS_PER_OPERATION_V1,
     p256_external_binding_air::p256_external_binding_rows_v1,
+    p256_external_binding_air::{
+        P256_INPUT_SELECTION_ROW_START_V1, P256_INPUT_SELECTION_SELECTOR_ROW_V1,
+    },
     p256_reduction_air::P256_REDUCTION_ROWS_V1,
     p256_scalar_bit_bus::P256_SCALAR_BIT_BUS_ROWS_V1,
     p256_trace::compile_p256_ecdsa_topology_v1,
@@ -175,7 +177,8 @@ fn p256_native_boundaries(
                 p256_external_binding_rows_v1(registration.role_v1()),
                 size,
             );
-            add_native_boundary(edges, P256_INPUT_SELECTION_BYTES_V1, size);
+            add_native_boundary(edges, P256_INPUT_SELECTION_ROW_START_V1, size);
+            add_native_boundary(edges, P256_INPUT_SELECTION_SELECTOR_ROW_V1, size);
         }
         P256MainAdapterV1::ScalarBitBus => {
             add_native_boundary(edges, P256_SCALAR_BIT_BUS_ROWS_V1, size);
@@ -241,9 +244,22 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
     let mut io =
         MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
     io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    assert_eq!(
+        super::main_terminal_links::MainTerminalLinkPlanV1::new_v1(&layout)
+            .unwrap()
+            .check_native_v1(
+                &layout,
+                &MainTraceReplaySourcesV1::Bound {
+                    log19: &source,
+                    projection: &projection,
+                    io: &io,
+                }
+            )
+            .expect("all 192 actual private native endpoint equations"),
+        192,
+    );
     let p256_fixed = P256MainVerifierFixedSourceV1::new_v1().unwrap();
     let p256_challenges = p256_aggregate_challenges_from_post_base_v1(source.post_base).unwrap();
-    let p256_terminals = main_p256_terminal_registrations_v1(&source.claims.p256).unwrap();
     let projection_fixed =
         compile_zk_x509_projection_stark_fixed_rows_v1(&fixture.statement).unwrap();
     let rfc_counts = build_zk_x509_rfc5280_stark_shape_v1(&assembly.rfc_trace)
@@ -464,7 +480,6 @@ fn maximum_credential_all_49_native_registration_boundaries_have_zero_residues()
                     opening,
                     &rows.fixed[current],
                     p256_challenges,
-                    &p256_terminals[p256_registration.unwrap().signature_v1()],
                 )
                 .unwrap(),
             };

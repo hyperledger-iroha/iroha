@@ -74,8 +74,21 @@ fn maximum_credential_bound_sources_preserve_joint_binding_and_terminal_handoffs
         source.p256.post_base_v1().unwrap(),
         binding.main_post_base()
     );
-    validate_zk_x509_der_rfc_terminal_equalities_v1(source.claims.der, source.claims.rfc5280)
-        .expect("DER/RFC source handoff");
+    let der_last =
+        super::super::der_stark::zk_x509_der_stark_aggregate_aux_row_v1(&source.der, (1 << 19) - 1)
+            .expect("actual DER final native row");
+    for (der_column, rfc_column) in super::super::der_stark::zk_x509_der_terminal_columns_v1()
+        .into_iter()
+        .zip(super::super::rfc5280_stark::zk_x509_rfc_der_terminal_columns_v1())
+    {
+        let rfc_values = ZeroizingMainTraceColumnV1(
+            source
+                .rfc
+                .build_aux_column_v1(rfc_column)
+                .expect("actual private RFC handoff column"),
+        );
+        assert_eq!(der_last[der_column], rfc_values[(1 << 19) - 1]);
+    }
     assert!(zk_x509_main_rfc_sha_terminal_products_match_v1(
         source.claims.rfc5280,
         source.claims.sha
@@ -1651,9 +1664,15 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         ]),
     )
     .expect("exact MAIN providers");
-    let direct =
-        main_opened_composition_value_v1(&mut providers, query_index, lane, &trace_groups, &alphas)
-            .expect("direct MAIN row composition");
+    let direct = main_opened_composition_value_v1(
+        &mut providers,
+        query_index,
+        lane,
+        &trace_groups,
+        &alphas,
+        &[E::ONE; 192],
+    )
+    .expect("direct MAIN row composition");
     let lde_root =
         goldilocks_primitive_root_v1(layout.common_lde_log2).expect("canonical MAIN LDE root");
     let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(query_index as u128));
@@ -1683,11 +1702,21 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             .map(|value| sum.add(value))
         })
         .expect("independent registered quotient sum");
+    let independently_expected = independently_expected.add(
+        main_aggregate::main_link_composition_for_test_v1(
+            &layout,
+            &trace_groups,
+            x,
+            &[E::ONE; 192],
+        )
+        .unwrap(),
+    );
     assert_eq!(direct, independently_expected);
     let evaluated = {
         let mut evaluator = MainOpenedRowEvaluatorV1 {
             providers: &mut providers,
             alphas: &alphas,
+            link_alphas: &[E::ONE; 192],
             mixes: &mixes,
         };
         aggregate::AggregateOpenedRowEvaluatorV1::evaluate_opened_row_v1(
@@ -1730,21 +1759,29 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut changed_rows = trace_groups.clone();
     changed_rows[0].base_current[0] = changed_rows[0].base_current[0].add(F::ONE);
     assert_ne!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &changed_rows,
-                &alphas,
-            )
-            .expect("semantic row mutation"),
-            direct
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &changed_rows,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .expect("semantic row mutation"),
+        direct
+    );
     let mut short_rows = trace_groups.clone();
     short_rows[0].base_current.pop();
     assert!(
-        main_opened_composition_value_v1(&mut providers, query_index, lane, &short_rows, &alphas,)
-            .is_err()
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &short_rows,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
     );
     let mut noncanonical_rows = trace_groups.clone();
     noncanonical_rows[0].base_current[0] =
@@ -1756,6 +1793,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &noncanonical_rows,
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1766,6 +1804,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups[..FULL_PROFILE_TRACE_GROUPS_V1 - 1],
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1776,6 +1815,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups,
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1786,6 +1826,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             SECURITY_LANES,
             &trace_groups,
             &alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1798,6 +1839,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups,
             &short_alphas,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1810,6 +1852,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
             lane,
             &trace_groups,
             &short_alpha_lanes,
+            &[E::ONE; 192]
         )
         .is_err()
     );
@@ -1818,6 +1861,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &short_mix,
     };
     assert!(
@@ -1836,6 +1880,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &short_mix_lanes,
     };
     assert!(
@@ -1857,6 +1902,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &inconsistent_mix,
     };
     assert!(
@@ -1873,6 +1919,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     let mut evaluator = MainOpenedRowEvaluatorV1 {
         providers: &mut providers,
         alphas: &alphas,
+        link_alphas: &[E::ONE; 192],
         mixes: &mixes,
     };
     assert!(
@@ -1896,15 +1943,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("short-residue adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
     drop(providers);
     log5.short_residues = false;
     log5.noncanonical_residues = true;
@@ -1916,15 +1964,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("noncanonical-residue adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
     drop(providers);
     log5.noncanonical_residues = false;
     log5.short_fixed_row = true;
@@ -1936,15 +1985,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("short-fixed-row adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
     drop(providers);
     log5.short_fixed_row = false;
     log5.noncanonical_fixed_row = true;
@@ -1956,15 +2006,16 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
     )
     .expect("noncanonical-fixed-row adversary registry");
     assert!(
-            main_opened_composition_value_v1(
-                &mut providers,
-                query_index,
-                lane,
-                &trace_groups,
-                &alphas,
-            )
-            .is_err()
-        );
+        main_opened_composition_value_v1(
+            &mut providers,
+            query_index,
+            lane,
+            &trace_groups,
+            &alphas,
+            &[E::ONE; 192]
+        )
+        .is_err()
+    );
 }
 #[test]
 fn main_base_commitment_session_mints_pre_aux_only_after_joined_commitment() {
@@ -2575,7 +2626,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         .expect("MAIN finish end");
     let finish = &source[finish_start..finish_end];
     assert!(finish.contains("commit_joined_v1"));
-    assert!(finish.contains("self.composition_material_v1()"));
+    assert!(finish.contains("self.composition_material_v1(rng)"));
     assert!(finish.contains("MainTraceReplaySourcesV1::Bound"));
     let base_replay = finish
         .find("let base_openings = self.base_polynomials.commit_joined_v1")
@@ -2595,7 +2646,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(base_replay < base_root_check && aux_replay < base_root_check);
     assert!(base_root_check < publish && aux_root_check < publish);
     let material_start = source
-        .find("fn composition_material_v1(&self)")
+        .find("fn composition_material_v1<R: TryRngCore>")
         .expect("retained composition material");
     let material_end = source[material_start..]
         .find("pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng")
@@ -2605,6 +2656,20 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         source[material_start..material_end]
             .contains("main_composition_material_from_polynomials_v1")
     );
+    let combined_start = source
+        .find("fn main_composition_material_from_polynomials_v1<R: TryRngCore>")
+        .expect("canonical MAIN composition owner");
+    let combined = &source[combined_start..];
+    let links = combined
+        .find(".accumulate_v1(")
+        .expect("private endpoint contributions");
+    let blind = combined
+        .find(".blind_v1(lane, rng)")
+        .expect("canonical quotient masks");
+    let evaluate = combined
+        .find("evaluate_main_composition_coefficient_chunks_v1(")
+        .expect("masked coefficient evaluation");
+    assert!(links < blind && blind < evaluate);
     assert!(!finish.contains("verify_opened_query_relations_with_deep_v1"));
     for forbidden in [
         "spill_replayed_masked_trace_columns_v1",
