@@ -9,6 +9,7 @@ use crate::{
     NetworkId,
     account::{AccountController, AccountId, MultisigPolicy},
     asset::AssetDefinitionId,
+    block::consensus::NexusFeeReceipt,
     events::data::prelude::AssetBatchTransferOutcome,
     isi::{CustomInstruction, ExecuteTrigger, InstructionBox, privacy::SubmitPrivacyProofV1},
     nexus::FeeSponsorProgramId,
@@ -550,6 +551,9 @@ mod model {
         pub TransactionResultInner,
         /// Durable per-leg receipts emitted by an independently settled native transfer batch.
         pub Vec<AssetBatchTransferOutcome>,
+        /// Exact actual Nexus charge; explicitly absent when no charge committed.
+        /// The binary tuple frame and manual JSON key are mandatory, including `None`.
+        pub Option<NexusFeeReceipt>,
     );
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
@@ -2109,6 +2113,10 @@ impl norito::json::JsonSerialize for TransactionResult {
         norito::json::write_json_string("batch_transfer_outcomes", out);
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.1, out);
+        out.push(',');
+        norito::json::write_json_string("nexus_fee_receipt", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.2, out);
         out.push('}');
     }
     fn json_serialize_to(
@@ -2129,6 +2137,8 @@ impl norito::json::JsonSerialize for TransactionResult {
         }
         out.push_str(",\"batch_transfer_outcomes\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.1, out)?;
+        out.push_str(",\"nexus_fee_receipt\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.2, out)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -2143,6 +2153,7 @@ impl norito::json::JsonDeserialize for TransactionResult {
         parser.consume_char(b'{')?;
         let mut inner = None;
         let mut batch_transfer_outcomes = None;
+        let mut nexus_fee_receipt = None;
         loop {
             parser.skip_ws();
             if parser.try_consume_char(b'}')? {
@@ -2175,6 +2186,12 @@ impl norito::json::JsonDeserialize for TransactionResult {
                     batch_transfer_outcomes =
                         Some(Vec::<AssetBatchTransferOutcome>::json_deserialize(parser)?);
                 }
+                "nexus_fee_receipt" => {
+                    if nexus_fee_receipt.is_some() {
+                        return Err(norito::json::Error::duplicate_field("nexus_fee_receipt"));
+                    }
+                    nexus_fee_receipt = Some(Option::<NexusFeeReceipt>::json_deserialize(parser)?);
+                }
                 other => return Err(norito::json::Error::unknown_field(other.to_owned())),
             }
             parser.skip_ws();
@@ -2187,6 +2204,8 @@ impl norito::json::JsonDeserialize for TransactionResult {
         Ok(TransactionResult(
             inner.ok_or_else(|| norito::json::Error::missing_field("Ok or Err"))?,
             batch_transfer_outcomes.unwrap_or_default(),
+            nexus_fee_receipt
+                .ok_or_else(|| norito::json::Error::missing_field("nexus_fee_receipt"))?,
         ))
     }
 }
@@ -2643,7 +2662,7 @@ impl TransactionResult {
     #[inline]
     #[must_use]
     pub fn new(inner: TransactionResultInner) -> Self {
-        Self(inner, Vec::new())
+        Self(inner, Vec::new(), None)
     }
     /// Durable per-leg receipts emitted by an independently settled native transfer batch.
     #[inline]
@@ -2655,6 +2674,17 @@ impl TransactionResult {
     #[inline]
     pub fn set_batch_transfer_outcomes(&mut self, outcomes: Vec<AssetBatchTransferOutcome>) {
         self.1 = outcomes;
+    }
+    /// Exact actual Nexus settlement committed by this result leaf.
+    #[inline]
+    #[must_use]
+    pub fn nexus_fee_receipt(&self) -> Option<&NexusFeeReceipt> {
+        self.2.as_ref()
+    }
+    /// Set the execution owner's actual charge before result sizing and hashing.
+    #[inline]
+    pub fn set_nexus_fee_receipt(&mut self, receipt: Option<NexusFeeReceipt>) {
+        self.2 = receipt;
     }
     /// Hash for this transaction result.
     #[inline]

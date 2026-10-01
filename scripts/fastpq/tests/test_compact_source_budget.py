@@ -5,36 +5,44 @@ import pytest
 from scripts.fastpq.check_compact_source_budget import budget, load_sources
 
 
-def test_source_owned_offline_deep_bound_and_retained_diagnostic_floor() -> None:
+def test_source_owned_q77_bound_and_separate_hypothetical_q375_floor() -> None:
     """The sole offline profile fits the byte cap without qualifying admission."""
     result = budget(load_sources())
-    current = result["shared_diagnostic"]
+    current = result["hypothetical_full_group_q375"]
     assert current["mandatory_row_bytes"] == 1_026_000
     assert current["mandatory_mixed_quotient_bytes"] == 24_000
     assert current["mandatory_raw_floor"] == 1_050_000
+    assert current["raw_floor_over_segment_cap"] == 525_712
+    assert current["raw_floor_over_axt_cap"] == 1_424
     assert current["framed_maximum"] == 4_017_376
     assert current["framed_maximum_over_segment_cap"] == 3_493_088
     assert result["limits"] == {"segment": 524_288, "axt_inner": 1_048_576}
     assert current["fri_value_bytes_at_independent_maxima"] == 272_512
     assert current["fri_frontier_bytes_at_independent_maxima"] == 875_760
-    assert result["offline_deep"] == {"max_frame_bytes": 502_895, "headroom": 21_393}
-    assert set(result["retained_test_metadata"]) == {"ordinary-single", "axt-single"}
+    assert result["offline_deep"] == {"max_frame_bytes": 500_084, "headroom": 24_204}
+    assert set(result["retained_test_labels"]) == {"ordinary-single", "axt-single"}
+    assert result["current_geometry"] == {
+        "queries": 77, "trace_rows": 65_536, "lde_rows": 8_388_608,
+        "constraints": 923, "columns": 342, "retained_columns": 301,
+        "fp4_bytes": 32, "digest_bytes": 32,
+    }
+    assert result["fixture_evidence"] == "not checked by this source screen"
     assert result["production_qualified"] is False
 
 
 @pytest.mark.parametrize(
     ("name", "old", "new"),
     [
-        ("row", "struct RowValues([u64; 342]);", "struct RowValues([u64; 341]);"),
-        ("shared", "proof.rows.len() < query_count", "proof.rows.len() < 1"),
-        ("shared", "mixed: GoldilocksFp4V1,", "mixed: u64,"),
+        ("deep_row", "struct RowValues([u64; COMMITTED_COLUMN_COUNT]);", "struct RowValues([u64; 300]);"),
+        ("deep", "proof.rows.len() != QUERY_COUNT", "proof.rows.len() < 1"),
+        ("deep", "low: Fp4,", "low: u64,"),
         ("backend", 'mod deep_engine;', 'mod admitted_deep_engine;'),
         ("deep", "caller_max_bytes.min(MAX_FRAME_BYTES)", "caller_max_bytes"),
         ("deep", "composition_mask: Fp4,", "composition_mask: u64,"),
-        ("deep", "MAX_FRAME_BYTES: usize = 502_895", "MAX_FRAME_BYTES: usize = 502_896"),
-        ("deep_tests", "assert_eq!(bytes.len(), 502_895);", "assert_eq!(bytes.len(), 502_894);"),
+        ("deep", "MAX_FRAME_BYTES: usize = 500_084", "MAX_FRAME_BYTES: usize = 500_085"),
+        ("deep_tests", "assert_eq!(bytes.len(), 500_084);", "assert_eq!(bytes.len(), 500_083);"),
         ("deep_row", "COMMITTED_COLUMN_COUNT * size_of::<u64>()", "COMMITTED_COLUMN_COUNT * 4"),
-        ("deep_fri", "1 + arity * Fp4::BYTES", "8 + arity * Fp4::BYTES"),
+        ("deep_fri", "1 + (arity - 1) * Fp4::BYTES", "8 + (arity - 1) * Fp4::BYTES"),
         ("deep_fri", "Self::Eight(_) => 8,", "Self::Eight(_) => 4,"),
         ("deep_fri", "writer.write_all(&[self.arity_byte()])", "writer.write_all(&[self.arity_byte(), 0])"),
         ("deep_geometry", "[16, 16, 8, 8, 4]", "[16, 16, 8, 8, 8]"),
@@ -51,6 +59,18 @@ def test_source_owned_offline_deep_bound_and_retained_diagnostic_floor() -> None
         ("public_columns", "PUBLIC_COLUMN_COUNT: usize = 41", "PUBLIC_COLUMN_COUNT: usize = 40"),
         ("backend", '#[path = "backend/deep_engine.rs"]', '#[cfg(test)]\n#[path = "backend/deep_engine.rs"]'),
         ("backend", '#[cfg(test)]\n#[path = "backend/compact_quantity_diagnostic.rs"]', '#[path = "backend/compact_quantity_diagnostic.rs"]'),
+        ("challenge", "QUERY_COUNT: usize = 77;", "QUERY_COUNT: usize = 76;"),
+        ("challenge", "TRACE_MASK_COEFFICIENTS: usize = 2 * QUERY_COUNT + 8", "TRACE_MASK_COEFFICIENTS: usize = 2 * QUERY_COUNT + 7"),
+        ("deep_geometry", "QUERY_COUNT: usize = fastpq_isi::compact_challenge::QUERY_COUNT", "QUERY_COUNT: usize = 77"),
+        ("digest", "BYTES: usize = 32", "BYTES: usize = 48"),
+        ("digest", "writer.write_all(&self.0)", "writer.write_all(&self.0[..31])"),
+        ("deep_fri", "Sixteen([Fp4; 15])", "Sixteen([Fp4; 16])"),
+        ("deep", "ARITIES[round] - 1,", "ARITIES[round],"),
+        ("deep", "exact_indices(proof.quotients.iter().map(|row| row.index), queries)", "exact_indices(proof.quotients.iter().map(|row| row.index), &[])"),
+        ("deep", "row_root: Digest,\n    pub(super) quotient_root: Digest,", "quotient_root: Digest,\n    pub(super) row_root: Digest,"),
+        ("deep", "pub(super) quotient: Vec<Fp4>,", "pub(super) quotient: Vec<u64>,"),
+        ("engine", "limits.max_proof_bytes.min(deep_proof::MAX_FRAME_BYTES)", "limits.max_proof_bytes"),
+        ("retained", "assert_eq!(hex::encode(Sha256::digest(&bytes)), pin.sha256)", "assert_eq!(pin.sha256, pin.sha256)"),
     ],
 )
 def test_source_drift_fails_closed(name: str, old: str, new: str) -> None:

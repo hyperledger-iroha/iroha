@@ -5,14 +5,21 @@
 //! folding. Recovering the shifted coefficients in place permits moving to the
 //! next stripe without retaining separate coefficient and evaluation matrices.
 
+use super::main_bounded_transform::{MainBoundedTransformPolicyV1, check_completion_v1};
 use super::*;
 use crate::privacy_engines::transparent_stark::{goldilocks_fft_v1, goldilocks_ifft_v1};
+use fastpq_prover::goldilocks_transform::{
+    GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
+    GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
+    transform_goldilocks_columns_v1,
+};
 
 pub(super) struct MainFixedCosetV1 {
     columns: ZeroizingBaseColumnsV1,
     native_log2: u8,
     previous: Option<main_quotient_stripes::MainQuotientStripeV1>,
     poisoned: bool,
+    transform_policy: MainBoundedTransformPolicyV1,
 }
 
 impl MainFixedCosetV1 {
@@ -25,6 +32,7 @@ impl MainFixedCosetV1 {
             native_log2,
             previous: None,
             poisoned: false,
+            transform_policy: MainBoundedTransformPolicyV1::cpu_v1(),
         };
         let rows = 1_usize
             .checked_shl(u32::from(native_log2))
@@ -38,6 +46,18 @@ impl MainFixedCosetV1 {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         Ok(owner)
+    }
+
+    /// Install the outer assembly's checked allowance before the first stripe.
+    pub(super) fn with_transform_policy_v1(
+        mut self,
+        policy: MainBoundedTransformPolicyV1,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        if self.previous.is_some() || self.poisoned {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        self.transform_policy = policy;
+        Ok(self)
     }
 
     fn validate_stripe_v1(
@@ -90,9 +110,37 @@ impl MainFixedCosetV1 {
         &mut self,
         stripe: main_quotient_stripes::MainQuotientStripeV1,
     ) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
+        let result = self.evaluate_with_v1(
+            stripe,
+            |words, root, direction| {
+                transform_goldilocks_columns_v1(
+                    words,
+                    root,
+                    direction,
+                    fastpq_prover::ExecutionMode::Auto,
+                )
+            },
+            goldilocks_transform_completion_uncertain_v1,
+        );
+        #[cfg(test)]
+        if result.is_err() {
+            super::super::super::prover_observation::failed_fixed_coset_v1();
+        }
+        result
+    }
+
+    fn evaluate_with_v1(
+        &mut self,
+        stripe: main_quotient_stripes::MainQuotientStripeV1,
+        mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
         let valid = self.validate_stripe_v1(stripe);
         self.poisoned = true;
         valid?;
+        // Explicit CPU dispatch does not itself check quarantined storage.
+        // Admission must remain terminal even after selecting CPU fallback.
+        check_completion_v1(uncertain())?;
         let previous = self.previous;
         let diagonal = match previous {
             Some(previous) => stripe.shift.mul(
@@ -104,8 +152,9 @@ impl MainFixedCosetV1 {
             None => stripe.shift,
         };
         // The fixed matrix is public. Reserve before padding, then reuse each
-        // allocation for inverse/diagonal/forward operations. No value matrix
-        // is copied, and no output is exposed until every column has completed.
+        // allocation for inverse/diagonal/forward operations. A device path
+        // charges one bounded word batch; no full second matrix is copied and
+        // no output is exposed until every column has completed.
         for column in &mut self.columns.0 {
             if column.len() < stripe.rows {
                 column
@@ -114,22 +163,52 @@ impl MainFixedCosetV1 {
                 column.resize(stripe.rows, F::ZERO);
             }
         }
-        for batch in self
-            .columns
-            .0
-            .chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
-        {
-            batch.par_iter_mut().try_for_each(|column| {
-                if previous.is_some() {
-                    goldilocks_ifft_v1(column, stripe.root).map_err(map_transparent_error_v1)?;
+        let device_columns = self.transform_policy.columns_v1(stripe.rows);
+        let batch_columns = if device_columns == 0 {
+            aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+        } else {
+            device_columns
+        };
+        for batch in self.columns.0.chunks_mut(batch_columns) {
+            check_completion_v1(uncertain())?;
+            if device_columns == 0 {
+                batch.par_iter_mut().try_for_each(|column| {
+                    if previous.is_some() {
+                        goldilocks_ifft_v1(column, stripe.root)
+                            .map_err(map_transparent_error_v1)?;
+                    }
+                    let mut power = F::ONE;
+                    for value in &mut *column {
+                        *value = value.mul(power);
+                        power = power.mul(diagonal);
+                    }
+                    goldilocks_fft_v1(column, stripe.root).map_err(map_transparent_error_v1)
+                })?;
+                #[cfg(test)]
+                {
+                    super::super::super::prover_observation::completed_fixed_backend_v1(
+                        false,
+                        false,
+                        batch.len(),
+                    );
+                    if previous.is_some() {
+                        super::super::super::prover_observation::completed_fixed_backend_v1(
+                            false,
+                            true,
+                            batch.len(),
+                        );
+                    }
                 }
-                let mut power = F::ONE;
-                for value in &mut *column {
-                    *value = value.mul(power);
-                    power = power.mul(diagonal);
-                }
-                goldilocks_fft_v1(column, stripe.root).map_err(map_transparent_error_v1)
-            })?;
+            } else {
+                self.transform_policy.apply_with_v1(
+                    batch,
+                    stripe.root,
+                    diagonal,
+                    previous.is_some(),
+                    &mut transform,
+                    &mut uncertain,
+                )?;
+            }
             #[cfg(test)]
             super::super::super::prover_observation::completed_fixed_coset_v1(
                 batch.len(),
@@ -137,6 +216,7 @@ impl MainFixedCosetV1 {
                 previous.is_some(),
             );
         }
+        check_completion_v1(uncertain())?;
         self.previous = Some(stripe);
         self.poisoned = false;
         Ok(&self.columns)
@@ -154,3 +234,7 @@ impl Drop for MainFixedCosetV1 {
 #[cfg(test)]
 #[path = "main_fixed_coset_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "main_fixed_coset_device_tests.rs"]
+mod device_tests;

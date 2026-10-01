@@ -9,6 +9,8 @@ publish = false
 [features]
 default = []
 dev-tools = []
+# Paired Keccak NEON/SSE2; all other targets retain deterministic scalar execution.
+simd = []
 # Synchronous GPU FFT/LDE planner helpers exercised by the `planner` benchmark.
 bench = []
 fastpq-gpu = ["dep:block", "dep:metal"]

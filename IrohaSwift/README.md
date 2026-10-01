@@ -150,6 +150,10 @@ package from the same source revision as the Iroha node you target until the
 signed first-release cut is promoted. The remote coordinates below are release
 targets, not evidence that the tags are already public.
 
+The bridge requires the four `soranet_mldsa_*` exports owned by
+`crates/soranet_pq/include/soranet_pq.h`. Swift loads those current symbols
+unconditionally; an incomplete native artifact fails admission.
+
 Build the required native bridge before resolving the package:
 
 ```bash

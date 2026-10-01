@@ -24,7 +24,7 @@ use super::{
     KagemushaLaneIdV1, KagemushaStateContextV1, KagemushaStateV1, PreparedOutgoingCandidateV1,
     PreparedOutgoingRecoveryViewV1,
 };
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 use super::{
     DurableOutgoingEnvelopeV1,
     candidate_lifecycle::{CommittedOutgoingCandidateV1, PersistedOutgoingCandidateV1},
@@ -686,7 +686,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         Ok(Some(existing))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Bind one caller ID to public inputs derived from the actual preparation.
     ///
     /// This builds a clone-before-install successor. The journal/capacity owner
@@ -786,7 +786,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         Ok((next, KagemushaOutgoingOperationPrepareOutcomeV1::Inserted))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Advance the indexed preparation after Core persists its verified candidate.
     pub(super) fn candidate_successor(
         &self,
@@ -814,7 +814,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Advance the indexed candidate after qualified hardware commits it.
     pub(super) fn commit_successor(
         &self,
@@ -844,7 +844,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     /// Advance the indexed commit after Core durably installs its final envelope.
     pub(super) fn install_successor(
         &self,
@@ -875,7 +875,6 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
-    #[cfg(test)]
     /// Retain a terminal tombstone after a separately verified terminal receipt.
     ///
     /// This method does not validate or authorize a receipt. The state machine
@@ -1006,7 +1005,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         self.validate_internal(Some(current))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
     fn progress_successor(
         &self,
         preparation_id: DigestV1,
@@ -1112,7 +1111,7 @@ fn terminal_record_allocation(
         .ok_or(KagemushaOutgoingOperationIndexErrorV1::CanonicalEncoding)
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(unix, feature = "zk-halo2-ipa")))]
 fn next_revision(revision: u128) -> KagemushaOutgoingOperationIndexResultV1<u128> {
     revision
         .checked_add(1)

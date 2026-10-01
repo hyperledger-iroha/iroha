@@ -931,4 +931,46 @@ mod tests {
                 .any(|column| polynomial::degree_bound(column) > 4)
         );
     }
+    #[test]
+    fn compiled_smt_is_affine_in_every_private_next_column() {
+        use super::super::compact_public_columns::{COMMITTED_COLUMN_COUNT, PUBLIC_COLUMNS};
+
+        const PHASE_START: usize = 2 * COLUMN_COUNT;
+        const SPARSE_START: usize = PHASE_START + PHYSICAL_HASH_ROWS;
+        const INPUT_COUNT: usize = SPARSE_START + FIXED_COLUMN_COUNT;
+        let arena = RefCell::new(Builder::default());
+        let inputs: [Expression<'_>; INPUT_COUNT] = core::array::from_fn(|index| {
+            let node = arena.borrow_mut().intern(Node::Input(index));
+            Expression::Node(&arena, node)
+        });
+        let current = smt_row_from_cells(&core::array::from_fn(|column| inputs[column]));
+        let next = smt_row_from_cells(&core::array::from_fn(|column| {
+            inputs[COLUMN_COUNT + column]
+        }));
+        let phases = core::array::from_fn(|phase| inputs[PHASE_START + phase]);
+        let sparse = core::array::from_fn(|column| inputs[SPARSE_START + column]);
+        let outputs = numerators(&phases, &sparse, &current, &next, &statement())
+            .map(|expression| expression.id(&arena));
+        let graph = arena.into_inner();
+        let degrees: [PolynomialDegree; INPUT_COUNT] = core::array::from_fn(|index| {
+            let private_next = (COLUMN_COUNT..PHASE_START).contains(&index)
+                && !PUBLIC_COLUMNS.contains(&(index - COLUMN_COUNT));
+            PolynomialDegree::from_exclusive(if private_next { 2 } else { 1 })
+        });
+        assert_eq!(
+            degrees
+                .iter()
+                .filter(|degree| degree.exclusive() == 2)
+                .count(),
+            COMMITTED_COLUMN_COUNT
+        );
+        // This compiles all actual SMT numerators with separate current/next
+        // variables; the existing common-column degree bound cannot do that.
+        let values = evaluate_node_degrees(&graph.nodes, &degrees).unwrap();
+        let bounds = outputs.map(|node| values[node].exclusive());
+        for (slot, bound) in bounds.iter().enumerate() {
+            assert!(*bound <= 2, "private-next SMT slot {slot}");
+        }
+        assert!(bounds.contains(&2));
+    }
 }

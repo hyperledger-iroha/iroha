@@ -85,7 +85,7 @@ impl Set {
     ) -> core::result::Result<CanonicalTablePairedSnapshot, LeafError> {
         let view = self.view();
         view.validate_world_contract_rows()
-            .map_err(LeafError::Encoding)?;
+            .map_err(LeafError::SourceValidation)?;
         let rows = view.contracts();
         CanonicalTableLeafSet::paired_semantic_table_from_rows(
             "triggers.contracts",
@@ -95,5 +95,44 @@ impl Set {
             rows.iter(),
             BorrowedWorldContract::from,
         )
+    }
+}
+
+#[cfg(test)]
+mod custody_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_contract_source_is_not_a_codec_failure_or_a_partial_table() {
+        let set = Set::default();
+        let blob = IvmBytecode::from_compiled(vec![1, 2, 3]);
+        let key = HashOf::new(&blob);
+        let mut block = set.block();
+        block.contracts.insert(
+            key,
+            IvmBytecodeEntry {
+                original_contract: blob,
+                code_hash: Hash::new(b"incorrect derived contract hash"),
+                count: NonZeroU64::MIN,
+            },
+        );
+        block.commit();
+        let pool = iroha_allocation::AllocationBudget::new(64 * 1024);
+        let result = set.capture_contracts_authority_table(
+            LeafLimits {
+                max_tables: 1,
+                max_rows: 1,
+                max_payload_bytes: 1024,
+                max_ordered_table_bytes: 4096,
+                max_streamed_value_bytes: 4096,
+            },
+            &pool,
+        );
+        assert!(
+            matches!(result, Err(LeafError::SourceValidation(ref message))
+            if message == "trigger contract code hash does not match its original bytecode")
+        );
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert_eq!(pool.peak_reserved_bytes(), 0);
     }
 }

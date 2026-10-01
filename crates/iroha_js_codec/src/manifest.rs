@@ -199,9 +199,12 @@ mod tests {
         )
     }
 
+    fn artifact_json() -> Value {
+        crate::lifecycle_instructions::render_artifact_id(&artifact_id()).expect("artifact JSON")
+    }
+
     fn instruction_json(manifest: &ContractManifest) -> String {
-        let artifact = crate::lifecycle_instructions::render_artifact_id(&artifact_id())
-            .expect("artifact JSON");
+        let artifact = artifact_json();
         json::to_json(&norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact, "manifest": manifest } }))
             .expect("manifest instruction JSON")
     }
@@ -363,8 +366,10 @@ mod tests {
                         entrypoint.insert((*field).to_owned(), Value::Null);
                     }
                 }
+                let artifact_id = crate::lifecycle_instructions::render_artifact_id(&artifact_id())
+                    .expect("artifact JSON");
                 let source = json::to_json(
-                    &norito::json!({ "RegisterSmartContractCode": { "manifest": manifest } }),
+                    &norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact_id, "manifest": manifest } }),
                 )
                 .expect("JSON");
                 assert!(encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).is_err());

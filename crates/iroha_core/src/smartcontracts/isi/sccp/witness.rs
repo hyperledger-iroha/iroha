@@ -54,7 +54,7 @@ mod tests {
         smartcontracts::isi::sccp::{store, test_support::blank_state},
     };
     use iroha_data_model::{
-        block::{BlockHeader, consensus::ExecWitness},
+        block::{BlockHeader, builder::BlockBuilder, consensus::ExecWitness},
         sccp::params::SccpParametersV1,
     };
     use std::num::NonZeroU64;
@@ -113,9 +113,15 @@ mod tests {
     fn captured_witness(parameters: Option<SccpParametersV1>) -> ExecWitness {
         let state = blank_state();
         let header = BlockHeader::new(NonZeroU64::MIN, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let _guard = crate::exec_witness::exec_witness_guard();
-        crate::exec_witness::start_block();
+        let source = BlockBuilder::new(header).build_with_signature(
+            0,
+            iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+        );
+        // Own the recorder before any block effects. This component capture does
+        // not authenticate consensus controls or publish a certified carrier.
+        let (mut state_block, _recording) =
+            crate::block::ValidBlock::start_component_execution(&source, &state)
+                .expect("the original component execution recorder");
         if let Some(parameters) = parameters {
             let mut transaction = state_block.transaction();
             store::parameters::set(&mut transaction, Some(parameters));
@@ -137,6 +143,31 @@ mod tests {
         state_block
             .take_exec_witness()
             .expect("the captured witness")
+    }
+
+    #[test]
+    fn late_recording_cannot_own_the_sccp_witness() {
+        let state = blank_state();
+        let header = BlockHeader::new(NonZeroU64::MIN, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let _recording = crate::exec_witness::begin_exec_witness_capture()
+            .expect("a fresh recorder after block construction");
+        let tx_set_hash: [u8; 32] =
+            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
+                &iroha_data_model::transaction::TransactionEntrypoint,
+            >())
+            .expect("empty transaction set digest")
+            .into();
+        state_block.set_fastpq_tx_set_hash(tx_set_hash);
+        state_block
+            .finalize_fastpq_source_inventory(&[], &[], &[])
+            .expect("empty source inventory");
+        assert_eq!(
+            state_block.capture_exec_witness(),
+            Err("State execution has no original recorder".into())
+        );
+        assert!(state_block.take_exec_witness().is_none());
+        assert!(state_block.take_fastpq_witness_context().is_none());
     }
 
     /// `(ordinary_writes_root, post_state_root)` as `crate::sumeragi::commitment` derives them

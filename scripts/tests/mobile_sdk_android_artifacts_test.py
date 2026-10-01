@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 OWNER = ROOT / "scripts/mobile_sdk_android_artifacts.py"
@@ -56,6 +57,89 @@ class AndroidArtifactOwnerTests(unittest.TestCase):
 
     def collect(self, destination=None):
         MODULE.collect_sboms(self.repo, str(self.external), destination or self.directory / "collected", "1.2.3")
+
+    def local_directory(self):
+        path = self.repo / MODULE.LOCAL_INTEGRATION_DIRECTORY
+        path.mkdir(parents=True, mode=0o700)
+        return path
+
+    def git_inventory(self, *, tracked=b"", ignored=True):
+        def run(command, **kwargs):
+            self.assertEqual(command[0], "/usr/bin/git")
+            self.assertEqual(kwargs["timeout"], 30)
+            self.assertEqual(kwargs["env"]["GIT_CONFIG_GLOBAL"], os.devnull)
+            self.assertNotIn("GIT_INDEX_FILE", kwargs["env"])
+            return subprocess.CompletedProcess(
+                command, 0 if "ls-files" in command or ignored else 1,
+                tracked if "ls-files" in command else b"", b"",
+            )
+        return mock.patch.object(MODULE.subprocess, "run", side_effect=run)
+
+    def test_explicit_local_root_is_exact_owned_ignored_and_not_release_output(self):
+        local = self.local_directory()
+        with self.git_inventory(), mock.patch.dict(os.environ, {"GIT_INDEX_FILE": "foreign"}):
+            self.assertEqual(MODULE.local_integration_directory(self.repo, str(local)), local)
+            self.assertEqual(MODULE.build_root(self.repo, str(local), local_integration=True),
+                             local / "gradle-build/iroha_kotlin_sdk")
+        with self.assertRaisesRegex(ValueError, "outside"):
+            MODULE.build_root(self.repo, str(local))
+        with self.assertRaisesRegex(ValueError, "explicit"):
+            MODULE.build_root(self.repo, None, local_integration=True)
+
+    def test_local_root_rejects_wrong_path_permissions_owner_and_symbolic_alias(self):
+        local = self.local_directory()
+        with self.assertRaisesRegex(ValueError, "fixed"):
+            MODULE.local_integration_directory(self.repo, str(self.external))
+        local.chmod(0o750)
+        with self.assertRaisesRegex(ValueError, "owned.*0700"):
+            MODULE.local_integration_directory(self.repo, str(local))
+        local.chmod(0o700)
+        with mock.patch.object(MODULE.os, "geteuid", return_value=local.stat().st_uid + 1):
+            with self.assertRaisesRegex(ValueError, "owned.*0700"):
+                MODULE.local_integration_directory(self.repo, str(local))
+        alias = self.directory / "local-alias"
+        alias.symlink_to(local, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            MODULE.local_integration_directory(self.repo, str(alias))
+
+    def test_local_root_rejects_forced_tracked_outputs_and_unignored_directory(self):
+        local = self.local_directory()
+        for tracked, ignored in [(b"dist/norito-bridge-android-local/source.rs\0", True), (b"", False)]:
+            with self.subTest(tracked=tracked, ignored=ignored), self.git_inventory(tracked=tracked, ignored=ignored):
+                with self.assertRaisesRegex(ValueError, "ignored.*tracked"):
+                    MODULE.local_integration_directory(self.repo, str(local))
+
+    def test_local_artifact_selection_never_falls_back_or_accepts_linked_bytes(self):
+        local = self.local_directory()
+        self.outputs(external=False)
+        with self.git_inventory(), self.assertRaisesRegex(ValueError, "exactly one"):
+            MODULE.built_artifacts(self.repo, str(local), local_integration=True)
+        self.build = local / "gradle-build/iroha_kotlin_sdk"
+        expected = self.outputs()
+        with self.git_inventory():
+            self.assertEqual(MODULE.built_artifacts(self.repo, str(local), local_integration=True), expected)
+        expected[0].with_name("core-jvm-other.jar").write_bytes(b"ambiguous")
+        with self.git_inventory(), self.assertRaisesRegex(ValueError, "exactly one"):
+            MODULE.built_artifacts(self.repo, str(local), local_integration=True)
+        expected[0].with_name("core-jvm-other.jar").unlink()
+        target = self.directory / "other.jar"
+        expected[0].rename(target)
+        expected[0].symlink_to(target)
+        with self.git_inventory(), self.assertRaisesRegex(ValueError, "symbolic"):
+            MODULE.built_artifacts(self.repo, str(local), local_integration=True)
+        expected[0].unlink()
+        os.link(target, expected[0])
+        with self.git_inventory(), self.assertRaisesRegex(ValueError, "single-link"):
+            MODULE.built_artifacts(self.repo, str(local), local_integration=True)
+
+    def test_local_scope_cannot_collect_release_sboms(self):
+        local = self.local_directory()
+        result = subprocess.run([sys.executable, "-I", "-B", str(OWNER), "--root", str(self.repo),
+                                 "--artifact-dir", str(local), "--local-integration",
+                                 "--collect-sboms", str(self.directory / "collected")], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot enter release SBOM", result.stderr)
+        self.assertFalse((self.directory / "collected").exists())
 
     def test_external_root_selects_fresh_output_and_ignores_source_decoys(self):
         expected = self.outputs()

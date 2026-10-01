@@ -25302,6 +25302,7 @@ pub async fn handle_post_account_recovery_propose(
     let instruction = iroha_data_model::isi::ProposeAccountRecovery {
         alias,
         new_controller: request.new_controller,
+        request_generation: request.request_generation,
     };
     execute_account_recovery_mutation(
         queue,
@@ -25327,7 +25328,10 @@ pub async fn handle_post_account_recovery_approve(
         resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
     let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
     recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
-    let instruction = iroha_data_model::isi::ApproveAccountRecovery { alias };
+    let instruction = iroha_data_model::isi::ApproveAccountRecovery {
+        alias,
+        request_generation: request.request_generation,
+    };
     execute_account_recovery_mutation(
         queue,
         state,
@@ -25352,7 +25356,10 @@ pub async fn handle_post_account_recovery_finalize(
         resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
     let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
     recovery_guardian_authorized(&policy, &request.auth.signer_account_id)?;
-    let instruction = iroha_data_model::isi::FinalizeAccountRecovery { alias };
+    let instruction = iroha_data_model::isi::FinalizeAccountRecovery {
+        alias,
+        request_generation: request.request_generation,
+    };
     execute_account_recovery_mutation(
         queue,
         state,
@@ -25362,6 +25369,91 @@ pub async fn handle_post_account_recovery_finalize(
         instruction.into(),
         "FINALIZE",
         ENDPOINT_ACCOUNT_RECOVERY_FINALIZE,
+    )
+    .await
+}
+fn validate_account_recovery_cancellation_authority(
+    policy: &iroha_data_model::account::AccountRecoveryPolicy,
+    request: &iroha_data_model::account::AccountRecoveryRequest,
+    active: &AccountId,
+    signer: &AccountId,
+) -> Result<()> {
+    if !request.is_pending() {
+        return Err(conversion_error("account recovery request is not pending".to_owned()));
+    }
+    if signer == active {
+        return Ok(());
+    }
+    recovery_guardian_authorized(policy, signer)?;
+    if request.cancellation_approvals.contains(&signer.subject_id()) {
+        return Err(conversion_error(
+            "guardian already approved cancellation of this native request".to_owned(),
+        ));
+    }
+    Ok(())
+}
+/// POST /v1/accounts/recovery/cancel — prepare or submit exact-request cancellation.
+#[iroha_futures::telemetry_future]
+pub async fn handle_post_account_recovery_cancel(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(request): NoritoJson<AccountRecoveryCancelDto>,
+) -> Result<impl IntoResponse> {
+    let (alias, active) =
+        resolve_account_recovery_alias(state.as_ref(), &request.selector.account_alias)?;
+    let policy = load_regulated_account_recovery_policy(state.as_ref(), &alias)?;
+    let native_request = state
+        .world_view()
+        .account_recovery_requests()
+        .get(&alias)
+        .cloned()
+        .ok_or_else(|| conversion_error("account recovery request does not exist".to_owned()))?;
+    if native_request.alias != alias
+        || native_request.request_generation != request.request_generation
+    {
+        return Err(conversion_error(
+            "account recovery cancellation does not match the exact native request generation"
+                .to_owned(),
+        ));
+    }
+    let now_ms = state.latest_block_header_fast().map_or(0, |header| header.creation_time_ms);
+    let nexus = state.nexus_snapshot();
+    let lineage = iroha_core::sns::resolve_active_account_id_rekey_lineage_for_alias(
+        &state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias,
+        &native_request.active_account_id_at_proposal,
+        now_ms,
+    )
+    .map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(error.to_string()))
+    })?;
+    if lineage.as_ref() != Some(&active) {
+        return Err(conversion_error(
+            "account recovery cancellation is not bound to the active controller lineage"
+                .to_owned(),
+        ));
+    }
+    validate_account_recovery_cancellation_authority(
+        &policy,
+        &native_request,
+        &active,
+        &request.auth.signer_account_id,
+    )?;
+    let instruction = iroha_data_model::isi::CancelAccountRecovery {
+        alias,
+        request_generation: request.request_generation,
+    };
+    execute_account_recovery_mutation(
+        queue,
+        state,
+        telemetry,
+        request.selector,
+        request.auth,
+        instruction.into(),
+        "CANCEL",
+        ENDPOINT_ACCOUNT_RECOVERY_CANCEL,
     )
     .await
 }
@@ -25441,6 +25533,59 @@ fn account_recovery_invalidation_evidence(
     Ok((evidence, true))
 }
 /// POST /v1/accounts/recovery/status — query authoritative alias-bound recovery evidence.
+fn validate_account_recovery_status_policy(
+    state: &CoreState,
+    policy: Option<&iroha_data_model::account::AccountRecoveryPolicy>,
+    request: Option<&iroha_data_model::account::AccountRecoveryRequest>,
+) -> Result<()> {
+    // A terminal request retains its original identity and votes independently
+    // of a later policy update. Current mutation authorization never uses this path.
+    if request.is_some_and(|request| !request.is_pending()) {
+        return Ok(());
+    }
+    if let Some(policy) = policy {
+        regulated_account_recovery_policy(state, policy)?;
+    } else if request.is_some() {
+        return Err(conversion_error(
+            "pending account recovery request is missing its regulated policy".to_owned(),
+        ));
+    }
+    Ok(())
+}
+fn validate_account_recovery_status_lineage(
+    world: &impl iroha_core::state::WorldReadOnly,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    alias: &iroha_data_model::account::AccountAlias,
+    active: &AccountId,
+    request: &iroha_data_model::account::AccountRecoveryRequest,
+    now_ms: u64,
+) -> Result<()> {
+    let resolve = |account: &AccountId| {
+        iroha_core::sns::resolve_active_account_id_rekey_lineage_for_alias(
+            world, catalog, alias, account, now_ms,
+        )
+        .map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(error.to_string()))
+        })
+    };
+    if resolve(&request.active_account_id_at_proposal)?.as_ref() != Some(active) {
+        return Err(conversion_error(
+            "account recovery request is not bound to the active alias controller lineage"
+                .to_owned(),
+        ));
+    }
+    if request.status == iroha_data_model::account::AccountRecoveryStatus::Finalized
+        && resolve(&recovered_company_account_id(&request.proposed_controller))?.as_ref()
+            != Some(active)
+    {
+        return Err(conversion_error(
+            "finalized account recovery controller is not in the active alias controller lineage"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+/// POST /v1/accounts/recovery/status — query authoritative alias-bound recovery evidence.
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_account_recovery_status(
     state: Arc<CoreState>,
@@ -25458,14 +25603,9 @@ pub async fn handle_post_account_recovery_status(
         .get(&account_alias)
         .cloned();
     drop(world);
-    if let Some(policy) = policy.as_ref() {
-        regulated_account_recovery_policy(state.as_ref(), policy)?;
-    }
-    if recovery_request.is_some() && policy.is_none() {
-        return Err(conversion_error(
-            "account recovery request is missing its regulated policy".to_owned(),
-        ));
-    }
+    validate_account_recovery_status_policy(
+        state.as_ref(), policy.as_ref(), recovery_request.as_ref(),
+    )?;
     if let Some(recovery_request) = recovery_request.as_ref() {
         if recovery_request.alias != account_alias {
             return Err(conversion_error(
@@ -25478,31 +25618,14 @@ pub async fn handle_post_account_recovery_status(
             .map_or(0, |header| header.creation_time_ms);
         let nexus = state.nexus_snapshot();
         let world = state.world_view();
-        let lineage = iroha_core::sns::resolve_active_account_id_rekey_lineage_for_alias(
+        validate_account_recovery_status_lineage(
             &world,
             &nexus.dataspace_catalog,
             &account_alias,
-            &recovery_request.active_account_id_at_proposal,
+            &active_account,
+            recovery_request,
             now_ms,
-        )
-        .map_err(|error| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(
-                error.to_string(),
-            ))
-        })?;
-        if lineage.as_ref() != Some(&active_account) {
-            return Err(conversion_error(
-                "account recovery request is not bound to the active alias controller lineage"
-                    .to_owned(),
-            ));
-        }
-        if recovery_request.status == iroha_data_model::account::AccountRecoveryStatus::Finalized
-            && recovered_company_account_id(&recovery_request.proposed_controller) != active_account
-        {
-            return Err(conversion_error(
-                "finalized account recovery controller does not match the active alias".to_owned(),
-            ));
-        }
+        )?;
     }
     let (invalidated_proposals, invalidation_evidence_complete) = match recovery_request.as_ref() {
         Some(recovery_request) => account_recovery_invalidation_evidence(
@@ -25555,6 +25678,152 @@ mod account_recovery_route_tests {
             creation_time_ms: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
         }
+    }
+    #[test]
+    fn recovery_cancellation_accepts_independent_guardian_votes_only_for_pending_request() {
+        use iroha_data_model::account::{AccountAlias, AccountRecoveryRequest};
+        use iroha_model_base::topology::DataSpaceId;
+        let owner = single_account(&ed25519_keypair());
+        let guardians = (0..3)
+            .map(|_| RecoveryGuardian::new(single_account(&ed25519_keypair()), 1))
+            .collect::<Vec<_>>();
+        let policy = AccountRecoveryPolicy::new(
+            guardians.clone(),
+            REGULATED_RECOVERY_GUARDIAN_QUORUM,
+            NonZeroU64::new(REGULATED_RECOVERY_TIMELOCK_MS).unwrap(),
+        )
+        .unwrap();
+        let mut request = AccountRecoveryRequest::new(
+            AccountAlias::domainless("cancel-fixture".parse().unwrap(), DataSpaceId::UNIVERSAL),
+            NonZeroU64::new(1).unwrap(),
+            owner.clone(),
+            AccountController::single(ed25519_keypair().public_key().clone()),
+            guardians[0].account.clone(),
+            REGULATED_RECOVERY_TIMELOCK_MS,
+        );
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &owner
+        ).is_ok());
+        request.approve(&guardians[0].account);
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[0].account
+        ).is_ok(), "cancellation must not require approval of a stale replacement");
+        request.approve(&guardians[1].account);
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[2].account
+        ).is_ok(), "any configured guardian can cast an independent cancellation vote");
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &single_account(&ed25519_keypair())
+        ).is_err());
+        request.cancellation_approvals.insert(guardians[0].account.subject_id());
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[0].account
+        ).is_err(), "one guardian cannot be quoted a second cancellation vote");
+        request.cancel();
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &owner
+        ).is_err());
+        assert!(validate_account_recovery_cancellation_authority(
+            &policy, &request, &owner, &guardians[0].account
+        ).is_err());
+    }
+    #[test]
+    fn recovery_cancel_dto_requires_positive_exact_request_generation() {
+        let request = AccountRecoveryCancelDto {
+            selector: AccountRecoverySelectorDto { account_alias: "cancel-fixture@universal".to_owned() },
+            auth: recovery_auth(single_account(&ed25519_keypair())),
+            request_generation: NonZeroU64::new(7).unwrap(),
+        };
+        let value = norito::json::to_value(&request).expect("serialize exact cancellation intent");
+        let decoded: AccountRecoveryCancelDto = norito::json::from_value(value.clone())
+            .expect("decode current cancellation intent");
+        assert_eq!(decoded.request_generation.get(), 7);
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("request_generation");
+        assert!(norito::json::from_value::<AccountRecoveryCancelDto>(missing).is_err());
+        let mut zero = value;
+        zero.as_object_mut().unwrap().insert("request_generation".to_owned(), norito::json::Value::from(0_u64));
+        assert!(norito::json::from_value::<AccountRecoveryCancelDto>(zero).is_err());
+    }
+    #[test]
+    fn terminal_recovery_readback_survives_policy_clear_or_replacement() {
+        use iroha_data_model::account::{AccountAlias, AccountRecoveryRequest};
+        use iroha_model_base::topology::DataSpaceId;
+        let owner = single_account(&ed25519_keypair());
+        let mut request = AccountRecoveryRequest::new(
+            AccountAlias::domainless("terminal-fixture".parse().unwrap(), DataSpaceId::UNIVERSAL),
+            NonZeroU64::new(9).unwrap(), owner.clone(),
+            AccountController::single(ed25519_keypair().public_key().clone()),
+            owner.clone(), REGULATED_RECOVERY_TIMELOCK_MS,
+        );
+        let state = test_state();
+        let replacement_policy = AccountRecoveryPolicy::new(
+            vec![RecoveryGuardian::new(owner, 1)], 1, NonZeroU64::new(1).unwrap(),
+        ).unwrap();
+        assert!(validate_account_recovery_status_policy(&state, None, Some(&request)).is_err());
+        assert!(validate_account_recovery_status_policy(&state, Some(&replacement_policy), Some(&request)).is_err());
+        request.cancel();
+        assert!(validate_account_recovery_status_policy(&state, None, Some(&request)).is_ok());
+        assert!(validate_account_recovery_status_policy(&state, Some(&replacement_policy), Some(&request)).is_ok());
+        request.finalize();
+        assert!(validate_account_recovery_status_policy(&state, None, Some(&request)).is_ok());
+        assert!(validate_account_recovery_status_policy(&state, Some(&replacement_policy), Some(&request)).is_ok());
+    }
+    #[test]
+    fn terminal_recovery_readback_requires_proven_controller_rekey_continuity() {
+        use iroha_data_model::account::{AccountAlias, AccountRecoveryRequest, rekey::AccountRekeyRecord};
+        use iroha_model_base::topology::DataSpaceId;
+        let original = single_account(&ed25519_keypair());
+        let replacement_controller = || AccountController::multisig(
+            MultisigPolicy::new(2, (0..2).map(|_| {
+                MultisigMember::new(ed25519_keypair().public_key().clone(), 1).unwrap()
+            }).collect()).unwrap(),
+        );
+        let proposed_controller = replacement_controller();
+        let proposed = recovered_company_account_id(&proposed_controller);
+        let active = recovered_company_account_id(&replacement_controller());
+        let alias = AccountAlias::domainless("history-fixture".parse().unwrap(), DataSpaceId::UNIVERSAL);
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+        ]).unwrap();
+        let build_world = |record: AccountRekeyRecord| {
+            let account = iroha_data_model::account::Account::new(active.clone()).build(&active);
+            let mut world = World::with([], [account], []);
+            {
+                let mut block = world.block();
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(), 0,
+                );
+                insert_account_alias_binding_for_test(&mut transaction, &active, alias.clone(), &catalog);
+                transaction.replace_account_rekey_record_for_testing(record);
+                transaction.apply();
+                block.commit();
+            }
+            world
+        };
+        let world = build_world(AccountRekeyRecord::new(alias.clone(), original.clone())
+            .repoint_for_account_id_rekey(proposed).unwrap()
+            .repoint_for_account_id_rekey(active.clone()).unwrap());
+        let mut request = AccountRecoveryRequest::new(
+            alias.clone(), NonZeroU64::new(9).unwrap(), original.clone(),
+            proposed_controller, original, REGULATED_RECOVERY_TIMELOCK_MS,
+        );
+        request.finalize();
+        assert!(validate_account_recovery_status_lineage(
+            &world.view(), &catalog, &alias, &active, &request, 0,
+        ).is_ok(), "finalized history survives a later proven controller rekey");
+        request.proposed_controller = replacement_controller();
+        assert!(validate_account_recovery_status_lineage(
+            &world.view(), &catalog, &alias, &active, &request, 0,
+        ).is_err(), "an unrelated proposed controller cannot authenticate finalized history");
+        request.cancel();
+        assert!(validate_account_recovery_status_lineage(
+            &world.view(), &catalog, &alias, &active, &request, 0,
+        ).is_ok(), "canceled history only requires its original controller lineage");
+        let reassigned = build_world(AccountRekeyRecord::new(alias.clone(), active.clone()));
+        assert!(validate_account_recovery_status_lineage(
+            &reassigned.view(), &catalog, &alias, &active, &request, 0,
+        ).is_err(), "ordinary alias reassignment does not prove historical continuity");
     }
     #[test]
     fn regulated_recovery_policy_rejects_any_shape_other_than_two_of_three_for_72_hours() {
@@ -28115,6 +28384,8 @@ pub struct AccountRecoveryProposeDto {
     pub auth: AccountRecoveryDetachedAuthDto,
     /// Exact replacement controller requested for the stable alias.
     pub new_controller: iroha_data_model::account::AccountController,
+    /// Exact next generation of the alias-bound native recovery request.
+    pub request_generation: std::num::NonZeroU64,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[derive(norito::NoritoSchema)]
@@ -28128,6 +28399,8 @@ pub struct AccountRecoveryApproveDto {
     pub selector: AccountRecoverySelectorDto,
     #[norito(flatten)]
     pub auth: AccountRecoveryDetachedAuthDto,
+    /// Immutable generation of the pending native recovery request.
+    pub request_generation: std::num::NonZeroU64,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[derive(norito::NoritoSchema)]
@@ -28141,6 +28414,21 @@ pub struct AccountRecoveryFinalizeDto {
     pub selector: AccountRecoverySelectorDto,
     #[norito(flatten)]
     pub auth: AccountRecoveryDetachedAuthDto,
+    /// Immutable generation of the pending native recovery request.
+    pub request_generation: std::num::NonZeroU64,
+}
+( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryCancelDto")]
+#[norito(deny_unknown_fields)]
+/// Cancel the exact pending regulated account-recovery request.
+pub struct AccountRecoveryCancelDto {
+    #[norito(flatten)]
+    pub selector: AccountRecoverySelectorDto,
+    #[norito(flatten)]
+    pub auth: AccountRecoveryDetachedAuthDto,
+    /// Immutable generation of the pending native recovery request.
+    pub request_generation: std::num::NonZeroU64,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[derive(norito::NoritoSchema)]
@@ -34395,6 +34683,8 @@ pub const ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET: &str = "/v1/accounts/recovery/po
 pub const ENDPOINT_ACCOUNT_RECOVERY_PROPOSE: &str = "/v1/accounts/recovery/propose";
 pub const ENDPOINT_ACCOUNT_RECOVERY_APPROVE: &str = "/v1/accounts/recovery/approve";
 pub const ENDPOINT_ACCOUNT_RECOVERY_FINALIZE: &str = "/v1/accounts/recovery/finalize";
+/// Prepare or submit exact-request native recovery cancellation.
+pub const ENDPOINT_ACCOUNT_RECOVERY_CANCEL: &str = "/v1/accounts/recovery/cancel";
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";

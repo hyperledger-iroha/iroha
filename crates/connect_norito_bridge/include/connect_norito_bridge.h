@@ -447,6 +447,13 @@ int32_t connect_norito_parliament_timed_ovn_ballot_from_proof_v1(
 uint64_t connect_norito_chain_discriminant_scope_enter(uint16_t discriminant);
 int32_t connect_norito_chain_discriminant_scope_exit(uint64_t token);
 
+// ---------------- Canonical domain identity ----------------
+// Require exact native-canonical ASCII domain.dataspace text (maximum 127 bytes).
+// No normalization is performed. Returns 0 when valid, 1 when invalid, -1 for
+// null input, -2 for invalid UTF-8, and -3 for a native panic. Lengths outside
+// 1..127 are rejected before input is read. No output allocation is returned.
+int32_t connect_norito_domain_id_validate_v1(const char* input, unsigned long input_len);
+
 // ---------------- Account address helpers ----------------
 int32_t connect_norito_account_address_parse(
     const char* input,
@@ -692,6 +699,8 @@ int32_t connect_norito_kagemusha_testnet_value_credit_v1(
 #define CONNECT_NORITO_KAGEMUSHA_OUTGOING_STATE_INPUT_ARCHIVE_MAX_BYTES_V1 4096
 #define CONNECT_NORITO_KAGEMUSHA_OUTGOING_PAIRED_PROOF_ARCHIVE_MAX_BYTES_V1 6528
 
+// Method 18 returns [release ID, hardware-policy digest, provider-policy root].
+// This current native catalog projection grants no new hardware or monetary authority.
 typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RESERVE_OPERATION_ID_V1 = 1,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACCEPT_QUALIFICATION_V1 = 2,
@@ -706,7 +715,11 @@ typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_BEGIN_OBSERVATION_V1 = 11,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_INITIAL_ENROLLMENT_V1 = 12,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACKNOWLEDGE_COMMITTED_APP_ATTEST_V1 = 13,
-  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_EXPORT_OUTGOING_STATE_PROOF_V1 = 14
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_EXPORT_OUTGOING_STATE_PROOF_V1 = 14,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_PREPARE_INCOMING_FOLD_V1 = 15,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_COMPLETE_INCOMING_FOLD_V1 = 16,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_STAGE_INCOMING_ORIGINAL_V1 = 17,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_AUTHENTICATED_HARDWARE_POLICY_V1 = 18
 } ConnectNoritoKagemushaCoreCoordinatorMethodV1;
 
 int32_t connect_norito_kagemusha_core_coordinator_contract_v1(

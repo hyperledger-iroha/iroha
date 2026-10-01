@@ -921,7 +921,8 @@ mod tests {
             when.method(POST).path("/v1/query").is_true(|request| {
                 SignedQuery::decode_all_versioned(request.body_ref()).is_ok_and(|query| {
                     query.authority() == &*BOB_ID
-                        && query.network_id() == crate::torii::test_network_id()
+                        && query.payload.network_id() == crate::torii::test_network_id()
+                        && query.verify_signature().is_ok()
                 })
             });
             then.status(200).body(to_bytes(&output).unwrap());

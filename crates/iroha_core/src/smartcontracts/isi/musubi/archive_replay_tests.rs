@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{GovernanceProposalRecord, State, World},
+    state::{GovernanceProposalRecord, State, StateReadOnly, World},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use mv::cell::Cell;
@@ -402,7 +402,7 @@ fn publication_resolution_binds_rows_and_selection_state_to_snapshot() {
         validate_row(newer_yank).expect_err("future yank state did not exist at the snapshot");
     assert!(error.to_string().contains("yank state is newer"));
 }
-fn initial_executor_archive_registration_fixture() -> (World, AccountId, RegisterMusubiArchiveV1) {
+fn initial_executor_archive_registration_fixture() -> (State, AccountId, RegisterMusubiArchiveV1) {
     let mut archive = retention_archive(0x34);
     let publisher = archive.registered_by.clone();
     let broker = archive
@@ -420,12 +420,37 @@ fn initial_executor_archive_registration_fixture() -> (World, AccountId, Registe
         ],
         [],
     );
+    // Exercise the real execution boundary with committed, validated global authority.
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     world.provider_owners.insert(
         archive.staging_receipt.payload.binding.seed_provider,
         broker,
     );
-    archive.staging_receipt.payload.binding.network_id =
-        iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash());
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let config = TestChainConfig::new(world, 0);
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("prepare original Musubi genesis");
+    let state = std::sync::Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished Musubi State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        mode.into(),
+        None,
+    )
+    .expect("apply actual signed Musubi genesis");
+    archive.staging_receipt.payload.binding.network_id = *state.network_id_ref();
     archive.staging_receipt.payload.issued_at_ms = 500;
     archive.staging_receipt.payload.expires_at_ms = 2_000;
     let broker_key = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519)
@@ -441,7 +466,7 @@ fn initial_executor_archive_registration_fixture() -> (World, AccountId, Registe
         .verify(&archive.staging_receipt.payload.binding, 1_500)
         .expect("authenticated fixture receipt at execution time");
     (
-        world,
+        state,
         publisher,
         RegisterMusubiArchiveV1::new(archive.commitment, archive.staging_receipt, 1),
     )
@@ -450,7 +475,7 @@ fn initial_executor_archive_registration_fixture() -> (World, AccountId, Registe
 fn initial_executor_archive_block(state: &State) -> crate::state::StateBlock<'_> {
     state.block(BlockHeader::new(
         std::num::NonZeroU64::new(2).expect("post-genesis archive height"),
-        Some(archive_location_genesis_header().hash()),
+        state.view().latest_block_hash(),
         None,
         1_500,
         0,
@@ -459,12 +484,15 @@ fn initial_executor_archive_block(state: &State) -> crate::state::StateBlock<'_>
 
 #[test]
 fn initial_executor_registers_authenticated_musubi_archive_and_preserves_exact_replay() {
-    let (world, publisher, instruction) = initial_executor_archive_registration_fixture();
+    let (state, publisher, instruction) = initial_executor_archive_registration_fixture();
     let archive_id = instruction.commitment.archive_id();
     let receipt = instruction.staging_receipt.clone();
-    let state = archive_location_replay_state(world);
     let mut block = initial_executor_archive_block(&state);
     let mut transaction = block.transaction();
+    assert!(
+        crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+        "authenticated archive cases require the ordinary signed-genesis root"
+    );
     crate::executor::Executor::Initial
         .execute_instruction(&mut transaction, &publisher, instruction.clone().into())
         .expect("Initial executor routes the authenticated archive registration through Core");
@@ -530,16 +558,21 @@ fn initial_executor_musubi_archive_registration_keeps_native_authority_and_polic
         ("signature", "receipt signature failed"),
         ("expired", "validity window does not match"),
     ] {
-        let (mut world, publisher, mut instruction) =
-            initial_executor_archive_registration_fixture();
+        let (state, publisher, mut instruction) = initial_executor_archive_registration_fixture();
+        let mut block = initial_executor_archive_block(&state);
+        let mut transaction = block.transaction();
+        assert!(
+            crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+            "every native archive refusal must reach its handler through an authentic root"
+        );
         let mut authority = publisher;
         match case {
             "publisher" => authority = account(0x90),
             "closed_policy" => {
-                world.musubi_registry_policy = Cell::new(MusubiRegistryPolicyV1 {
+                *transaction.world.musubi_registry_policy.get_mut() = MusubiRegistryPolicyV1 {
                     mode: MusubiRegistryAdmissionModeV1::Closed,
                     ..MusubiRegistryPolicyV1::default()
-                });
+                };
             }
             "stale_policy" => instruction.expected_policy_revision = 2,
             "provider" => {
@@ -575,9 +608,6 @@ fn initial_executor_musubi_archive_registration_keeps_native_authority_and_polic
             _ => unreachable!("closed native rejection matrix"),
         }
         let archive_id = instruction.commitment.archive_id();
-        let state = archive_location_replay_state(world);
-        let mut block = initial_executor_archive_block(&state);
-        let mut transaction = block.transaction();
         let error = crate::executor::Executor::Initial
             .execute_instruction(&mut transaction, &authority, instruction.into())
             .expect_err("native archive checks must remain mandatory through Initial");

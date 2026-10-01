@@ -2,8 +2,9 @@
 //!
 //! A Torii operation status is much larger than the native sender command budget because it
 //! carries complete consensus finality and an ordinary-write membership witness. The compact
-//! projection below is hardware selector material only; it never authorizes release of a durable
-//! redemption outbox entry, and Core exposes no redemption release path in this release.
+//! projection below is hardware selector material only. Native release independently admits the
+//! full result against authority-signed finality, the actual installed voucher and original signed
+//! device op12, then publishes the complete checkpoint before exposing released capacity.
 
 use iroha_data_model::NetworkId;
 use norito::codec::{Decode, Encode};

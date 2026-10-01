@@ -55,14 +55,7 @@ const MAX_DATAGRAM_INBOX_ENTRIES: usize = 256;
 const DATAGRAM_NEGOTIATING: usize = usize::MAX;
 const DATAGRAM_PROTOCOL_ERROR_CODE: u32 = 0x4e53_4301;
 const MEDIA_PROTOCOL_ERROR_CODE: u32 = 0x4e53_4302;
-const QUIC_DEPENDENCY_BLOCK_REASON: &str = "streaming QUIC is unavailable with locked quinn-proto 0.11.15: \
-released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, \
-connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 \
-or later and requalify QUIC before re-enabling it";
-const QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON: &str = "streaming QUIC DATAGRAM transport is unavailable with locked quinn-proto 0.11.15: \
-its receive queue charges only DATAGRAM payload bytes, so zero-length frames consume no configured \
-budget and can grow the private VecDeque before application polling; upgrade quinn-proto to \
-0.11.17 or later before re-enabling DATAGRAM";
+const QUIC_DEPENDENCY_BLOCK_REASON: &str = "streaming QUIC is unavailable pending transport requalification of locked quinn-proto 0.11.18; dependency memory and panic fixes alone do not establish authenticated transport, resource, or interoperability qualification";
 const SETUP_PENDING: u8 = 0;
 const SETUP_COMPLETE: u8 = 1;
 const SETUP_TIMED_OUT: u8 = 2;
@@ -204,15 +197,15 @@ impl EndpointRole {
 pub struct TransportConfigSettings {
     /// Maximum QUIC DATAGRAM payload size (after AEAD).
     ///
-    /// This must remain zero until the Quinn per-entry accounting fix lands.
+    /// Shipping defaults remain zero pending complete transport requalification.
     pub max_datagram_size: usize,
     /// Total receive buffer reserved for datagrams.
     ///
-    /// This must remain zero until the Quinn per-entry accounting fix lands.
+    /// Shipping defaults remain zero pending complete transport requalification.
     pub datagram_receive_buffer: usize,
     /// Total send buffer reserved for datagrams.
     ///
-    /// This must remain zero until the Quinn per-entry accounting fix lands.
+    /// Shipping defaults remain zero pending complete transport requalification.
     pub datagram_send_buffer: usize,
     /// Idle timeout advertised at the transport layer.
     pub idle_timeout: Duration,
@@ -699,9 +692,9 @@ impl StreamingConnection {
         // Drain Quinn continuously before the control stream is authenticated.
         // The bounded application inbox counts entries as well as bytes and
         // closes the connection on the first empty DATAGRAM.
-        // TODO: Upgrade quinn-proto to 0.11.17 or later. The locked 0.11.15
-        // release charges only `data.len()`, so empty frames cost zero and can
-        // grow its private `VecDeque` before `read_datagram()` is polled.
+        // Locked quinn-proto 0.11.18 independently charges fixed per-entry
+        // overhead before this pump polls. TODO: Complete whole-transport
+        // qualification before enabling the shipping endpoint constructors.
         let datagram_task = spawn_datagram_pump(
             connection.clone(),
             Arc::clone(&datagram_inbox),
@@ -1705,13 +1698,29 @@ where
 }
 
 fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<TransportConfig>> {
-    if settings.max_datagram_size != 0
+    let datagrams_enabled = settings.max_datagram_size != 0
         || settings.datagram_receive_buffer != 0
-        || settings.datagram_send_buffer != 0
-    {
-        return Err(Error::TransportConfig(
-            QUIC_DATAGRAM_DEPENDENCY_BLOCK_REASON.to_owned(),
-        ));
+        || settings.datagram_send_buffer != 0;
+    if datagrams_enabled {
+        if settings.max_datagram_size == 0 || u16::try_from(settings.max_datagram_size).is_err() {
+            return Err(Error::TransportConfig(
+                "DATAGRAM payload limit must be between 1 and u16::MAX".into(),
+            ));
+        }
+        // Quinn charges one private Datagram (a Bytes value) per queue entry.
+        let minimum_buffer = settings
+            .max_datagram_size
+            .checked_add(core::mem::size_of::<Bytes>())
+            .ok_or_else(|| {
+                Error::TransportConfig("DATAGRAM buffer geometry overflows usize".into())
+            })?;
+        if settings.datagram_receive_buffer < minimum_buffer
+            || settings.datagram_send_buffer < minimum_buffer
+        {
+            return Err(Error::TransportConfig(format!(
+                "DATAGRAM receive and send buffers must each hold a {minimum_buffer}-byte entry"
+            )));
+        }
     }
     let mut transport = TransportConfig::default();
     // Quinn defaults to zero concurrent streams, which makes `open_uni()`/`accept_uni()` hang
@@ -1723,12 +1732,13 @@ fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<Trans
     // The protocol has no bidirectional stream role. Advertising any credit would let a peer
     // retain streams that the application never accepts or validates.
     transport.max_concurrent_bidi_streams(VarInt::from_u32(0));
-    // `None` omits max_datagram_frame_size from the transport parameters, so
-    // peers cannot send a conforming DATAGRAM and a raw unexpected frame is a
-    // transport-level protocol violation before Quinn queues it. A zero send
-    // buffer independently prevents this endpoint from retaining sends.
-    transport.datagram_receive_buffer_size(None);
-    transport.datagram_send_buffer_size(0);
+    // Disabled settings omit DATAGRAM support. Explicit bounded settings
+    // remain available to private requalification; public constructors still
+    // reject every QUIC endpoint before binding.
+    transport.datagram_receive_buffer_size(
+        datagrams_enabled.then_some(settings.datagram_receive_buffer),
+    );
+    transport.datagram_send_buffer_size(settings.datagram_send_buffer);
     transport.keep_alive_interval(Some(settings.idle_timeout / 2));
     let idle = IdleTimeout::try_from(settings.idle_timeout)
         .map_err(|e| Error::TransportConfig(e.to_string()))?;
@@ -1883,17 +1893,59 @@ mod tests {
             },
         ] {
             let error = build_transport_config(enabled)
-                .expect_err("each DATAGRAM-enabling setting must fail closed");
+                .expect_err("each incomplete DATAGRAM configuration must fail closed");
             let Error::TransportConfig(reason) = error else {
                 panic!("unexpected error: {error:?}");
             };
-            assert!(reason.contains("quinn-proto 0.11.15"));
-            assert!(reason.contains("zero-length frames"));
-            assert!(reason.contains("0.11.17"));
+            assert!(reason.contains("DATAGRAM"));
         }
     }
+    #[test]
+    fn requalification_datagram_geometry_accepts_exact_entry_and_rejects_incomplete_buffers() {
+        let payload = 1_200;
+        let minimum_buffer = payload + core::mem::size_of::<Bytes>();
+        let settings = TransportConfigSettings {
+            max_datagram_size: payload,
+            datagram_receive_buffer: minimum_buffer,
+            datagram_send_buffer: minimum_buffer,
+            ..TransportConfigSettings::default()
+        };
+        build_transport_config(settings).expect("an exact fixed-overhead DATAGRAM entry fits");
+        for invalid in [
+            TransportConfigSettings {
+                datagram_receive_buffer: minimum_buffer - 1,
+                ..settings
+            },
+            TransportConfigSettings {
+                datagram_send_buffer: minimum_buffer - 1,
+                ..settings
+            },
+            TransportConfigSettings {
+                max_datagram_size: 0,
+                ..settings
+            },
+            TransportConfigSettings {
+                max_datagram_size: usize::from(u16::MAX) + 1,
+                ..settings
+            },
+            TransportConfigSettings {
+                max_datagram_size: usize::MAX,
+                ..settings
+            },
+        ] {
+            assert!(matches!(
+                build_transport_config(invalid),
+                Err(Error::TransportConfig(_))
+            ));
+        }
+        // Valid private geometry never opens the public shipping transport.
+        assert!(matches!(
+            validate_shipping_quic_dependency(),
+            Err(Error::TransportConfig(_))
+        ));
+    }
     #[tokio::test]
-    async fn public_streaming_endpoints_reject_vulnerable_quinn_before_binding() {
+    async fn public_streaming_endpoints_reject_unqualified_quinn_before_binding() {
         let settings = TransportConfigSettings::default();
         let server_error = match StreamingServer::bind(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -1901,7 +1953,7 @@ mod tests {
         )
         .await
         {
-            Ok(_) => panic!("public server must reject vulnerable Quinn"),
+            Ok(_) => panic!("public server must reject unqualified Quinn"),
             Err(error) => error,
         };
         let client_error = match StreamingClient::connect(
@@ -1911,16 +1963,16 @@ mod tests {
         )
         .await
         {
-            Ok(_) => panic!("public client must reject vulnerable Quinn"),
+            Ok(_) => panic!("public client must reject unqualified Quinn"),
             Err(error) => error,
         };
         for error in [server_error, client_error] {
             let Error::TransportConfig(reason) = error else {
                 panic!("unexpected error: {error:?}");
             };
-            assert!(reason.contains("quinn-proto 0.11.15"));
-            assert!(reason.contains("remote memory exhaustion"));
-            assert!(reason.contains("0.11.17"));
+            assert!(reason.contains("quinn-proto 0.11.18"));
+            assert!(reason.contains("transport requalification"));
+            assert!(reason.contains("requalification"));
         }
     }
     #[test]
@@ -2294,18 +2346,17 @@ mod tests {
         }
     }
     #[tokio::test]
-    #[ignore = "dormant until quinn-proto 0.11.17 per-entry DATAGRAM accounting is in the lockfile"]
     async fn capability_negotiation_and_datagram_roundtrip() {
-        let settings = TransportConfigSettings::default();
-        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server = match StreamingServer::bind_for_requalification(server_addr, settings).await {
-            Ok(server) => server,
-            Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("quic test skipped: {err}");
-                return;
-            }
-            Err(err) => panic!("server bind failed: {err:?}"),
+        let settings = TransportConfigSettings {
+            max_datagram_size: 1_200,
+            datagram_receive_buffer: 64 * 1024,
+            datagram_send_buffer: 64 * 1024,
+            ..TransportConfigSettings::default()
         };
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = StreamingServer::bind_for_requalification(server_addr, settings)
+            .await
+            .expect("real loopback QUIC listener is required for DATAGRAM qualification");
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
         let (datagram_read_tx, datagram_read_rx) = tokio::sync::oneshot::channel();
@@ -2677,26 +2728,23 @@ mod tests {
         within("server.shutdown", server.shutdown()).await;
     }
     #[tokio::test]
-    #[ignore = "dormant until quinn-proto 0.11.17 per-entry DATAGRAM accounting is in the lockfile"]
     async fn mtu_negotiation_clamps_asymmetric_local_limits_on_the_wire() {
         let server_settings = TransportConfigSettings {
             max_datagram_size: 1_200,
+            datagram_receive_buffer: 64 * 1024,
+            datagram_send_buffer: 64 * 1024,
             ..TransportConfigSettings::default()
         };
         let viewer_settings = TransportConfigSettings {
             max_datagram_size: 800,
+            datagram_receive_buffer: 64 * 1024,
+            datagram_send_buffer: 64 * 1024,
             ..TransportConfigSettings::default()
         };
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server =
-            match StreamingServer::bind_for_requalification(server_addr, server_settings).await {
-                Ok(server) => server,
-                Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                    eprintln!("quic test skipped: {err}");
-                    return;
-                }
-                Err(err) => panic!("server bind failed: {err:?}"),
-            };
+        let server = StreamingServer::bind_for_requalification(server_addr, server_settings)
+            .await
+            .expect("real loopback QUIC listener is required for MTU qualification");
         let listen_addr = server.local_addr().expect("listen addr");
         let server_certificate_fingerprint = server.certificate_fingerprint();
         let (datagram_received_tx, datagram_received_rx) = tokio::sync::oneshot::channel();

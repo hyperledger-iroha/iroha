@@ -1085,7 +1085,7 @@ mod tests {
     };
     use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
     use nonzero_ext::nonzero;
     use std::{collections::BTreeMap, time::Duration};
     struct AccessKeyFixture {
@@ -1115,6 +1115,7 @@ mod tests {
     fn access_key_fixture() -> AccessKeyFixture {
         let account = (*ALICE_ID).clone();
         let missing_account = (*BOB_ID).clone();
+        let supply_account = (*CARPENTER_ID).clone();
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
         let missing_domain = DomainId::try_new("looking_glass", "universal").expect("domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -1164,22 +1165,11 @@ mod tests {
             .metadata_mut()
             .insert("issuer".parse::<Name>().expect("metadata key"), "alice");
         let asset_record = Asset::new(asset.clone(), 11_u32);
-        // The canonical total is derived from actual balances, not a supplied total.
-        // Keep it distinct from the observed account's balance and keep Bob absent.
-        let supply_holder = AccountId::new(
-            iroha_crypto::KeyPair::try_from_seed(
-                b"execution-witness-supply-holder".to_vec(),
-                iroha_crypto::Algorithm::Ed25519,
-            )
-            .expect("deterministic supply holder")
-            .public_key()
-            .clone(),
-        );
-        assert_ne!(supply_holder, account);
-        assert_ne!(supply_holder, missing_account);
-        let supply_account = Account::new(supply_holder.clone()).build(&account);
-        let other_balance = Asset::new(
-            AssetId::new(asset_definition.clone(), supply_holder),
+        // World derives canonical supply from every real balance. Keep the total
+        // distinct from the queried account while the missing account stays absent.
+        let supply_account_record = Account::new(supply_account.clone()).build(&supply_account);
+        let remaining_supply = Asset::new(
+            AssetId::new(asset_definition.clone(), supply_account),
             26_u32,
         );
         let nft_record = Nft::new(nft.clone(), metadata_entry("artist", "carroll")).build(&account);
@@ -1191,9 +1181,9 @@ mod tests {
             .build(&account);
         let mut world = World::with_assets_and_roles(
             [domain_record],
-            [account_record, supply_account],
+            [account_record, supply_account_record],
             [asset_definition_record],
-            [asset_record, other_balance],
+            [asset_record, remaining_supply],
             [nft_record],
             [role_record, unicode_role_record],
         );

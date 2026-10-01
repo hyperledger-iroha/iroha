@@ -1,7 +1,15 @@
 //! Registration-local coefficient reuse within the admitted quotient envelope.
 
-use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1};
+use super::super::super::private_table::{
+    PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1,
+};
+use super::main_bounded_transform::{MainBoundedTransformPolicyV1, check_completion_v1};
 use super::*;
+use fastpq_prover::goldilocks_transform::{
+    GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
+    GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
+    transform_goldilocks_columns_v1,
+};
 
 /// Public geometry fixes the retained base-then-auxiliary prefix before replay.
 #[derive(Clone, Copy, Debug)]
@@ -52,6 +60,7 @@ impl MainQuotientCachePlanV1 {
 pub(super) struct MainQuotientReplayCacheV1 {
     columns: Vec<PrivateTableV1<F>>,
     base_columns: usize,
+    coefficient_count: usize,
 }
 
 impl MainQuotientReplayCacheV1 {
@@ -67,6 +76,7 @@ impl MainQuotientReplayCacheV1 {
         let mut cache = Self {
             columns: Vec::new(),
             base_columns: plan.base_columns,
+            coefficient_count: plan.coefficient_count,
         };
         cache
             .columns
@@ -117,10 +127,43 @@ impl MainQuotientReplayCacheV1 {
         kind: MainTraceColumnKindV1,
         width: usize,
         stripe: main_quotient_stripes::MainQuotientStripeV1,
-        mut replay: impl FnMut(
+        policy: MainBoundedTransformPolicyV1,
+        replay: impl FnMut(
             core::ops::Range<usize>,
         ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
     ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
+        self.evaluate_with_v1(
+            kind,
+            width,
+            stripe,
+            policy,
+            replay,
+            |words, root, direction| {
+                transform_goldilocks_columns_v1(
+                    words,
+                    root,
+                    direction,
+                    fastpq_prover::ExecutionMode::Auto,
+                )
+            },
+            goldilocks_transform_completion_uncertain_v1,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_with_v1(
+        &self,
+        kind: MainTraceColumnKindV1,
+        width: usize,
+        stripe: main_quotient_stripes::MainQuotientStripeV1,
+        policy: MainBoundedTransformPolicyV1,
+        mut replay: impl FnMut(
+            core::ops::Range<usize>,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+        mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<ZeroizingBaseColumnsV1, ZkX509StarkErrorV1> {
+        check_completion_v1(uncertain())?;
         let cached = match kind {
             MainTraceColumnKindV1::Base => &self.columns[..self.base_columns],
             MainTraceColumnKindV1::Aux => &self.columns[self.base_columns..],
@@ -128,35 +171,72 @@ impl MainQuotientReplayCacheV1 {
         if cached.len() > width {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
-        let mut output = ZeroizingBaseColumnsV1(Vec::new());
+        let mut output = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1::<Vec<F>>);
         output
-            .0
             .try_reserve_exact(width)
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        for batch in cached.chunks(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
-            let values = batch
-                .par_iter()
-                .map(|column| stripe.evaluate_v1(column))
-                .collect::<Result<Vec<_>, _>>()?;
-            for column in values {
-                output.0.push(column.into_vec_v1());
+        // The registration charge covers exactly width complete output columns;
+        // their headers are reserved by for_quotient_layout_v1. Refuse any excess
+        // capacity rather than borrowing the next batch's device allowance.
+        if output.capacity() != width {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        let mut append = |coefficients: &[&[F]]| -> Result<(), ZkX509StarkErrorV1> {
+            check_completion_v1(uncertain())?;
+            let start = output.len();
+            for _ in coefficients {
+                let mut column = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
+                column
+                    .try_reserve_exact(stripe.rows)
+                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                if column.capacity() != stripe.rows {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                column.resize(stripe.rows, F::ZERO);
+                output.push(column.into_vec());
             }
+            let batch = &mut output[start..];
+            batch
+                .par_iter_mut()
+                .zip(coefficients.par_iter())
+                .try_for_each(|(values, coefficients)| stripe.fold_into_v1(coefficients, values))?;
+            policy.forward_with_v1(batch, stripe.root, &mut transform, &mut uncertain)
+        };
+        // Stack-only borrowed views add no private field matrix or heap batch.
+        for batch in cached.chunks(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+            let mut coefficients: [&[F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                [&[]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1];
+            for (target, source) in coefficients.iter_mut().zip(batch) {
+                *target = source;
+            }
+            append(&coefficients[..batch.len()])?;
         }
         for first in (cached.len()..width).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
             let end = width.min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
             let batch = replay(first..end)?;
-            if batch.len() != end - first {
+            if batch.len() != end - first
+                || batch
+                    .iter()
+                    .any(|column| column.len() != self.coefficient_count)
+            {
                 return Err(ZkX509StarkErrorV1::InternalInvariant);
             }
-            let values = batch
-                .par_iter()
-                .map(|column| stripe.evaluate_v1(column))
-                .collect::<Result<Vec<_>, _>>()?;
-            for column in values {
-                output.0.push(column.into_vec_v1());
+            if batch.capacity() != end - first
+                || batch
+                    .iter()
+                    .any(|column| column.0.capacity() != self.coefficient_count)
+            {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
             }
+            let mut coefficients: [&[F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                [&[]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1];
+            for (target, source) in coefficients.iter_mut().zip(&batch) {
+                *target = source;
+            }
+            append(&coefficients[..batch.len()])?;
         }
-        Ok(output)
+        check_completion_v1(uncertain())?;
+        Ok(ZeroizingBaseColumnsV1(output.into_vec()))
     }
 }
 

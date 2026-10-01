@@ -172,6 +172,7 @@ impl KagemushaQualifiedEnrollmentDelegateV1 for KagemushaKernelEnrollmentDelegat
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
         }
         let enrollment = iroha_core_zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1 {
+            core_authorization_key_reference: crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_key_reference_v1(&context.native_authorization_public_key),
             enrollment_id: context
                 .owner
                 .enrollment_id()

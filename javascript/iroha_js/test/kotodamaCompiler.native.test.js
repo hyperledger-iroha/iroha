@@ -162,31 +162,43 @@ nativeTest("native Kotodama V1 preserves declared arguments and composable value
     ],
   });
 
-  // Call modes belong to compiler source interfaces, not public record fields.
-  // Keep the call unchanged and alter only one declaration marker at a time.
+  // Ordinary parameters allow positional or named values; `_` remains positional-only.
+  // These source labels must not rename the public argument-record fields.
   const signature = "fn combine(int _ value, int minimum, int maximum)";
+  const call = "combine(amount, maximum: 10, minimum: 0)";
   assert.equal(source.split(signature).length, 2);
-  // Ordinary parameters accept a positional prefix; `_` prohibits a named value.
-  const optionalLabelsRaw = await nativeBinding.compileKotodama({
-    ...request,
-    source: source.replace(signature, "fn combine(int value, int minimum, int maximum)"),
-  });
-  assert.equal(optionalLabelsRaw.ok, true, optionalLabelsRaw.diagnosticsJson);
-  const optionalLabels = normalizeCompilerResult(optionalLabelsRaw);
-  assert.equal(optionalLabels.ok, true);
-  assert.deepEqual(optionalLabels.output.manifest.entrypoints, manifest.entrypoints);
-
-  const rejectedRaw = await nativeBinding.compileKotodama({
-    ...request,
-    source: source.replace(signature, "fn combine(int _ value, int _ minimum, int maximum)"),
-  });
-  assert.equal(rejectedRaw.ok, false);
-  assert.equal(rejectedRaw.output, null);
-  const rejected = normalizeCompilerResult(rejectedRaw);
-  assert.equal(rejected.ok, false);
-  assert.deepEqual(
-    rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
-      .map((diagnostic) => diagnostic.code),
-    ["E_POSITIONAL_ARGUMENT_REQUIRED"],
-  );
+  assert.equal(source.split(call).length, 2);
+  for (const acceptedCall of [call, "combine(amount, 0, 10)", "combine(value: amount, maximum: 10, minimum: 0)"]) {
+    const acceptedRaw = await nativeBinding.compileKotodama({
+      ...request,
+      source: source.replace(signature, "fn combine(int value, int minimum, int maximum)").replace(call, acceptedCall),
+    });
+    assert.equal(acceptedRaw.ok, true, acceptedRaw.diagnosticsJson);
+    assert.equal(acceptedRaw.diagnosticsJson, null);
+    const accepted = normalizeCompilerResult(acceptedRaw);
+    assert.equal(accepted.ok, true);
+    assert.deepEqual(accepted.output.manifest.entrypoints, manifest.entrypoints);
+    assert.deepEqual(accepted.output.manifest.error_types, manifest.error_types);
+  }
+  // Retain both rejection contracts: positional-only declarations cannot be named,
+  // and StateMap.page retains its required builtin labels.
+  for (const [original, replacement, expectedCode] of [
+    [signature, "fn combine(int _ value, int _ minimum, int maximum)", "E_POSITIONAL_ARGUMENT_REQUIRED"],
+    ["Flags.page(limit: PAGE_SIZE * 2, after: after)", "Flags.page(after, limit: PAGE_SIZE * 2)", "E_NAMED_ARGUMENTS_REQUIRED"],
+  ]) {
+    assert.equal(source.split(original).length, 2);
+    const rejectedRaw = await nativeBinding.compileKotodama({
+      ...request, source: source.replace(original, replacement),
+    });
+    assert.equal(rejectedRaw.ok, false, replacement);
+    assert.equal(rejectedRaw.output, null);
+    const rejected = normalizeCompilerResult(rejectedRaw);
+    assert.equal(rejected.ok, false);
+    assert.deepEqual(
+      rejected.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
+        .map((diagnostic) => diagnostic.code),
+      [expectedCode],
+      replacement,
+    );
+  }
 });

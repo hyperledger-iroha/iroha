@@ -258,13 +258,16 @@ public sealed class ToriiIntegrationSmokeTests
 
         if (!string.IsNullOrWhiteSpace(contractCodeHash))
         {
-            var contractCode = await client.GetContractCodeAsync(contractCodeHash, cancellationToken: TestContext.Current.CancellationToken);
+            var dataspace = Environment.GetEnvironmentVariable("IROHA_CSHARP_SMOKE_CONTRACT_DATASPACE_ID")
+                ?? throw new InvalidOperationException("Contract smoke reads require explicit IROHA_CSHARP_SMOKE_CONTRACT_DATASPACE_ID.");
+            var artifactId = new ContractArtifactId(ulong.Parse(dataspace, System.Globalization.CultureInfo.InvariantCulture), contractCodeHash);
+            var contractCode = await client.GetContractCodeAsync(artifactId, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(contractCodeHash, contractCode.Manifest.CodeHash);
 
-            var contractBytes = await client.GetContractCodeBytesAsync(contractCodeHash, cancellationToken: TestContext.Current.CancellationToken);
+            var contractBytes = await client.GetContractCodeBytesAsync(artifactId, cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotEmpty(contractBytes);
 
-            var contractView = await client.GetContractCodeViewAsync(contractCodeHash, cancellationToken: TestContext.Current.CancellationToken);
+            var contractView = await client.GetContractCodeViewAsync(artifactId, cancellationToken: TestContext.Current.CancellationToken);
             Assert.False(string.IsNullOrWhiteSpace(contractView.CodeHash));
             Assert.False(string.IsNullOrWhiteSpace(contractView.RenderedSourceKind));
         }

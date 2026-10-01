@@ -556,6 +556,20 @@ capacity. A reservation is retry material, not authenticated monetary authority.
 Read operations 1, 13, 18 and 21 are rejected by both the typed reservation boundary
 and the Core operation WAL; observations never consume durable-operation capacity.
 
+Method 3, AcceptAuthenticatedReply, takes the device operation `u32`, nonzero
+32-byte request ID, exact canonical command, exact canonical reply, original
+low-S P-256 response authenticator, then the five qualification fields (protocol
+version, release ID, canonical profile, canonical credential, capability mask).
+These are exactly ten fields for operations other than 12. Operation 12 requires
+an eleventh field after qualification: the complete original signed `IKGMJRS1`
+success frame, bounded by the device-response limit. Its operation, request ID,
+payload and authenticator must match the preceding fields byte-for-byte. The
+ten-field operation-12 layout is rejected. A reconstructed frame is never an
+original response. Native signature/qualification checks and consuming Core
+release admission remain mandatory; framing equality supplies no monetary
+authority. Exact release retries retain the original frame through completion
+and checkpoint publication.
+
 Method 11, BeginObservation, has exactly two fields: the read operation `u32` and
 its exact canonical typed command. It accepts only device operations 1, 13, 18
 and 21 and returns exactly one nonzero 32-byte native-generated challenge. The

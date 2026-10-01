@@ -1,8 +1,6 @@
 //! Signed admission, routing, and native execution regressions for additive SNS bootstrap.
 use crate::{
     alias_setup::{alias_intent_owner, selector_for_resolved_alias_target},
-    governance::manifest::LaneManifestRegistry,
-    query::store::LiveQueryStore,
     queue::{
         ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan, RoutingResolveError,
         evaluate_policy_plan_with_nexus_and_world_at,
@@ -11,18 +9,27 @@ use crate::{
     smartcontracts::ivm::cache::IvmCache,
     sns,
     state::{State, StateReadOnly, World, WorldReadOnly},
+    sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig, fixture_validators},
+    },
     tx::AcceptedTransaction,
 };
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
+    IntoKeyValue,
     alias_setup::{
         AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasDataSpaceIntentV1,
         AliasDataspaceBootstrapGrantV1, AliasDomainIntentV1, AliasIntentV1,
         AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1,
         ResolvedDomainV1,
     },
-    isi::alias_setup::{EnsureAlias, RenewAliasLease},
+    consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+    isi::{
+        alias_setup::{EnsureAlias, RenewAliasLease},
+        consensus_keys::RegisterConsensusKey,
+    },
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
     prelude::*,
 };
@@ -32,13 +39,18 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
-use std::{collections::BTreeSet, num::NonZeroU32, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{
+    cell::RefCell, collections::BTreeSet, num::NonZeroU32, num::NonZeroU64, sync::Arc,
+    time::Duration,
+};
 
 const PRIVATE_DATASPACE: DataSpaceId = DataSpaceId::new(10);
 const PRIVATE_LANE: LaneId = LaneId::new(1);
+const BPNG_LANE: LaneId = LaneId::new(2);
 
 struct Fixture {
-    state: State,
+    state: Arc<State>,
+    chain: RefCell<CertifiedTestChain>,
     signer: KeyPair,
     owner: AccountId,
     collector: AccountId,
@@ -50,6 +62,30 @@ fn fixture() -> Fixture {
 }
 
 fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
+    let (config, signer, owner, collector, payment_asset) = fixture_config();
+    let chain =
+        CertifiedTestChain::start(config).expect("apply original paid alias signed genesis");
+    let fixture = Fixture {
+        state: Arc::clone(chain.state()),
+        chain: RefCell::new(chain),
+        signer,
+        owner,
+        collector,
+        payment_asset,
+    };
+    if include_bpng {
+        commit_bpng_catalog(&fixture);
+    }
+    fixture
+}
+
+fn fixture_config() -> (
+    TestChainConfig,
+    KeyPair,
+    AccountId,
+    AccountId,
+    AssetDefinitionId,
+) {
     let signer = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519).expect("signer");
     let owner = AccountId::new(signer.public_key().clone());
     let collector = AccountId::new(
@@ -89,6 +125,15 @@ fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
         BTreeSet::from([Permission::from(CanSetParameters)]),
     );
     sns::seed_default_namespace_policies(&mut world);
+    // Paid alias operations execute on the global registry under explicit
+    // immutable genesis metadata, even before a new dataspace is catalogued.
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.fee_asset_id = payment_asset.to_string();
     // Match the standard State test fixture's zero ordinary transaction fees. The independent
@@ -97,7 +142,7 @@ fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = Quantity::zero();
     nexus.fees.per_gas_unit_fee = Quantity::zero();
-    let mut dataspaces = vec![
+    let dataspaces = vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
             id: PRIVATE_DATASPACE,
@@ -106,14 +151,6 @@ fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
             fault_tolerance: 1,
         },
     ];
-    if include_bpng {
-        dataspaces.push(DataSpaceMetadata {
-            id: sns::dataspace_id_for_sns_alias("bpng").expect("BPNG ID"),
-            alias: "bpng".to_owned(),
-            description: None,
-            fault_tolerance: 1,
-        });
-    }
     nexus.dataspace_catalog = DataSpaceCatalog::new(dataspaces).expect("existing dataspaces");
     nexus.lane_catalog = LaneCatalog::new(
         NonZeroU32::new(2).expect("lane bound"),
@@ -136,27 +173,195 @@ fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
             ..LaneRoutingMatcher::default()
         },
     });
-    let state =
-        State::new_with_pre_genesis_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    state
-        .block(header(1))
-        .commit_empty_block_for_testing()
-        .expect("commit existing genesis fixture");
-    Fixture {
-        state,
-        signer,
-        owner,
-        collector,
-        payment_asset,
+    nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    nexus.staking.public_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    let validators = fixture_validators();
+    for (peer, _) in &validators {
+        let id = AccountId::new(peer.public_key().clone());
+        let (id, account) = Account::new(id.clone()).build(&id).into_key_value();
+        world.accounts.insert(id, account);
     }
+    let mut config = TestChainConfig::new(world, 0);
+    config.nexus = Some(nexus);
+    config.genesis_instructions = validators
+        .into_iter()
+        .map(|(peer, pop)| {
+            let id = crate::state::derive_committee_key_id(peer.public_key());
+            RegisterConsensusKey {
+                id: id.clone(),
+                record: ConsensusKeyRecord {
+                    id,
+                    public_key: peer.public_key().clone(),
+                    pop: Some(pop),
+                    activation_height: 1,
+                    expiry_height: None,
+                    replaces: None,
+                    status: ConsensusKeyStatus::Active,
+                },
+            }
+            .into()
+        })
+        .collect();
+    (config, signer, owner, collector, payment_asset)
 }
 
-fn header(height: u64) -> BlockHeader {
-    BlockHeader::new(NonZeroU64::new(height).expect("height"), None, None, 0, 0)
+fn commit_bpng_catalog(fixture: &Fixture) {
+    let before = fixture.state.nexus_snapshot();
+    let network = *fixture.state.network_id_ref();
+    let mut chain = fixture.chain.borrow_mut();
+    let genesis = chain
+        .genesis()
+        .encode_wire()
+        .expect("original signed genesis wire");
+    let bootstrap = AliasDataspaceBootstrapGrantV1::try_new("bpng", fixture.owner.clone())
+        .expect("canonical BPNG authority");
+    let peers = chain
+        .validators()
+        .iter()
+        .map(|(peer, _)| peer.clone())
+        .collect::<Vec<_>>();
+    let payload = crate::state::runtime_catalog_tests::catalog_transition_for_testing(
+        &fixture.state,
+        DataSpaceMetadata {
+            id: bootstrap.dataspace.dataspace_id,
+            alias: "bpng".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+        bootstrap.name_hash,
+        LaneConfig {
+            id: BPNG_LANE,
+            dataspace_id: bootstrap.dataspace.dataspace_id,
+            alias: "bpng".to_owned(),
+            ..LaneConfig::default()
+        },
+        &peers,
+    );
+    let request = SetParameter::new(Parameter::Custom(
+        payload
+            .clone()
+            .into_custom_parameter()
+            .expect("canonical catalog transition"),
+    ))
+    .into();
+    let signed = chain.sign(&fixture.signer, [request], 1);
+    assert_eq!(
+        chain.commit(vec![signed]),
+        vec![true],
+        "native committed catalog transition"
+    );
+    assert_eq!(
+        chain.height(),
+        2,
+        "the additive authority is actually certified at H2"
+    );
+    assert_eq!(chain.genesis().encode_wire().unwrap(), genesis);
+    assert_eq!(*fixture.state.network_id_ref(), network);
+    assert_eq!(chain.committed(1).block().encode_wire().unwrap(), genesis);
+    let view = fixture.state.view();
+    let after = view.nexus();
+    assert_eq!(
+        &after.lane_catalog.lanes()[..before.lane_catalog.lanes().len()],
+        before.lane_catalog.lanes(),
+        "every original lane is retained"
+    );
+    assert_eq!(
+        after.configured_lane_catalog,
+        before.configured_lane_catalog
+    );
+    assert_eq!(
+        after.configured_dataspace_catalog,
+        before.configured_dataspace_catalog
+    );
+    for descriptor in before.dataspace_catalog.entries() {
+        assert_eq!(
+            after.dataspace_catalog.by_id(descriptor.id),
+            Some(descriptor)
+        );
+    }
+    assert_eq!(
+        after
+            .dataspace_catalog
+            .by_id(bootstrap.dataspace.dataspace_id),
+        Some(&payload.dataspace_additions[0].descriptor)
+    );
+    assert!(
+        view.runtime_catalog_hash().unwrap().is_some(),
+        "committed runtime authority exists"
+    );
+    let native =
+        crate::sumeragi::lanes::lane_policy(view.world()).expect("committed native lane policy");
+    let lane = native
+        .fixed_lane(BPNG_LANE)
+        .expect("new lane has authenticated authority");
+    assert_eq!(lane.dataspace, bootstrap.dataspace.dataspace_id);
+    assert_eq!(lane.committee.len(), 4);
+    for member in &lane.committee {
+        assert!(
+            chain
+                .validators()
+                .iter()
+                .any(|(peer, pop)| peer == &member.peer && pop == &member.pop)
+        );
+    }
+    crate::sumeragi::lanes::step::validate_policy(&native).expect("exact native committee policy");
+}
+
+#[test]
+fn alias_registry_routing_local_config_cannot_authorize_catalog_expansion() {
+    let (config, _, _, _, _) = fixture_config();
+    let account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("original prepared genesis");
+    let genesis = prepared.genesis.block().clone();
+    let mut state =
+        Arc::try_unwrap(prepared.state).unwrap_or_else(|_| panic!("unique unapplied State"));
+    startup::apply_genesis(&state, genesis.clone(), &account, mode.into(), None)
+        .expect("genuine signed genesis establishes the physical baseline");
+    let before = state.nexus_snapshot();
+    let mut configured = before.clone();
+    let mut entries = before.configured_dataspace_catalog.entries().to_vec();
+    entries.push(DataSpaceMetadata {
+        id: sns::dataspace_id_for_sns_alias("bpng").unwrap(),
+        alias: "bpng".to_owned(),
+        description: None,
+        fault_tolerance: 1,
+    });
+    configured.configured_dataspace_catalog = DataSpaceCatalog::new(entries).unwrap();
+    configured.dataspace_catalog = configured.configured_dataspace_catalog.clone();
+    let error = state
+        .set_nexus_from_config(configured)
+        .expect_err("local expansion cannot mint authority");
+    assert!(
+        error
+            .to_string()
+            .contains("configured catalog differs from retained physical dataspace authority"),
+        "{error}"
+    );
+    assert_eq!(
+        state.nexus_snapshot().dataspace_catalog,
+        before.dataspace_catalog
+    );
+    assert_eq!(state.nexus_snapshot().lane_catalog, before.lane_catalog);
+    assert_eq!(state.view().latest_block_hash(), Some(genesis.hash()));
+    assert_eq!(
+        *state.network_id_ref(),
+        NetworkId::from_genesis_hash(genesis.hash())
+    );
+}
+
+fn header(fixture: &Fixture, height: u64) -> BlockHeader {
+    BlockHeader::new(
+        NonZeroU64::new(height).expect("height"),
+        fixture.state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    )
 }
 
 fn accepted(fixture: &Fixture, instructions: Vec<InstructionBox>) -> AcceptedTransaction<'static> {
@@ -250,7 +455,7 @@ fn assert_universal_queue_and_block(fixture: &Fixture, transaction: &AcceptedTra
 fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), String> {
     let transaction = accepted(fixture, instructions);
     let height = u64::try_from(fixture.state.view().height()).expect("height") + 1;
-    let mut block = fixture.state.block(header(height));
+    let mut block = fixture.state.block(header(fixture, height));
     let plan = plans(fixture, &transaction, height).map_err(|error| format!("{error:?}"))?;
     let RoutingPlan::Single(leg) = plan else {
         return Err("alias registry fixture must have exactly one route".into());
@@ -258,6 +463,10 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
     let mut overlay = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
         transaction.entrypoint().execution_call_hash(),
     ));
+    assert!(
+        crate::executor::root_scope::execution_root_scope(&overlay).is_ok(),
+        "paid alias and refusal cases require the authenticated ordinary execution root"
+    );
     overlay.current_entrypoint_index = Some(0);
     overlay.current_network_entrypoint_hash = Some(transaction.hash_as_entrypoint());
     overlay.current_tx_hash = Some(transaction.as_ref().hash());
@@ -345,7 +554,7 @@ fn balance(fixture: &Fixture, account: &AccountId) -> Quantity {
 
 #[test]
 fn alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal() {
-    let mut fixture = fixture();
+    let fixture = fixture();
     let dataspace = ensure(&fixture, bpng_intent(&fixture.owner));
     let bpng = dataspace.intent.target().dataspace_id();
     assert_universal_queue_and_block(
@@ -378,21 +587,9 @@ fn alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal() {
         "no-op must not charge another lease"
     );
 
-    let mut nexus = fixture.state.nexus_snapshot();
-    let old_lanes = nexus.lane_catalog.clone();
-    let mut entries = nexus.dataspace_catalog.entries().to_vec();
-    entries.push(DataSpaceMetadata {
-        id: bpng,
-        alias: "bpng".to_owned(),
-        description: None,
-        fault_tolerance: 1,
-    });
-    nexus.dataspace_catalog = DataSpaceCatalog::new(entries).expect("additive canonical catalog");
-    fixture
-        .state
-        .set_nexus_from_config(nexus)
-        .expect("add matching static dataspace without resetting genesis or lanes");
-    assert_eq!(fixture.state.nexus_snapshot().lane_catalog, old_lanes);
+    // The catalog is protocol authority: commit its additive transition instead of
+    // replacing the process-configured baseline with a locally expanded configuration.
+    commit_bpng_catalog(&fixture);
     assert_universal_queue_and_block(
         &fixture,
         &accepted(&fixture, vec![dataspace.clone().into()]),
@@ -483,8 +680,8 @@ fn alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal() {
     );
     assert_eq!(
         fixture.state.view().height(),
-        1,
-        "the original carrier history remains intact"
+        2,
+        "paid overlays retain the original genesis and its certified catalog descendant"
     );
 }
 
@@ -548,7 +745,7 @@ fn alias_registry_routing_nested_walkers_use_universal_registry() {
         is_relayed: None,
     };
     {
-        let mut block = fixture.state.block(header(2));
+        let mut block = fixture.state.block(header(&fixture, 2));
         let mut transaction = block.transaction();
         transaction
             .world
@@ -685,10 +882,26 @@ fn alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards() {
 #[test]
 fn alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap() {
     // Reconstruct the original pre-lease world, not a snapshot already containing the SNS name.
-    // The second independent instance has the future static catalog from startup. Both replay
-    // exactly the same bootstrap grant and signed lease/domain sequence.
+    // The second independent instance commits the additive catalog before paid replay starts.
+    // Both retain the same signed genesis and replay the exact bootstrap grant and signed
+    // lease/domain sequence; a newly signed expanded genesis is a different network.
     let original = fixture_with_expanded_catalog(false);
     let replay = fixture_with_expanded_catalog(true);
+    assert_eq!(
+        original.state.network_id_ref(),
+        replay.state.network_id_ref()
+    );
+    assert_eq!(
+        original.chain.borrow().genesis().encode_wire().unwrap(),
+        replay
+            .chain
+            .borrow()
+            .committed(1)
+            .block()
+            .encode_wire()
+            .unwrap(),
+        "cold paid replay retains the same authentic genesis"
+    );
     let dataspace = ensure(&original, bpng_intent(&original.owner));
     let target = dataspace.intent.target();
     let selector = selector_for_resolved_alias_target(&target).expect("BPNG selector");
@@ -764,5 +977,17 @@ fn alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_boots
             .domain(&domain_id)
             .expect("replayed domain")
     );
-    assert_eq!(original.state.view().height(), replay.state.view().height());
+    assert_eq!(original.state.view().height(), 1);
+    assert_eq!(replay.state.view().height(), 2);
+    assert_eq!(
+        replay
+            .chain
+            .borrow()
+            .committed(2)
+            .block()
+            .header()
+            .prev_block_hash,
+        Some(original.chain.borrow().genesis().hash()),
+        "expanded replay carries the actual certified descendant of the original genesis"
+    );
 }

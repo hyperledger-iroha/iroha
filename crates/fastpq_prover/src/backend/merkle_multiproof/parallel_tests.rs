@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use super::*;
-use crate::backend::compact_v1::{Context, Oracle};
+use crate::backend::compact_sha3::Context;
 
 fn limits() -> MultiproofLimits {
     MultiproofLimits {
@@ -18,7 +18,7 @@ fn limits() -> MultiproofLimits {
 }
 
 #[test]
-fn parallel_parents_preserve_complete_six_lane_trees_roots_and_work() {
+fn parallel_parents_preserve_complete_sha3_trees_roots_and_work() {
     let parallel = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build()
@@ -27,33 +27,30 @@ fn parallel_parents_preserve_complete_six_lane_trees_roots_and_work() {
         .num_threads(1)
         .build()
         .unwrap();
-    let context =
-        Context::new(b"independent complete six-lane parallel verification fixture").unwrap();
-    for (round, count, query_count) in [(17, 1, 1), (15, 8, 3), (10, 256, 173), (8, 1_024, 375)] {
-        let oracle = Oracle::Fri(round);
+    let context = Context::new(b"independent complete SHA3 parallel verification fixture").unwrap();
+    for (round, count, query_count) in [(5, 1, 1), (4, 8, 3), (2, 256, 173), (1, 1_024, 375)] {
+        let oracle = round;
         let indices: Vec<_> = (0..query_count).map(|i| i * count / query_count).collect();
         let mut leaves: Vec<_> = (0..count)
             .map(|i| {
-                let mut bytes = vec![0; if round == 17 { 128 } else { 64 }];
+                let mut bytes = vec![0; if count == 1 { 4096 } else { 128 }];
                 bytes[..8].copy_from_slice(&u64::try_from(i + 1).unwrap().to_le_bytes());
-                context
-                    .hash_leaf(oracle, u32::try_from(i).unwrap(), &bytes)
-                    .unwrap()
+                sha3_reference::leaf(&context, oracle, u32::try_from(i).unwrap(), &bytes).unwrap()
             })
             .collect();
         if count == 1 {
             leaves.push(leaves[0]);
         }
         let parent = |level: usize, index: usize, left, right| {
-            context
-                .hash_parent(
-                    oracle,
-                    u32::try_from(level).unwrap(),
-                    u32::try_from(index).unwrap(),
-                    left,
-                    right,
-                )
-                .map_err(|_| shape("six-lane fixture parent rejected"))
+            sha3_reference::parent(
+                &context,
+                oracle,
+                u32::try_from(level).unwrap(),
+                u32::try_from(index).unwrap(),
+                left,
+                right,
+            )
+            .map_err(|_| shape("SHA3 fixture parent rejected"))
         };
         let mut levels = vec![leaves];
         while levels.last().unwrap().len() > 1 {
@@ -101,14 +98,23 @@ fn parallel_parents_preserve_complete_six_lane_trees_roots_and_work() {
 fn assert_tampering_matches_serial(
     plan: &MultiproofPlan,
     parallel: &rayon::ThreadPool,
-    root: Digest,
-    selected: &[Digest],
-    siblings: &[Digest],
-    parent: impl Fn(usize, usize, Digest, Digest) -> Result<Digest> + Copy + Send + Sync,
+    root: fastpq_isi::keccak256::Sha3Digest256V1,
+    selected: &[fastpq_isi::keccak256::Sha3Digest256V1],
+    siblings: &[fastpq_isi::keccak256::Sha3Digest256V1],
+    parent: impl Fn(
+        usize,
+        usize,
+        fastpq_isi::keccak256::Sha3Digest256V1,
+        fastpq_isi::keccak256::Sha3Digest256V1,
+    ) -> Result<fastpq_isi::keccak256::Sha3Digest256V1>
+    + Copy
+    + Send
+    + Sync,
 ) {
-    let mut changed_root = root.words();
-    changed_root[5] ^= 1;
-    let changed_root = Digest::new(changed_root).unwrap();
+    use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
+    let mut changed_root = root.into_bytes();
+    changed_root[31] ^= 1;
+    let changed_root = Digest::from_bytes(changed_root);
     assert_eq!(
         format!(
             "{:?}",
@@ -126,9 +132,9 @@ fn assert_tampering_matches_serial(
     );
     if !siblings.is_empty() {
         let mut changed = siblings.to_vec();
-        let mut words = changed[0].words();
-        words[4] ^= 1;
-        changed[0] = Digest::new(words).unwrap();
+        let mut words = changed[0].into_bytes();
+        words[30] ^= 1;
+        changed[0] = Digest::from_bytes(words);
         assert_eq!(
             format!("{:?}", plan.verify_with(root, selected, &changed, parent)),
             format!(

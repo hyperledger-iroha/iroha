@@ -28,6 +28,17 @@
           "path": "../poseidon_digest384.rs"
         }
       ]
+    },
+    {
+      "path": "keccak256_reference_v1.tsv",
+      "byte_length": 7748,
+      "sha256": "764a37a7148b31b2c81db2dd0af242909029a0a87e6b54f8b8cbf5f75aea5836",
+      "layout": "12 ordered independent SHA3-256 and SHAKE256 vectors in tab-separated input-length, hash, and XOF fields",
+      "source_preimages": [
+        {
+          "path": "../keccak256/tests.rs"
+        }
+      ]
     }
   ]
 }

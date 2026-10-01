@@ -1,7 +1,11 @@
 // Copyright 2026 Hyperledger Iroha Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+
 package org.hyperledger.iroha.sdk.offline.probe
+
+import org.hyperledger.iroha.sdk.crypto.keystore.KagemushaAndroidOriginalJournalIoV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidOriginalJournalIoV1
 
 import java.io.File
 import java.nio.file.Files
@@ -19,7 +23,7 @@ import kotlin.test.assertIs
 import org.junit.jupiter.api.Test
 
 class FilePixel6TestnetObservationStoreV1Test {
-    private class MemoryIo : SelectionJournalIoV1 {
+    private class MemoryIo : KagemushaAndroidOriginalJournalIoV1 {
         val files = mutableMapOf<String, ByteArray>()
 
         override fun exists(file: File): Boolean = files.containsKey(file.absolutePath)
@@ -32,6 +36,8 @@ class FilePixel6TestnetObservationStoreV1Test {
         override fun writeNew(file: File, bytes: ByteArray) {
             check(files.putIfAbsent(file.absolutePath, bytes.copyOf()) == null)
         }
+
+        override fun syncExisting(file: File) { check(files.containsKey(file.absolutePath)) }
 
         override fun <T> withLock(file: File, action: () -> T): T = action()
     }

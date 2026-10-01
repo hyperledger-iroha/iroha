@@ -8,6 +8,10 @@ internal static class ToriiContractCodeBytesJson
     internal static void ValidateContractCodeBytesResponse(ToriiContractCodeBytesResponse response)
     {
         ArgumentNullException.ThrowIfNull(response);
+        if (response.NetworkId is null || response.ArtifactId is null)
+        {
+            throw new JsonException("contract code-byte response requires network_id and artifact_id.");
+        }
         _ = response.DecodeBytes();
     }
 
@@ -15,56 +19,24 @@ internal static class ToriiContractCodeBytesJson
         ref Utf8JsonReader reader,
         string context)
     {
-        if (reader.TokenType == JsonTokenType.Null)
+        var payload = ToriiExplorerJson.ReadObject(ref reader, context);
+        if (payload["code_b64"] is null)
+            throw new JsonException($"{context}.code_b64 must not be null.");
+        if (payload["code_b64"] is not System.Text.Json.Nodes.JsonValue codeNode
+            || !codeNode.TryGetValue<string>(out var codeBase64))
+            throw new JsonException($"{context}.code_b64 must be a string.");
+        if (payload.Count != 3)
         {
-            throw new JsonException($"{context} must not be null.");
+            throw new JsonException($"{context} requires exactly network_id, artifact_id, and code_b64.");
         }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
+        var response = new ToriiContractCodeBytesResponse
         {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? codeBase64 = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                if (codeBase64 is null)
-                {
-                    throw new JsonException($"{context}.code_b64 must not be null.");
-                }
-
-                var response = new ToriiContractCodeBytesResponse { CodeBase64 = codeBase64 };
-                ValidateContractCodeBytesResponse(response);
-                return response;
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            if (propertyName == "code_b64")
-            {
-                codeBase64 = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.code_b64");
-            }
-            else
-            {
-                ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
+            NetworkId = ToriiContractArtifactJson.ReadNetworkId(payload, context),
+            ArtifactId = ToriiContractArtifactJson.ReadArtifactId(payload, context),
+            CodeBase64 = codeBase64,
+        };
+        ValidateContractCodeBytesResponse(response);
+        return response;
     }
 
     internal static void WriteContractCodeBytesResponse(
@@ -75,6 +47,7 @@ internal static class ToriiContractCodeBytesJson
         ValidateContractCodeBytesResponse(response);
 
         writer.WriteStartObject();
+        ToriiContractArtifactJson.WriteFields(writer, response.NetworkId, response.ArtifactId);
         writer.WriteString("code_b64", response.CodeBase64);
         writer.WriteEndObject();
     }

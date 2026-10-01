@@ -220,6 +220,7 @@ fn retail_debit_rejects_unbound_source_and_receiver() {
 fn retail_day_usage_is_shared_across_two_source_accounts() {
     let (state, definition, source, alternate_source, carol) = retail_cap_test_state();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0));
+    block.admit_fastpq_source_for_testing(Hash::prehashed([0xE2; Hash::LENGTH]));
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::new(7));
     stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
@@ -264,6 +265,7 @@ fn retail_day_usage_is_shared_across_two_source_accounts() {
 fn atomic_batch_rejects_two_accounts_sharing_one_identity() {
     let (state, definition, source, alternate_source, carol) = retail_cap_test_state();
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0));
+    block.admit_fastpq_source_for_testing(Hash::prehashed([0xE3; Hash::LENGTH]));
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::new(7));
     stx.world.current_dataspace_id = Some(DataSpaceId::new(7));

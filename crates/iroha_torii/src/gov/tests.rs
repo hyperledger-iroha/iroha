@@ -2635,7 +2635,7 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
         &contract_address,
         code_hash,
     )
-    .expect("registered contract scope");
+    .expect("exact governed contract artifact scope");
     let mut manifest = harness
         .state
         .view()

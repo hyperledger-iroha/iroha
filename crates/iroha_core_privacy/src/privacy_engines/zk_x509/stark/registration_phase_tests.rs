@@ -120,7 +120,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "775b6fc6871d99d6211ba840c22df45beb0d7eaf5015c09bffc603906240fb31",
+        "6de4f9403e4659834a309ceff14b2bd4ba8f2e0b182a1d4b85bf98e71d000ff5",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -178,7 +178,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "bd4b3c6494b0d6d10cc22515e1014b6beb2c7bfa7cc0d5f9c14d218276234a2c",
+        "da169e0edd7885a13b8d5d5a8faab55442fa1c5213fab7eacb30fe3e9c7221fd",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
@@ -2317,27 +2317,36 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
 #[test]
 fn main_phase_source_retains_original_masks_and_authenticates_replay() {
     let source = include_str!("main_aggregate.rs");
-    let helper_start = source
-        .find("fn sample_main_trace_group_v1")
-        .expect("MAIN commitment helper");
-    let helper_end = source[helper_start..]
-        .find("fn main_trace_group_root_v1")
-        .map(|offset| helper_start + offset)
-        .expect("MAIN commitment helper end");
-    let helper = &source[helper_start..helper_end];
-    assert!(
-        helper.contains("MainTraceMaskGroupV1::sample_v1"),
-        "MAIN sampling must retain the original independent masks for every joined column"
-    );
-    assert!(
-        !helper.contains("MaskedTracePolynomialSetV1::sample_columns_v1")
-            && !helper.contains("commit_masked_trace_columns_v1(")
-            && !helper.contains("commit_masked_trace_columns_retaining_encrypted_scratch_v1")
-            && !helper.contains("spill_replayed_masked_trace_columns_v1")
-            && !helper.contains("replay_masked_trace_columns_via_encrypted_scratch_v1"),
-        "MAIN must not retain the whole masked coefficient matrix or substitute an unrelated spool"
-    );
     let replay_source = include_str!("main_trace_replay.rs");
+    let helper_start = replay_source
+        .find("fn sample_and_replay_batch_with_v1<")
+        .expect("bounded first-pass sampler");
+    let helper_end = replay_source[helper_start..]
+        .find("fn replay_v1(")
+        .map(|offset| helper_start + offset)
+        .expect("test replay boundary");
+    let helper = &replay_source[helper_start..helper_end];
+    assert!(
+        helper.contains("sample_trace_mask_v1(MASK_DEGREE, rng)") && helper.contains("self.masks"),
+        "MAIN sampling retains each original independent mask"
+    );
+    assert!(
+        helper.contains("drop(source)"),
+        "source header allocation drops before inverse staging"
+    );
+    for forbidden in [
+        "MaskedTracePolynomialSetV1::sample_columns_v1",
+        "commit_masked_trace_columns_v1(",
+        "commit_masked_trace_columns_retaining_encrypted_scratch_v1",
+        "spill_replayed_masked_trace_columns_v1",
+        "replay_masked_trace_columns_via_encrypted_scratch_v1",
+    ] {
+        assert!(
+            !replay_source[..replay_source.find("\n#[cfg(test)]\nmod tests {").unwrap()]
+                .contains(forbidden),
+            "MAIN cannot substitute whole-matrix retention or a spool"
+        );
+    }
     let replay_start = replay_source
         .find("fn replay_batch_v1(")
         .expect("live original-mask batch replay");
@@ -2346,7 +2355,24 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .map(|offset| replay_start + offset)
         .expect("mask replay end");
     let replay = &replay_source[replay_start..replay_end];
-    assert!(replay.contains("goldilocks_ifft_v1"));
+    assert!(replay.contains("policy.inverse_with_v1(&mut batch, root"));
+    let adapter = include_str!("main_bounded_transform.rs");
+    let inverse_start = adapter
+        .find("fn inverse_with_v1(")
+        .expect("bounded inverse");
+    let inverse_end = adapter[inverse_start..]
+        .find("fn private_with_v1(")
+        .map(|offset| inverse_start + offset)
+        .expect("shared private adapter");
+    assert!(adapter[inverse_start..inverse_end].contains("Direction::Inverse"));
+    let inverse = replay.find("policy.inverse_with_v1").unwrap();
+    let masking = replay
+        .find("for (native, mask) in batch.iter_mut().zip(masks)")
+        .unwrap();
+    assert!(
+        inverse < masking,
+        "inverse completion must precede mask application"
+    );
     assert!(replay.contains("mask.coefficients()"));
     assert!(replay.contains("coefficients[degree].sub(random)"));
     assert!(replay.contains("coefficients[native_rows + degree].add(random)"));
@@ -2368,6 +2394,9 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .find("pub(crate) fn bind_credential_pre_aux_v1_with_rng")
         .expect("credential-bound phase");
     let base = &phases[..bound_start];
+    let base_quarantine = base
+        .find("goldilocks_transform_completion_uncertain_v1()")
+        .expect("base quarantine gate");
     let preallocation = base
         .find("check_before_sources_v1")
         .expect("source preallocation gate");
@@ -2381,16 +2410,20 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .find("check_native_sources_v1")
         .expect("actual source capacity gate");
     let base_entropy = base
-        .find("sample_main_trace_group_v1")
+        .find("sample_and_commit_joined_v1")
         .expect("first base mask sampling");
     assert!(
-        preallocation < source_shapes
+        base_quarantine < preallocation
+            && preallocation < source_shapes
             && source_shapes < p256_construction
             && p256_construction < actual_capacities
             && actual_capacities < base_entropy,
         "source admission must precede bulk allocation, and actual capacity admission must precede entropy"
     );
     let bound = &phases[bound_start..];
+    let aux_quarantine = bound
+        .find("goldilocks_transform_completion_uncertain_v1()")
+        .expect("auxiliary quarantine gate");
     let bound_preallocation = bound
         .find("check_before_sources_v1")
         .expect("bound source preallocation gate");
@@ -2401,24 +2434,30 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .find("check_native_sources_v1")
         .expect("bound capacity gate");
     let aux_entropy = bound
-        .find("sample_main_trace_group_v1")
+        .find("sample_and_commit_joined_v1")
         .expect("first auxiliary mask sampling");
     assert!(
-        bound_preallocation < bound_construction
+        aux_quarantine < bound_preallocation
+            && bound_preallocation < bound_construction
             && bound_construction < bound_capacities
             && bound_capacities < aux_entropy,
         "bound sources must be admitted before auxiliary entropy"
     );
     assert_eq!(
-        phases.matches("base_polynomials.push(polynomials)").count(),
-        FULL_PROFILE_TRACE_GROUPS_V1,
-        "phase one must retain exactly six base mask groups"
+        phases
+            .matches("MainTracePolynomialSetV1::sample_and_commit_joined_v1(")
+            .count(),
+        2,
+        "both initial roots must consume the same bounded sample-and-commit path"
     );
-    assert_eq!(
-        phases.matches("aux_polynomials.push(polynomials)").count(),
-        FULL_PROFILE_TRACE_GROUPS_V1,
-        "phase two must retain exactly six auxiliary mask groups"
-    );
+    let initial = &replay_source[replay_source
+        .find("fn sample_and_commit_joined_v1<")
+        .unwrap()
+        ..replay_source.find("fn commit_joined_batches_v1(").unwrap()];
+    assert!(initial.contains("FULL_PROFILE_TRACE_GROUPS_V1"));
+    assert!(initial.contains(".try_into()"));
+    assert!(initial.contains("set.validate_v1(layout, kind)?"));
+    assert!(initial.contains("MainTraceMaskGroupV1::empty_v1"));
     let provenance = phases
         .find("matches_main_pre_aux_v1")
         .expect("provenance check");
@@ -2607,7 +2646,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(!verifier.contains("verify_opened_query_relations_with_deep_v1"));
     let engine = include_str!("../engine.rs");
     let engine_production = &engine[..engine
-        .find("#[cfg(test)]")
+        .find("\n#[cfg(test)]\nmod tests {")
         .expect("engine production/test boundary")];
     assert!(engine_production.contains("verify_zk_x509_main_aggregate_stark_v1"));
     assert!(engine_production.contains("ca_accumulator_subproof_binding_from_proof_v1"));

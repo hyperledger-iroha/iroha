@@ -49,7 +49,8 @@ class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 internal constructo
                 error,
             )
         }
-        return KagemushaAuthenticatedHardwareProviderV1(transport, coordinator, intentStore, authorizeBootstrap)
+        return KagemushaAuthenticatedHardwareProviderV1(transport, coordinator, intentStore, authorizeBootstrap,
+            coordinatorFactory.incomingFoldEvidenceProvider(coordinator))
     }
 
     private fun loadExactlyOneCoordinatorFactory(): KagemushaNativeCoreCoordinatorFactoryV1 {

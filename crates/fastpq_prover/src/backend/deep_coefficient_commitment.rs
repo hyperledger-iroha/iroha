@@ -17,7 +17,7 @@ use super::{
     secret_polynomial::SecretPolynomial,
 };
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};
-use fastpq_isi::GoldilocksDigest384V1 as Digest;
+use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
 
 /// Exact oracle identity, source geometry and checked active-phase payload bound.
 pub(super) struct CoefficientCommitmentPlan<'a> {
@@ -154,14 +154,14 @@ impl<'a> CoefficientCommitmentPlan<'a> {
         let mut bytes = SecretPolynomial::zeroed(capacity * self.fields * F::BYTES)?;
         // Every oracle uses the explicitly selected bulk-leaf executor. The
         // terminal retains its one-leaf duplicated-parent Merkle geometry.
-        let mut leaves = SecretPolynomial::<[u64; 6]>::zeroed(capacity)?;
+        let mut leaves = SecretPolynomial::<[u8; 32]>::zeroed(capacity)?;
         let mut selected = SecretPolynomial::zeroed(self.retained)?;
         let parent = |level: usize, index: usize, left, right| {
             binding
                 .hash_parent_at(self.oracle, level, index, left, right)
                 .map_err(binding_error)
         };
-        let batch_parent = |level, indices: &[usize], left: &[[u64; 6]], right: &mut [[u64; 6]]| {
+        let batch_parent = |level, indices: &[usize], left: &[[u8; 32]], right: &mut [[u8; 32]]| {
             super::deep_parent_batch::hash_in_place(
                 binding,
                 self.oracle,

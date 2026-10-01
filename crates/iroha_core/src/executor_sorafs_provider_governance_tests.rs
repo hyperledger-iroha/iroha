@@ -26,7 +26,7 @@ mod sorafs_provider_governance_admission {
         assert!(initial_native_instruction_is_explicitly_admitted(
             &instruction
         ));
-        let state = component_state_after_genesis(World::with(
+        let state = state_after_genesis(World::with(
             [],
             [
                 Account::new(authority.clone()).build(&authority),

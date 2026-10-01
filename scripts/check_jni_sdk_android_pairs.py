@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze retained JNI pairs and the sole Kotlin privacy export inventory."""
+"""Freeze the sole Kotlin JNI signatures, bodies, attributes and privacy inventory."""
 
 from __future__ import annotations
 
@@ -14,10 +14,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 JNI_SOURCE = REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/part_3.rs"
 SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
-MACRO_NAME = "jni_sdk_android_pairs"
-EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
+EXPECTED_GOVERNANCE_SOURCE_DIGEST = "d8e413b1478089114c52d3877bf5442328d5c7a933f09bdb1cebcdda470ef4c2"
+EXPECTED_GOVERNANCE_METHODS = (
+    "nativeBridgeAbiVersion", "nativeVerifyCastingProofV1", "nativeVerifyCastingProofPageV1",
+    "nativeRegistrationFromProofV1", "nativeBallotFromProofV1",
+)
 EXPECTED_ABI_DIGEST = "406c64c8e153cc2c31bc96d344c3aeba6960ec722b0cbf75e04e85aa3cd64a85"
-EXPECTED_ATTRIBUTE_DIGEST = "111f39db22a786680e2d3762f4c62cd61da771641edfca73ce47ea8f5cf29720"
+EXPECTED_ATTRIBUTE_DIGEST = "c80e87e1a878a1263dd1cb7708bc8ec335cb7e4e5461934708561466f7a2d795"
 
 EXPECTED_METHODS = {
     "crypto_NativeSignerBridge": (
@@ -78,7 +81,7 @@ EXPECTED_SDK_ONLY_SUFFIXES = tuple(
     "privacy_PrivacyNativeBridge_" + method
     for method in EXPECTED_METHODS["privacy_PrivacyNativeBridge"]
 )
-EXPECTED_PAIR_SUFFIXES = tuple(
+EXPECTED_COMMON_SUFFIXES = tuple(
     suffix for suffix in EXPECTED_SUFFIXES if suffix not in EXPECTED_SDK_ONLY_SUFFIXES
 )
 CONFIDENTIAL_PRIVACY_METHODS = (
@@ -106,17 +109,19 @@ def audit_confidential_source(source: str) -> None:
 
 
 class AuditError(ValueError):
-    """Raised when the paired JNI source contract is no longer exact."""
+    """Raised when the current Kotlin JNI source contract is no longer exact."""
 
 
 @dataclass(frozen=True)
 class AuditResult:
-    """Summary of the authenticated paired-wrapper inventory."""
+    """Summary of the exact current Kotlin source inventory."""
 
-    pair_count: int
-    sdk_only_count: int
+    sdk_count: int
+    privacy_count: int
     abi_digest: str
     attribute_digest: str
+    governance_count: int
+    governance_digest: str
 
 
 def _skip_quoted(source: str, index: int) -> int | None:
@@ -225,148 +230,67 @@ def _attribute_text(fragment: str, platform: str) -> str:
     return "".join(attributes)
 
 
-def _macro_invocation(source: str) -> tuple[str, int, int]:
-    """Return the paired macro body and its source boundaries."""
-
-    definition_start = source.find(f"macro_rules! {MACRO_NAME}")
-    invocation_start = source.find(f"{MACRO_NAME}! {{")
-    if definition_start != 0 or invocation_start < 0:
-        raise AuditError("paired JNI macro definition and invocation must lead part_3.rs")
-    macro_definition = source[definition_start:invocation_start]
-    macro_digest = hashlib.sha256(" ".join(macro_definition.split()).encode()).hexdigest()
-    if macro_digest != EXPECTED_MACRO_DIGEST:
-        raise AuditError(
-            "paired JNI macro expansion contract changed: "
-            f"expected {EXPECTED_MACRO_DIGEST}, found {macro_digest}"
-        )
-    opening = source.index("{", invocation_start)
-    closing = _matching_brace(source, opening)
-    return source[opening + 1 : closing], opening + 1, closing
+def _sdk_inventory(source: str) -> tuple[list[str], list[str], list[str]]:
+    """Read the direct Kotlin declarations without expanding a legacy macro."""
+    if ANDROID_PREFIX in source:
+        raise AuditError("retired Android JNI owner is present")
+    if "jni_sdk_android_pairs" in source or "android:" in source or "sdk:" in source:
+        raise AuditError("retired paired JNI macro is present")
+    if source.count(SDK_ONLY_MARKER) != 1:
+        raise AuditError("canonical SDK-only privacy inventory changed")
+    cursor = 0
+    observed = []
+    abi_records = []
+    attributes = []
+    for suffix in (*EXPECTED_COMMON_SUFFIXES, *EXPECTED_SDK_ONLY_SUFFIXES):
+        if suffix == EXPECTED_SDK_ONLY_SUFFIXES[0]:
+            marker = source.find(SDK_ONLY_MARKER, cursor)
+            if marker < 0 or source[cursor:marker].strip():
+                raise AuditError("canonical SDK-only privacy boundary changed")
+            cursor = marker + len(SDK_ONLY_MARKER)
+        item = source.find('pub unsafe extern "system" fn ', cursor)
+        if item < 0:
+            raise AuditError("canonical Kotlin JNI inventory changed")
+        preamble = _attribute_text(source[cursor:item], "SDK")
+        if preamble.count("#[unsafe(no_mangle)]\n") != 1:
+            raise AuditError("SDK wrapper must retain exactly one unsafe no_mangle attribute")
+        match = re.match(r'pub unsafe extern "system" fn (Java_org_hyperledger_iroha_sdk_[A-Za-z0-9_]+)\(', source[item:])
+        expected = SDK_PREFIX + suffix
+        if match is None or match.group(1) != expected or source.count(expected + "(") != 1:
+            raise AuditError("canonical Kotlin JNI inventory changed")
+        opening = source.find("{", item + match.end())
+        closing = _matching_brace(source, opening)
+        function = source[item:closing + 1]
+        observed.append(suffix)
+        abi_records.append(suffix + "\0" + function.replace(expected, "__JNI_EXPORT__", 1))
+        attributes.append(suffix + "\0" + preamble)
+        cursor = closing + 1
+    governance_source = source[cursor:].strip()
+    governance_names = re.findall(
+        r'pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_([A-Za-z0-9_]+)\(',
+        governance_source,
+    )
+    governance_digest = hashlib.sha256(governance_source.encode()).hexdigest()
+    if (tuple(governance_names) != EXPECTED_GOVERNANCE_METHODS
+            or governance_digest != EXPECTED_GOVERNANCE_SOURCE_DIGEST):
+        raise AuditError("unexpected source after the canonical Kotlin JNI inventory: "
+                         "governance helper/signature/body contract changed")
+    return observed, abi_records, attributes
 
 
 def audit_source(source: str) -> AuditResult:
-    """Validate the exact paired export, signature, body, and attribute inventory."""
-
-    body, _body_start, _body_end = _macro_invocation(source)
-    cursor = 0
-    observed_suffixes = []
-    abi_records = []
-    attribute_records = []
-    while True:
-        cursor += len(body[cursor:]) - len(body[cursor:].lstrip())
-        if cursor == len(body):
-            break
-        if not body.startswith("android:", cursor):
-            raise AuditError(f"unexpected token before paired wrapper {len(observed_suffixes) + 1}")
-        android_preamble_start = cursor + len("android:")
-        android_match = re.search(
-            rf"fn ({re.escape(ANDROID_PREFIX)}[A-Za-z0-9_]+)\(\);",
-            body[android_preamble_start:],
-        )
-        if android_match is None:
-            raise AuditError("paired wrapper is missing its full Android export identifier")
-        android_start = android_preamble_start + android_match.start()
-        android_end = android_preamble_start + android_match.end()
-        android_name = android_match.group(1)
-        android_attributes = _attribute_text(
-            body[android_preamble_start:android_start], "Android"
-        )
-        if "#[unsafe(no_mangle)]" in android_attributes:
-            raise AuditError("Android no_mangle must be supplied exactly once by the pair macro")
-
-        sdk_label = re.match(r"\s*sdk:", body[android_end:])
-        if sdk_label is None:
-            raise AuditError(f"{android_name} is not followed by its SDK wrapper")
-        sdk_preamble_start = android_end + sdk_label.end()
-        sdk_item = body.find('pub unsafe extern "system" fn ', sdk_preamble_start)
-        if sdk_item < 0:
-            raise AuditError(f"{android_name} has no unsafe system SDK function item")
-        sdk_attributes = _attribute_text(body[sdk_preamble_start:sdk_item], "SDK")
-        if sdk_attributes.count("#[unsafe(no_mangle)]\n") != 1:
-            raise AuditError("SDK wrapper must retain exactly one unsafe no_mangle attribute")
-        sdk_match = re.match(
-            rf'pub unsafe extern "system" fn ({re.escape(SDK_PREFIX)}[A-Za-z0-9_]+)\(',
-            body[sdk_item:],
-        )
-        if sdk_match is None:
-            raise AuditError(f"{android_name} has a malformed SDK function declaration")
-        sdk_name = sdk_match.group(1)
-        body_open = body.find("{", sdk_item + sdk_match.end())
-        if body_open < 0:
-            raise AuditError(f"{sdk_name} has no function body")
-        body_close = _matching_brace(body, body_open)
-        function_item = body[sdk_item : body_close + 1]
-
-        sdk_suffix = sdk_name.removeprefix(SDK_PREFIX)
-        android_suffix = android_name.removeprefix(ANDROID_PREFIX)
-        if sdk_suffix != android_suffix:
-            raise AuditError(
-                f"paired export suffix mismatch: SDK {sdk_suffix}, Android {android_suffix}"
-            )
-        observed_suffixes.append(sdk_suffix)
-        abi_records.append(
-            sdk_suffix + "\0" + function_item.replace(sdk_name, "__JNI_EXPORT__", 1)
-        )
-        attribute_records.append(
-            sdk_suffix
-            + "\0"
-            + sdk_attributes
-            + "\0"
-            + android_attributes
-            + "#[unsafe(no_mangle)]\n"
-        )
-        cursor = body_close + 1
-
-    if tuple(observed_suffixes) != EXPECTED_PAIR_SUFFIXES:
-        raise AuditError(
-            "paired JNI export inventory changed: expected "
-            f"{len(EXPECTED_PAIR_SUFFIXES)} ordered pairs, found {len(observed_suffixes)}"
-        )
-    for suffix in EXPECTED_PAIR_SUFFIXES:
-        sdk_name = SDK_PREFIX + suffix
-        android_name = ANDROID_PREFIX + suffix
-        if source.count(sdk_name) != 1 or source.count(android_name) != 1:
-            raise AuditError(f"paired JNI export must occur exactly once: {suffix}")
-        direct_android = f'pub unsafe extern "system" fn {android_name}('
-        if direct_android in source:
-            raise AuditError(f"Android wrapper escaped the exact pair macro: {android_name}")
-    if source.count(SDK_ONLY_MARKER) != 1:
-        raise AuditError("canonical SDK-only privacy inventory changed")
-    if ANDROID_PREFIX + "privacy_PrivacyNativeBridge_" in source:
-        raise AuditError("retired Android privacy JNI owner is present")
-    cursor = source.index(SDK_ONLY_MARKER) + len(SDK_ONLY_MARKER)
-    for suffix in EXPECTED_SDK_ONLY_SUFFIXES:
-        sdk_item = source.find('pub unsafe extern "system" fn ', cursor)
-        if sdk_item < 0:
-            raise AuditError("canonical SDK-only privacy inventory changed")
-        sdk_attributes = _attribute_text(source[cursor:sdk_item], "SDK")
-        if sdk_attributes.count("#[unsafe(no_mangle)]\n") != 1:
-            raise AuditError("SDK privacy wrapper must retain exactly one unsafe no_mangle attribute")
-        sdk_name = SDK_PREFIX + suffix
-        declaration = 'pub unsafe extern "system" fn ' + sdk_name + '('
-        if not source.startswith(declaration, sdk_item) or source.count(sdk_name) != 1:
-            raise AuditError("canonical SDK-only privacy inventory changed")
-        body_open = source.find("{", sdk_item + len(declaration))
-        body_close = _matching_brace(source, body_open)
-        function_item = source[sdk_item:body_close + 1]
-        abi_records.append(suffix + "\0" + function_item.replace(sdk_name, "__JNI_EXPORT__", 1))
-        attribute_records.append(suffix + "\0" + sdk_attributes)
-        cursor = body_close + 1
+    """Require exact current ownership with unchanged Kotlin signatures and bodies."""
+    observed, abi_records, attributes = _sdk_inventory(source)
     abi_digest = hashlib.sha256("\0\0".join(sorted(abi_records)).encode()).hexdigest()
     if abi_digest != EXPECTED_ABI_DIGEST:
-        raise AuditError(
-            "paired JNI signature/body contract changed: "
-            f"expected {EXPECTED_ABI_DIGEST}, found {abi_digest}"
-        )
-    attribute_digest = hashlib.sha256(
-        "\0\0".join(sorted(attribute_records)).encode()
-    ).hexdigest()
+        raise AuditError("Kotlin JNI signature/body contract changed: "
+                         f"expected {EXPECTED_ABI_DIGEST}, found {abi_digest}")
+    attribute_digest = hashlib.sha256("\0\0".join(sorted(attributes)).encode()).hexdigest()
     if attribute_digest != EXPECTED_ATTRIBUTE_DIGEST:
-        raise AuditError(
-            "paired JNI documentation/attribute contract changed: "
-            f"expected {EXPECTED_ATTRIBUTE_DIGEST}, found {attribute_digest}"
-        )
-    return AuditResult(len(observed_suffixes), len(EXPECTED_SDK_ONLY_SUFFIXES), abi_digest, attribute_digest)
+        raise AuditError("Kotlin JNI documentation/attribute contract changed: "
+                         f"expected {EXPECTED_ATTRIBUTE_DIGEST}, found {attribute_digest}")
+    return AuditResult(len(observed), len(EXPECTED_SDK_ONLY_SUFFIXES), abi_digest,
+                       attribute_digest, len(EXPECTED_GOVERNANCE_METHODS), EXPECTED_GOVERNANCE_SOURCE_DIGEST)
 
 
 def main() -> int:
@@ -381,11 +305,11 @@ def main() -> int:
             raise AuditError("confidential JNI source is unavailable")
         audit_confidential_source(confidential_source.read_text(encoding="utf-8"))
     except (AuditError, OSError, UnicodeError) as error:
-        print(f"JNI SDK/Android pair guard failed: {error}", file=sys.stderr)
+        print(f"Kotlin JNI source guard failed: {error}", file=sys.stderr)
         return 1
     print(
-        "JNI SDK/Android pair guard passed: "
-        f"pairs={result.pair_count} privacy_sdk_only={result.sdk_only_count} abi_sha256={result.abi_digest} "
+        "Kotlin JNI source guard passed: "
+        f"sdk={result.sdk_count} governance={result.governance_count} privacy={result.privacy_count} abi_sha256={result.abi_digest} "
         f"attributes_sha256={result.attribute_digest}"
     )
     return 0

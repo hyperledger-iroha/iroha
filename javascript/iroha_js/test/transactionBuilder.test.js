@@ -2181,9 +2181,9 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xaa) },
+        artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xab) },
         manifest: {
-          codeHash: Buffer.alloc(32, 0xaa),
+          codeHash: Buffer.alloc(32, 0xab),
           compilerFingerprint: "rustc",
         },
         privateKey: PRIVATE_KEY,
@@ -2195,6 +2195,7 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
   const parsed = JSON.parse(captures[0].instructions[0]);
   assert.equal(parsed.RegisterSmartContractCode.artifact_id.dataspace_id, "18446744073709551615");
   assert.equal(Object.hasOwn(parsed.RegisterSmartContractCode, "code_hash"), false);
+  assert.equal(parsed.RegisterSmartContractCode.artifact_id.code_hash, parsed.RegisterSmartContractCode.manifest.code_hash);
   assert.equal(
     parsed.RegisterSmartContractCode.manifest.compiler_fingerprint,
     "rustc",
@@ -2272,7 +2273,7 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xaa) },
+        artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xab) },
         reason: "cleanup",
         privateKey: PRIVATE_KEY,
       });

@@ -86,11 +86,16 @@ require the explicitly approved OVH target.
 ## Build and release qualification
 
 Default daemon/CLI binaries have scoped compilation coverage after compiler and
-runtime-owner extraction. Merged Core/test qualification, executable freshness,
-timing and full workspace execution remain incomplete. Dependency ownership and
-measured compiler memory are the active gates; code line-count gates are retired.
-See the [architecture plan](specs/first_release_architecture_redesign.md) and
-[compile-bloat goals](specs/compile_bloat_optimization_goals.md).
+runtime-owner extraction. Historical epoch10 Core/Kagami, CLI and network builds
+pass, along with 1,144 default Core controls and two four-validator component
+checks. The workspace all-targets check fails on six fixture/API errors. Apple
+ABI-25 packaging passes; Swift host fixtures and physical-device qualification
+remain open. A subsequent merge changes compiled inputs, invalidating remaining
+in-flight Core, IVM and FASTPQ qualification. Reconciled repairs need normal builds
+and tests on the completed source. Full workspace and same-candidate release
+validation remain incomplete. Dependency ownership and measured compiler memory
+remain gates; see the [architecture plan](specs/first_release_architecture_redesign.md)
+and [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
 Memory qualification retains a 25% model-baseline reduction, measured limits for
 introduced units and a 13-GiB per-unit release ceiling. Core/Torii test and daemon
@@ -111,10 +116,15 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** complete FASTPQ/X509 relations and bounded work, ZK-ACE/qROM
-  and terminal-degree qualification, BFV/MKHE/Figure 9 design, independent review
-  and actual CPU/Metal/CUDA conformance. Unsupported paths stay fail closed under
-  the [ZK goals](specs/zk_first_release_goals.md).
+- **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
+  pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
+  300 seconds. Public terminal claims also require a zero-knowledge repair.
+  Prepared transform and selective auxiliary replay changes need native parity
+  and a new complete proof. Historical q77 controls pass; the maximum ordinary
+  producer crosses source changes and cannot qualify the merge. RAM-LFE secure
+  encryption/full execution, IVM execution/finalized-State binding, protocol and
+  side-channel review, hardware/network evidence and final signing remain open
+  under the [ZK goals](specs/zk_first_release_goals.md).
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

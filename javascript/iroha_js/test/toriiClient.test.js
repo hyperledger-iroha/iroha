@@ -21650,7 +21650,7 @@ test("bounded readers cancel when custom header methods throw", async () => {
 test("bounded code-byte responses cancel after UTF-8 and JSON rejection", async () => {
   for (const [bytes, expected] of [
     [Uint8Array.of(0xc3, 0x28), /must be valid UTF-8/],
-    [new TextEncoder().encode("{"), /contains invalid JSON at character 1: expected a string/],
+    [new TextEncoder().encode("{"), /contract code bytes response contains invalid JSON at character 1: expected a string/],
   ]) {
     let bodyCancelCalls = 0;
     let reads = 0;

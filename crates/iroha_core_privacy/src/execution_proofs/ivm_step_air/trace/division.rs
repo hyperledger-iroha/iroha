@@ -38,7 +38,7 @@ const BOOLEAN_RANGES: [(usize, usize); 5] =
     [(108, 112), (148, 154), (190, 203), (204, 205), (206, 208)];
 
 pub(super) fn signed_kind(kind: usize) -> bool {
-    kind == 0 || kind == 2
+    kind == 0 || kind == 2 || kind == 4
 }
 
 fn fill_word(bank: &mut [F], offset: usize, value: u64) {
@@ -73,7 +73,8 @@ pub(super) fn witness(left: u64, right: u64, gas: u64, kind: usize) -> Witness {
     };
     let overflow = left == i64::MIN as u64 && right == u64::MAX;
     let arithmetic_error = right == 0 || signed && overflow;
-    let trap = gas < 10 || arithmetic_error;
+    let debit = if kind == 4 { 12 } else { 10 };
+    let trap = gas < debit || arithmetic_error;
     let (quotient, remainder) = if trap {
         (0, 0)
     } else {
@@ -101,7 +102,7 @@ pub(super) fn witness(left: u64, right: u64, gas: u64, kind: usize) -> Witness {
     }
     bank[QUOTIENT_NEGATIVE] = F(u64::from(quotient_negative));
     bank[REMAINDER_NEGATIVE] = F(u64::from(a_negative));
-    let gas_difference = multiply::correction_witness(gas, 10);
+    let gas_difference = multiply::correction_witness(gas, debit);
     bank[GAS_DIFFERENCE..GAS_DIFFERENCE + 36].copy_from_slice(&gas_difference[..36]);
     bank[GAS_BORROWS..GAS_BORROWS + 4].copy_from_slice(&gas_difference[36..]);
     let digits = multiply::product_digits(magnitude_b, quotient);
@@ -156,6 +157,7 @@ pub(super) fn witness(left: u64, right: u64, gas: u64, kind: usize) -> Witness {
 pub(super) struct Selection {
     pub(super) active: F,
     pub(super) signed: F,
+    pub(super) ceiling: F,
     pub(super) out_of_gas: F,
     pub(super) assertion_failed: F,
 }
@@ -173,6 +175,7 @@ pub(super) fn append_residues(
     let Selection {
         active,
         signed,
+        ceiling,
         out_of_gas,
         assertion_failed,
     } = selection;
@@ -243,7 +246,11 @@ pub(super) fn append_residues(
         } else {
             bank[GAS_BORROWS + limb - 1]
         };
-        let debit = if limb == 0 { F(10) } else { F::ZERO };
+        let debit = if limb == 0 {
+            F(10).add(F(2).mul(ceiling))
+        } else {
+            F::ZERO
+        };
         out.push(
             active.mul(
                 word::pack(&gas_digits[8 * limb..8 * (limb + 1)], 2)
@@ -336,7 +343,7 @@ pub(super) fn append_residues(
 }
 
 pub(super) fn result_half(bank: &[F], kind: usize, half: usize) -> F {
-    let offset = if kind < 2 {
+    let offset = if kind < 2 || kind == 4 {
         QUOTIENT_RESULT
     } else {
         REMAINDER_RESULT

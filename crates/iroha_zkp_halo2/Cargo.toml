@@ -68,3 +68,8 @@ required-features = ["full"]
 name = "ipa_minimum_dimension"
 path = "tests/ipa_minimum_dimension.rs"
 required-features = ["full"]
+
+[[bench]]
+name = "vega_secret_msm_timing"
+harness = false
+required-features = ["bench"]

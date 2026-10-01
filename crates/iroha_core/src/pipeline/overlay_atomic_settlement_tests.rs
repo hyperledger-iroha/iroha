@@ -1,11 +1,7 @@
 //! Actual TxOverlay admission, executor authorization and execution of atomic settlements.
 
 use super::*;
-use crate::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    state::{State, StateBlock, World},
-};
+use crate::state::{State, StateBlock, StateReadOnly, World};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
@@ -37,7 +33,10 @@ fn owner(index: u16) -> AccountId {
 }
 
 /// Freeze a finite component corpus bound through the same governed source policy.
-fn set_source_delta_limit(world: &World, max_deltas: u32) {
+fn set_source_delta_limit(
+    world: &World,
+    max_deltas: u32,
+) -> iroha_data_model::parameter::FastpqSourcePolicyV1 {
     use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
 
     let mut parameters = world.parameters.block();
@@ -69,9 +68,35 @@ fn set_source_delta_limit(world: &World, max_deltas: u32) {
         .get_mut()
         .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
     parameters.commit();
+    profile
 }
 
-fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, AccountId) {
+fn fixture(
+    count: usize,
+    final_scope_mismatch: bool,
+) -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    SettleAtomic,
+    AccountId,
+) {
+    fixture_with_source_delta_limit(
+        count,
+        final_scope_mismatch,
+        u32::try_from(count)
+            .expect("bounded movement count")
+            .max(16),
+    )
+}
+
+fn fixture_with_source_delta_limit(
+    count: usize,
+    final_scope_mismatch: bool,
+    max_deltas: u32,
+) -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    SettleAtomic,
+    AccountId,
+) {
     let sponsor = owner(u16::MAX);
     let domain_id = DomainId::try_new("atomic_overlay", "universal").expect("domain");
     let definition =
@@ -128,34 +153,41 @@ fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, Ac
         assets,
         [],
     );
-    {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ));
-        parameters.commit();
-    }
     // The 255-movement corpus exceeds bootstrap's sixteen transfer deltas.
     // Reserve its deltas and complete framing before StateBlock freezes its source owner.
-    set_source_delta_limit(
-        &world,
-        u32::try_from(count)
-            .expect("bounded movement count")
-            .max(16),
-    );
-    let state = State::new(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
+    let source_policy = set_source_delta_limit(&world, max_deltas);
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    // Genesis installs its signed parameter snapshot. Carry this finite corpus
+    // policy in that snapshot so bootstrap defaults cannot replace its owner.
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Block(
+            iroha_data_model::parameter::BlockParameter::FastpqSource(source_policy),
+        ));
+    let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("signed atomic settlement corpus policy");
     let instruction = SettleAtomic::new(
-        state.network_id.clone(),
+        chain.network_id(),
         "overlay_atomic_business".parse().expect("id"),
         AtomicSettlementMovements::try_from(movements).expect("canonical full vector"),
         nonzero!(100_u64),
         Metadata::default(),
     );
-    (state, instruction, sponsor)
+    (chain, instruction, sponsor)
+}
+
+fn next_block(state: &State) -> StateBlock<'_> {
+    assert!(
+        crate::sumeragi::lanes::routing::committed_root_scope(state.view().world()).is_some(),
+        "settlement permission cases require the actual signed genesis root",
+    );
+    state.block(BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ))
 }
 
 fn permission(instruction: &SettleAtomic, source: &AssetId) -> Permission {
@@ -189,6 +221,7 @@ fn grant_consents(
             !crate::executor::is_initial_genesis_context(&grant_tx),
             "actual issuer policy must execute without genesis exceptions"
         );
+
         let permission: Permission = CanExecuteSettlement {
             debited_asset: movement.source.clone(),
             settlement_id: instruction.settlement_id().clone(),
@@ -262,8 +295,9 @@ fn observable(state_tx: &StateTransaction<'_, '_>) -> (Vec<Vec<u8>>, usize) {
 fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
     for direct in [false, true] {
         for count in [3, 255] {
-            let (state, instruction, sponsor) = fixture(count, false);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+            let (chain, instruction, sponsor) = fixture(count, false);
+            let state = chain.state();
+            let mut block = next_block(state);
             grant_consents(&mut block, &instruction, &sponsor, None);
             let mut state_tx =
                 block.transaction_for_fastpq_testing(Hash::new(b"atomic-overlay-carrier"));
@@ -329,8 +363,9 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
 #[test]
 fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
     for direct in [false, true] {
-        let (state, instruction, sponsor) = fixture(255, false);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let (chain, instruction, sponsor) = fixture(255, false);
+        let state = chain.state();
+        let mut block = next_block(state);
         grant_consents(&mut block, &instruction, &sponsor, Some(254));
         let mut state_tx =
             block.transaction_for_fastpq_testing(Hash::new(b"missing-final-consent"));
@@ -353,8 +388,9 @@ fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
 #[test]
 fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution() {
     for direct in [false, true] {
-        let (state, instruction, sponsor) = fixture(255, true);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let (chain, instruction, sponsor) = fixture(255, true);
+        let state = chain.state();
+        let mut block = next_block(state);
         grant_consents(&mut block, &instruction, &sponsor, None);
         let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"final-scope-policy"));
         let before = observable(&state_tx);
@@ -372,9 +408,10 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
 
 #[test]
 fn atomic_overlay_nonowner_cannot_issue_the_final_owner_consent() {
-    let (state, instruction, sponsor) = fixture(3, false);
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-    let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"nonowner-consent"));
+    let (chain, instruction, sponsor) = fixture(3, false);
+    let state = chain.state();
+    let mut block = next_block(state);
+    let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"nonowner-final-consent"));
     assert!(!crate::executor::is_initial_genesis_context(&state_tx));
     let source = &instruction.movements().as_slice()[2].source;
     let grant = TxOverlay::from_instructions(vec![
@@ -392,9 +429,9 @@ fn atomic_overlay_nonowner_cannot_issue_the_final_owner_consent() {
 #[test]
 fn atomic_overlay_intrinsic_capacity_rejects_without_partial_execution() {
     for direct in [false, true] {
-        let (state, instruction, sponsor) = fixture(255, false);
-        set_source_delta_limit(&state.world, 254);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let (chain, instruction, sponsor) = fixture_with_source_delta_limit(255, false, 254);
+        let state = chain.state();
+        let mut block = next_block(state);
         grant_consents(&mut block, &instruction, &sponsor, None);
         let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-delta-limit"));
         let before = observable(&state_tx);

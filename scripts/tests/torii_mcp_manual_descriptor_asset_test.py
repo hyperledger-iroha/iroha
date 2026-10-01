@@ -13,8 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 146_844
-EXPECTED_ASSET_SHA256 = "cd3b270475903372c4c44f8df24eb7edc7becc7fd97e6d136285866241c910a6"
+# Manual asset formatting owner: one-space JSON indentation, enforced below.
+EXPECTED_ASSET_LENGTH = 109_610
+EXPECTED_ASSET_SHA256 = "dd5712b9432008b1c55ae38eb96ffd8ea833a65d9c58b70cce8263269c38c90e"
 EXPECTED_SEMANTIC_SHA256 = "f546351a80bd7d7d3ed4d0437068b9ca4845fde56b12cbfe909b4e1f7c9a748d"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
@@ -23,7 +24,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "86a2209e7adee5e4e150b00c852d4ebcafc0a056d870783d5c2ddc061babc438"
+    "f3a0a64f1e46c5a5368b0f59a7f6218f858134eceb9af27021bfbd24b9e4eb30"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -427,6 +428,20 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
     def test_current_asset_and_source_match_the_historical_inventory(self) -> None:
         validate(self.source, self.asset)
 
+    def test_asset_format_and_runtime_byte_limit_are_preserved(self) -> None:
+        # This asset is edited directly; there is no separate generator. Keep
+        # regeneration deterministic without growing the production byte cap.
+        canonical = (
+            json.dumps(json.loads(self.asset, object_pairs_hook=_strict_object), ensure_ascii=False, indent=1)
+            + "\n"
+        ).encode()
+        self.assertEqual(self.asset, canonical)
+        self.assertRegex(
+            self.source,
+            r"const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 \* 1024;",
+        )
+        self.assertLessEqual(len(self.asset), 128 * 1024)
+
     def test_prepared_account_schemas_are_closed_and_fully_typed(self) -> None:
         asset = json.loads(self.asset)
         descriptors = {
@@ -547,6 +562,35 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 )
             self.assertIn("Optional canonical target authentication", descriptors[name]["description"])
 
+    def test_contract_artifacts_require_exact_dataspace_and_hash(self) -> None:
+        descriptors = {record["name"]: record for record in _parse_asset(self.asset)["descriptors"]}
+        for name, suffix in (("iroha.contracts.code.get", ""), ("iroha.contracts.code.bytes.get", "/bytes")):
+            with self.subTest(name=name):
+                record = descriptors[name]
+                self.assertEqual(record["method"], "GET")
+                self.assertEqual(record["effect"], "read")
+                self.assertEqual(record["path_template"], "/v1/contracts/artifacts/{dataspace_id}/{code_hash}" + suffix)
+                schema = record["input_schema"]
+                self.assertEqual(schema["required"], ["path"])
+                self.assertIs(schema["additionalProperties"], False)
+                path = schema["properties"]["path"]
+                self.assertEqual(path["required"], ["dataspace_id", "code_hash"])
+                self.assertIs(path["additionalProperties"], False)
+                self.assertEqual(path["properties"], {
+                    "dataspace_id": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$"},
+                    "code_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                })
+        for old, new in (
+            (b'/v1/contracts/artifacts/{dataspace_id}/{code_hash}', b'/v1/contracts/code/{code_hash}'),
+            (b'"dataspace_id",', b''),
+            (b'^(0|[1-9][0-9]{0,19})$', b'^[0-9]+$'),
+            (b'^[0-9a-f]{64}$', b'^[0-9a-fA-F]{64}$'),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, self.asset)
+                with self.assertRaises(GuardError):
+                    validate(self.source, self.asset.replace(old, new, 1))
+
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (
             (
@@ -585,6 +629,7 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
         )
         for mutated in mutations:
             with self.subTest(digest=hashlib.sha256(mutated).hexdigest()):
+                self.assertNotEqual(mutated, self.asset)
                 with self.assertRaises(GuardError):
                     validate(self.source, mutated)
 

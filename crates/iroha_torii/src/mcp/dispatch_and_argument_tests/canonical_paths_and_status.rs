@@ -471,16 +471,37 @@ fn applied_wait_result_has_one_exact_v1_key_set() {
 }
 #[test]
 fn contract_artifact_route_requires_canonical_scoped_path_fields() {
-    let hash = "11".repeat(32);
-    let args = norito::json!({
-        "path": { "dataspace_id": "18446744073709551615", "code_hash": (hash.clone()) }
-    });
-    let route = contract_artifact_route(args.as_object().expect("object"), false)
-        .expect("scoped artifact route");
-    assert_eq!(
-        route,
-        format!("/v1/contracts/artifacts/{}/{hash}", u64::MAX)
-    );
+    let hash = hex::encode(iroha_crypto::Hash::new(b"canonical scoped artifact").as_ref());
+    for dataspace_id in [0, 7, u64::MAX] {
+        let scope = dataspace_id.to_string();
+        let args = norito::json!({
+            "path": { "dataspace_id": (scope.clone()), "code_hash": (hash.clone()) }
+        });
+        let artifact = crate::routing::parse_contract_artifact_path(&scope, &hash)
+            .expect("typed scoped artifact");
+        assert_eq!(artifact.dataspace_id.as_u64(), dataspace_id);
+        assert_eq!(hex::encode(artifact.code_hash.as_ref()), hash);
+        assert_eq!(
+            contract_artifact_route(args.as_object().expect("object"), false).unwrap(),
+            format!("/v1/contracts/artifacts/{scope}/{hash}")
+        );
+        assert_eq!(
+            contract_artifact_route(args.as_object().expect("object"), true).unwrap(),
+            format!("/v1/contracts/artifacts/{scope}/{hash}/bytes")
+        );
+    }
+    for retired in [
+        norito::json!({ "code_hash": (hash.clone()), "dataspace_id": "7" }),
+        norito::json!({ "hash": (hash.clone()), "dataspace_id": "7" }),
+        norito::json!({ "path": { "code_hash": (hash.clone()) } }),
+        norito::json!({ "path": { "dataspace_id": "7" } }),
+        norito::json!({ "path": { "dataspace_id": "7", "hash": (hash.clone()) } }),
+        norito::json!({ "path": { "dataspace_id": "07", "code_hash": (hash.clone()) } }),
+        norito::json!({ "path": { "dataspace_id": "7", "code_hash": "cafebabe" } }),
+    ] {
+        contract_artifact_route(retired.as_object().expect("object"), false)
+            .expect_err("missing scope, retired hash aliases and noncanonical artifact IDs reject");
+    }
 }
 #[test]
 fn extract_contract_address_argument_requires_canonical_path_field() {

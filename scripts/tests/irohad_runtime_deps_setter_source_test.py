@@ -19,7 +19,7 @@ SOURCE_PATH = Path("crates/irohad/src/main/runtime_deps.rs")
 SOURCE = ROOT / SOURCE_PATH
 SETTER_COUNT = 61
 INVENTORY_SHA256 = "a9886e8cb2cb12406772d4d751a5dec9dcd4ff5dcad45f570c1e6259ce4a84d1"
-OUTSIDE_PRODUCTION_SHA256 = "3a6f3c9f3c974d5526e53a5aae214a08284e7f04172e15a786a9300f1f42d148"
+OUTSIDE_PRODUCTION_SHA256 = "4e4e8b603dfe2562ab97e470ff64ffd48d3740c863fabc2ff3ab5363b7a758ab"
 MACRO = """macro_rules! define_runtime_dep_setters_v1 {
     (
         $(

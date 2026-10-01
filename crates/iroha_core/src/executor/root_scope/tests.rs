@@ -13,7 +13,7 @@ use iroha_data_model::{
     NetworkId, Registrable,
     account::Account,
     block::BlockHeader,
-    isi::{RegisterPeerWithPop, SetParameter},
+    isi::{CustomInstruction, RegisterPeerWithPop, SetParameter},
     nexus::{DataSpaceCatalog, DataSpaceMetadata},
     smart_contract::ContractAddress,
     transaction::{Executable, IvmBytecode, IvmProved},
@@ -106,16 +106,20 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
     };
     let instruction = InstructionBox::from(MultisigInstructionBox::Propose(propose));
     assert!(ensure_instruction_scope(&instruction, &tx).is_err());
+    let no_scope: InstructionBox =
+        CustomInstruction::new("unreviewed private-root operation").into();
     let peer_key =
         iroha_crypto::KeyPair::from_seed(vec![71; 32], iroha_crypto::Algorithm::BlsNormal);
-    let no_scope: InstructionBox = RegisterPeerWithPop::new(
+    let register_peer: InstructionBox = RegisterPeerWithPop::new(
         iroha_model_base::peer::PeerId::new(peer_key.public_key().clone()),
         iroha_crypto::bls_normal_pop_prove(peer_key.private_key()).expect("fixture PoP"),
     )
     .into();
-    assert!(
-        matches!(ensure_instruction_scope(&no_scope, &tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
-    );
+    for unreviewed in [no_scope, register_peer] {
+        assert!(
+            matches!(ensure_instruction_scope(&unreviewed, &tx), Err(ValidationFail::NotPermitted(reason)) if reason.contains("reviewed private-root scope owner"))
+        );
+    }
 }
 
 #[test]

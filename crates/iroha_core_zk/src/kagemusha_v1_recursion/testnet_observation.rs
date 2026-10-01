@@ -1736,6 +1736,14 @@ mod tests {
         let (trial, public) = trial_fixture();
         let scope = trial.scope();
         let state = &public.successor;
+        let experimental_purpose = || {
+            KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: scope.asset_identity_digest(),
+                asset_incarnation: scope.asset_incarnation(),
+                asset_scale: scope.asset_scale(),
+                liability_pool_id: scope.liability_pool_id(),
+            })
+        };
         assert_eq!(
             scope.check_release_bindings(
                 scope.network_id(),
@@ -1783,9 +1791,9 @@ mod tests {
             KagemushaReleasePurposeV1::Production,
             KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
                 asset_identity_digest: [0xA5; 32],
-                asset_incarnation: INCARNATION,
-                asset_scale: SCALE,
-                liability_pool_id: POOL,
+                asset_incarnation: scope.asset_incarnation(),
+                asset_scale: scope.asset_scale(),
+                liability_pool_id: scope.liability_pool_id(),
             }),
         ] {
             assert_eq!(

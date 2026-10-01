@@ -1198,13 +1198,13 @@ HARNESS_TARGETS = {
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad_lib", "--lib"]),
     "config-fixtures": ("native configuration loading fixtures", "iroha_config_integration", "test", ["-p", "iroha_config", "--test", "iroha_config_integration"]),
     "genesis": ("native signed genesis contracts", "iroha_genesis", "lib", ["-p", "iroha_genesis", "--lib"]),
+    "deploy": ("native generated genesis and localnet contracts", "iroha_deploy", "lib", ["-p", "iroha_deploy", "--lib"]),
     "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "data-model": ("native canonical catalog parameters", "iroha_data_model", "lib", ["-p", "iroha_data_model", "--lib"]),
     "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
     "cli": ("native CLI", "iroha_cli", "lib", ["-p", "iroha_cli_lib", "--lib"]),
     "cli-bin": ("native shipping CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
     "kagami": ("native Kagami", "kagami", "bin", ["-p", "iroha_kagami", "--bin", "kagami"]),
-    "deploy": ("native deployment engine", "iroha_deploy", "lib", ["-p", "iroha_deploy", "--lib"]),
     "sorafs-bin": ("native SoraFS shipping target", "sorafs-node", "bin", ["-p", "sorafs_node", "--bin", "sorafs-node"]),
     "taira-launcher": ("native Taira shipping launcher", "iroha3d_taira", "bin", ["-p", "irohad", "--bin", "iroha3d_taira"]),
     "crypto": ("native puzzle cryptography", "iroha_crypto", "lib", ["-p", "iroha_crypto", "--lib"]),
@@ -1225,7 +1225,7 @@ HARNESS_TARGETS = {
 }
 
 
-DEPLOY_STAGES = (("native Taira genesis and independent localnet profiles", (
+DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", (
     "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",

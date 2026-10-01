@@ -1326,7 +1326,7 @@ test("contract manifest codec roundtrips every V1 descriptor field", () => {
     ],
     states: [{ name: "Balances", type_name: "StateMap<AccountId, quantity>" }],
     error_types: [{ identity: "LedgerError", variants: [{ name: "Denied", code: 7 }] }],
-    error_messages: null,
+    error_messages: [{ error_type: "LedgerError", code: 7, message: "拒否" }],
     kotoba: [
       {
         msg_id: "ledger.denied",

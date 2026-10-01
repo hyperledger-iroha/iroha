@@ -296,7 +296,7 @@ class KagemushaKeyMintOneUseAttestationVerifierV1(
         ) {
             throw AttestationVerificationException("Attestation and key must share one hardware security level")
         }
-        val description = parseDescriptionV1(verified.leafCertificate.getExtensionValue(KEYMINT_ATTESTATION_OID_V1))
+        val description = parseDescriptionV1(verified.attestationCertificate.getExtensionValue(KEYMINT_ATTESTATION_OID_V1))
         // Hardware-enforced limited-use keys are a KeyMint feature. Keymaster-era
         // layouts must not acquire the V1 one-use guarantee merely by carrying
         // a syntactically valid tag 405 in a signed extension.

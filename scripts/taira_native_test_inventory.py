@@ -133,6 +133,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'native_active_session_from_a_foreign_real_committee_refuses_before_signing',
         'readiness_reprobes_same_applied_cut_without_signing_and_excludes_stale_generation',
         'readiness_no_demand_does_not_require_a_beacon_session',
+        'control_retries_use_original_tip_without_decoding_history_again',
+        'control_requires_original_tip_and_matching_published_hash_journal',
     )),
     ('native executed beacon controls', 'sumeragi/epoch_beacon/producer/tests.rs', 'sumeragi/epoch_beacon/producer/execution_tests.rs', 'execution_tests', 'sumeragi::epoch_beacon::producer::tests::execution_tests', (
         'transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_result',

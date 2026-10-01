@@ -28,6 +28,16 @@ const BLOCK_MERKLE_MAX_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
 /// This is a public protocol resource bound: Torii refuses to emit a larger
 /// carrier and native SDK verifiers refuse to allocate or decode one.
 pub const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: usize = 32 * 1024 * 1024;
+/// Exact authority digest committed in a native FASTPQ transfer transcript.
+/// This pure preimage calculation grants no execution or signer authority.
+#[must_use]
+pub fn fastpq_authority_digest_v1(authority: &crate::account::AccountId) -> Hash {
+    const DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
+    let mut payload = Vec::with_capacity(DOMAIN.len() + 96);
+    payload.extend_from_slice(DOMAIN);
+    payload.extend_from_slice(&authority.encode());
+    Hash::new(payload)
+}
 /// Merkle inclusion proof for a transaction entrypoint under an authenticated
 /// root-and-count commitment.
 #[derive(

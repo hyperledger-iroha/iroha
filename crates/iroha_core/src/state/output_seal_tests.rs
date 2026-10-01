@@ -84,8 +84,6 @@ fn seal_fixture() -> (Box<State>, SignedBlock) {
             .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(policy)));
         parameters.commit();
     }
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
-    let mut tx = setup.transaction();
     let write = |key: &str| {
         vec![InstructionBox::from(SetKeyValue::account(
             ALICE_ID.clone(),
@@ -93,40 +91,47 @@ fn seal_fixture() -> (Box<State>, SignedBlock) {
             Json::new(1),
         ))]
     };
-    for trigger in [
-        Trigger::new(
-            "seal_pipeline".parse().unwrap(),
-            Action::new(
-                write("pipeline"),
-                Repeats::Exactly(1),
-                ALICE_ID.clone(),
-                BlockEventFilter::new().for_status(BlockStatus::Approved),
-            )
-            .unwrap(),
-        ),
-        Trigger::new(
-            "seal_time".parse().unwrap(),
-            Action::new(
-                write("time"),
-                Repeats::Exactly(1),
-                ALICE_ID.clone(),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
-            )
-            .unwrap(),
-        ),
-    ] {
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut tx)
-            .unwrap();
+    {
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        let mut tx = setup.transaction_for_callback_testing();
+        for trigger in [
+            Trigger::new(
+                "seal_pipeline".parse().unwrap(),
+                Action::new(
+                    write("pipeline"),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    BlockEventFilter::new().for_status(BlockStatus::Approved),
+                )
+                .unwrap(),
+            ),
+            Trigger::new(
+                "seal_time".parse().unwrap(),
+                Action::new(
+                    write("time"),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter::new(ExecutionTime::PreCommit),
+                )
+                .unwrap(),
+            ),
+        ] {
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut tx)
+                .unwrap();
+        }
+        tx.apply();
+        setup.commit_world_overlay_for_testing().unwrap();
     }
-    tx.apply();
-    setup.commit_world_overlay_for_testing().unwrap();
-    let source = carrier(vec![input(
+    let source = carrier(
         &state,
-        write("network"),
-        FeePaymentIntent::authority(vec![], None),
-        false,
-    )]);
+        vec![input(
+            &state,
+            write("network"),
+            FeePaymentIntent::authority(vec![], None),
+            false,
+        )],
+    );
     (state, source)
 }
 
@@ -224,12 +229,15 @@ fn foreign_proposal_and_partial_mock_sources_cannot_enter_the_finalizer() {
                 .unwrap();
         } else {
             block.execute_ordinary_output_plan(&source, None).unwrap();
-            source = carrier(vec![input(
+            source = carrier(
                 &state,
-                vec![Log::new(Level::INFO, "foreign".to_owned()).into()],
-                FeePaymentIntent::authority(vec![], None),
-                false,
-            )]);
+                vec![input(
+                    &state,
+                    vec![Log::new(Level::INFO, "foreign".to_owned()).into()],
+                    FeePaymentIntent::authority(vec![], None),
+                    false,
+                )],
+            );
         }
         let result = block.seal_execution_outputs::<String>(&mut source, |_, _, _| {
             panic!("foreign/partial source entered finalizer")

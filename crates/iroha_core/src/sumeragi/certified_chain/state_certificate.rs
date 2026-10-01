@@ -106,7 +106,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let mut target = None;
         let mut latest = None;
         let mut ancestor = None;
-        view.canonical_history().visit_executed_backwards_while(
+        view.canonical_history().visit_executed_backwards_until(
             NonZeroUsize::new(1).expect("genesis height is nonzero"),
             height,
             before_read,
@@ -119,7 +119,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
                         let selected = select(&certified)?;
                         latest = Some(certified);
                         let Some(selected) = selected else {
-                            return Ok(false);
+                            return Ok(core::ops::ControlFlow::Break(()));
                         };
                         if selected.get() <= 1 || selected >= height {
                             return Err(invalid(
@@ -129,13 +129,13 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
                         target_height = selected.get() as u64;
                     } else {
                         ancestor = Some(certified);
-                        return Ok(false);
+                        return Ok(core::ops::ControlFlow::Break(()));
                     }
                 }
                 if receipt.height() == target_height {
                     target = Some(receipt);
                 }
-                Ok(true)
+                Ok(core::ops::ControlFlow::Continue(()))
             },
         )?;
         let latest = latest.ok_or_else(|| invalid("authenticated target is absent"))?;

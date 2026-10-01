@@ -8,7 +8,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     let signature = lowSSignature()
     for operation in UInt8(1)...UInt8(22) {
       XCTAssertNoThrow(
-        try KagemushaAuthenticatedDeviceResponseV1(
+        try testAuthenticatedDeviceResponse(
           operation: operation,
           status: .success,
           canonicalReply: Data([1]),
@@ -17,7 +17,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
       )
     }
     XCTAssertThrowsError(
-      try KagemushaAuthenticatedDeviceResponseV1(
+      try testAuthenticatedDeviceResponse(
         operation: 1,
         status: .success,
         canonicalReply: Data(),
@@ -25,7 +25,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
       )
     )
     XCTAssertThrowsError(
-      try KagemushaAuthenticatedDeviceResponseV1(
+      try testAuthenticatedDeviceResponse(
         operation: 1,
         status: .success,
         canonicalReply: Data([1]),
@@ -34,7 +34,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
     )
     for operation in [UInt8(0), UInt8(23), UInt8.max] {
       XCTAssertThrowsError(
-        try KagemushaAuthenticatedDeviceResponseV1(
+        try testAuthenticatedDeviceResponse(
           operation: operation,
           status: .success,
           canonicalReply: Data([1]),
@@ -46,7 +46,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
 
   func testFailedResponseCannotExposeUnauthenticatedBytes() throws {
     XCTAssertNoThrow(
-      try KagemushaAuthenticatedDeviceResponseV1(
+      try testAuthenticatedDeviceResponse(
         operation: 21,
         status: .missing,
         canonicalReply: Data(),
@@ -54,7 +54,7 @@ final class KagemushaAuthenticatedHardwareProviderV1Tests: XCTestCase {
       )
     )
     XCTAssertThrowsError(
-      try KagemushaAuthenticatedDeviceResponseV1(
+      try testAuthenticatedDeviceResponse(
         operation: 21,
         status: .missing,
         canonicalReply: Data([1]),
@@ -248,18 +248,18 @@ private final class UnavailableAuthenticatedTransport:
 
   func executeAndVerify(
     operation: UInt8,
-    requestID _: Data,
+    requestID: Data,
     canonicalCommand _: Data,
     acceptedDevicePublicKey: Data?
   ) throws -> KagemushaAuthenticatedDeviceResponseV1 {
     operations.append(operation)
     acceptedKeys.append(acceptedDevicePublicKey)
-    return try KagemushaAuthenticatedDeviceResponseV1(
+    return try testAuthenticatedDeviceResponse(
       operation: operation,
       status: .unavailable,
       canonicalReply: Data(),
       authenticator: Data()
-    )
+    , requestID: requestID)
   }
 }
 
@@ -292,6 +292,7 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
     canonicalCommand _: Data,
     canonicalReply _: Data,
     responseAuthenticator _: Data,
+    originalResponse _: Data?,
     qualification _: KagemushaHardwareQualificationV1
   ) throws {}
 
@@ -308,7 +309,7 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
 
   func terminalEnvelope(
     candidate _: KagemushaNativeSenderCandidateV1,
-    authenticatedCommitReply _: Data
+    originalSignedCommitResponse _: Data
   ) throws -> Data { throw TestFailure.unused }
 
   func acceptInstalledTerminal(
@@ -370,7 +371,7 @@ private final class QualificationOnlyTransport: KagemushaNativeAuthenticatedDevi
     let reply = noritoEncode(typeName: "iroha.kagemusha.device.v1.active-hardware-credential-reply",
       payload: payload, flags: NoritoHeader.compactLen, payloadAlignment: 8)
     var signature = Data(repeating: 0, count: 64); signature[31] = 1; signature[63] = 1
-    return try KagemushaAuthenticatedDeviceResponseV1(operation: 1, status: .success,
-      canonicalReply: reply, authenticator: signature)
+    return try testAuthenticatedDeviceResponse(operation: 1, status: .success,
+      canonicalReply: reply, authenticator: signature, requestID: requestID)
   }
 }

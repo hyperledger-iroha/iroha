@@ -75,7 +75,12 @@ fn text_digest(value: &str) -> Result<Hash, CompositionError> {
 }
 
 fn schema_digest(field: &'static str, schema: Schema) -> Result<Hash, CompositionError> {
-    let (tag, identity, encoder, layout): (u8, String, &str, CanonicalLayout) = match schema {
+    let (tag, identity, encoder, layout): (
+        u8,
+        std::borrow::Cow<'static, str>,
+        &str,
+        CanonicalLayout,
+    ) = match schema {
         Schema::Norito {
             nominal_name,
             layout,
@@ -84,7 +89,7 @@ fn schema_digest(field: &'static str, schema: Schema) -> Result<Hash, Compositio
             identity,
             encoder,
             layout,
-        } => (1, identity.to_owned(), encoder, layout),
+        } => (1, std::borrow::Cow::Borrowed(identity), encoder, layout),
         Schema::Required { .. } => {
             // require_complete_inventory rejects this before composition.
             return Err(CompositionError::Inventory(

@@ -34,6 +34,11 @@ impl PrivacyOuterDigestV1 {
     pub(crate) const fn to_bytes(self) -> [u8; 48] {
         self.0
     }
+    /// Overwrite a transient digest tile before its allocation is released.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn zeroize_v1(&mut self) {
+        self.0.zeroize();
+    }
     /// Borrow the exact digest bytes.
     pub(crate) const fn as_bytes(&self) -> &[u8; 48] {
         &self.0
@@ -82,6 +87,16 @@ impl WipingSha3V1 {
     fn finish(mut self) -> PrivacyOuterDigestV1 {
         let mut output = Output::<Sha3_384Core>::default();
         self.core.finalize_fixed_core(&mut self.buffer, &mut output);
+        PrivacyOuterDigestV1::from_bytes(output.into())
+    }
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    fn finish_in_place_v1(&mut self) -> PrivacyOuterDigestV1 {
+        let mut output = Output::<Sha3_384Core>::default();
+        self.core.finalize_fixed_core(&mut self.buffer, &mut output);
+        // Drop the old wiping owner in its original allocation before replacing
+        // it. The buffer and dependency core erase in place, without moving a
+        // private state into a temporary Vec with uncleared vacated slots.
+        *self = Self::default();
         PrivacyOuterDigestV1::from_bytes(output.into())
     }
     fn wipe_buffer(&mut self) {
@@ -183,6 +198,46 @@ impl PrivacyOuterDomainPrefixV1 {
             prefix_bytes,
         })
     }
+    /// Start an exact final field while reusing only the checked public prefix.
+    /// Coordinates and every field length remain freshly bound after the clone.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
+    pub(crate) fn last_field_stream_at_with_counter(
+        &self,
+        index: u64,
+        counter: u64,
+        prefix_fields: &[&[u8]],
+        final_field_len: usize,
+    ) -> Result<PrivacyOuterLastFieldStreamV1, PrivacyOuterLastFieldStreamErrorV1> {
+        let invalid = PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded;
+        let count = prefix_fields.len().checked_add(1).ok_or(invalid)?;
+        let count = u32::try_from(count).map_err(|_| invalid)?;
+        let final_length = u64::try_from(final_field_len).map_err(|_| invalid)?;
+        let mut bytes = self.prefix_bytes.checked_add(4).ok_or(invalid)?;
+        for field in prefix_fields {
+            u64::try_from(field.len()).map_err(|_| invalid)?;
+            bytes = bytes
+                .checked_add(8)
+                .and_then(|n| n.checked_add(field.len()))
+                .ok_or(invalid)?;
+        }
+        bytes
+            .checked_add(8)
+            .and_then(|n| n.checked_add(final_field_len))
+            .ok_or(invalid)?;
+        let mut state = self.state.clone();
+        state.update(&index.to_be_bytes());
+        state.update(&counter.to_be_bytes());
+        state.update(&count.to_be_bytes());
+        for field in prefix_fields {
+            state.update(&(field.len() as u64).to_be_bytes());
+            state.update(field);
+        }
+        state.update(&final_length.to_be_bytes());
+        Ok(PrivacyOuterLastFieldStreamV1 {
+            state,
+            remaining: final_field_len,
+        })
+    }
     /// Hash one index/counter with the identical scalar framing.
     pub(crate) fn hash_at_with_counter(
         &self,
@@ -232,7 +287,8 @@ pub(crate) struct PrivacyOuterLastFieldStreamV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PrivacyOuterLastFieldStreamV1 {
-    /// Start exactly one declared final field after the complete prefix fields.
+    /// Scalar byte oracle for the prefix path; no parallel legacy production owner.
+    #[cfg(test)]
     pub(crate) fn new(
         domain: PrivacyOuterDomainV1<'_>,
         prefix_fields: &[&[u8]],
@@ -277,6 +333,9 @@ impl PrivacyOuterLastFieldStreamV1 {
         &mut self,
         bytes: &[u8],
     ) -> Result<(), PrivacyOuterLastFieldStreamErrorV1> {
+        if self.remaining == usize::MAX {
+            return Err(PrivacyOuterLastFieldStreamErrorV1::FramingLimitExceeded);
+        }
         if bytes.len() > self.remaining {
             return Err(PrivacyOuterLastFieldStreamErrorV1::InputOverrun {
                 remaining: self.remaining,
@@ -287,7 +346,22 @@ impl PrivacyOuterLastFieldStreamV1 {
         self.remaining -= bytes.len();
         Ok(())
     }
-    /// Finish only after the complete declared field; all paths drop wiping state.
+    /// Finalize and wipe in the original row-state slot, then permanently seal it.
+    pub(crate) fn finalize_in_place_v1(
+        &mut self,
+    ) -> Result<PrivacyOuterDigestV1, PrivacyOuterLastFieldStreamErrorV1> {
+        if self.remaining != 0 {
+            return Err(PrivacyOuterLastFieldStreamErrorV1::InputUnderrun {
+                remaining: self.remaining,
+            });
+        }
+        let digest = self.state.finish_in_place_v1();
+        // A nonempty checked frame prefix prohibits this declared field size.
+        self.remaining = usize::MAX;
+        Ok(digest)
+    }
+    /// Scalar consuming oracle retained only for independent byte-parity tests.
+    #[cfg(test)]
     pub(crate) fn finalize(
         self,
     ) -> Result<PrivacyOuterDigestV1, PrivacyOuterLastFieldStreamErrorV1> {
@@ -331,6 +405,31 @@ mod tests {
             index: 0,
             counter: 0,
         }
+    }
+
+    fn assert_cached_stream_v1(
+        domain: PrivacyOuterDomainV1<'_>,
+        prefix_fields: &[&[u8]],
+        last: &[u8],
+        chunk_size: usize,
+        expected: PrivacyOuterDigestV1,
+    ) {
+        let prefix = PrivacyOuterDomainPrefixV1::new(domain).unwrap();
+        let mut stream = prefix
+            .last_field_stream_at_with_counter(
+                domain.index,
+                domain.counter,
+                prefix_fields,
+                last.len(),
+            )
+            .unwrap();
+        for chunk in last.chunks(chunk_size) {
+            stream.update(chunk).unwrap();
+        }
+        assert_eq!(stream.finalize_in_place_v1(), Ok(expected));
+        assert!(stream.finalize_in_place_v1().is_err());
+        assert!(stream.update(&[]).is_err());
+        assert!(stream.state.buffer.get_data().iter().all(|byte| *byte == 0));
     }
 
     #[test]
@@ -385,6 +484,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -436,6 +536,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -487,6 +588,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -538,6 +640,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -589,6 +692,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -640,6 +744,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -691,6 +796,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -742,6 +848,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -793,6 +900,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -844,6 +952,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -895,6 +1004,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -948,6 +1058,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -1001,6 +1112,7 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
@@ -1054,10 +1166,80 @@ mod tests {
                         stream.update(chunk).unwrap();
                     }
                     assert_eq!(stream.finalize(), Ok(expected));
+                    assert_cached_stream_v1(domain, prefix, last, chunk_size, expected);
                 }
             }
         }
     }
+    #[test]
+    fn cached_final_field_prefix_preserves_scalar_bytes_coordinates_and_errors() {
+        let catalog = [37; 48];
+        let mut domain = domain(&catalog);
+        domain.level = 11;
+        let prefix = PrivacyOuterDomainPrefixV1::new(domain).unwrap();
+        for index in [0, 1, 4_194_303, u64::MAX] {
+            for counter in [0, 2, 65_535, u64::MAX] {
+                for length in [0, 1, 103, 104, 105, 208, 1024] {
+                    let value = vec![29; length];
+                    domain.index = index;
+                    domain.counter = counter;
+                    let expected = PrivacyOuterFrameV1::new(domain, &[b"prefix", &value])
+                        .unwrap()
+                        .hash();
+                    let mut actual = prefix
+                        .last_field_stream_at_with_counter(index, counter, &[b"prefix"], length)
+                        .unwrap();
+                    for chunk in value.chunks(7) {
+                        actual.update(chunk).unwrap();
+                    }
+                    assert_eq!(actual.finalize(), Ok(expected));
+                    if index == 1 && counter == 2 && length == 104 {
+                        assert_eq!(
+                            expected.as_bytes(),
+                            &hex(
+                                "79a92306d5759f329c507ade65e0fbd85e0b19fc29b8f4f7c38e747ccb988caf652b400de8ce4f02ed8195a508e4cdf7"
+                            )[..]
+                        );
+                    }
+                }
+            }
+        }
+        let mut stream = prefix
+            .last_field_stream_at_with_counter(1, 2, &[], 8)
+            .unwrap();
+        assert!(stream.update(&[3; 9]).is_err());
+        stream.update(&[3; 8]).unwrap();
+        assert_eq!(
+            stream.finalize().unwrap(),
+            PrivacyOuterFrameV1::new(
+                PrivacyOuterDomainV1 {
+                    index: 1,
+                    counter: 2,
+                    ..domain
+                },
+                &[&[3; 8]]
+            )
+            .unwrap()
+            .hash()
+        );
+        assert!(
+            prefix
+                .last_field_stream_at_with_counter(1, 2, &[], 8)
+                .unwrap()
+                .finalize()
+                .is_err()
+        );
+        assert!(
+            prefix
+                .last_field_stream_at_with_counter(1, 2, &[], usize::MAX)
+                .is_err()
+        );
+        // Prefix clones use the same private buffer-clearing owner as streams.
+        let mut cloned = prefix.state.clone();
+        cloned.wipe_buffer();
+        assert!(cloned.buffer.get_data().iter().all(|byte| *byte == 0));
+    }
+
     #[test]
     fn sha3_wiping_owner_matches_standard_digest_and_wipes_cloned_buffers() {
         for length in [0, 1, 103, 104, 105, 207, 208, 4448] {

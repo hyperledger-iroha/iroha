@@ -416,8 +416,8 @@ fn multiplication_keeps_public_tag_boundary_and_complete_register_restrictions()
 fn multiply_maximum_segment_stays_degree_four_inside_unchanged_native_envelope() {
     let (segment, records) = maximum_segment();
     assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-    assert_eq!(segment.base_width_v1(), 1_351);
-    assert_eq!(segment.profile_constraint_count_v1(), 2_940);
+    assert_eq!(segment.base_width_v1(), 1_356);
+    assert_eq!(segment.profile_constraint_count_v1(), 3_369);
     let protocol = segment.protocol_v1();
     protocol.validate().unwrap();
     assert_eq!(protocol.maximum_constraint_degree, 4);
@@ -435,8 +435,8 @@ fn multiply_maximum_segment_stays_degree_four_inside_unchanged_native_envelope()
     )
     .unwrap();
     let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-    assert_eq!(bound, 4_141_952);
-    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 52_352);
+    assert_eq!(bound, 4_153_152);
+    assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
     assert_eq!(
         measured_maximum_affine_degree_v1(
             [0xda; 32],
@@ -454,7 +454,7 @@ fn native_stark_proves_maximum_multiply_segment_and_binds_signedness_and_outputs
     let (segment, records) = maximum_segment();
     let columns = segment.columns(&records).unwrap();
     let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-    assert!(proof.len() <= 4_141_952);
+    assert!(proof.len() <= 4_153_152);
     verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
     for register in [8, 9, 10, 11] {
         let mut after = segment.after;
@@ -520,6 +520,7 @@ fn product_limb_equations_match_wide_integer_oracle_for_seeded_inputs() {
             multiply::Selection {
                 multiply: F::ONE,
                 division: F::ZERO,
+                square: F::ZERO,
                 signed: F::ZERO,
                 success: F::ZERO,
                 quotient: [F::ZERO; 4],

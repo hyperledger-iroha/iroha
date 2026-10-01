@@ -1784,10 +1784,10 @@ impl Builtin {
                 &["AccountId", "AssetDefinitionId", "Option<quantity>"],
                 "()",
             ),
-            Self::AccountRecoveryPropose => S::new(&["string", "AccountId"], "()"),
+            Self::AccountRecoveryPropose => S::new(&["string", "AccountId", "int"], "()"),
             Self::AccountRecoveryApprove
             | Self::AccountRecoveryCancel
-            | Self::AccountRecoveryFinalize => S::new(&["string"], "()"),
+            | Self::AccountRecoveryFinalize => S::new(&["string", "int"], "()"),
             Self::NftMintAsset => S::new(&["NftId", "AccountId"], "()"),
             Self::NftSetMetadata => S::new(&["NftId", "Name", "Json"], "()"),
             Self::NftBurnAsset => S::new(&["NftId"], "()"),
@@ -2033,10 +2033,14 @@ impl Builtin {
             Self::SetAssetHoldingLimit => {
                 signature.with_names(&["account", "asset_definition", "limit"])
             }
-            Self::AccountRecoveryPropose => signature.with_names(&["alias", "replacement"]),
+            Self::AccountRecoveryPropose => {
+                signature.with_names(&["alias", "replacement", "request_generation"])
+            }
             Self::AccountRecoveryApprove
             | Self::AccountRecoveryCancel
-            | Self::AccountRecoveryFinalize => signature.with_names(&["alias"]),
+            | Self::AccountRecoveryFinalize => {
+                signature.with_names(&["alias", "request_generation"])
+            }
             Self::NftMintAsset => signature.with_names(&["nft", "owner"]),
             Self::NftSetMetadata => signature.with_names(&["nft", "key", "value"]),
             Self::NftBurnAsset => signature.with_names(&["nft"]),
@@ -2579,32 +2583,32 @@ mod tests {
                 "account_recovery_propose",
                 "ledger::account::recovery::propose",
                 s::SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
-                &["string", "AccountId"][..],
-                &["alias", "replacement"][..],
+                &["string", "AccountId", "int"][..],
+                &["alias", "replacement", "request_generation"][..],
             ),
             (
                 Builtin::AccountRecoveryApprove,
                 "account_recovery_approve",
                 "ledger::account::recovery::approve",
                 s::SYSCALL_ACCOUNT_RECOVERY_APPROVE,
-                &["string"][..],
-                &["alias"][..],
+                &["string", "int"][..],
+                &["alias", "request_generation"][..],
             ),
             (
                 Builtin::AccountRecoveryCancel,
                 "account_recovery_cancel",
                 "ledger::account::recovery::cancel",
                 s::SYSCALL_ACCOUNT_RECOVERY_CANCEL,
-                &["string"][..],
-                &["alias"][..],
+                &["string", "int"][..],
+                &["alias", "request_generation"][..],
             ),
             (
                 Builtin::AccountRecoveryFinalize,
                 "account_recovery_finalize",
                 "ledger::account::recovery::finalize",
                 s::SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
-                &["string"][..],
-                &["alias"][..],
+                &["string", "int"][..],
+                &["alias", "request_generation"][..],
             ),
         ] {
             assert_eq!(builtin.name(), name);

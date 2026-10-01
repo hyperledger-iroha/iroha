@@ -5986,7 +5986,7 @@ mod tests {
             zk_ams_runtime_fixture_for_test,
         },
         query::store::LiveQueryStore,
-        state::{State, World},
+        state::{State, StateReadOnly, World},
     };
     use core::num::NonZeroU64;
     use iroha_crypto::{Hash, HashOf};
@@ -6038,15 +6038,56 @@ mod tests {
             Hash::prehashed(TEST_GENESIS_HASH),
         ))
     }
+    fn activation_execution_state() -> State {
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        let world = World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(iroha_test_samples::BOB_ID.clone()).build(&iroha_test_samples::BOB_ID),
+            ],
+            [],
+        );
+        let config = TestChainConfig::new(world, 0);
+        let account = AccountId::new(config.genesis_key.public_key().clone());
+        let mode = config.consensus_mode;
+        let prepared =
+            CertifiedTestChain::prepare(config).expect("prepare actual governance genesis");
+        let state = std::sync::Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished governance State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &account,
+            mode.into(),
+            None,
+        )
+        .expect("apply actual signed governance genesis");
+        state
+    }
+
+    fn activation_execution_header(state: &State) -> BlockHeader {
+        BlockHeader::new(
+            NonZeroU64::new(TEST_BLOCK_HEIGHT).unwrap(),
+            state.view().latest_block_hash(),
+            None,
+            1_800_000_000_000,
+            0,
+        )
+    }
+
     #[test]
     fn governed_registration_and_activation_share_one_state_transaction() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let mut block = state.block(test_header());
+        let state = activation_execution_state();
+        let mut block = state.block(activation_execution_header(&state));
         let mut transaction = block.transaction();
+        assert!(
+            crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+            "governance matrix requires the authenticated ordinary execution root"
+        );
         grant_governance(&mut transaction);
         let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("compiled profile")
@@ -6097,12 +6138,8 @@ mod tests {
     }
     #[test]
     fn explicit_activation_keeps_authority_height_and_transaction_rollback_checks() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let mut block = state.block(test_header());
+        let state = activation_execution_state();
+        let mut block = state.block(activation_execution_header(&state));
         let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("compiled profile")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
@@ -6113,6 +6150,10 @@ mod tests {
         let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
         {
             let mut transaction = block.transaction();
+            assert!(
+                crate::executor::root_scope::execution_root_scope(&transaction).is_ok(),
+                "governance matrix requires the authenticated ordinary execution root"
+            );
             let error = crate::executor::Executor::Initial
                 .execute_instruction(
                     &mut transaction,

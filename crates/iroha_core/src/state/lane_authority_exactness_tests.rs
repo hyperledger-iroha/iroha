@@ -683,7 +683,8 @@ fn exact_lane_committee_rejects_manifest_dataspace_mismatch() {
         .map(|key| AccountId::new(key.public_key().clone()))
         .collect();
     let retained = resolve_universal_committee(&state).expect("valid canonical manifest authority");
-    install_stale_lane_manifest_registry_for_test(&state, &[(LaneId::SINGLE, other, validators)]);
+    let stale =
+        stale_lane_manifest_registry_for_test(&state, &[(LaneId::SINGLE, other, validators)]);
     assert_eq!(
         resolve_universal_committee(&state)
             .expect("a stale process cache cannot replace canonical manifest authority")
@@ -692,7 +693,7 @@ fn exact_lane_committee_rejects_manifest_dataspace_mismatch() {
     );
     // Retain the deliberately malformed source in an isolated resolver view.
     let mut view = state.view();
-    view.lane_manifests = Arc::clone(&state.lane_manifests.read());
+    view.lane_manifests = stale;
     assert!(matches!(
         view.resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),

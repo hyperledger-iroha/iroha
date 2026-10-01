@@ -5578,6 +5578,12 @@ public sealed record class ToriiContractAliasResolution
 [JsonConverter(typeof(ToriiContractCodeRecordJsonConverter))]
 public sealed record class ToriiContractCodeRecord
 {
+    [JsonPropertyName("network_id")]
+    public required NetworkId NetworkId { get; init; }
+
+    [JsonPropertyName("artifact_id")]
+    public required ContractArtifactId ArtifactId { get; init; }
+
     private ToriiContractManifest manifest = new();
     private string? codeHash;
     private string? abiHash;
@@ -5700,6 +5706,12 @@ internal static class ToriiContractMetadataDirectMetadata
 [JsonConverter(typeof(ToriiContractCodeBytesResponseJsonConverter))]
 public sealed record class ToriiContractCodeBytesResponse
 {
+    [JsonPropertyName("network_id")]
+    public required NetworkId NetworkId { get; init; }
+
+    [JsonPropertyName("artifact_id")]
+    public required ContractArtifactId ArtifactId { get; init; }
+
     private string codeBase64 = string.Empty;
 
     [JsonPropertyName("code_b64")]
@@ -6599,6 +6611,12 @@ public sealed record class ToriiContractVerifiedSourceReference
 [JsonConverter(typeof(ToriiContractCodeViewJsonConverter))]
 public sealed record class ToriiContractCodeView
 {
+    [JsonPropertyName("network_id")]
+    public required NetworkId NetworkId { get; init; }
+
+    [JsonPropertyName("artifact_id")]
+    public required ContractArtifactId ArtifactId { get; init; }
+
     private string codeHash = string.Empty;
     private string? declaredCodeHash;
     private string? abiHash;
@@ -7293,6 +7311,12 @@ public sealed record class ToriiContractSourceFile
 [JsonConverter(typeof(ToriiContractVerifiedSourceJobJsonConverter))]
 public sealed record class ToriiContractVerifiedSourceJob
 {
+    [JsonPropertyName("network_id")]
+    public required NetworkId NetworkId { get; init; }
+
+    [JsonPropertyName("artifact_id")]
+    public required ContractArtifactId ArtifactId { get; init; }
+
     private string jobId = string.Empty;
     private string codeHash = string.Empty;
     private string status = string.Empty;

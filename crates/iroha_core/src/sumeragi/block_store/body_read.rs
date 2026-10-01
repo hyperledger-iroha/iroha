@@ -43,6 +43,7 @@ pub(super) struct StoredBodyRead {
     stage: Stage,
 }
 impl StoredBodyRead {
+    #[cfg(test)]
     pub(super) fn new(
         source: AvailabilitySource,
         block: Option<Arc<SignedBlock>>,

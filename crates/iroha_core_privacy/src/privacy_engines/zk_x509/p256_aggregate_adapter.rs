@@ -483,6 +483,13 @@ fn p256_arithmetic_aux_replay_scratch_v1() -> usize {
         + core::mem::size_of::<P256AggregateColumnsDestinationGuardV1<'static, 'static>>()
         + crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
             * core::mem::size_of::<&mut [F]>()
+        + core::mem::size_of::<P256ArithmeticAuxSelectionV1>()
+        + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>>(
+        )
+        + core::mem::size_of::<P256AggregateAuxRowScratchV1<8>>()
+        + core::mem::size_of::<[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1]>()
+        + core::mem::size_of::<[P256ScalarSourceEventFixedV1; 8]>()
+        + core::mem::size_of::<[P256ArithmeticCopyEventFixedV1; 3]>()
 }
 /// Peak stack payload for a serial value-bus batch, beyond existing stream heap scratch.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1897,6 +1904,52 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
         )
     }
 }
+/// A bounded column selection derived only from the public registration range.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct P256ArithmeticAuxSelectionV1 {
+    scalar: bool,
+    value_copy: bool,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256ArithmeticAuxSelectionV1 {
+    fn new_v1(first: usize, width: usize) -> Result<Self, P256AggregateAdapterErrorV1> {
+        let end = first
+            .checked_add(width)
+            .filter(|&end| end <= P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1)
+            .filter(|_| {
+                width > 0
+                    && width
+                        <= crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            })
+            .ok_or(P256AggregateAdapterErrorV1::Topology)?;
+        Ok(Self {
+            scalar: first < ARITHMETIC_VALUE_COPY_AUX && end > ARITHMETIC_SCALAR_AUX,
+            value_copy: end > ARITHMETIC_VALUE_COPY_AUX,
+        })
+    }
+}
+/// Exact compact row when its verifier-fixed events are all inactive: every
+/// source is zero, every prefix is the unchanged running product, and terminal
+/// copies remain those of the same bound source. No private value is inspected.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn fill_compact_identity_aux_row_v1(
+    events: usize,
+    running: &[F; P256_PERMUTATION_CHALLENGE_LANES_V1],
+    terminal: &[F; P256_PERMUTATION_CHALLENGE_LANES_V1],
+    target: &mut [F],
+) -> Result<(), P256AggregateAdapterErrorV1> {
+    if !matches!(events, 3 | 8) || target.len() != compact_aux_width_v1(events) {
+        return Err(P256AggregateAdapterErrorV1::Topology);
+    }
+    target[..events].fill(F::ZERO);
+    for lane in 0..P256_PERMUTATION_CHALLENGE_LANES_V1 {
+        let start = compact_products_start_v1(events, lane);
+        target[start..start + events + 1].fill(running[lane]);
+        target[compact_terminal_start_v1(events) + lane] = terminal[lane];
+    }
+    Ok(())
+}
 /// Constant-memory arithmetic auxiliary stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ArithmeticAggregateAuxStreamV1<'a> {
@@ -2034,6 +2087,92 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         )?;
         self.next_row += 1;
         Ok(Some(aux))
+    }
+    /// Project only requested public column families while preserving the
+    /// native row order. Activity is the verifier-owned operation/coefficient
+    /// schedule, never a witness selector. The dense stream above remains the
+    /// independent native oracle and the terminal-derivation path.
+    fn next_selected_aux_row_v1(
+        &mut self,
+        selection: P256ArithmeticAuxSelectionV1,
+    ) -> Result<Option<[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1]>, P256AggregateAdapterErrorV1>
+    {
+        if self.next_row == P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
+            return Ok(None);
+        }
+        if self.next_row > P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        #[cfg(test)]
+        auxiliary_replay_tests::record_arithmetic_row_v1();
+        let row = self.next_row;
+        let mut aux =
+            P256AggregateAuxRowScratchV1([F::ZERO; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1]);
+        if selection.scalar {
+            let target = &mut aux.0[ARITHMETIC_SCALAR_AUX..ARITHMETIC_VALUE_COPY_AUX];
+            if matches!(row / P256_ARITHMETIC_ROWS_PER_OPERATION_V1, 13 | 14) {
+                let base = self
+                    .rows
+                    .trace
+                    .base
+                    .get(row)
+                    .ok_or(P256AggregateAdapterErrorV1::Source)?;
+                let events = arithmetic_scalar_events_v1(row)?;
+                let sources = P256AggregateAuxRowScratchV1(arithmetic_scalar_sources_v1(row, base));
+                self.scalar_running = build_compact_scalar_aux_row_v1(
+                    &events,
+                    &sources.0,
+                    self.scalar_running,
+                    self.scalar_terminal,
+                    self.scalar_challenges,
+                    target,
+                )?;
+            } else {
+                fill_compact_identity_aux_row_v1(
+                    8,
+                    &self.scalar_running,
+                    &self.scalar_terminal,
+                    target,
+                )?;
+            }
+        }
+        if selection.value_copy {
+            let target = &mut aux.0[ARITHMETIC_VALUE_COPY_AUX..];
+            let logical_rows =
+                P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
+            if row < logical_rows && row % P256_ARITHMETIC_ROWS_PER_OPERATION_V1 < 16 {
+                let base = self
+                    .rows
+                    .trace
+                    .base
+                    .get(row)
+                    .ok_or(P256AggregateAdapterErrorV1::Source)?;
+                let fixed = self.rows.fixed.row_v1(row)?;
+                let events = arithmetic_value_copy_events_v1(row, logical_rows)?;
+                let sources = P256AggregateAuxRowScratchV1(
+                    p256_arithmetic_opened_operand_limbs_v1(base, &fixed),
+                );
+                self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
+                    &events,
+                    &sources.0,
+                    self.arithmetic_copy_running,
+                    self.arithmetic_copy_terminal,
+                    self.arithmetic_copy_challenges,
+                    target,
+                )?;
+            } else {
+                fill_compact_identity_aux_row_v1(
+                    3,
+                    &self.arithmetic_copy_running,
+                    &self.arithmetic_copy_terminal,
+                    target,
+                )?;
+            }
+        }
+        // Column zero and every unselected family remain zero. Only selected
+        // columns are copied by the existing transactional destination guard.
+        self.next_row += 1;
+        Ok(Some(aux.0))
     }
     /// Replay this deterministic stream into one challenge-dependent arithmetic auxiliary column.
     pub(crate) fn fill_aux_column_v1(
@@ -6215,12 +6354,13 @@ impl P256MainBoundSourceV1 {
         {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
+        let selection = P256ArithmeticAuxSelectionV1::new_v1(first, outputs.len())?;
         let mut stream = self.arithmetic_aux_stream_v1(registration)?;
         fill_aggregate_aux_columns_v1::<P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1>(
             shape.trace_size,
             first,
             outputs,
-            || stream.next_aux_row_v1(),
+            || stream.next_selected_aux_row_v1(selection),
         )
     }
     /// Replay at most eight adjacent value auxiliary columns from one exact

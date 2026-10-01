@@ -100,7 +100,7 @@ mod sorafs_market_admission {
             max_pending_movements_per_provider: 4,
             max_open_appeals_per_provider: 2,
         };
-        (component_state_after_genesis(world), policy)
+        (state_after_genesis(world), policy)
     }
 
     fn reject_unchanged(

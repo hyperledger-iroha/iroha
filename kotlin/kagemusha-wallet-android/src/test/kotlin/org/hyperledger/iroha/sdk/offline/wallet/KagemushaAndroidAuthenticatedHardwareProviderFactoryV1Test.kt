@@ -9,6 +9,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.test.assertSame
+import org.hyperledger.iroha.sdk.offline.KagemushaIncomingFoldEvidenceProviderV1
+import org.hyperledger.iroha.sdk.offline.KagemushaNativeIncomingFoldPreparationV1
+import org.hyperledger.iroha.sdk.offline.KagemushaIncomingFoldEvidenceV1
 import org.hyperledger.iroha.sdk.offline.KagemushaAuthenticatedHardwareProviderV1
 import org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
 import org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorFactoryV1
@@ -16,6 +20,41 @@ import org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorV1
 import org.junit.jupiter.api.Test
 
 class KagemushaAndroidAuthenticatedHardwareProviderFactoryV1Test {
+    @Test
+    fun `incoming physical owner is selected only for the exact coordinator created by this factory`() {
+        val original = coordinatorProxy()
+        var selections = 0
+        val physical = object : KagemushaIncomingFoldEvidenceProviderV1 {
+            override fun recheckOriginals(preparation: KagemushaNativeIncomingFoldPreparationV1): Unit =
+                error("opening cannot perform physical work")
+            override fun obtainOrRecoverOriginal(preparation: KagemushaNativeIncomingFoldPreparationV1): KagemushaIncomingFoldEvidenceV1 =
+                error("opening cannot perform physical work")
+        }
+        val selected = object : KagemushaNativeCoreCoordinatorFactoryV1 {
+            override fun create() = original
+            override fun incomingFoldEvidenceProvider(coordinator: KagemushaNativeCoreCoordinatorV1): KagemushaIncomingFoldEvidenceProviderV1 {
+                assertSame(original, coordinator)
+                selections++
+                return physical
+            }
+        }
+        assertIs<KagemushaAuthenticatedHardwareProviderV1>(factoryWith(selected).open(availableBridge(),
+            org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {}))
+        assertEquals(1, selections)
+    }
+
+    @Test
+    fun `failed original physical owner binding cannot expose a provider`() {
+        val original = coordinatorProxy()
+        val selected = object : KagemushaNativeCoreCoordinatorFactoryV1 {
+            override fun create() = original
+            override fun incomingFoldEvidenceProvider(coordinator: KagemushaNativeCoreCoordinatorV1): KagemushaIncomingFoldEvidenceProviderV1? =
+                error("original physical custody changed")
+        }
+        assertFailsWith<IllegalStateException> { factoryWith(selected).open(availableBridge(),
+            org.hyperledger.iroha.sdk.offline.TestOperationIntentStoreV1(), {}) }
+    }
+
     @Test
     fun `exactly one native Core factory creates the authenticated provider`() {
         var creations = 0

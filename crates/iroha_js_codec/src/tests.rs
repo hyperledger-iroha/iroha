@@ -417,10 +417,11 @@ fn assert_typed_instruction_roundtrip(instruction: &InstructionBox, value: &Valu
 #[test]
 fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
     let code_hash = Hash::new(b"browser-deployment-code");
-    let artifact_id = ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
     let address = "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp"
         .parse()
         .expect("canonical contract address");
+    let artifact_id = ContractArtifactId::for_address(&address, code_hash)
+        .expect("exact contract artifact dataspace");
     let manifest = ContractManifest {
         seiyaku_name: None,
         code_hash: Some(code_hash),
@@ -491,9 +492,19 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
     assert_strict_rejection(&object([(
         "CancelSmartContractCodeUpload",
         object([(
+            "code_hash",
+            json::to_value(&code_hash).expect("retired hash field"),
+        )]),
+    )]));
+    assert_strict_rejection(&object([(
+        "CancelSmartContractCodeUpload",
+        object([(
             "artifact_id",
             object([
-                ("dataspace_id", Value::String("0".to_owned())),
+                (
+                    "dataspace_id",
+                    Value::String(artifact_id.dataspace_id.as_u64().to_string()),
+                ),
                 ("code_hash", Value::String("not-a-hash".to_owned())),
             ]),
         )]),
@@ -1075,9 +1086,10 @@ fn sole_instruction_payload_requires_a_single_envelope_field() {
 }
 
 fn register_code_payload() -> Value {
+    let code_hash = Hash::new(b"precedence-code");
     let manifest = ContractManifest {
         seiyaku_name: None,
-        code_hash: Some(Hash::new(b"precedence-code")),
+        code_hash: Some(code_hash),
         abi_hash: Some(Hash::new(b"precedence-abi")),
         compiler_fingerprint: Some("codec-fixture".to_owned()),
         features_bitmap: Some(0),

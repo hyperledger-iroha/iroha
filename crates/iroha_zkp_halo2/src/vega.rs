@@ -49,8 +49,14 @@ mod nifs;
 mod p256;
 #[path = "vega/r1cs.rs"]
 mod r1cs;
+#[cfg(feature = "bench")]
+#[path = "vega/secret_msm_timing.rs"]
+mod secret_msm_timing;
 #[path = "vega/sha256.rs"]
 mod sha256;
+#[cfg(feature = "bench")]
+#[doc(hidden)]
+pub use secret_msm_timing::run_vega_secret_msm_timing_screen;
 #[path = "vega/spartan.rs"]
 mod spartan;
 #[path = "vega/sponge.rs"]

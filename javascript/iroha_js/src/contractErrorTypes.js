@@ -1,3 +1,4 @@
+const isArray = Array.isArray.bind(Array);
 import { isCanonicalKotodamaIdentifier, isCanonicalKotodamaStateTypeName } from "./kotodamaIdentifiers.js";
 
 // Preserve the public diagnostic class and text with one constructor.
@@ -6,7 +7,7 @@ function rejectType(message) {
 }
 
 function exactKeys(value, keys, context) {
-  if (value === null || typeof value !== "object" || Array.isArray(value) ||
+  if (value === null || typeof value !== "object" || isArray(value) ||
       Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) {
     rejectType(`${context} must contain exactly ${keys.join(" and ")}`);
   }

@@ -187,3 +187,33 @@ test("replication profiles share the immutable canonical native registry handles
     rejects((_, row) => { row.order.chunking_profile = handle; });
   }
 });
+
+
+test("replication SLA diagnostics retain each exact field context", () => {
+  for (const field of ["ingest_deadline_secs", "min_availability_percent_milli", "min_por_success_percent_milli"]) {
+    const value = fixture();
+    value.replication_orders[0].order.sla[field] = 0;
+    assert.throws(() => normalize(value), {
+      name: "TypeError",
+      message: `sorafs replication list response.replication_orders[0].order.sla.${field} must be positive`,
+    });
+  }
+});
+
+test("replication completion diagnostics retain exact authority and anchor contexts", () => {
+  const cases = [
+    [["completion_authority", "signer_policy", "revision"], 0, "must be positive"],
+    [["completion_authority", "signer_policy", "policy_id_hex"], "00".repeat(32), "must be exact non-zero lowercase 32-byte hex"],
+    [["completion_authority", "signer_policy", "policy_digest_hex"], "00".repeat(32), "must be exact non-zero lowercase 32-byte hex"],
+    [["finalized_anchor", "height"], 0, "must be positive"],
+    [["finalized_anchor", "block_hash_hex"], "00".repeat(32), "must be exact non-zero lowercase 32-byte hex"],
+  ];
+  for (const [path, invalid, message] of cases) {
+    const value = fixture();
+    set(value.replication_orders[0].provider_completions[0], path, invalid);
+    assert.throws(() => normalize(value), {
+      name: "TypeError",
+      message: `sorafs replication list response.replication_orders[0].provider_completions[0].${path.join(".")} ${message}`,
+    });
+  }
+});

@@ -438,7 +438,7 @@ mod tests {
         ZkX509CredentialPublicBindingV1 {
             consensus_context_digest: [seed; 32],
             governed_ca_root: [seed.wrapping_add(1); 32],
-            root_spki_channel: 36,
+            root_spki_channel: 38,
         }
     }
     fn role(index: usize) -> ZkX509ShaCallRoleV1 {

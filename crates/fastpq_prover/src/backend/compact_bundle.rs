@@ -9,7 +9,7 @@
 //! integration before production use. This offline bundle does not change any
 //! production default or grant source-state authority or finality.
 
-use iroha_data_model::privacy::GoldilocksDigest384V1;
+use iroha_data_model::fastpq::FastpqCommitmentV1;
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
 
 use super::compact_value_domain::CompactTransferValue;
@@ -146,13 +146,13 @@ pub(super) struct VerifiedBundle {
     wire_bytes: usize,
     statement_bytes: usize,
     work: BundleVerificationWork,
-    row_roots: Vec<GoldilocksDigest384V1>,
+    row_roots: Vec<FastpqCommitmentV1>,
 }
 
 impl VerifiedBundle {
     /// Complete authenticated row roots in original segment occurrence order.
     /// The list is published only after every child has verified successfully.
-    pub(super) fn row_roots(&self) -> &[GoldilocksDigest384V1] {
+    pub(super) fn row_roots(&self) -> &[FastpqCommitmentV1] {
         &self.row_roots
     }
 
@@ -740,7 +740,7 @@ fn shape(details: &str) -> Error {
 mod tests {
     fn test_segment_limits() -> crate::VerifyLimits {
         crate::VerifyLimits {
-            max_queries: 64,
+            max_queries: super::super::deep_geometry::QUERY_COUNT,
             ..crate::VerifyLimits::default()
         }
     }
@@ -769,9 +769,9 @@ mod tests {
     fn limits(count: usize) -> BundleLimits {
         BundleLimits {
             max_segments: count,
-            max_total_queries: count * 64,
+            max_total_queries: count * super::super::deep_geometry::QUERY_COUNT,
             segment: VerifyLimits {
-                max_queries: 64,
+                max_queries: super::super::deep_geometry::QUERY_COUNT,
                 ..test_segment_limits()
             },
             ..BundleLimits::default()
@@ -794,14 +794,14 @@ mod tests {
             preflight_count(
                 2,
                 BundleLimits {
-                    max_total_queries: 127,
+                    max_total_queries: 153,
                     ..limits(2)
                 }
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_bundle_queries",
-                actual: 128,
-                max: 127
+                actual: 154,
+                max: 153
             })
         ));
         preflight_count(2, limits(2)).unwrap();
@@ -1086,7 +1086,7 @@ mod tests {
                 &frame,
                 BundleLimits {
                     segment: VerifyLimits {
-                        max_queries: 63,
+                        max_queries: 76,
                         ..test_segment_limits()
                     },
                     ..limits(1)
@@ -1094,8 +1094,8 @@ mod tests {
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_queries",
-                actual: 64,
-                max: 63
+                actual: 77,
+                max: 76
             })
         ));
         let prepared_bytes = ordinary.work().public_bytes;
@@ -1124,12 +1124,12 @@ mod tests {
         let input = super::super::deep_engine::VerificationWork {
             proof_bytes: 506_351,
             air_evaluations: 1,
-            leaf_hashes: 449,
-            parent_hashes: 4666,
-            h_calls: 5125,
+            leaf_hashes: 540,
+            parent_hashes: 5433,
+            h_calls: 5983,
             verifier_messages: 10,
-            g_blocks: 637,
-            fold_checks: 320,
+            g_tape_bytes: 30_920,
+            fold_checks: 385,
             terminal_values: 128,
         };
         assert_eq!(
@@ -1137,10 +1137,10 @@ mod tests {
             BundleVerificationWork {
                 proof_bytes: 506_351,
                 transcripts: 1,
-                row_leaves: 64,
-                oracle_leaves: 64,
-                fri_leaves: 321,
-                parent_hashes: 4666,
+                row_leaves: 77,
+                oracle_leaves: 77,
+                fri_leaves: 386,
+                parent_hashes: 5433,
                 air_evaluations: 1,
                 terminal_degree_checks: 1,
             }
@@ -1199,7 +1199,7 @@ mod tests {
             wire_bytes: 99,
             statement_bytes: 100,
             work,
-            row_roots: vec![GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).unwrap(); 2],
+            row_roots: vec![FastpqCommitmentV1::from_bytes([0x13; 32]); 2],
         };
         assert_eq!(result.public_io(), PublicIO::default());
         assert_eq!(result.segments(), 2);
@@ -1211,7 +1211,7 @@ mod tests {
             result
                 .row_roots()
                 .iter()
-                .all(|r| r.words() == [1, 2, 3, 4, 5, 6])
+                .all(|r| r.as_bytes() == &[0x13; 32])
         );
         assert!(check_limit("test", 1, 0).is_err());
         check_limit("test", 1, 1).unwrap();
@@ -1413,7 +1413,7 @@ mod tests {
             (
                 BundleLimits {
                     segment: VerifyLimits {
-                        max_queries: 63,
+                        max_queries: 76,
                         ..limits(2).segment
                     },
                     ..limits(2)
@@ -1499,11 +1499,11 @@ mod tests {
             max_segments: count,
             max_wire_bytes: 16 * 1024 * 1024,
             max_total_segment_bytes: 16 * 1024 * 1024,
-            max_total_queries: 64 * count,
+            max_total_queries: super::super::deep_geometry::QUERY_COUNT * count,
             max_total_decode_allocation_charges: 128 * 1024 * 1024,
             segment: VerifyLimits {
                 max_proof_bytes: super::super::deep_proof::MAX_FRAME_BYTES,
-                max_queries: 64,
+                max_queries: super::super::deep_geometry::QUERY_COUNT,
                 ..test_segment_limits()
             },
             ..BundleLimits::default()
@@ -1653,7 +1653,7 @@ mod tests {
                 ),
                 (
                     BundleLimits {
-                        max_total_queries: 127,
+                        max_total_queries: 153,
                         ..final_limits(2)
                     },
                     "max_bundle_queries",
@@ -1661,7 +1661,7 @@ mod tests {
                 (
                     BundleLimits {
                         segment: VerifyLimits {
-                            max_queries: 63,
+                            max_queries: 76,
                             ..final_limits(2).segment
                         },
                         ..final_limits(2)

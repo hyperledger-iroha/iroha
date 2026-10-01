@@ -330,6 +330,8 @@ mod tests {
             "kagemusha.redeem",
             "kagemusha.operation",
             "kagemusha.authority_state",
+            "ledger.resource_names_state",
+            "ledger.authority_originals",
         ]);
         for projection in [CatalogProjection::Mounted, CatalogProjection::OpenApi] {
             let projected = catalog.project(projection, enabled);
@@ -340,9 +342,25 @@ mod tests {
                     .map(|route| route.stable_route_id())
                     .collect::<BTreeSet<_>>(),
                 complete,
-                "every app-api node and authored OpenAPI contract must expose all five native KAGEMUSHA routes"
+                "every app-api node and authored OpenAPI contract must expose the five native KAGEMUSHA routes and exact authenticated names/authority routes"
             );
         }
+        assert_eq!(
+            kagemusha::RESOURCE_NAMES_STATE.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            kagemusha::RESOURCE_NAMES_STATE.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            kagemusha::RESOURCE_NAMES_STATE.effect(),
+            RouteEffect::ReadOnly
+        );
+        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.method(), HttpMethod::Post);
+        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.authentication(), AuthenticationPolicy::CanonicalAccountSignature);
+        assert_eq!(kagemusha::AUTHORITY_ORIGINALS.effect(), RouteEffect::ReadOnly);
         let mcp = catalog.project(CatalogProjection::Mcp, enabled);
         assert_eq!(mcp.len(), 4);
         assert_eq!(
@@ -355,7 +373,7 @@ mod tests {
                 "kagemusha.redeem",
                 "kagemusha.operation",
             ]),
-            "the data-only complete authority snapshot has no MCP projection"
+            "complete native authority/name carriers have no MCP projection"
         );
     }
     #[test]
@@ -573,6 +591,10 @@ mod tests {
             (
                 contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
                 "/v1/accounts/recovery/finalize",
+            ),
+            (
+                contracts_and_verification_keys::ACCOUNT_RECOVERY_CANCEL_POST,
+                "/v1/accounts/recovery/cancel",
             ),
             (
                 contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,

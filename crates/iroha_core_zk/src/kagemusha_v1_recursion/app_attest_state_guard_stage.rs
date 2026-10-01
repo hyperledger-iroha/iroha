@@ -37,6 +37,8 @@ pub(super) struct AppleAssertionSignatureCellsV1<'a, F: KagemushaPoseidonFieldV1
     pub(super) s: &'a ProperCrtUint<F>,
     pub(super) z: &'a ProperCrtUint<F>,
     pub(super) digest_reduction_quotient: AssignedValue<F>,
+    pub(super) retained_counter_floor: AssignedValue<F>,
+    pub(super) accepted_counter: AssignedValue<F>,
 }
 
 /// Copy-bind one original assertion to the same signed subject, policy, State
@@ -70,6 +72,8 @@ pub(super) fn constrain_apple_state_guard_assertion_stage_v1<
         public,
         canonical_s,
         authenticator_data,
+        signature.retained_counter_floor,
+        signature.accepted_counter,
         credential,
     )?;
     let governed = constrain_apple_governed_signed_identity_v1(
@@ -115,6 +119,8 @@ pub(super) fn constrain_apple_state_guard_assertion_stage_v1<
         &governed.rp_id_hash,
         state.predecessor.secure_index,
         state.successor.secure_index,
+        signature.retained_counter_floor,
+        signature.accepted_counter,
         signature.signature_public_key,
         signature.enrolled_public_key,
         &enrolled_sec1,

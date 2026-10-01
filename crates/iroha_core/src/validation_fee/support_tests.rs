@@ -369,7 +369,9 @@ fn minimal_bound_contract_artifact() -> (
     };
     let entrypoints = [wrapper_entrypoint, pool_entrypoint];
     let interface = ivm::EmbeddedContractInterfaceV1 {
-        callables: (0..entrypoints.len()).map(|index| crate::ivm_test_support::unit_callable(index as u64 * 16)).collect(),
+        callables: (0..entrypoints.len())
+            .map(|index| crate::ivm_test_support::unit_callable(index as u64 * 16))
+            .collect(),
         seiyaku_name: "ValidationFeePayout".to_owned(),
         compiler_fingerprint: "validation-fee-bound-contract-test".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
@@ -527,12 +529,82 @@ pub(crate) fn with_validation_fee_payout_state_at_height(
     )
     .expect("grant contract lifecycle authority");
     let (code, manifest) = minimal_bound_contract_artifact();
-    let code_hash =
-        crate::smartcontracts::code::register_code_bytes(&deployer,iroha_model_base::topology::DataSpaceId::UNIVERSAL, code.clone(), &mut state_tx)
-            .expect("register payout contract bytes");
+    let code_hash = crate::smartcontracts::code::register_code_bytes(
+        &deployer,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        code.clone(),
+        &mut state_tx,
+    )
+    .expect("register payout contract bytes");
     crate::smartcontracts::code::register_manifest(
         &deployer,
-iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(&deployer_key),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        manifest.signed(&deployer_key),
+        &mut state_tx,
+    )
+    .expect("register payout contract manifest");
+    test(&mut state_tx, &deployer, &code, code_hash);
+}
+// This ordinary contract fixture owns the original signed root and finite
+// callback invocation. The pristine component helper above remains unchanged.
+pub(crate) fn with_original_validation_fee_payout_state_at_height(
+    height: u64,
+    prepare: impl FnOnce(crate::state::State) -> crate::state::State,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    let deployer_key = key_pair(55);
+    let deployer = AccountId::new(deployer_key.public_key().clone());
+    let state = prepare(
+        crate::state::State::new_with_chain_and_network_id_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        ),
+    );
+    let parent = state
+        .view()
+        .latest_block()
+        .expect("original signed payout parent");
+    let time_ms = u64::try_from(parent.header().creation_time().as_millis())
+        .expect("original payout parent timestamp fits")
+        .checked_add(1)
+        .expect("ordinary payout fixture follows its parent");
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("test height is non-zero"),
+        state.view().latest_block_hash(),
+        None,
+        time_ms,
+        0,
+    );
+    assert_eq!(
+        header.creation_time(),
+        parent.header().creation_time() + std::time::Duration::from_millis(1),
+        "the payout fixture clock follows its actual signed parent"
+    );
+    let mut block = state.block(header);
+    let mut state_tx = block.transaction_for_callback_testing();
+    let deployment_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
+    crate::smartcontracts::Execute::execute(
+        iroha_data_model::isi::Grant::account_permission(deployment_permission, deployer.clone()),
+        &deployer,
+        &mut state_tx,
+    )
+    .expect("grant contract lifecycle authority");
+    let (code, manifest) = minimal_bound_contract_artifact();
+    let code_hash = crate::smartcontracts::code::register_code_bytes(
+        &deployer,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        code.clone(),
+        &mut state_tx,
+    )
+    .expect("register payout contract bytes");
+    crate::smartcontracts::code::register_manifest(
+        &deployer,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        manifest.signed(&deployer_key),
         &mut state_tx,
     )
     .expect("register payout contract manifest");
@@ -633,12 +705,17 @@ fn install_active_bound_validation_fee_policy(
     )
     .expect("grant contract lifecycle authority");
     let (code, manifest) = minimal_bound_contract_artifact();
-    let code_hash =
-        crate::smartcontracts::code::register_code_bytes(deployer,iroha_model_base::topology::DataSpaceId::UNIVERSAL, code.clone(), state_tx)
-            .expect("register contract bytes");
+    let code_hash = crate::smartcontracts::code::register_code_bytes(
+        deployer,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        code.clone(),
+        state_tx,
+    )
+    .expect("register contract bytes");
     crate::smartcontracts::code::register_manifest(
         deployer,
-iroha_model_base::topology::DataSpaceId::UNIVERSAL, manifest.signed(deployer_key),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        manifest.signed(deployer_key),
         state_tx,
     )
     .expect("register signed contract manifest");

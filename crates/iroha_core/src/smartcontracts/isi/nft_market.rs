@@ -288,6 +288,7 @@ mod tests {
     fn exact_price_purchase_moves_both_legs_and_rejects_replayed_or_changed_terms() {
         let (state, offer, seller, buyer, outsider) = fixture();
         let mut block = state.block(header(1));
+        block.admit_fastpq_source_for_testing(Hash::new(b"native-nft-purchase-test-call"));
         let mut st = block.transaction();
         st.tx_call_hash = Some(Hash::new(b"native-nft-purchase-test-call"));
         mint(&mut st, &offer, &seller);

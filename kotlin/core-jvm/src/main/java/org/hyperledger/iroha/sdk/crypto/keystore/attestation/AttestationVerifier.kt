@@ -51,12 +51,16 @@ class AttestationVerifier private constructor(
         val activeTrustAnchors = validateRevocationStatus(chain)
         validateCertificatePath(chain, activeTrustAnchors)
 
-        val description = parseKeyDescription(leaf)
+        // Android attestation can include a subsequently issued leaf extension. The first
+        // extension encountered from the root is the attested original, after PKIX validation.
+        val attested = AndroidKeyAttestationOriginalV1.certificate(chain)
+        val description = parseKeyDescription(attested)
         if (!MessageDigest.isEqual(challenge, description.attestationChallenge)) {
             throw AttestationVerificationException("Attestation challenge mismatch")
         }
         if (requireStrongBox
-            && description.attestationSecurityLevel != AttestationResult.SecurityLevel.STRONG_BOX
+            && (description.attestationSecurityLevel != AttestationResult.SecurityLevel.STRONG_BOX ||
+                description.keymasterSecurityLevel != AttestationResult.SecurityLevel.STRONG_BOX)
         ) {
             throw AttestationVerificationException("StrongBox attestation required by policy")
         }
@@ -64,6 +68,7 @@ class AttestationVerifier private constructor(
         return AttestationResult(
             alias = attestation.alias,
             certificateChain = chain,
+            attestationCertificate = attested,
             attestationSecurityLevel = description.attestationSecurityLevel,
             keymasterSecurityLevel = description.keymasterSecurityLevel,
             attestationChallenge = description.attestationChallenge,
@@ -196,10 +201,10 @@ class AttestationVerifier private constructor(
         certificate.subjectX500Principal == trusted.subjectX500Principal &&
             certificate.publicKey == trusted.publicKey
 
-    private fun parseKeyDescription(leaf: X509Certificate): KeyDescription {
-        val extension = leaf.getExtensionValue(ATTESTATION_OID)
+    private fun parseKeyDescription(attested: X509Certificate): KeyDescription {
+        val extension = attested.getExtensionValue(ATTESTATION_OID)
             ?: throw AttestationVerificationException(
-                "Leaf certificate does not contain Android attestation extension"
+                "Selected certificate does not contain Android attestation extension"
             )
 
         val outer = DerReader(extension)

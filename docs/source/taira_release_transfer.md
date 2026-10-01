@@ -1,7 +1,7 @@
 # Prepared Taira transfer
 
 `scripts/taira_release_transfer.py` imports the four executables from a completed
-`taira_release.py prepare` result, its public qualification evidence and the exact signed Git source into fresh,
+`taira_release.py prepare` result, its public check/build evidence and the exact signed Git source into fresh,
 inactive custody on the approved MacStadium Dublin Linux guest. It runs no
 validator, deployment, reset, service, transaction or activation command.
 
@@ -44,11 +44,20 @@ command from the plan. SSH handles its authentication; the driver reads no
 runtime private key, token, password or validator configuration.
 
 Before remote I/O, the command verifies the signed controller sources, the exact
-preparation request/result/capture, its native qualification checkpoint, the
+preparation request/result/capture and its actual typed check evidence, the
 frozen source snapshot, and all four captured AArch64 ELF hashes. The original
 mode 0500 captures are retained unchanged. The signed-source owner exports only
 the selected commit and complete tree/object closure, excluding parent history,
 working-tree changes and gitlink contents.
+
+Current `prepare` always records `native_check_scope: "build-only"` and
+`checks.passed: false` because regression checks were not run. Transfer preserves
+the actual boolean and request bytes. Retained `basic`, `full` and `build-only`
+scopes classify their evidence; neither transfer nor the same-revision
+owner-signed dispatcher transition requires regression success as deployment
+authority. Neither can convert a failed check into a pass. Native deployment
+preflight, canary, finality, readiness, restart, authorization and artifact/source
+custody remain mandatory.
 
 Source readers retain bounded lookahead across Git headers and adjacent pack
 objects. Pack inflation consumes each input byte once before the independent
@@ -134,7 +143,7 @@ The mode 0600 plan is a closed JSON object with exactly these fields:
 Each path/SHA256 reference has exactly `path` and `sha256` fields. Binary hashes
 and the import root are derived from the receipts, not maintained separately for
 each invocation. The controller authenticates its signed source and the bounded
-preparation/request/checkpoint/completion records, then rehashes only the selected
+preparation/request/check-evidence/completion records, then rehashes only the selected
 guest ELF. It does **not** revalidate all other imported payloads or traverse the
 source tree on each command. Native source-manifest and assembly retain their own
 source checks; an invocation receipt is not renewed whole-import qualification.

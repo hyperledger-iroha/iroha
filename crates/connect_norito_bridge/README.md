@@ -16,3 +16,9 @@ link checks. The native host check exercises ABI identity, SHA3/SHAKE, ML-DSA,
 and ML-KEM. Static XCFramework layout, headers, exports, and CocoaPods archive
 limits remain enforced by their existing owners. Profile selection alone is
 not evidence that a candidate passes resource, SDK, or device qualification.
+
+`connect_norito_domain_id_validate_v1` admits only exact canonical ASCII
+`domain.dataspace` identities through the native pinned UTS-46 owner. Its 127-byte
+input bound is checked before reading or allocating. SDK callers must retain the
+provided spelling and reject missing native admission; this API does not normalize
+Unicode input or provide a managed fallback.

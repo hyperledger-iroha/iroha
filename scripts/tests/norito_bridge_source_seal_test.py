@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -112,6 +113,72 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
             return seal.seal_inputs(self.root, platform, lockfile_path=self.root / "Cargo.lock")
 
+    def git_child_environment(self) -> dict[str, str]:
+        return {
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/var/empty",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+        }
+
+    def test_git_child_uses_fixed_settings_and_original_executable(self) -> None:
+        git = Path("/usr/bin/git").resolve(strict=True)
+        arguments = ["rev-parse", "--verify", "HEAD"]
+        environment = self.git_child_environment()
+        completed = subprocess.CompletedProcess([], 0, stdout=b"observed\n")
+        with mock.patch.object(seal.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(seal.run(self.root, git, arguments, environment), b"observed\n")
+        self.assertEqual(run.call_args.args[0], [
+            str(git), "--no-replace-objects", "-c", "core.fsmonitor=false",
+            "-c", "core.hooksPath=/dev/null", *arguments,
+        ])
+        self.assertEqual(run.call_args.kwargs["executable"], str(git))
+        self.assertEqual(run.call_args.kwargs["cwd"], self.root)
+        self.assertIs(run.call_args.kwargs["env"], environment)
+        self.assertEqual(arguments, ["rev-parse", "--verify", "HEAD"])
+
+    def test_git_child_ignores_actual_persistent_blob_replacement(self) -> None:
+        original = (self.root / "Cargo.lock").read_bytes()
+        original_blob = self.git("rev-parse", "HEAD:Cargo.lock").decode("ascii").strip()
+        replacement = self.root / ".git" / "replacement-blob"
+        replacement.write_bytes(b"# distinctly replaced fixture lock\n")
+        replacement_blob = self.git("hash-object", "-w", str(replacement)).decode("ascii").strip()
+        self.assertNotEqual(original_blob, replacement_blob)
+        self.git("replace", original_blob, replacement_blob)
+        self.assertEqual(self.git("show", "HEAD:Cargo.lock"), replacement.read_bytes())
+        observed = seal.run(
+            self.root, Path("/usr/bin/git").resolve(strict=True),
+            ["show", "HEAD:Cargo.lock"], self.git_child_environment(),
+        )
+        self.assertEqual(observed, original)
+        self.assertEqual(self.git("replace", "-l").decode("ascii").strip(), original_blob)
+
+    def test_git_child_does_not_execute_actual_local_fsmonitor(self) -> None:
+        marker = self.root / ".git" / "fsmonitor-invoked"
+        monitor = self.root / ".git" / "benign-fsmonitor"
+        monitor.write_text(
+            "#!/bin/sh\n"
+            + "printf invoked > " + shlex.quote(str(marker)) + "\n"
+            + "printf 'fixture-token\\0'\n",
+            encoding="utf-8",
+        )
+        monitor.chmod(0o700)
+        self.git("config", "core.fsmonitor", str(monitor))
+        self.git("status", "--porcelain=v1", "--untracked-files=all")
+        self.assertTrue(marker.is_file(), "unprotected Git must exercise the benign monitor")
+        marker.unlink()
+        (self.root / "Cargo.lock").write_bytes(b"# changed tracked fixture lock\n")
+        observed = seal.run(
+            self.root, Path("/usr/bin/git").resolve(strict=True),
+            ["status", "--porcelain=v1", "--untracked-files=all", "--", "Cargo.lock"],
+            self.git_child_environment(),
+        )
+        self.assertFalse(marker.exists(), "source-seal Git must disable the local monitor")
+        self.assertIn(b" M Cargo.lock", observed)
+
     def test_apple_seal_includes_package_lock_and_mobile_transports(self) -> None:
         apple = self.inputs("apple")
         self.assertIn("crates/connect_norito_bridge/NoritoBridge.podspec.template", apple)
@@ -135,6 +202,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("ci/check_connect_norito_bridge_header.sh", apple)
 
         android = self.inputs("android")
+        self.assertIn("gradle/mobile-sdk-external-android-build.settings.gradle.kts", seal.ANDROID_ROOT_INPUTS)
         self.assertNotIn("IrohaSwift/Package.resolved", android)
         self.assertNotIn("IrohaSwift/Sources/IrohaSwiftMobileTransports", android)
         self.assertNotIn("scripts/exec_with_file_lock.py", android)

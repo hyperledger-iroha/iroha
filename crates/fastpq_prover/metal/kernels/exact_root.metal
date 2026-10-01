@@ -12,6 +12,16 @@ struct ExactRootFftArgs {
     uint padding;
 };
 
+// Public radix-256 exponent digits index a root-specific 8KiB table. Exactly
+// three multiplies replace repeated square-and-multiply exponentiation. Root,
+// exponent, table addresses and execution order are independent of column data.
+inline ulong exact_root_power_v1(const device ulong *powers, uint exponent) {
+    ulong value = powers[exponent & 255U];
+    value = mul_mod(value, powers[256U + ((exponent >> 8U) & 255U)]);
+    value = mul_mod(value, powers[512U + ((exponent >> 16U) & 255U)]);
+    return mul_mod(value, powers[768U + (exponent >> 24U)]);
+}
+
 // One pair is written only by its lower index. Distinct pairs never overlap.
 kernel void exact_root_bit_reverse_v1(
     device ulong *columns [[buffer(0)]],
@@ -37,7 +47,7 @@ kernel void exact_root_bit_reverse_v1(
 // Each group owns one disjoint tile. No group iterates across the column.
 kernel void exact_root_local_tiles_v1(
     device ulong *columns [[buffer(0)]],
-    const device ulong *stage_twiddles [[buffer(1)]],
+    const device ulong *root_powers [[buffer(1)]],
     constant ExactRootFftArgs &args [[buffer(2)]],
     uint2 group [[threadgroup_position_in_grid]],
     uint lane [[thread_index_in_threadgroup]]
@@ -53,7 +63,10 @@ kernel void exact_root_local_tiles_v1(
             uint half_width = 1U << stage;
             uint offset = lane & (half_width - 1U);
             uint low = (lane - offset) * 2U + offset;
-            ulong twiddle = pow_mod(stage_twiddles[stage], (ulong)offset);
+            // log_len <= 32 and stage < log_len: shift is in 0..31;
+            // offset < 2^stage keeps the product below 2^31.
+            uint exponent = offset << (args.log_len - stage - 1U);
+            ulong twiddle = exact_root_power_v1(root_powers, exponent);
             ulong left = tile[low];
             ulong right = mul_mod(tile[low + half_width], twiddle);
             tile[low] = add_mod(left, right);
@@ -73,7 +86,7 @@ kernel void exact_root_local_tiles_v1(
 // barrier alone cannot synchronize these independently scheduled groups.
 kernel void exact_root_global_stage_v1(
     device ulong *columns [[buffer(0)]],
-    const device ulong *stage_twiddles [[buffer(1)]],
+    const device ulong *root_powers [[buffer(1)]],
     constant ExactRootFftArgs &args [[buffer(2)]],
     uint2 group [[threadgroup_position_in_grid]],
     uint lane [[thread_index_in_threadgroup]]
@@ -83,9 +96,10 @@ kernel void exact_root_global_stage_v1(
     ulong butterfly = group_base + (ulong)lane;
     ulong limit = args.column_len / 2UL;
     ulong offset = butterfly & (half_width - 1UL);
-    ulong first_twiddle = pow_mod(stage_twiddles[args.stage], offset);
+    uint root_shift = args.log_len - args.stage - 1U;
+    ulong first_twiddle = exact_root_power_v1(root_powers, (uint)offset << root_shift);
     ulong twiddle = first_twiddle;
-    ulong twiddle_stride = pow_mod(stage_twiddles[args.stage], 256UL);
+    ulong twiddle_stride = exact_root_power_v1(root_powers, 256U << root_shift);
     ulong column_base = (ulong)group.y * args.column_len;
     for (uint iteration = 0U; iteration < 8U && butterfly < limit; ++iteration) {
         ulong low = column_base + (butterfly - offset) * 2UL + offset;

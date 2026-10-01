@@ -15,6 +15,8 @@ pub mod account_capabilities;
 pub mod account_faucet_policy;
 /// Typed account-alias absence selectors and planning error codes.
 pub mod aliases;
+/// Scoped canonical account/fee authority originals for an existing native ledger-wide reader.
+pub mod authority_originals;
 /// Typed non-success observations for challenge-bound bridge finality.
 pub mod bridge_attestation;
 /// Exact progress bindings for challenge-bound finality attestation reads.
@@ -45,6 +47,8 @@ pub mod prepared_transaction;
 pub mod private_settlement_api;
 /// Shared QR Code encoder used by Torii and CLI device-handoff flows.
 pub mod qr;
+/// Complete native alias/SNS originals for an existing signed ledger-wide reader.
+pub mod resource_names_state;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
 /// Typed absence response for authoritative SNS registration lookups.

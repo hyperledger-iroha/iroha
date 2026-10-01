@@ -424,11 +424,37 @@ fn role13_current_raw_custody_requires_exact_block_finality_and_remains_non_auth
         read_current_release_manifest_custody_block_finality_v1(&state.view(), binding, height)
     };
     // Block 2 is committed and durable, but its local CommitQC does not verify.
-    assert!(commit_uncertified(&mut chain, 1_000, Vec::new()).is_empty());
+    assert!(commit(&mut chain, 1_000, Vec::new()).is_empty());
+    let original = chain.committed(2);
+    chain.corrupt_local_quorum_for_test(2, crate::sumeragi::test_chain::Signers::BelowQuorum);
     assert_eq!(
         read(&policy.binding, 2),
         Err(ReleaseManifestCustodyErrorV1::FinalityUnavailable),
         "a committed row and durable block do not replace the CommitQC"
+    );
+    // Retain and recover the actual original QC before advancing: the complete
+    // certificate prefix is mandatory for the current custody read.
+    state
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Some(
+                original
+                    .block()
+                    .commit_certificate()
+                    .unwrap()
+                    .commit_qc()
+                    .to_vec(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        chain
+            .committed(2)
+            .block()
+            .executed_block_wire_identity()
+            .unwrap(),
+        original.block().executed_block_wire_identity().unwrap()
     );
     // A certified successor finalizes the current raw row.
     assert!(commit(&mut chain, 1_500, Vec::new()).is_empty());

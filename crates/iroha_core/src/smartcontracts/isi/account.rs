@@ -18,6 +18,7 @@ pub mod isi {
         error::{InvalidParameterError, MintabilityError, RepetitionError},
     };
     use iroha_executor_data_model::isi::multisig::MultisigSpec;
+    use std::num::NonZeroU64;
     fn is_idempotent_alias_permission(permission: &Permission) -> bool {
         iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(permission)
             .is_ok()
@@ -32,6 +33,18 @@ pub mod isi {
     }
     fn invalid_account_recovery(message: impl Into<std::string::String>) -> Error {
         Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+    }
+    fn ensure_recovery_request_generation(
+        request: &AccountRecoveryRequest,
+        generation: NonZeroU64,
+    ) -> Result<(), Error> {
+        if request.request_generation != generation {
+            return Err(invalid_account_recovery(format!(
+                "account recovery request generation mismatch: expected {}, received {}",
+                request.request_generation, generation,
+            )));
+        }
+        Ok(())
     }
     fn multisig_spec_key() -> Name {
         "multisig/spec"
@@ -390,6 +403,16 @@ pub mod isi {
             let SetAccountRecoveryPolicy { account, policy } = self;
             validate_recovery_policy(&policy)?;
             let alias = stable_recovery_alias(state_transaction, &account)?;
+            if state_transaction
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .is_some_and(AccountRecoveryRequest::is_pending)
+            {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery policy for `{alias:?}` cannot be replaced while a request is pending"
+                )));
+            }
             state_transaction
                 .world
                 .account_recovery_policies
@@ -456,6 +479,7 @@ pub mod isi {
             let ProposeAccountRecovery {
                 alias,
                 new_controller,
+                request_generation,
             } = self;
             let current_account = active_account_for_alias(state_transaction, &alias)?;
             let policy = state_transaction
@@ -485,6 +509,27 @@ pub mod isi {
                     "account recovery for `{alias:?}` already has a pending request"
                 )));
             }
+            let expected_generation = state_transaction
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .map_or(Ok(NonZeroU64::MIN), |previous| {
+                    previous
+                        .request_generation
+                        .get()
+                        .checked_add(1)
+                        .and_then(NonZeroU64::new)
+                        .ok_or_else(|| {
+                            invalid_account_recovery(format!(
+                                "account recovery request generation for `{alias:?}` is exhausted"
+                            ))
+                        })
+                })?;
+            if request_generation != expected_generation {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery request generation mismatch for `{alias:?}`: expected {expected_generation}, received {request_generation}"
+                )));
+            }
             let candidate = proposed_account_id(&new_controller);
             if candidate == current_account {
                 return Err(invalid_account_recovery(format!(
@@ -501,6 +546,7 @@ pub mod isi {
                 .saturating_add(policy.timelock_ms.get());
             let request = AccountRecoveryRequest::new(
                 alias.clone(),
+                request_generation,
                 current_account.clone(),
                 new_controller,
                 authority.clone(),
@@ -529,7 +575,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let ApproveAccountRecovery { alias } = self;
+            let ApproveAccountRecovery {
+                alias,
+                request_generation,
+            } = self;
             let current_account = active_account_for_alias(state_transaction, &alias)?;
             let policy = state_transaction
                 .world
@@ -556,6 +605,7 @@ pub mod isi {
                         "account recovery request for `{alias:?}` does not exist"
                     ))
                 })?;
+            ensure_recovery_request_generation(&request, request_generation)?;
             if !request.is_pending() {
                 return Err(invalid_account_recovery(format!(
                     "account recovery request for `{alias:?}` is not pending"
@@ -566,6 +616,14 @@ pub mod isi {
                 &request,
                 &current_account,
             )?;
+            if request
+                .cancellation_approvals
+                .contains(&authority.subject_id())
+            {
+                return Err(invalid_account_recovery(format!(
+                    "guardian `{authority}` already approved cancellation for `{alias:?}`"
+                )));
+            }
             let request = state_transaction
                 .world
                 .account_recovery_requests
@@ -593,7 +651,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let CancelAccountRecovery { alias } = self;
+            let CancelAccountRecovery {
+                alias,
+                request_generation,
+            } = self;
             let current_account = active_account_for_alias(state_transaction, &alias)?;
             let policy = state_transaction
                 .world
@@ -615,6 +676,7 @@ pub mod isi {
                         "account recovery request for `{alias:?}` does not exist"
                     ))
                 })?;
+            ensure_recovery_request_generation(&request, request_generation)?;
             if !request.is_pending() {
                 return Err(invalid_account_recovery(format!(
                     "account recovery request for `{alias:?}` is not pending"
@@ -626,10 +688,8 @@ pub mod isi {
                 &current_account,
             )?;
             let owner_can_cancel = authority == &current_account;
-            let guardian_quorum_can_cancel =
-                current_account_is_recovery_guardian(&policy, authority)
-                    && policy.quorum_reached(&request.approvals);
-            if !owner_can_cancel && !guardian_quorum_can_cancel {
+            let guardian_can_vote = current_account_is_recovery_guardian(&policy, authority);
+            if !owner_can_cancel && !guardian_can_vote {
                 return Err(invalid_account_recovery(format!(
                     "account `{authority}` is not allowed to cancel recovery for `{alias:?}`"
                 )));
@@ -639,18 +699,33 @@ pub mod isi {
                 .account_recovery_requests
                 .get_mut(&alias)
                 .expect("recovery request was verified immediately before mutation");
-            request.cancel();
-            let cancelled = request.clone();
+            if owner_can_cancel {
+                request.cancel();
+            } else {
+                request.approve_cancellation(authority);
+                if policy.quorum_reached(&request.cancellation_approvals) {
+                    request.cancel();
+                }
+            }
+            let updated = request.clone();
+            let event = if updated.is_pending() {
+                AccountRecoveryEvent::CancellationApproved(AccountRecoveryCancellationApproved {
+                    account: current_account,
+                    alias,
+                    approver: authority.clone(),
+                    request: updated,
+                })
+            } else {
+                AccountRecoveryEvent::Cancelled(AccountRecoveryCancelled {
+                    account: current_account,
+                    alias,
+                    cancelled_by: authority.clone(),
+                    request: updated,
+                })
+            };
             state_transaction
                 .world
-                .emit_events(Some(AccountEvent::Recovery(
-                    AccountRecoveryEvent::Cancelled(AccountRecoveryCancelled {
-                        account: current_account,
-                        alias,
-                        cancelled_by: authority.clone(),
-                        request: cancelled,
-                    }),
-                )));
+                .emit_events(Some(AccountEvent::Recovery(event)));
             Ok(())
         }
     }
@@ -661,7 +736,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let FinalizeAccountRecovery { alias } = self;
+            let FinalizeAccountRecovery {
+                alias,
+                request_generation,
+            } = self;
             let current_account = active_account_for_alias(state_transaction, &alias)?;
             let policy = state_transaction
                 .world
@@ -683,6 +761,7 @@ pub mod isi {
                         "account recovery request for `{alias:?}` does not exist"
                     ))
                 })?;
+            ensure_recovery_request_generation(&request, request_generation)?;
             if !request.is_pending() {
                 return Err(invalid_account_recovery(format!(
                     "account recovery request for `{alias:?}` is not pending"
@@ -2397,17 +2476,20 @@ pub mod query {
                 .unwrap();
                 ProposeAccountRecovery {
                     alias: alias.clone(),
+                    request_generation: NonZeroU64::MIN,
                     new_controller: AccountController::single(replacement_key.public_key().clone()),
                 }
                 .execute(&owner_id, &mut stx)
                 .unwrap();
                 ApproveAccountRecovery {
                     alias: alias.clone(),
+                    request_generation: NonZeroU64::MIN,
                 }
                 .execute(&guardian_id, &mut stx)
                 .unwrap();
                 ApproveAccountRecovery {
                     alias: alias.clone(),
+                    request_generation: NonZeroU64::MIN,
                 }
                 .execute(&guardian_id, &mut stx)
                 .unwrap();
@@ -2419,6 +2501,7 @@ pub mod query {
                 assert_eq!(request.approvals.len(), 1);
                 let err = FinalizeAccountRecovery {
                     alias: alias.clone(),
+                    request_generation: NonZeroU64::MIN,
                 }
                 .execute(&guardian_id, &mut stx)
                 .expect_err("timelock should block immediate finalization");
@@ -2430,6 +2513,7 @@ pub mod query {
             let mut stx = block.transaction();
             FinalizeAccountRecovery {
                 alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
             }
             .execute(&guardian_id, &mut stx)
             .expect("finalize after timelock");
@@ -2460,12 +2544,14 @@ pub mod query {
             );
             let err = FinalizeAccountRecovery {
                 alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
             }
             .execute(&guardian_id, &mut stx)
             .expect_err("finalized request must not be replayable");
             assert_smart_contract_error_contains(err, "is not pending");
             let err = CancelAccountRecovery {
                 alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
             }
             .execute(&guardian_id, &mut stx)
             .expect_err("cancellation must not reverse finalized recovery");
@@ -2489,6 +2575,7 @@ pub mod query {
             stx.world.replace_account_rekey_record(canonical.clone());
             let request = AccountRecoveryRequest::new(
                 alias.clone(),
+                NonZeroU64::MIN,
                 retired.clone(),
                 AccountController::single(replacement.public_key().clone()),
                 active.clone(),
@@ -2523,6 +2610,7 @@ pub mod query {
             stx.world.replace_account_rekey_record(canonical);
             let current_request = AccountRecoveryRequest::new(
                 alias.clone(),
+                NonZeroU64::MIN,
                 active.clone(),
                 AccountController::single(checked_keypair().public_key().clone()),
                 active.clone(),
@@ -2568,48 +2656,381 @@ pub mod query {
             .unwrap();
             ProposeAccountRecovery {
                 alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
                 new_controller: AccountController::single(replacement_key.public_key().clone()),
             }
             .execute(&owner_id, &mut stx)
             .unwrap();
             ApproveAccountRecovery {
                 alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
             }
             .execute(&guardian_one_id, &mut stx)
             .unwrap();
             let err = FinalizeAccountRecovery {
                 alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
             }
             .execute(&guardian_one_id, &mut stx)
             .expect_err("finalization must reject before quorum");
             assert_smart_contract_error_contains(err, "guardian quorum");
-            let err = CancelAccountRecovery {
-                alias: alias.clone(),
-            }
-            .execute(&guardian_one_id, &mut stx)
-            .expect_err("one guardian cannot cancel without quorum");
-            assert_smart_contract_error_contains(err, "not allowed to cancel");
-            ApproveAccountRecovery {
-                alias: alias.clone(),
-            }
-            .execute(&guardian_two_id, &mut stx)
-            .unwrap();
             CancelAccountRecovery {
                 alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
             }
             .execute(&guardian_one_id, &mut stx)
-            .expect("guardian quorum should be able to cancel");
+            .expect("first cancellation vote does not require a replacement approval quorum");
+            assert!(matches!(
+                stx.world.internal_event_buf.last().unwrap().as_ref(),
+                iroha_data_model::events::data::DataEvent::Account(AccountEvent::Recovery(
+                    AccountRecoveryEvent::CancellationApproved(event)
+                )) if event.approver == guardian_one_id && event.request.is_pending()
+            ));
+            let first_vote = stx
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .unwrap()
+                .clone();
+            assert_eq!(first_vote.status, AccountRecoveryStatus::Pending);
+            assert!(first_vote.approvals.is_empty());
+            assert_eq!(
+                first_vote.cancellation_approvals,
+                std::collections::BTreeSet::from([guardian_one_id.subject_id(),])
+            );
+            let held_approve = ApproveAccountRecovery {
+                alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
+            }
+            .execute(&guardian_one_id, &mut stx)
+            .expect_err("a held replacement approval cannot undo cancellation consent");
+            assert_smart_contract_error_contains(held_approve, "already approved cancellation");
+            assert_eq!(
+                stx.world.account_recovery_requests.get(&alias),
+                Some(&first_vote)
+            );
+            CancelAccountRecovery {
+                alias: alias.clone(),
+                request_generation: NonZeroU64::MIN,
+            }
+            .execute(&guardian_two_id, &mut stx)
+            .expect("independent cancellation quorum should be able to cancel");
+            assert!(matches!(
+                stx.world.internal_event_buf.last().unwrap().as_ref(),
+                iroha_data_model::events::data::DataEvent::Account(AccountEvent::Recovery(
+                    AccountRecoveryEvent::Cancelled(event)
+                )) if event.cancelled_by == guardian_two_id && !event.request.is_pending()
+            ));
             let request = stx
                 .world
                 .account_recovery_requests
                 .get(&alias)
                 .expect("cancelled request should remain queryable");
             assert_eq!(request.status, AccountRecoveryStatus::Cancelled);
-            let err = FinalizeAccountRecovery { alias }
-                .execute(&guardian_two_id, &mut stx)
-                .expect_err("a canceled recovery must reject queued finalization");
+            assert!(request.approvals.is_empty());
+            assert_eq!(request.cancellation_approvals.len(), 2);
+            let err = FinalizeAccountRecovery {
+                alias,
+                request_generation: NonZeroU64::MIN,
+            }
+            .execute(&guardian_two_id, &mut stx)
+            .expect_err("a canceled recovery must reject queued finalization");
             assert_smart_contract_error_contains(err, "is not pending");
         }
+        #[test]
+        fn account_recovery_one_cancellation_vote_cannot_veto_other_guardians_quorum() {
+            let state = new_state_with_authority();
+            let owner = checked_account_id();
+            let guardians = [
+                checked_account_id(),
+                checked_account_id(),
+                checked_account_id(),
+            ];
+            let alias = root_alias("independent-cancellation");
+            let controller = AccountController::single(checked_keypair().public_key().clone());
+            let policy = AccountRecoveryPolicy::new(
+                guardians
+                    .iter()
+                    .cloned()
+                    .map(|id| RecoveryGuardian::new(id, 1))
+                    .collect(),
+                2,
+                NonZeroU64::new(10).unwrap(),
+            )
+            .unwrap();
+            {
+                let mut block = state.block(new_block_header(1, 0));
+                let mut stx = block.transaction();
+                register_labeled_account(&mut stx, &ALICE_ID, &owner, &alias);
+                for guardian in &guardians {
+                    Register::account(Account::new(guardian.clone()))
+                        .execute(&ALICE_ID, &mut stx)
+                        .unwrap();
+                }
+                SetAccountRecoveryPolicy::new(owner.clone(), policy.clone())
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                ProposeAccountRecovery::new(alias.clone(), controller, NonZeroU64::MIN)
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                let original = stx
+                    .world
+                    .account_recovery_requests
+                    .get(&alias)
+                    .unwrap()
+                    .clone();
+                let changed_policy = AccountRecoveryPolicy::new(
+                    vec![RecoveryGuardian::new(guardians[0].clone(), 1)],
+                    1,
+                    NonZeroU64::MIN,
+                )
+                .unwrap();
+                let replace_error = SetAccountRecoveryPolicy::new(owner.clone(), changed_policy)
+                    .execute(&owner, &mut stx)
+                    .expect_err("pending request must retain its exact guardian council");
+                assert_smart_contract_error_contains(
+                    replace_error,
+                    "cannot be replaced while a request is pending",
+                );
+                assert_eq!(
+                    stx.world.account_recovery_policies.get(&alias),
+                    Some(&policy)
+                );
+                assert_eq!(
+                    stx.world.account_recovery_requests.get(&alias),
+                    Some(&original)
+                );
+                CancelAccountRecovery::new(alias.clone(), NonZeroU64::MIN)
+                    .execute(&guardians[0], &mut stx)
+                    .unwrap();
+                for guardian in &guardians[1..] {
+                    ApproveAccountRecovery::new(alias.clone(), NonZeroU64::MIN)
+                        .execute(guardian, &mut stx)
+                        .unwrap();
+                }
+                let eligible = stx.world.account_recovery_requests.get(&alias).unwrap();
+                assert_eq!(eligible.status, AccountRecoveryStatus::Pending);
+                assert_eq!(eligible.cancellation_approvals.len(), 1);
+                assert!(policy.quorum_reached(&eligible.approvals));
+                stx.apply();
+                block.commit_world_overlay_for_testing().unwrap();
+            }
+            let mut block = state.block(new_block_header(2, 10));
+            let mut stx = block.transaction();
+            FinalizeAccountRecovery::new(alias.clone(), NonZeroU64::MIN)
+                .execute(&guardians[1], &mut stx)
+                .expect(
+                    "one cancellation vote cannot override two independent replacement approvals",
+                );
+            let finalized = stx.world.account_recovery_requests.get(&alias).unwrap();
+            assert_eq!(finalized.status, AccountRecoveryStatus::Finalized);
+            assert_eq!(finalized.cancellation_approvals.len(), 1);
+            assert_eq!(finalized.approvals.len(), 2);
+        }
+
+        #[test]
+        fn account_recovery_generations_reject_stale_same_block_replacement_operations() {
+            let state = new_state_with_authority();
+            let owner = checked_account_id();
+            let guardian = checked_account_id();
+            let alias = root_alias("generation-guarded");
+            let controller = AccountController::single(checked_keypair().public_key().clone());
+            let generation_one = NonZeroU64::MIN;
+            let generation_two = NonZeroU64::new(2).unwrap();
+            let policy = AccountRecoveryPolicy::new(
+                vec![RecoveryGuardian::new(guardian.clone(), 1)],
+                1,
+                NonZeroU64::new(10).unwrap(),
+            )
+            .unwrap();
+            {
+                let mut block = state.block(new_block_header(1, 0));
+                let mut stx = block.transaction();
+                register_labeled_account(&mut stx, &ALICE_ID, &owner, &alias);
+                Register::account(Account::new(guardian.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .unwrap();
+                SetAccountRecoveryPolicy::new(owner.clone(), policy.clone())
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                let wrong_first =
+                    ProposeAccountRecovery::new(alias.clone(), controller.clone(), generation_two)
+                        .execute(&owner, &mut stx)
+                        .expect_err("first generation must be one");
+                assert_smart_contract_error_contains(wrong_first, "generation mismatch");
+                assert!(stx.world.account_recovery_requests.get(&alias).is_none());
+                ProposeAccountRecovery::new(alias.clone(), controller.clone(), generation_one)
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                ApproveAccountRecovery::new(alias.clone(), generation_one)
+                    .execute(&guardian, &mut stx)
+                    .unwrap();
+                CancelAccountRecovery::new(alias.clone(), generation_one)
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                let first = stx
+                    .world
+                    .account_recovery_requests
+                    .get(&alias)
+                    .unwrap()
+                    .clone();
+                assert_eq!(first.status, AccountRecoveryStatus::Cancelled);
+                ClearAccountRecoveryPolicy::new(owner.clone())
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                SetAccountRecoveryPolicy::new(owner.clone(), policy)
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                assert_eq!(
+                    stx.world.account_recovery_requests.get(&alias),
+                    Some(&first)
+                );
+                let stale_propose =
+                    ProposeAccountRecovery::new(alias.clone(), controller.clone(), generation_one)
+                        .execute(&owner, &mut stx)
+                        .expect_err("policy replacement cannot reset generation");
+                assert_smart_contract_error_contains(stale_propose, "generation mismatch");
+                assert_eq!(
+                    stx.world.account_recovery_requests.get(&alias),
+                    Some(&first)
+                );
+                ProposeAccountRecovery::new(alias.clone(), controller.clone(), generation_two)
+                    .execute(&owner, &mut stx)
+                    .unwrap();
+                let second = stx
+                    .world
+                    .account_recovery_requests
+                    .get(&alias)
+                    .unwrap()
+                    .clone();
+                assert_eq!(second.request_generation, generation_two);
+                assert_eq!(
+                    second.active_account_id_at_proposal,
+                    first.active_account_id_at_proposal
+                );
+                assert_eq!(second.proposed_controller, first.proposed_controller);
+                assert_eq!(second.proposed_by, first.proposed_by);
+                assert_eq!(
+                    second.execute_after_ms, first.execute_after_ms,
+                    "same block replacement has identical timelock"
+                );
+                let stale_approve = ApproveAccountRecovery::new(alias.clone(), generation_one)
+                    .execute(&guardian, &mut stx)
+                    .expect_err("old approval must not vote on identical replacement");
+                assert_smart_contract_error_contains(stale_approve, "generation mismatch");
+                assert_eq!(
+                    stx.world.account_recovery_requests.get(&alias),
+                    Some(&second)
+                );
+                ApproveAccountRecovery::new(alias.clone(), generation_two)
+                    .execute(&guardian, &mut stx)
+                    .unwrap();
+                let approved = stx
+                    .world
+                    .account_recovery_requests
+                    .get(&alias)
+                    .unwrap()
+                    .clone();
+                let stale_cancel = CancelAccountRecovery::new(alias.clone(), generation_one)
+                    .execute(&owner, &mut stx)
+                    .expect_err("owner's old Cancel cannot cancel replacement");
+                assert_smart_contract_error_contains(stale_cancel, "generation mismatch");
+                let stale_finalize = FinalizeAccountRecovery::new(alias.clone(), generation_one)
+                    .execute(&guardian, &mut stx)
+                    .expect_err("old Finalize must bind exact generation before timelock");
+                assert_smart_contract_error_contains(stale_finalize, "generation mismatch");
+                assert_eq!(
+                    stx.world.account_recovery_requests.get(&alias),
+                    Some(&approved)
+                );
+                stx.apply();
+                block.commit_world_overlay_for_testing().unwrap();
+            }
+            let mut block = state.block(new_block_header(2, 10));
+            let mut stx = block.transaction();
+            let approved = stx
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .unwrap()
+                .clone();
+            let stale_finalize = FinalizeAccountRecovery::new(alias.clone(), generation_one)
+                .execute(&guardian, &mut stx)
+                .expect_err("old Finalize cannot rekey eligible replacement");
+            assert_smart_contract_error_contains(stale_finalize, "generation mismatch");
+            assert_eq!(
+                stx.world.account_recovery_requests.get(&alias),
+                Some(&approved)
+            );
+            assert_eq!(stx.world.account_aliases.get(&alias), Some(&owner));
+            FinalizeAccountRecovery::new(alias.clone(), generation_two)
+                .execute(&guardian, &mut stx)
+                .expect("fresh generation retains normal quorum/timelock finalization");
+            let finalized = stx.world.account_recovery_requests.get(&alias).unwrap();
+            assert_eq!(finalized.request_generation, generation_two);
+            assert_eq!(finalized.status, AccountRecoveryStatus::Finalized);
+        }
+
+        #[test]
+        fn account_recovery_generation_overflow_preserves_terminal_history() {
+            let state = new_state_with_authority();
+            let owner = checked_account_id();
+            let guardian = checked_account_id();
+            let alias = root_alias("generation-exhausted");
+            let controller = AccountController::single(checked_keypair().public_key().clone());
+            let mut block = state.block(new_block_header(1, 0));
+            let mut stx = block.transaction();
+            register_labeled_account(&mut stx, &ALICE_ID, &owner, &alias);
+            Register::account(Account::new(guardian.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            let policy = AccountRecoveryPolicy::new(
+                vec![RecoveryGuardian::new(guardian, 1)],
+                1,
+                NonZeroU64::MIN,
+            )
+            .unwrap();
+            SetAccountRecoveryPolicy::new(owner.clone(), policy.clone())
+                .execute(&owner, &mut stx)
+                .unwrap();
+            let mut terminal = AccountRecoveryRequest::new(
+                alias.clone(),
+                NonZeroU64::MAX,
+                owner.clone(),
+                controller.clone(),
+                owner.clone(),
+                1,
+            );
+            terminal.cancel();
+            stx.world
+                .account_recovery_requests
+                .insert(alias.clone(), terminal.clone());
+            ClearAccountRecoveryPolicy::new(owner.clone())
+                .execute(&owner, &mut stx)
+                .unwrap();
+            SetAccountRecoveryPolicy::new(owner.clone(), policy)
+                .execute(&owner, &mut stx)
+                .unwrap();
+            let error = ProposeAccountRecovery::new(alias.clone(), controller, NonZeroU64::MIN)
+                .execute(&owner, &mut stx)
+                .expect_err("exhausted generation must never wrap or reset");
+            assert_smart_contract_error_contains(error, "generation");
+            assert_smart_contract_error_contains(
+                ProposeAccountRecovery::new(
+                    alias.clone(),
+                    AccountController::single(checked_keypair().public_key().clone()),
+                    NonZeroU64::MAX,
+                )
+                .execute(&owner, &mut stx)
+                .expect_err("max generation cannot be reused"),
+                "is exhausted",
+            );
+            assert_eq!(
+                stx.world.account_recovery_requests.get(&alias),
+                Some(&terminal)
+            );
+        }
+
         #[test]
         fn find_accounts_returns_registered_accounts_for_pass_predicate() {
             let kura = Kura::blank_kura_for_testing();

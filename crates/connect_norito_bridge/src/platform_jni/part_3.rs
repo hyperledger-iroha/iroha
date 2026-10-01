@@ -1,30 +1,3 @@
-macro_rules! jni_sdk_android_pairs {
-    (
-        $(
-            android: $(#[$android_attribute:meta])* fn $android_name:ident();
-            sdk: $(#[$sdk_attribute:meta])*
-            pub unsafe extern "system" fn $sdk_name:ident(
-                $($argument:tt)*
-            ) $(-> $return_type:ty)? $body:block
-        )*
-    ) => {
-        $(
-            $(#[$sdk_attribute])*
-            pub unsafe extern "system" fn $sdk_name(
-                $($argument)*
-            ) $(-> $return_type)? $body
-            $(#[$android_attribute])*
-            #[unsafe(no_mangle)]
-            pub unsafe extern "system" fn $android_name(
-                $($argument)*
-            ) $(-> $return_type)? $body
-        )*
-    };
-}
-
-jni_sdk_android_pairs! {
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativePublicKeyFromPrivate();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
     mut env: jni::JNIEnv<'_>,
@@ -34,8 +7,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jbyteArray {
     java_native_public_key_from_private(&mut env, algorithm_code, private_key)
 }
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeBridgeAbiVersion();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -43,8 +14,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignerContractRevision();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignerContractRevision(
     _env: jni::JNIEnv<'_>,
@@ -52,8 +21,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jint {
     native_signer_jni_contract_revision() as jni::sys::jint
 }
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeKeypairFromSeed();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
@@ -63,8 +30,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jobjectArray {
     java_native_keypair_from_seed(&mut env, algorithm_code, seed)
 }
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignDetached();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignDetached(
     mut env: jni::JNIEnv<'_>,
@@ -75,8 +40,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jbyteArray {
     java_native_sign_detached(&mut env, algorithm_code, private_key, message)
 }
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeVerifyDetached();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeVerifyDetached(
     mut env: jni::JNIEnv<'_>,
@@ -88,8 +51,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ) -> jni::sys::jboolean {
     java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
 }
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeAccountReadPermissionMultisigPayloadHash();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeAccountReadPermissionMultisigPayloadHash(
     mut env: jni::JNIEnv<'_>,
@@ -106,8 +67,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         fee_payment_json,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeFinalizeAccountReadPermissionMultisig();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeFinalizeAccountReadPermissionMultisig(
     mut env: jni::JNIEnv<'_>,
@@ -125,10 +84,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         fee_payment_json, signature,
     )
 }
-android:
-#[allow(clippy::too_many_arguments)]
-fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction();
-sdk:
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
@@ -163,8 +118,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         fee_payment_json,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
@@ -172,8 +125,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasGovernanceDagSymbols();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasGovernanceDagSymbols(
     _env: jni::JNIEnv<'_>,
@@ -181,8 +132,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasGovernanceLogNodeSymbols();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasGovernanceLogNodeSymbols(
     _env: jni::JNIEnv<'_>,
@@ -190,8 +139,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasFixtureBundleSymbols();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasFixtureBundleSymbols(
     _env: jni::JNIEnv<'_>,
@@ -199,13 +146,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-android:
-/// Reports that the Java Android ABI contains appeal-finance validator symbols.
-///
-/// # Safety
-/// The JVM must supply valid JNI references for the duration of this call.
-fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols();
-sdk:
 /// Reports that the Kotlin/JVM ABI contains appeal-finance validator symbols.
 ///
 /// # Safety
@@ -217,8 +157,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jboolean {
     jni::sys::JNI_TRUE
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -236,8 +174,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePopPayloadJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePopPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -249,8 +185,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_validate_pop_payload_json(&mut env, kind, payload, label, generated_at)
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateHedgingPayloadJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateHedgingPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -268,13 +202,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android:
-/// JNI entrypoint for Java Android appeal-finance `CancelAssetLock` validation.
-///
-/// # Safety
-/// The JVM must supply valid JNI references for the duration of this call.
-fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson();
-sdk:
 /// JNI entrypoint for Kotlin/JVM appeal-finance `CancelAssetLock` validation.
 ///
 /// # Safety
@@ -294,8 +221,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateFixtureBundleJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateFixtureBundleJson(
     mut env: jni::JNIEnv<'_>,
@@ -315,8 +240,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateGovernanceLogNodeJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateGovernanceLogNodeJson(
     mut env: jni::JNIEnv<'_>,
@@ -334,8 +257,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagBlockJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagBlockJson(
     mut env: jni::JNIEnv<'_>,
@@ -353,8 +274,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagHeadChainJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateGovernanceDagHeadChainJson(
     mut env: jni::JNIEnv<'_>,
@@ -374,8 +293,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeSignOrderbookPayload();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeSignOrderbookPayload(
     mut env: jni::JNIEnv<'_>,
@@ -386,8 +303,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_sign_orderbook_payload(&mut env, kind, payload, private_key)
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeDeriveOrderbookOrderId(
     mut env: jni::JNIEnv<'_>,
@@ -397,8 +312,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_derive_orderbook_order_id(&mut env, owner_account, nonce)
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderRequest(
     mut env: jni::JNIEnv<'_>,
@@ -436,8 +349,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         },
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderCancel();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookOrderCancel(
     mut env: jni::JNIEnv<'_>,
@@ -457,8 +368,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         private_key,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookSettlementReceipt();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeBuildSignedOrderbookSettlementReceipt(
     mut env: jni::JNIEnv<'_>,
@@ -494,8 +403,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         },
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpPayloadJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpPayloadJson(
     mut env: jni::JNIEnv<'_>,
@@ -507,8 +414,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_validate_pdp_payload_json(&mut env, kind, payload, label, generated_at)
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpCommitmentChallengeJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpCommitmentChallengeJson(
     mut env: jni::JNIEnv<'_>,
@@ -528,8 +433,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpChallengeProofJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpChallengeProofJson(
     mut env: jni::JNIEnv<'_>,
@@ -549,8 +452,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePdpBundleJson();
-sdk:
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePdpBundleJson(
     mut env: jni::JNIEnv<'_>,
@@ -576,7 +477,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
-}
+
 
 // Canonical privacy JNI exports are owned only by the Kotlin SDK.
 /// Return the native bridge ABI version for Kotlin/JVM privacy callers.

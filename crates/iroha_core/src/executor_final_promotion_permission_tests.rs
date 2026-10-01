@@ -160,7 +160,7 @@ mod final_promotion_permission_tests {
                 .into_iter()
                 .collect(),
         );
-        component_state_after_genesis(world)
+        state_after_genesis(world)
     }
     fn assert_delegated_action_matrix(
         transaction: &StateTransaction<'_, '_>,
@@ -326,8 +326,18 @@ mod final_promotion_permission_tests {
         for required in [Capability::Manage, Capability::Operate, Capability::Check] {
             let exact = permission(required, "production-primary");
             let state = fixture(vec![exact.clone()], vec![]);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(
+                nonzero!(2_u64),
+                state.view().latest_block_hash(),
+                None,
+                0,
+                0,
+            ));
             let mut transaction = block.transaction();
+            assert!(
+                super::super::root_scope::execution_root_scope(&transaction).is_ok(),
+                "delegation matrix requires the authenticated ordinary execution root"
+            );
             let role: RoleId = "final_promotion_operator".parse().expect("role id");
             Register::role(Role::new(role.clone(), ALICE_ID.clone()).add_permission(exact.clone()))
                 .execute(&ALICE_ID, &mut transaction)

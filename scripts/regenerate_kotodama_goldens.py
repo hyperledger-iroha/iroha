@@ -8,7 +8,10 @@ Scratch files are confined to
 the selected staging root. ``--write`` requires an absent absolute output root
 outside the source workspace and can only create one sealed publication there.
 The checked-in ``ivm_artifacts.tsv`` file is the authoritative ownership and
-source-to-artifact map for every IVM program in the repository.
+source-to-artifact map for every IVM program in the repository. Compiler staging
+outputs retain the native writer's mode 0600; reviewed public renderings use
+mode 0644. Independent runtime manifests may use 0600 or 0644 and must match
+compiler bytes exactly. This does not change checked-tree or publication modes.
 
 ``--check`` is the safe default: compile everything in two independent
 temporary staging trees and fail unless their canonical path sets, bytes, and
@@ -712,11 +715,26 @@ def compare_payload(expected: bytes, destination: Path, expected_mode: int = 0o6
         raise GoldenError(f"stale Kotodama generated output: {destination}")
 
 
-def compare_file(source: Path, destination: Path) -> None:
-    """Require a checked-in destination to exactly match its staged source."""
+def read_compiler_output(source: Path) -> bytes:
+    """Authenticate the native compiler's private staging output without chmod."""
 
-    expected, metadata = _read_sealed_regular(source, "staged generated output")
-    compare_payload(expected, destination, stat.S_IMODE(metadata.st_mode))
+    payload, metadata = _read_sealed_regular(source, "staged compiler output")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise GoldenError(f"staged compiler output must use mode 0600: {source}")
+    return payload
+
+
+def compare_runtime_manifest(source: Path, destination: Path) -> None:
+    """Compare private compiler bytes with an independently produced CLI manifest."""
+
+    expected = read_compiler_output(source)
+    actual, metadata = _read_sealed_regular(destination, "runtime manifest")
+    # The CLI's regular-file writer honors the caller's private or public umask.
+    # Neither accepted staging mode allows execution or group/other mutation.
+    if stat.S_IMODE(metadata.st_mode) not in {0o600, 0o644}:
+        raise GoldenError(f"runtime manifest must use mode 0600 or 0644: {destination}")
+    if actual != expected:
+        raise GoldenError(f"runtime manifest differs from compiler output: {destination}")
 
 
 def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, ...]:
@@ -736,16 +754,7 @@ def rendered_files(stage: Path, rows: Sequence[Golden]) -> tuple[RenderedFile, .
 
     rendered: list[RenderedFile] = []
     for destination in sorted(sources, key=lambda value: value.as_posix()):
-        payload, metadata = _read_sealed_regular(
-            sources[destination], "staged generated output"
-        )
-        mode = stat.S_IMODE(metadata.st_mode)
-        if mode != 0o600:
-            raise GoldenError(
-                f"staged generated output must use mode 0600: {sources[destination]}"
-            )
-        # Compiler ownership stays private. Publication creates a separate,
-        # canonical public fixture after both independent renderings agree.
+        payload = read_compiler_output(sources[destination])
         rendered.append(RenderedFile(destination, 0o644, payload))
     return tuple(rendered)
 
@@ -1110,7 +1119,7 @@ def verify_runtime_manifests(
             ],
             root,
         )
-        compare_file(generated, runtime_manifest)
+        compare_runtime_manifest(generated, runtime_manifest)
 
 
 def build_and_validate(

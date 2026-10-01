@@ -37,10 +37,13 @@ sequentially:
 ```sh
 scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p iroha_data_model --features transparent_api --lib block::tests
 scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p iroha_data_model --features transparent_api --lib proof::tests
-scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p norito --lib --test norito_group_01 --test norito_group_02 --test norito_group_03
+scripts/cargo_fast.sh --target-slot finish -- test --locked --offline -p norito --lib \
+  --test norito_group_01 --test norito_group_02 --test norito_group_03 \
+  --test norito_group_04 --test norito_group_05 --test norito_group_06
 ```
 
-Norito disables automatic integration-test discovery. The grouped harnesses
+Norito disables automatic integration-test discovery, so validation names all
+six ordinary grouped harnesses explicitly. The grouped harnesses
 cover adaptive/default flags, flag-state restoration, derive codecs, header
 rejection and bare/current-payload framing. Preserve source negative controls
 when validating their source readers.
@@ -48,7 +51,9 @@ when validating their source readers.
 Compiler-memory limits remain the pinned-runner qualification in roadmap A5.
 Include newly extracted owners and libraries in that measurement. Dependency
 inventory costs describe the selected source graph without speculative growth
-headroom; working-tree observations do not qualify a staged subset. Warm
-timings must identify source, toolchain and competing build load before they
-can establish improvement over the recovered baseline. The executable metadata
-freshness measurement and final merged validation remain pending.
+headroom; working-tree observations do not qualify a staged subset. Compare
+warm timings with the recovered baseline while recording source, toolchain and
+competing build load. Comparisons across changing source or load are
+observational; attribute improvement only to measurements that isolate the
+optimization. The executable metadata freshness measurement and final merged
+validation remain pending.

@@ -85,6 +85,7 @@ fn remove_committed_hashes_clears_expiry_tracking() {
 #[tokio::test]
 async fn custom_expired_transaction_is_rejected() {
     const TTL_MS: u64 = 200;
+    const SWEEP_MS: u64 = 1_000;
     let max_txs_in_block = nonzero!(2_usize);
     let (alice_id, alice_keypair) = gen_account_in("wonderland");
     let kura = Kura::blank_kura_for_testing();
@@ -97,7 +98,9 @@ async fn custom_expired_transaction_is_rejected() {
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let mut queue = Queue::test(config_factory(), &time_source);
+    let mut config = config_factory();
+    config.expired_cull_interval = Duration::from_millis(SWEEP_MS);
+    let mut queue = Queue::test(config, &time_source);
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(1);
     queue.events_sender = event_sender;
     // Use a simple instruction to avoid exercising heavy decode paths
@@ -149,6 +152,26 @@ async fn custom_expired_transaction_is_rejected() {
     let txs = queue
         .bounded_pending_snapshot(&state.view(), max_txs_in_block)
         .unwrap();
+    assert!(
+        txs.is_empty(),
+        "expired input is excluded before the sweep is due"
+    );
+    assert_eq!(
+        queue.active_len(),
+        1,
+        "throttled sweeps retain queue ownership"
+    );
+    assert!(matches!(
+        event_receiver.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+    // Event publication follows actual reclamation at the configured sweep deadline.
+    time_handle.advance(Duration::from_millis(SWEEP_MS - TTL_MS - 1));
+    let swept = queue
+        .bounded_pending_snapshot(&state.view(), max_txs_in_block)
+        .expect("deadline sweep keeps queue healthy");
+    assert!(swept.is_empty());
+    assert_eq!(queue.active_len(), 0);
     let expired_tx_event = tokio::time::timeout(Duration::from_secs(2), event_receiver.recv())
         .await
         .expect("timed out waiting for expired event")

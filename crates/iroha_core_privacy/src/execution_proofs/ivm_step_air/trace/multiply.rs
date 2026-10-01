@@ -1,10 +1,11 @@
 //! Full 64×64 product and signed high-word corrections with exact radix-2^16 carries.
 //!
-//! The caller supplies 64 workspace cells: product radix-four digits on multiply
-//! and successful division rows, canonical count prefixes on other operations. Their range constraints
-//! are unconditional. Only the convolution is selected; inactive carries are
-//! zero. Correction slots hold signed high corrections or exact division magnitudes;
-//! their range constraints remain unconditional in both modes.
+//! The caller supplies 64 workspace cells: product radix-four digits on multiply,
+//! division and square-root rows, canonical count prefixes on other operations.
+//! Their ranges are unconditional. Only the convolution is selected; inactive
+//! carries are zero. Correction slots hold signed high corrections, division
+//! magnitudes, or square-root input and root. Their ranges remain unconditional;
+//! the selected instruction owner constrains each interpretation.
 //! Carries fit 18 bits. Every convolution residual has absolute integer value
 //! below 2^35, so Goldilocks equality cannot hide a modular integer discrepancy.
 
@@ -120,10 +121,11 @@ fn correction_residues(
 }
 
 /// Code-derived modes and verifier-owned terminal selection. Success is the
-/// division selector minus the fixed trap flag, never a supplied witness bit.
+/// selected division/square mode minus its fixed trap flag, never a witness bit.
 pub(super) struct Selection {
     pub(super) multiply: F,
     pub(super) division: F,
+    pub(super) square: F,
     pub(super) signed: F,
     pub(super) success: F,
     pub(super) quotient: [F; 4],
@@ -139,6 +141,7 @@ pub(super) fn append_residues(
     let Selection {
         multiply: active,
         division,
+        square,
         signed,
         success,
         quotient,
@@ -188,7 +191,7 @@ pub(super) fn append_residues(
         sources,
         1,
         sources.sign(0),
-        F::ONE.sub(division),
+        F::ONE.sub(division).sub(square),
     );
     correction_residues(
         out,
@@ -197,7 +200,7 @@ pub(super) fn append_residues(
         sources,
         0,
         sources.sign(1),
-        F::ONE.sub(division),
+        F::ONE.sub(division).sub(square),
     );
     for (operand, offset) in [(0, SIGNED_UNSIGNED), (1, SIGNED_SIGNED)] {
         for limb in 0..4 {

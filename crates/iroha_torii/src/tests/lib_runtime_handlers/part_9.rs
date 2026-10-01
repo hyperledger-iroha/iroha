@@ -1177,24 +1177,49 @@ async fn app_api_vk_and_proofs_lists_ok() {
 }
 #[tokio::test]
 async fn app_api_get_by_id_not_found_returns_404() {
-    let app = app_with_root_scope_for_token_test(false);
-    let headers = HeaderMap::new();
-    // The handler receives the identity already checked by canonical-auth middleware.
-    // Scope and the hash marker remain valid so this exercises absence, not malformed input.
-    let signer = ALICE_KEYPAIR.public_key().clone();
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key_pair = checked_torii_test_ed25519_keypair(0xc1, "contract artifact read fixture");
+    let caller = AccountId::new(key_pair.public_key().clone());
+    let mut app = app_with_root_scope_for_handler_test(world_with_account(&caller), false);
+    let code_hash = hex::encode(Hash::new(b"missing scoped contract artifact").as_ref());
+    let method = axum::http::Method::GET;
+    let uri: axum::http::Uri = format!("/v1/contracts/artifacts/0/{code_hash}")
+        .parse()
+        .expect("canonical scoped artifact URI");
+    let headers = signed_network_app_headers(
+        app.state.network_id_ref(),
+        &caller,
+        &key_pair,
+        &method,
+        &uri,
+        &[],
+    );
+    let verified = crate::app_auth::verify_canonical_network_request(
+        &app.state,
+        app.state.network_id_ref(),
+        &headers,
+        &method,
+        &uri,
+        &[],
+        Some(&caller),
+    )
+    .expect("valid exact-network artifact request signature")
+    .expect("authenticated artifact reader");
+    assert_eq!(verified.account, caller);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state.view().world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
+    // Contract artifact in the authenticated public dataspace (non-existent).
     let resp = super::handler_get_contract_code(
         State(app.clone()),
         headers.clone(),
         crate::loopback_connect_info(),
-        axum::extract::Path(("0".to_owned(), "11".repeat(32))),
-        axum::Extension(crate::app_auth::VerifiedCanonicalRequest {
-            account: ALICE_ID.clone(),
-            signer: signer.clone(),
-            verified_signers: vec![signer],
-        }),
+        axum::extract::Path(("0".to_string(), code_hash.clone())),
+        axum::Extension(verified),
     )
     .await
-    .into_response();
+    .unwrap_or_else(|error| error.into_response());
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     // VK by backend/name (non-existent)
     let resp = super::handler_get_vk_by_backend_name(
@@ -1221,6 +1246,49 @@ async fn app_api_get_by_id_not_found_returns_404() {
     .expect("ok mapping")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    // Authenticated artifact reads still pass through the finite route limiter.
+    Arc::get_mut(&mut app)
+        .expect("read fixture retains the sole app reference")
+        .rate_limiter =
+        limits::RateLimiter::new_without_refill_for_tests(std::num::NonZeroU32::MIN);
+    for expected in [
+        axum::http::StatusCode::NOT_FOUND,
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+    ] {
+        let headers = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &caller,
+            &key_pair,
+            &method,
+            &uri,
+            &[],
+        );
+        let verified = crate::app_auth::verify_canonical_network_request(
+            &app.state,
+            app.state.network_id_ref(),
+            &headers,
+            &method,
+            &uri,
+            &[],
+            Some(&caller),
+        )
+        .expect("fresh rate-limited request verifies")
+        .expect("signed rate-limited caller");
+        let response = super::handler_get_contract_code(
+            State(app.clone()),
+            headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(("0".to_string(), code_hash.clone())),
+            axum::Extension(verified),
+        )
+        .await
+        .unwrap_or_else(|error| error.into_response());
+        assert_eq!(
+            response.status(),
+            expected,
+            "canonical admission retains the finite read budget"
+        );
+    }
 }
 struct RuntimeApiRouterFixture {
     router: crate::TestApiRouterRuntime,

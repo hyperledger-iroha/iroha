@@ -56,6 +56,10 @@ class KagemushaAccountIdV1 private constructor(payload: ByteArray) {
     /** Return a defensive copy of the canonical bare Norito payload. */
     fun canonicalPayload(): ByteArray = value.copyOf()
 
+    /** Render this exact canonical account for a selected I105 chain discriminant. */
+    fun toI105(chainDiscriminant: Int): String =
+        TransferWirePayloadEncoder.decodeAccountIdPayload(value, chainDiscriminant)
+
     override fun equals(other: Any?): Boolean =
         other is KagemushaAccountIdV1 && value.contentEquals(other.value)
 

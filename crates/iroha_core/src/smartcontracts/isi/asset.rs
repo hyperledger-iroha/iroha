@@ -9789,6 +9789,7 @@ pub mod query {
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
+            block.admit_fastpq_source_for_testing(Hash::prehashed([0xB6; Hash::LENGTH]));
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(source_dataspace);
             stx.world.current_dataspace_id = Some(source_dataspace);
@@ -9857,6 +9858,7 @@ pub mod query {
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
+            block.admit_fastpq_source_for_testing(Hash::prehashed([0xB7; Hash::LENGTH]));
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(source_dataspace);
             stx.world.current_dataspace_id = Some(source_dataspace);
@@ -10084,6 +10086,7 @@ pub mod query {
             let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
+            block.admit_fastpq_source_for_testing(Hash::prehashed([0xB3; Hash::LENGTH]));
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -10178,6 +10181,7 @@ pub mod query {
             ])
             .expect("dataspace catalog");
             block.nexus.dataspace_catalog = catalog.clone();
+            block.admit_fastpq_source_for_testing(Hash::prehashed([0xB9; Hash::LENGTH]));
             let mut stx = block.transaction();
             stx.nexus.dataspace_catalog = catalog.clone();
             stx.world.dataspace_catalog = catalog;
@@ -10258,6 +10262,7 @@ pub mod query {
             let state = asset_route_test_state(world);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
+            block.admit_fastpq_source_for_testing(Hash::prehashed([0xB8; Hash::LENGTH]));
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -10348,6 +10353,7 @@ pub mod query {
             state.world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
+            block.admit_fastpq_source_for_testing(Hash::prehashed([0xB4; Hash::LENGTH]));
             let mut stx = block.transaction();
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

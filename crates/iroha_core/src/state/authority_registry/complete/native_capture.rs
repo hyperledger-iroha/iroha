@@ -136,7 +136,15 @@ mod tests {
             .read()
             .execution_budget()
             .clone();
-        assert_eq!(budget.reserved_bytes(), 0);
+        // Fresh State already owns the native execution tip's current/undo EBR
+        // cells, publication identity and release controls in this same pool.
+        let initial_bytes = mv::cell::CellInitialization::<
+            Option<crate::state::NativeExecutionTip>,
+        >::allocation_layouts()
+        .iter()
+        .map(std::alloc::Layout::size)
+        .sum::<usize>();
+        assert_eq!(budget.reserved_bytes(), initial_bytes);
         budget.set_limit_bytes(0);
         assert!(matches!(
             capture_accounts_table_once(&state, limits()),
@@ -144,7 +152,8 @@ mod tests {
                 AllocationRefusal::ExceedsLimit { .. }
             )))
         ));
-        budget.set_limit_bytes(4096);
+        assert_eq!(budget.reserved_bytes(), initial_bytes);
+        budget.set_limit_bytes(initial_bytes.checked_add(4096).unwrap());
         let occupied = budget.try_reserve_bytes(4096).unwrap();
         let Err(LeafError::OrderedRange(NoritoKeyRangeError::Admission(
             AllocationRefusal::Capacity { release, .. },
@@ -164,13 +173,39 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(captured.row_count(), 0);
-        assert!(budget.reserved_bytes() > 0);
+        assert!(budget.reserved_bytes() > initial_bytes);
+        let captured_bytes = budget.reserved_bytes() - initial_bytes;
         let root = captured.root();
         budget.set_limit_bytes(0);
+        let retired_generations = crate::state::native_execution_tip::TipCell::allocation_layouts()
+            .iter()
+            .map(std::alloc::Layout::size)
+            .sum::<usize>();
+        let retirement_pin = crossbeam_epoch::pin();
         drop(state);
         assert_eq!(captured.root(), root);
-        assert!(budget.reserved_bytes() > 0);
+        retirement_pin.flush();
+        assert_eq!(
+            budget.reserved_bytes(),
+            captured_bytes + retired_generations,
+            "the live epoch retains both original native-tip generations after State drops",
+        );
+        drop(retirement_pin);
+        collect_original_ebr_until(&budget, captured_bytes);
+        assert_eq!(budget.reserved_bytes(), captured_bytes);
         drop(captured);
         assert_eq!(budget.reserved_bytes(), 0);
+    }
+    fn collect_original_ebr_until(budget: &iroha_allocation::AllocationBudget, expected: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while budget.reserved_bytes() != expected {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "original EBR custody {} != {expected}",
+                budget.reserved_bytes(),
+            );
+            crossbeam_epoch::pin().flush();
+            std::thread::yield_now();
+        }
     }
 }

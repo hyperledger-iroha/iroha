@@ -17,9 +17,9 @@ fn assert_initial_soracloud_core_denial(error: ValidationFail, message: &str) {
         panic!("instruction must reach Core authorization, got {error:?}");
     };
     let detail = match &error {
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(detail)) => {
-            detail.as_str()
-        }
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            detail,
+        )) => detail.as_str(),
         InstructionExecutionError::InvariantViolation(detail) => detail.as_ref(),
         _ => panic!("unexpected Core rejection category: {error:?}"),
     };
@@ -32,8 +32,8 @@ fn assert_initial_soracloud_core_denial(error: ValidationFail, message: &str) {
 #[test]
 fn initial_executor_soracloud_host_lifecycle_preserves_exact_validator_authority()
 -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    soracloud_transaction_at_height!(state, header, block, stx, 2);
+    initial_permissioned_soracloud_state!(kura, state);
+    initial_soracloud_transaction_at_height!(state, header, block, stx, 2);
     Register::account(Account::new(BOB_ID.clone()))
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     let peer = PeerId::from(
@@ -140,8 +140,8 @@ fn initial_executor_soracloud_host_lifecycle_preserves_exact_validator_authority
 #[test]
 fn initial_executor_soracloud_roles_preserve_exact_permission_payloads_and_delegation()
 -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    soracloud_transaction_at_height!(state, header, block, stx, 2);
+    initial_permissioned_soracloud_state!(kura, state);
+    initial_soracloud_transaction_at_height!(state, header, block, stx, 2);
     for account in [BOB_ID.clone(), CARPENTER_ID.clone()] {
         Register::account(Account::new(account)).execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     }

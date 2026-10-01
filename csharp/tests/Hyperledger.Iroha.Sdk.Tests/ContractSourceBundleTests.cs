@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Hyperledger.Iroha.Torii;
+using Hyperledger.Iroha.Http;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
@@ -10,7 +11,7 @@ public sealed class ContractSourceBundleTests
     public void VerifiedSourceCompanionsRoundtripWithTheirFileIdentities()
     {
         var view = JsonSerializer.Deserialize<ToriiContractCodeView>("""
-            {"code_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            {"network_id":"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0","artifact_id":{"dataspace_id":0,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"},"code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
              "permissions":[],"entrypoints":[],"warnings":[],"rendered_source_kind":"verified_source",
              "rendered_source_text":"seiyaku App { include \"view.ko\"; }",
              "source_files":[{"source_name":"view.ko","source_text":"view fn value() -> int { 7 }"}]}
@@ -28,8 +29,7 @@ public sealed class ContractSourceBundleTests
     {
         using var handler = new NoDispatchHandler();
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.SubmitContractVerifiedSourceJobAsync(
-            new string('a', 64), new ToriiContractVerifiedSourceSubmission {
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.SubmitContractVerifiedSourceJobAsync(new ContractArtifactId(0, new string('b', 64)), new ToriiContractVerifiedSourceSubmission {
                 Language = "kotodama", SourceName = "app.ko", SourceText = "seiyaku App {}",
                 Sources = new[] { new ToriiContractSourceFile { SourceName = path, SourceText = "state int total;" } },
             }, cancellationToken: TestContext.Current.CancellationToken));
@@ -40,7 +40,9 @@ public sealed class ContractSourceBundleTests
     public void VerifiedSourceLimitsDoNotConstrainGeneratedPseudoSource()
     {
         var view = new ToriiContractCodeView {
-            CodeHash = new string('a', 64), RenderedSourceKind = "pseudo_source",
+            NetworkId = NetworkId.Parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
+            ArtifactId = new ContractArtifactId(0, new string('b', 64)),
+            CodeHash = new string('b', 64), RenderedSourceKind = "pseudo_source",
             RenderedSourceText = new string('x', 1024 * 1024 + 1),
         };
         Assert.NotEmpty(JsonSerializer.Serialize(view));
@@ -75,8 +77,15 @@ public sealed class ContractSourceBundleTests
     public async Task LockedSourceClosurePreservesOwnersAndNormalizesPaths()
     {
         using var handler = new RecordingHandler();
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        await client.SubmitContractVerifiedSourceJobAsync(new string('a', 64), Bundle(), cancellationToken: TestContext.Current.CancellationToken);
+        using var credentials = new CanonicalRequestCredentials(
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler),
+            new ToriiClientOptions {
+                NetworkId = NetworkId.Parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
+                CanonicalRequestCredentials = credentials,
+            }, TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
+        await client.SubmitContractVerifiedSourceJobAsync(new ContractArtifactId(0, new string('b', 64)), Bundle(), cancellationToken: TestContext.Current.CancellationToken);
         using var body = JsonDocument.Parse(handler.Body!);
         Assert.Equal("app.ko", body.RootElement.GetProperty("source_name").GetString());
         Assert.Equal("math@1.0.0", body.RootElement.GetProperty("imports")[0].GetProperty("package").GetString());
@@ -86,7 +95,9 @@ public sealed class ContractSourceBundleTests
         Assert.Equal("Math::add", package.GetProperty("exports")[0].GetString());
 
         var view = new ToriiContractCodeView {
-            CodeHash = new string('a', 64), RenderedSourceKind = "verified_source", RenderedSourceText = Bundle().SourceText,
+            NetworkId = NetworkId.Parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
+            ArtifactId = new ContractArtifactId(0, new string('b', 64)),
+            CodeHash = new string('b', 64), RenderedSourceKind = "verified_source", RenderedSourceText = Bundle().SourceText,
             SourceImports = Bundle().Imports, SourcePackages = Bundle().Packages,
         };
         var restored = JsonSerializer.Deserialize<ToriiContractCodeView>(JsonSerializer.Serialize(view))!;
@@ -116,8 +127,7 @@ public sealed class ContractSourceBundleTests
         using var handler = new NoDispatchHandler();
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         foreach (var request in invalid)
-            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.SubmitContractVerifiedSourceJobAsync(
-                new string('a', 64), request, cancellationToken: TestContext.Current.CancellationToken));
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.SubmitContractVerifiedSourceJobAsync(new ContractArtifactId(0, new string('b', 64)), request, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(0, handler.Requests);
     }
 
@@ -127,7 +137,9 @@ public sealed class ContractSourceBundleTests
         var request = Bundle();
         var package = request.Packages.Single();
         var view = new ToriiContractCodeView {
-            CodeHash = new string('a', 64), RenderedSourceKind = "verified_source", RenderedSourceText = request.SourceText,
+            NetworkId = NetworkId.Parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
+            ArtifactId = new ContractArtifactId(0, new string('b', 64)),
+            CodeHash = new string('b', 64), RenderedSourceKind = "verified_source", RenderedSourceText = request.SourceText,
             SourceImports = request.Imports,
             SourcePackages = new[] { package with { Sources = new[] { new ToriiContractSourceFile { SourceName = "app.ko", SourceText = "" } } } },
         };
@@ -142,7 +154,7 @@ public sealed class ContractSourceBundleTests
             Body = await request.Content!.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK) {
                 Content = new StringContent("""
-                    {"job_id":"job-1","code_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    {"network_id":"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0","artifact_id":{"dataspace_id":0,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"},"job_id":"job-1","code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                      "status":"queued","submitted_at":"2026-09-30T00:00:00Z"}
                     """),
             };

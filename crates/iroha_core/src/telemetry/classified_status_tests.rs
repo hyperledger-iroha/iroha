@@ -57,7 +57,8 @@ async fn queued_status_captures_the_publication_after_its_admission_barrier() {
     .unwrap();
     resume.send(()).unwrap();
     let (status, height) = response.await.unwrap().unwrap().into_parts();
-    assert_eq!(pre_await_height, 2);
+    assert_eq!(pre_await_height, 1);
+    assert_eq!(height, pre_await_height as u64 + 1);
     assert_eq!(height, 2);
     assert_eq!(status.blocks, height);
     assert_eq!(status.blocks_non_empty, 2);

@@ -81,7 +81,7 @@ pub(super) async fn certified_block(
                     eyre!("verified Parliament successor lacks its embedded certificate")
                 })?;
                 let qc: iroha_sumeragi::message::Qc =
-                    norito::decode_canonical(&certificate.commit_qc)?;
+                    norito::decode_canonical(certificate.commit_qc())?;
                 if qc.signers.count_ones() != 3 {
                     return Err(eyre!("Parliament successor requires exactly three equal validator votes"));
                 }

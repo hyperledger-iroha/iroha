@@ -55,7 +55,7 @@ mod stream_token_custody_permission_tests {
         world
             .provider_owners
             .insert(ProviderId::new([1; 32]), BOB_ID.clone());
-        component_state_after_genesis(world)
+        state_after_genesis(world)
     }
 
     #[test]
@@ -107,8 +107,18 @@ mod stream_token_custody_permission_tests {
     #[test]
     fn native_stream_token_custody_direct_and_role_delegation_preserve_exact_scope() {
         let state = fixture();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
+        ));
         let mut transaction = block.transaction();
+        assert!(
+            super::super::root_scope::execution_root_scope(&transaction).is_ok(),
+            "delegation matrix requires the authenticated ordinary execution root"
+        );
         let role: RoleId = "stream_token_custody_operator".parse().expect("role id");
         Register::role(Role::new(role.clone(), ALICE_ID.clone()).add_permission(permission(1)))
             .execute(&ALICE_ID, &mut transaction)

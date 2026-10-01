@@ -247,8 +247,13 @@ impl DiagnosticCheckpointRegister {
                 && snapshot.recovery_metadata.journals.responses.sequence == 1
                 && snapshot.recovery_metadata.journals.retirement_transition_id
                     == statement.operation_id
-                && snapshot.recovery_metadata.accepted_credential.credential == self.credential
-                && snapshot.recovery_metadata.accepted_credential.release_id
+                && snapshot
+                    .recovery_metadata
+                    .accepted_credential
+                    .oem_original()
+                    .ok()
+                    == Some(&self.credential)
+                && snapshot.recovery_metadata.accepted_credential.release_id()
                     == self.initial_state.release_id
                 && snapshot.recovery_metadata.enrollment == self.enrollment,
             "simulated checkpoint does not bind the exact pending Core snapshot",

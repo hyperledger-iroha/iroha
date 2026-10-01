@@ -693,13 +693,16 @@ fn fallback_config_is_limited_to_local_commands() {
         assert!(args.command.allows_fallback_config());
         assert!(args.command.allows_fallback_config_in_machine_mode());
     }
+    let code_hash = hex::encode(iroha_crypto::Hash::new(b"fallback-manifest-query-fixture"));
     let args = Args::try_parse_from([
         "iroha",
         "contract",
         "manifest",
         "get",
+        "--dataspace-id",
+        "0",
         "--code-hash",
-        "hash:0000000000000000000000000000000000000000000000000000000000000000#0000",
+        &code_hash,
     ])
     .expect("parse on-chain contract manifest query");
     assert!(!args.command.allows_fallback_config());

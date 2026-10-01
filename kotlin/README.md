@@ -181,6 +181,17 @@ class output with `--classes MODULE=DIR`, where MODULE is `core-jvm`,
 `--library PATH`. `--report PATH` writes the inspected class/library hashes and
 method descriptors after a successful check. `--help` describes the arguments.
 
+For Android release inputs, add `--platform android --android-abi arm64-v8a`
+(or `x86_64`), `--symbol-tool PATH`, `--symbol-tool-sha256 SHA256`,
+`--symbol-tool-size-bytes SIZE`, and `--inspection-output NEW_DIRECTORY`.
+The tool path must be the canonical absolute reviewed NDK `llvm-nm` executable;
+the checker verifies its exact hash, size and file identity around the fixed
+dynamic-export inspection. The library must be an ELF64 shared object for the
+selected ABI. The fresh output directory retains the actual argv, clean
+environment, stdout, stderr and result before file-drift checks, including
+failed attempts. Host mode discovers platform tooling and reports that
+inspection as unpinned. Neither mode executes native code.
+
 The check reads class files without reflection or class loading. It requires
 JDK 8 bytecode and Kotlin-owned native declarations, checks explicit signing
 context and the closed privacy surface, and rejects missing or undeclared JNI
@@ -428,7 +439,7 @@ immutable account/runtime scope, operation identity, exact typed command, and cr
 qualification before dispatch; after Core accepts the response it retains the exact reply,
 original authenticator, and reply qualification. Its shared reentrant lock and durable storage
 must exclude multiple owners across providers and processes. There is no in-memory default.
-The SDK resumes unfinished bootstrap, fold, and rotation commands before another transition.
+The SDK resumes unfinished bootstrap and rotation commands before another transition.
 Rotation retries use their retained original response key, while fresh qualification and state
 reads use the current epoch. Coordinator method 11 begins each transient native observation
 for operations 1, 13, 18, and 21; those reads never enter the operation intent store or durable
@@ -453,6 +464,22 @@ It checks the complete ABI-25 inventory and rejects substituted response binding
 missing JNI or an absent qualified native coordinator fails closed.
 Any failure after dispatch revokes the process-local handle before another JNI
 call. Uncertain monetary state remains the qualified backend's responsibility.
+Incoming staging uses native method 17 to select original reserve-mint, staged-mint or
+staged-peer material; the managed caller supplies only the kind and credit identity.
+Method 15 durably retains the native fold intent and its genuine original paired proof,
+then returns the bounded public hardware work. The authenticated provider requires an
+explicit `KagemushaIncomingFoldEvidenceProviderV1` before preparation or device work.
+That source rechecks its original physical custody before and after obtaining the exact
+State Guard and distinct device root-selection signature. Method 16 receives the held
+proof unchanged and independently verifies those originals before publishing funds.
+Exact retries recover the same history identity, proof and physical evidence; host
+operation storage, generic device operation 17 and Core/software signatures cannot
+substitute. A fresh authenticated wallet observation follows native completion.
+The current closed schema-2 inventory contains all 18 coordinator methods.
+Method 18 reads the installed native release ID, hardware-policy digest and provider
+policy registry root from the original selected Core owner under its observation
+lease. The policy digest remains bound to qualification signatures; aggregate state
+is checked against the separately authenticated provider root.
 `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
 wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
 codec handles bounded canonical preparation, candidate, recovery, and redemption
@@ -465,6 +492,15 @@ same native owner remains live. A failed dispatch or response publication revoke
 that owner and prevents readback or cancellation retries. Successful cancellation
 retries retain the original ticket. Closing the native owner revokes cached enrollment phases before
 another account can use them. These typed frames do not install a qualified backend.
+For a completed owner selected by the independently installed native provisioner,
+`recoveredEnrollment()` uses method-12 phases 9–11. It retains the exact canonical
+account challenge and native 32-byte signing message, checks the device request
+nonce and exact canonical operation-1 read command, and submits the original Ed25519 account signature and complete signed
+device response. Exact retries preserve the original deadline and proof. Native
+Core authenticates its retained checkpoint, journal, hardware and owner before
+granting only an observation lease; application caches never restore that authority.
+Recovery rejection never falls back to initial enrollment. Closing the adapter
+revokes both initial and recovered scopes.
 Device-reply admission retains the original 64-byte response authenticator so
 native Core independently verifies the exact response transcript.
 The sole JNI verifier is `nativeVerifyCommandResponseV1`: its response signature
@@ -789,6 +825,19 @@ and `false` property values are accepted. For example:
 ```bash
 ./gradlew :client-android:assembleDebug -PirohaDebugNativeBridge=true
 ```
+
+For local device integration inside this checkout, create the ignored
+`dist/norito-bridge-android-local` directory with mode `0700` and set
+`MOBILE_SDK_ANDROID_ARTIFACT_DIR` to that exact absolute canonical path. Set
+`MOBILE_SDK_PYTHON_BINARY` to a canonical Python 3.12 executable and add
+`-PirohaAndroidLocalIntegration=true` to the same normal Gradle command. This
+developer routing keeps the regular locked two-ABI native build, source seal,
+stripping, export and byte checks. It requires an owned directory with no tracked
+files and never falls back to source-tree JNI copies. Its embedded provenance
+has `artifact_scope: local-integration`; publication and release packaging reject
+that scope, including when the source is clean. It supplies local test evidence,
+not release or physical-device qualification by itself. Ordinary release output
+continues to require the external artifact root.
 
 The property also applies to this SDK when an Android app includes it as a
 composite build. Release packaging always includes the bridge independently of

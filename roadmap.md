@@ -14,8 +14,10 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
    certification, Kura publication and restart; finish DS-local State and AMX.
 3. Qualify Sumeragi and authenticated Linux artifacts, complete the authorized
    fresh Taira cutover, then prove readiness, paid writes, restart and DPN/contracts.
-4. Close compiler/test migration, SoraFS failures and native SDK regeneration
-   before sealing the workspace/release candidate.
+4. Validate the resolved merge and applied fixture/runtime repairs through
+   fresh workspace, genuine fixture and native SDK artifacts on one
+   source candidate. Repair X509 terminal-claim privacy and its time failure;
+   produce current q77 maximum proofs without widening resource limits.
 
 The [first-release goals](specs/first_release_completion_goals.md),
 [IVM goals](specs/kotodama_ivm_completion.md) and [ZK goals](specs/zk_first_release_goals.md)
@@ -83,7 +85,7 @@ See the [JVM inventory](specs/jvm_consolidation_inventory.md),
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
 | S1 | Python delivery | Python/native SDK | One typed credential/session, cohesive routes and bounded import/response/codec; native vectors, wheel/install/typing and four-validator corridor. |
-| S2 | JS codec/package | JS/native host | Exact options/exports/context, one `dist/` authority and bundle/RSS ceilings; installed source custody, native/portable lanes and four-validator parity. |
+| S2 | JS codec/package | JS/native host | Exact options/exports/context, one `dist/` authority, exact module graphs, browser isolation and runtime-memory bounds; installed source custody, native/portable lanes and four-validator parity. |
 | S3 | C# API/package | C#/native bridge | Canonical prepared operations, faucet metadata, immutable parsing, documented API/allocation checks and real Windows/native packaging. |
 | S4 | Shared wire/activity | SDKs/Torii | Canonical signing/executable/account fixtures, multisig witnesses and snapshot-bound activity with bounded cursors and expiry. |
 | S5 | Kotlin closure | Kotlin/Android | Finish Java/JNI/publication retirement; release transport/attestation/Nearby and CUDA hardware qualification with separate host/device evidence. |
@@ -104,8 +106,8 @@ and [privacy closure](specs/privacy_first_release_closure.md).
 | C1 | Norito/derive closure | Norito/derives/primitives/MV | Explicit archive context, fallible aligned/scalar/tree allocations and owned values; retire unused adapters, share emitters, meet compile budgets/UI tests. |
 | C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; anchored execution/private invocation/AXT; identical gas/traps/state/proofs, bounded caches and authenticated calibration. |
 | C3 | Signature audit | Crypto/consumers | ML-DSA/SM2/GOST/FHE feature/lint/custody, mixed-torsion Ed25519, PoP and threshold-BLS/timed-OVN/side-channel review; Musubi State-reader prerequisites. |
-| C4 | FASTPQ/backend | Prover/verifier/reviewers | Masked 301-column/64-query DEEP ordinary/AXT relations and bounded work/RSS; AIR/FRI/hash/qROM/privacy review, hardware/four-peer parity, embedded authenticated Metal and driver-loaded CUDA host. |
-| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; unsupported padding stays disabled. |
+| C4 | FASTPQ/backend | Prover/verifier/reviewers | Masked 301-column/77-query SHA3/SHAKE DEEP ordinary/AXT relations and bounded work/RSS; rerun adopted genuine pins and pass fresh maximum ordinary/AXT proofs, AIR/FRI/hash/qROM/privacy review, hardware/four-peer parity, embedded authenticated Metal and driver-loaded CUDA host. |
+| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; repair X509 terminal-claim privacy and complete its maximum proof within unchanged byte/RSS and 300-second limits; unsupported paths stay disabled. |
 | C6 | FHE/MKHE/Figure 9 | Crypto/model/proofs | Complete native40 correspondence/full-size eight-party replay; qPCS redesign within fixed work bounds, governed Figure 9 keys and independent measured ordinary-stack proofs. |
 | C7 | Acceleration | Native backends | Actual CPU/Metal/CUDA KAT/root parity, authenticated library/device/calibration, fault quarantine, side-channel and RSS/throughput; unqualified T256/MKHE stay scalar. |
 | C8 | Kaigi sessions | Model/crypto/Core/SDKs | Complete authorization/usage circuits and account lifecycle/undo; keys/fixtures, suite-tagged HPKE, bounded accounting and authenticated relay recovery. |

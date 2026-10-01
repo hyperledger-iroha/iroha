@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -327,6 +328,7 @@ def test_audit_seals_inputs_without_claiming_runtime_qualification(tmp_path, mon
     assert not report["native_execution_qualified"]
     assert not report["native_signatures_qualified"]
     assert not report["source_build_provenance_qualified"]
+    assert report["platform"] == "host" and not report["symbol_inspection"]["tool_pinned"]
     assert len(report["class_inventory_sha256"]) == len(report["library"]["sha256"]) == 64
 
     def change_class(*args, **kwargs):
@@ -337,6 +339,210 @@ def test_audit_seals_inputs_without_claiming_runtime_qualification(tmp_path, mon
     monkeypatch.setattr(GUARD.ARTIFACT, "inspect_exported_symbols", change_class)
     with pytest.raises(GUARD.AuditError, match="classes changed"):
         GUARD.audit(roots, library)
+
+
+def pinned_fixture(tmp_path, *, stdout="connect_norito_free\n", stderr="", exit_code=0, child_code="", abi="arm64-v8a"):
+    """Use an owned executable oracle and ELF header fixture, never native execution."""
+    root = tmp_path.resolve()
+    tool = root / "reviewed-symbol-tool"
+    tool.write_text("#!" + str(Path(sys.executable).resolve()) + "\nimport os, sys\n"
+                    + child_code + "\nsys.stdout.write(" + repr(stdout) + ")\n"
+                    + "sys.stderr.write(" + repr(stderr) + ")\nsys.exit(" + str(exit_code) + ")\n")
+    tool.chmod(0o700)
+    library = root / "libbridge.so"
+    header = bytearray(64)
+    header[:7] = b"\x7fELF\x02\x01\x01"
+    header[16:20] = struct.pack("<HH", 3, GUARD.ANDROID_MACHINES[abi])
+    library.write_bytes(header + b"synthetic symbol inspection fixture")
+    library.chmod(0o600)
+    return library, {"abi": abi, "tool": tool,
+                     "tool_sha256": hashlib.sha256(tool.read_bytes()).hexdigest(),
+                     "tool_size_bytes": tool.stat().st_size, "output": root / "original-inspection"}
+
+
+def test_android_audit_uses_only_pinned_tool_and_retains_originals(tmp_path, monkeypatch):
+    roots = build_outputs(tmp_path)
+    _, records = GUARD.scan_classes(roots)
+    exports = [operation["symbol"] for record in records for operation in record["operations"]]
+    library, pin = pinned_fixture(tmp_path, stdout="\n".join(exports + ["connect_norito_free"]) + "\n",
+                                  child_code="assert sys.argv[1:5] == ['--dynamic', '--defined-only', '--extern-only', '--format=just-symbols']\n"
+                                             "assert os.environ.get('PINNED_TOOL_HOSTILE') is None\n"
+                                             "assert os.environ['PATH'] == '/usr/bin:/bin'\n")
+    monkeypatch.setenv("PINNED_TOOL_HOSTILE", "must not reach symbol tool")
+    monkeypatch.setattr(GUARD.ARTIFACT, "inspect_exported_symbols",
+                        lambda *args, **kwargs: pytest.fail("Android must not discover an ambient tool"))
+    report = GUARD.audit(roots, library, platform="android", android_abi=pin["abi"],
+                         symbol_tool=pin["tool"], symbol_tool_sha256=pin["tool_sha256"],
+                         symbol_tool_size_bytes=pin["tool_size_bytes"], inspection_output=pin["output"])
+    inspection = report["symbol_inspection"]
+    assert inspection["tool_pinned"] and report["platform"] == "android"
+    assert inspection["argv"] == [str(pin["tool"]), *GUARD.ANDROID_SYMBOL_ARGUMENTS, str(library)]
+    assert inspection["environment"] == GUARD.ANDROID_SYMBOL_ENVIRONMENT
+    assert report["native_method_count"] == 8
+    assert not any(report[name] for name in ("native_signatures_qualified", "native_execution_qualified", "source_build_provenance_qualified"))
+    for name, claim in inspection["originals"].items():
+        raw = Path(claim["path"]).read_bytes()
+        assert len(raw) == claim["size_bytes"] and hashlib.sha256(raw).hexdigest() == claim["sha256"]
+        assert Path(claim["path"]).stat().st_mode & 0o777 == 0o600
+    assert pin["output"].stat().st_mode & 0o777 == 0o700
+    result = json.loads((pin["output"] / "result.json").read_bytes())
+    assert result["exit_code"] == 0 and result["streams_complete"] and result["transport_error"] is None
+
+
+@pytest.mark.parametrize("mutation", ["sha256", "size", "zero_sha256", "relative_tool", "symlink_tool", "hardlink_tool", "writable_tool", "not_executable", "wrong_abi", "not_elf", "symlink_library", "existing_output", "relative_output"])
+def test_android_pins_reject_before_starting_child(tmp_path, mutation):
+    library, pin = pinned_fixture(tmp_path)
+    if mutation == "sha256":
+        pin["tool_sha256"] = "1" * 64
+    elif mutation == "size":
+        pin["tool_size_bytes"] += 1
+    elif mutation == "zero_sha256":
+        pin["tool_sha256"] = "0" * 64
+    elif mutation == "relative_tool":
+        pin["tool"] = Path("symbol-tool")
+    elif mutation == "symlink_tool":
+        link = tmp_path / "linked-tool"
+        link.symlink_to(pin["tool"])
+        pin["tool"] = link
+    elif mutation == "hardlink_tool":
+        (tmp_path / "tool-alias").hardlink_to(pin["tool"])
+    elif mutation == "writable_tool":
+        pin["tool"].chmod(0o722)
+    elif mutation == "not_executable":
+        pin["tool"].chmod(0o600)
+    elif mutation == "wrong_abi":
+        pin["abi"] = "x86_64"
+    elif mutation == "not_elf":
+        library.write_bytes(b"not an Android library")
+    elif mutation == "symlink_library":
+        link = tmp_path / "linked-library"
+        link.symlink_to(library)
+        library = link
+    elif mutation == "existing_output":
+        pin["output"].mkdir()
+        (pin["output"] / "preserved").write_text("original retained")
+    else:
+        pin["output"] = Path("inspection-output")
+    with pytest.raises(GUARD.AuditError):
+        GUARD.inspect_pinned_android_symbols(library, **pin)
+    assert not (pin["output"] / "invocation.json").exists()
+    if mutation == "existing_output":
+        assert (pin["output"] / "preserved").read_text() == "original retained"
+
+
+@pytest.mark.parametrize("mutation", ["tool_bytes", "tool_inode", "library_bytes", "library_inode"])
+def test_android_drift_retains_actual_child_originals(tmp_path, mutation):
+    if mutation == "tool_bytes":
+        code = "with open(sys.argv[0], 'ab') as stream: stream.write(b'changed')"
+    elif mutation == "library_bytes":
+        code = "with open(sys.argv[-1], 'ab') as stream: stream.write(b'changed')"
+    else:
+        target = "sys.argv[0]" if mutation == "tool_inode" else "sys.argv[-1]"
+        code = "target = " + target + "\nwith open(target, 'rb') as stream: raw = stream.read()\nos.unlink(target)\nwith open(target, 'wb') as stream: stream.write(raw)\nos.chmod(target, 0o700)"
+    library, pin = pinned_fixture(tmp_path, child_code=code)
+    with pytest.raises(GUARD.AuditError, match="changed during inspection"):
+        GUARD.inspect_pinned_android_symbols(library, **pin)
+    assert (pin["output"] / "stdout.bin").read_bytes() == b"connect_norito_free\n"
+    assert (pin["output"] / "stderr.bin").read_bytes() == b""
+    assert json.loads((pin["output"] / "result.json").read_bytes())["exit_code"] == 0
+    assert not json.loads((pin["output"] / "input-guards.json").read_bytes())["valid"]
+
+
+def test_android_parent_symlink_substitution_fails_even_with_same_tool_inode(tmp_path):
+    library, pin = pinned_fixture(tmp_path)
+    parent = tmp_path.resolve() / "tool-parent"
+    parent.mkdir()
+    tool = parent / pin["tool"].name
+    pin["tool"].rename(tool)
+    relocated = tmp_path.resolve() / "relocated-tool-parent"
+    original = tool.read_text()
+    original = original.replace("\nsys.stdout.write", "\nos.rename(" + repr(str(parent)) + ", " + repr(str(relocated))
+                                + ")\nos.symlink(" + repr(str(relocated)) + ", " + repr(str(parent)) + ")\nsys.stdout.write")
+    tool.write_text(original)
+    pin.update(tool=tool, tool_sha256=hashlib.sha256(tool.read_bytes()).hexdigest(), tool_size_bytes=tool.stat().st_size)
+    inode = tool.stat().st_ino
+    with pytest.raises(GUARD.AuditError, match="changed during inspection"):
+        GUARD.inspect_pinned_android_symbols(library, **pin)
+    assert tool.stat().st_ino == inode
+    assert (pin["output"] / "stdout.bin").read_bytes() == b"connect_norito_free\n"
+    assert not json.loads((pin["output"] / "input-guards.json").read_bytes())["valid"]
+
+
+@pytest.mark.parametrize("mutation", ["nonzero", "stderr", "empty", "decorated", "non_ascii", "malformed", "stderr_limit", "stdout_limit"])
+def test_android_failed_probe_keeps_originals(tmp_path, mutation, monkeypatch):
+    arguments = {}
+    if mutation == "nonzero":
+        arguments["exit_code"] = 7
+    elif mutation == "stderr":
+        arguments["stderr"] = "actual diagnostic\n"
+    elif mutation == "empty":
+        arguments["stdout"] = ""
+    elif mutation == "decorated":
+        arguments["stdout"] = "Java_owner_call@@VERSION\n"
+    elif mutation == "non_ascii":
+        arguments["child_code"] = "os.write(1, b'\\xff\\n')"
+        arguments["stdout"] = ""
+    elif mutation == "malformed":
+        arguments["stdout"] = "connect_norito_free\n\n"
+    else:
+        monkeypatch.setattr(GUARD.ARTIFACT, "MAX_PROBE_STDERR_BYTES", 16)
+        monkeypatch.setattr(GUARD.ARTIFACT, "MAX_SYMBOL_TOOL_OUTPUT_BYTES", 16)
+        arguments["stdout"] = "x\n"
+        arguments["stderr" if mutation == "stderr_limit" else "stdout"] = "x" * 100
+    library, pin = pinned_fixture(tmp_path, **arguments)
+    with pytest.raises(GUARD.AuditError):
+        GUARD.inspect_pinned_android_symbols(library, **pin)
+    result = json.loads((pin["output"] / "result.json").read_bytes())
+    assert (pin["output"] / "stdout.bin").exists() and (pin["output"] / "stderr.bin").exists()
+    assert result["streams_complete"] == (not mutation.endswith("_limit"))
+    assert (result["transport_error"] is not None) == mutation.endswith("_limit")
+    if mutation == "nonzero":
+        assert result["exit_code"] == 7
+    elif mutation == "stderr":
+        assert (pin["output"] / "stderr.bin").read_bytes() == b"actual diagnostic\n"
+
+
+def test_android_audit_requires_complete_explicit_pin_and_separate_outputs(tmp_path):
+    roots = build_outputs(tmp_path)
+    library, pin = pinned_fixture(tmp_path)
+    with pytest.raises(GUARD.AuditError, match="requires explicit"):
+        GUARD.audit(roots, library, platform="android")
+    with pytest.raises(GUARD.AuditError, match="only to --platform android"):
+        GUARD.audit(roots, library, symbol_tool=pin["tool"])
+    with pytest.raises(GUARD.AuditError, match="outside compiled"):
+        GUARD.audit(roots, library, platform="android", android_abi=pin["abi"],
+                    symbol_tool=pin["tool"], symbol_tool_sha256=pin["tool_sha256"],
+                    symbol_tool_size_bytes=pin["tool_size_bytes"],
+                    inspection_output=roots["core-jvm"][0] / "inspection")
+
+
+def test_android_x86_64_and_bounded_owned_child_timeout(tmp_path):
+    library, pin = pinned_fixture(tmp_path, abi="x86_64")
+    symbols, record = GUARD.inspect_pinned_android_symbols(library, **pin)
+    assert symbols == ("connect_norito_free",) and record["android_abi"] == "x86_64"
+    stdout, stderr, outcome = GUARD._collect_symbol_probe(
+        [str(Path(sys.executable).resolve()), "-I", "-S", "-B", "-c", "import time; time.sleep(1)"],
+        timeout_seconds=0.05)
+    assert stdout == stderr == b""
+    assert not outcome["streams_complete"] and outcome["transport_error"]["kind"] == "TimeoutError"
+    assert outcome["exit_code"] is not None
+    with pytest.raises(GUARD.AuditError, match="deadline"):
+        GUARD._collect_symbol_probe(["never-executed"], timeout_seconds=float("nan"))
+
+
+def test_android_cli_requires_pins_and_preserves_tool_report_alias(tmp_path):
+    roots = build_outputs(tmp_path)
+    library, pin = pinned_fixture(tmp_path)
+    arguments = ["--library", str(library), "--platform", "android"]
+    for module, paths in roots.items():
+        arguments += ["--classes", module + "=" + str(paths[0])]
+    assert GUARD.main(arguments) == 1
+    original = pin["tool"].read_bytes()
+    arguments += ["--android-abi", pin["abi"], "--symbol-tool", str(pin["tool"]),
+                  "--symbol-tool-sha256", pin["tool_sha256"], "--symbol-tool-size-bytes", str(pin["tool_size_bytes"]),
+                  "--inspection-output", str(pin["output"]), "--report", str(pin["tool"])]
+    assert GUARD.main(arguments) == 1
+    assert pin["tool"].read_bytes() == original and not pin["output"].exists()
 
 
 @pytest.mark.parametrize("mutation", ("missing", "return_type", "instance", "managed", "curve_switch", "bypass", "retired_config"))

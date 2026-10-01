@@ -108,6 +108,15 @@ pub(crate) fn expand(input: DeriveInput) -> Result<TokenStream> {
             "generic schema identities cannot use a fixed frame projection",
         ));
     }
+    // Even an erased lifetime is an explicit nominal argument. Only an empty
+    // argument list can expose the bare declaration as its complete identity.
+    let static_nominal = arguments.is_empty().then(|| {
+        quote! {
+            fn static_nominal_name() -> ::core::option::Option<&'static str> {
+                ::core::option::Option::Some(#name)
+            }
+        }
+    });
     let projection = frame.map(|frame| {
         quote! {
             fn frame_name() -> ::std::string::String { ::std::string::String::from(#frame) }
@@ -121,6 +130,7 @@ pub(crate) fn expand(input: DeriveInput) -> Result<TokenStream> {
             fn nominal_name() -> ::std::string::String {
                 ::norito::schema::identity::generic_name(#name, &[#(#arguments),*])
             }
+            #static_nominal
             #projection
         }
     })
@@ -207,6 +217,40 @@ mod tests {
             result,
             "generic schema identities cannot use a fixed frame projection"
         );
+    }
+
+    #[test]
+    fn only_complete_literal_identities_expose_a_static_nominal_name() {
+        for input in [
+            quote!(
+                #[norito_schema(name = "example::Plain")]
+                struct Plain;
+            ),
+            quote!(
+                #[norito_schema(name = "example::Projected", frame = "wire::Projected")]
+                struct Projected;
+            ),
+        ] {
+            let expanded = expand(syn::parse2(input).unwrap()).unwrap().to_string();
+            assert!(expanded.contains("fn static_nominal_name"));
+        }
+        for input in [
+            quote!(
+                #[norito_schema(name = "example::Type")]
+                struct Type<T>(T);
+            ),
+            quote!(
+                #[norito_schema(name = "example::Lifetime")]
+                struct Lifetime<'a>(&'a str);
+            ),
+            quote!(
+                #[norito_schema(name = "example::Const")]
+                struct Const<const N: usize>;
+            ),
+        ] {
+            let expanded = expand(syn::parse2(input).unwrap()).unwrap().to_string();
+            assert!(!expanded.contains("fn static_nominal_name"));
+        }
     }
 
     #[test]

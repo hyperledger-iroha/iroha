@@ -58,7 +58,7 @@ mod sorafs_repair_admission {
         world
             .provider_owners
             .insert(ProviderId::new(PROVIDER), BOB_ID.clone());
-        component_state_after_genesis(world)
+        state_after_genesis(world)
     }
 
     fn submission(auditor: &AccountId) -> InstructionBox {

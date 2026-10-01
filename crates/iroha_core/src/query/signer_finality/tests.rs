@@ -171,6 +171,28 @@ fn an_invalid_local_certificate_is_not_signer_finality() {
 }
 
 #[test]
+fn original_genesis_without_a_successor_has_execution_but_no_signer_finality() {
+    use crate::sumeragi::certified_chain::{CertifiedChain, QcVerification};
+
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("original executed genesis");
+    let view = chain.state().view();
+    assert_eq!(chain.state().committed_height(), 1);
+    assert_eq!(chain.kura().blocks_count(), 1);
+    assert!(committed_block(&view, 1).is_ok());
+    let reader = CertifiedChain::new(&view).unwrap();
+    assert_eq!(
+        reader.certified(1).unwrap().verification(),
+        QcVerification::Genesis
+    );
+    assert!(super::certified_block_v1(&reader, 1, hash(&chain, 1)).is_err());
+    assert_eq!(
+        verify_signer_finality_v1(&view, 1, hash(&chain, 1)),
+        Err(SignerFinalityErrorV1)
+    );
+}
+
+#[test]
 fn genesis_execution_finality_requires_a_verified_successor() {
     use crate::sumeragi::{
         certified_chain::{CertifiedChain, QcVerification},
@@ -293,6 +315,30 @@ fn genesis_result_rejects_a_substituted_native_lane_witness_root() {
             if reason.contains("invalid native context proof")));
     assert_eq!(
         verify_signer_finality_v1(&view, 1, *original.hash().as_ref()),
+        Err(SignerFinalityErrorV1)
+    );
+}
+
+#[test]
+fn imported_genesis_frame_and_hash_journal_cannot_replace_original_execution() {
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("original native genesis");
+    let genesis = chain.committed(1).block().clone();
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = State::new_with_chain_and_network_id_for_testing(
+        World::new(),
+        std::sync::Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        chain.state().chain_id_ref().clone(),
+        chain.network_id(),
+    );
+    kura.store_block(std::sync::Arc::clone(&genesis)).unwrap();
+    state.push_block_hash_for_testing(genesis.hash());
+    let view = state.view();
+    assert!(committed_block(&view, 1).is_err());
+    assert_eq!(
+        verify_signer_finality_v1(&view, 1, hash(&chain, 1)),
         Err(SignerFinalityErrorV1)
     );
 }

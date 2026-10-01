@@ -208,7 +208,7 @@ fn signed_cancellation_updates_order_and_shared_nonce() {
     let authority = account(&buyer);
     let state = state_with_accounts(&[&buyer]);
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_callback_testing();
     let policy_digest = activate_policy(&mut stx, &authority);
     let order = order(&buyer, 1);
     let initial_balance = asset_balance(&stx, &authority);

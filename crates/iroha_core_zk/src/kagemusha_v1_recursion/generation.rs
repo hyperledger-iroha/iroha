@@ -21,9 +21,13 @@ use ff::{Field as _, FromUniformBytes, WithSmallOrderMulGroup};
 #[cfg(feature = "zk-halo2-ipa")]
 use halo2_base::gates::circuit::BaseCircuitParams;
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use halo2_base::utils::CurveAffineExt;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use halo2_proofs::plonk::create_proof_consuming;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 use halo2_proofs::plonk::{keygen_pk, keygen_vk};
@@ -74,7 +78,7 @@ use snark_verifier::{
 };
 use thiserror::Error;
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use {
     iroha_data_model::kagemusha::KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
     iroha_data_model::kagemusha::KagemushaCommitCertificateV1,
@@ -84,7 +88,11 @@ use {
     iroha_data_model::kagemusha::KagemushaRedemptionProofV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use {
     iroha_data_model::kagemusha::KagemushaAppAttestHardwareTransitionSelectionV1,
     iroha_data_model::kagemusha::KagemushaAppAttestationAuthorityPolicyV1,
@@ -96,6 +104,10 @@ use {
 
 #[cfg(feature = "zk-halo2-ipa")]
 use super::artifacts::CanonicalArtifactDigestWriterV1;
+
+#[cfg(feature = "kagemusha-production-prover")]
+#[path = "production_prover.rs"]
+pub(super) mod production_prover;
 
 /// Return an owned Eq parameter set backed by one process-local canonical derivation.
 ///
@@ -190,7 +202,11 @@ use mint_authority_generation::{
 };
 
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use super::composite::{
     KagemushaRecursiveIncomingEpWitnessV1 as CompositeIncomingEpWitnessV1,
     KagemushaRecursiveIncomingEqWitnessV1 as CompositeIncomingEqWitnessV1,
@@ -290,7 +306,11 @@ use super::{
     KagemushaMemoryArtifactResolverV1, KagemushaPastaParityV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use super::{
     composite::{KagemushaRecursiveStateWitnessV1, build_kagemusha_recursive_state_pair_v1},
     transport_decider::{
@@ -299,10 +319,14 @@ use super::{
     },
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use crate::kagemusha_v1_state::KagemushaMintFoldOpeningCapabilityV1;
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use crate::kagemusha_v1_state::KagemushaStateV1;
 #[cfg(feature = "zk-halo2-ipa")]
 use crate::{
@@ -310,7 +334,7 @@ use crate::{
     pasta_sha256_table8::{BLOCK_BYTE_SIZE, canonical_padding_suffix},
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use {
     super::KagemushaCommitWrapperWitnessV1, super::KagemushaTerminalAuthorizationEpWitnessV1,
     super::KagemushaTerminalAuthorizationEqWitnessV1,
@@ -322,14 +346,18 @@ use {
     super::derive_kagemusha_terminal_authorization_deferred_audits_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 use {
     super::KagemushaGuardBundleRelationWitnessV1, super::KagemushaOperationV1,
     super::KagemushaStateRelationWitnessV1, super::composite::KagemushaRecursiveStateEpCircuitV1,
     super::composite::KagemushaRecursiveStateEqCircuitV1, super::state_relation,
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use {
     super::KagemushaTerminalAuthorizationEpCircuitV1,
     super::KagemushaTerminalAuthorizationEqCircuitV1,
@@ -337,20 +365,20 @@ use {
     super::TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use {
     super::KagemushaTerminalAuthorizationPrivateTransitionV1,
     super::TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use {
     super::terminal_authorization::KagemushaCommitWrapperEpWitnessV1,
     super::terminal_authorization::KagemushaCommitWrapperEqWitnessV1,
 };
 
 #[cfg(feature = "zk-halo2-ipa")]
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 use {
     super::terminal_authorization::KagemushaCommitEvidenceOpeningV1,
     super::terminal_authorization::KagemushaTerminalSendPrivateV1,
@@ -402,7 +430,11 @@ impl KagemushaGeneratedOperationArtifactsV1 {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// One fixed-shape transported post-commit payment proof slot consumed by
 /// `ReceiveFold`.
 ///
@@ -423,10 +455,18 @@ pub struct KagemushaRecursiveIncomingEqGenerationWitnessV1<'a> {
     pub merge_fold_proof: &'a KagemushaEqFoldProofV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl<'a> KagemushaRecursiveIncomingEqGenerationWitnessV1<'a> {
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     fn into_composite(self) -> CompositeIncomingEqWitnessV1<'a> {
         CompositeIncomingEqWitnessV1 {
             instances: self.instances,
@@ -438,7 +478,11 @@ impl<'a> KagemushaRecursiveIncomingEqGenerationWitnessV1<'a> {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// One fixed Ep/Fq incoming post-commit payment proof slot for `ReceiveFold`.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
@@ -455,10 +499,18 @@ pub struct KagemushaRecursiveIncomingEpGenerationWitnessV1<'a> {
     pub merge_fold_proof: &'a KagemushaEpFoldProofV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl<'a> KagemushaRecursiveIncomingEpGenerationWitnessV1<'a> {
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     fn into_composite(self) -> CompositeIncomingEpWitnessV1<'a> {
         CompositeIncomingEpWitnessV1 {
             instances: self.instances,
@@ -470,7 +522,11 @@ impl<'a> KagemushaRecursiveIncomingEpGenerationWitnessV1<'a> {
     }
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Original assertion and governed identity needed by both recursive proof parities.
 ///
 /// These references carry the raw Apple assertion, enrolled credential, governed profile and
@@ -489,7 +545,11 @@ pub struct KagemushaAppAttestRecursiveSelectionWitnessV1<'a> {
     pub app_policy: &'a KagemushaAppAttestationAuthorityPolicyV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Complete private input needed to build both production recursive state circuits.
 ///
 /// Exactly one incoming proof position is always present. `ReceiveFold` consumes it, while every
@@ -618,15 +678,27 @@ pub struct KagemushaRecursiveStateGenerationWitnessV1<'a> {
     pub ep_mint_merge_fold_proof: &'a KagemushaEpFoldProofV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl<'a> KagemushaRecursiveStateGenerationWitnessV1<'a> {
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     fn reborrow(&self) -> KagemushaRecursiveStateGenerationWitnessV1<'_> {
         self.clone()
     }
 
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     fn into_recursive<'b>(
         self,
         eq_incoming_credits: &'b [CompositeIncomingEqWitnessV1<'b>; 1],
@@ -748,7 +820,11 @@ pub struct KagemushaGeneratedRecursiveStateArtifactsV1 {
     pub(super) ep_transport_capacity: KagemushaTransportDeciderCapacityProfileV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Loaded Eq production recursive-state parameters and keys.
 ///
 /// Its authenticated keys, layout and release identities remain private to the recursion
@@ -794,7 +870,11 @@ pub struct KagemushaLoadedEqRecursiveStateArtifactsV1 {
     pub(super) inner_circuit_params: BaseCircuitParams,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Loaded Ep production recursive-state parameters and keys.
 ///
 /// Its authenticated keys, layout and release identities remain private to the recursion
@@ -874,13 +954,13 @@ pub struct KagemushaGeneratedRecursiveStateProofV1 {
     pub ep_history: KagemushaEpAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Fixed release-enabled hardware-profile table width committed by every terminal-authorization key.
 #[cfg(feature = "zk-halo2-ipa")]
 pub const KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1: usize =
     TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Unlinkable post-commit public values used by the internal and transported terminal proofs.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -909,7 +989,7 @@ pub struct KagemushaTerminalAuthorizationTerminalGenerationPublicV1 {
     pub artifact_manifest_digest: [u8; 32],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl KagemushaTerminalAuthorizationTerminalGenerationPublicV1 {
     fn into_internal(
@@ -939,7 +1019,7 @@ impl KagemushaTerminalAuthorizationTerminalGenerationPublicV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Private opening of the terminal hardware commit evidence.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -956,7 +1036,7 @@ pub struct KagemushaCommitEvidenceOpeningGenerationV1 {
     pub lease_expires_at_ms: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl KagemushaCommitEvidenceOpeningGenerationV1 {
     fn into_internal(self) -> KagemushaCommitEvidenceOpeningV1 {
@@ -984,7 +1064,7 @@ pub struct KagemushaTerminalSendGenerationWitnessV1 {
 
 #[cfg(feature = "zk-halo2-ipa")]
 impl KagemushaTerminalSendGenerationWitnessV1 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "kagemusha-production-prover"))]
     fn into_internal(self) -> KagemushaTerminalSendPrivateV1 {
         KagemushaTerminalSendPrivateV1 {
             request: self.request,
@@ -994,7 +1074,7 @@ impl KagemushaTerminalSendGenerationWitnessV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Private exact-next aggregate and hardware transition constrained by terminal authorization.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1040,7 +1120,7 @@ pub struct KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
     pub apple_selection: Option<KagemushaAppAttestHardwareTransitionSelectionV1>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
     fn into_internal(self) -> KagemushaTerminalAuthorizationPrivateTransitionV1 {
@@ -1068,7 +1148,7 @@ impl KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Eq/Fp nested candidate and terminal-Guard inputs for terminal authorization.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
@@ -1099,7 +1179,7 @@ pub struct KagemushaTerminalAuthorizationEqGenerationWitnessV1<'a> {
     pub successor_history: &'a KagemushaEqAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Ep/Fq nested candidate and terminal-Guard inputs for terminal authorization.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
@@ -1130,7 +1210,7 @@ pub struct KagemushaTerminalAuthorizationEpGenerationWitnessV1<'a> {
     pub successor_history: &'a KagemushaEpAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Complete generation input for both mutually audited terminal-authorization parities.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
@@ -1182,7 +1262,7 @@ pub struct KagemushaGeneratedTerminalAuthorizationArtifactsV1 {
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Loaded authenticated Eq terminal-authorization parameters and keys.
 ///
 /// Its authenticated keys, layout and release identities remain private to the recursion
@@ -1239,7 +1319,7 @@ pub struct KagemushaLoadedEqTerminalAuthorizationArtifactsV1 {
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Loaded authenticated Ep terminal-authorization parameters and keys.
 ///
 /// Its authenticated keys, layout and release identities remain private to the recursion
@@ -1296,7 +1376,7 @@ pub struct KagemushaLoadedEpTerminalAuthorizationArtifactsV1 {
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Generated constant-size redemption proof and its recursive carry material.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1313,7 +1393,7 @@ pub struct KagemushaGeneratedRedemptionProofV1 {
     pub ep_current_accumulator: KagemushaEpAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Internal one-pair terminal authorization consumed by the transported proof.
 ///
 /// This carrier deliberately has no Norito wire representation. Only the
@@ -1380,7 +1460,7 @@ impl KagemushaGeneratedTerminalAuthorizationArtifactsV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Eq/Fp internal `TerminalAuthorization` inputs for the transported proof.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
@@ -1399,7 +1479,7 @@ pub struct KagemushaCommitWrapperEqGenerationWitnessV1<'a> {
     pub successor_history: &'a KagemushaEqAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Ep/Fq internal `TerminalAuthorization` inputs for the transported proof.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
@@ -1418,7 +1498,7 @@ pub struct KagemushaCommitWrapperEpGenerationWitnessV1<'a> {
     pub successor_history: &'a KagemushaEpAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Complete generation input for the sole transported authorization pair.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
@@ -1468,7 +1548,7 @@ pub struct KagemushaGeneratedCommitWrapperArtifactsV1 {
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Loaded authenticated Eq CommitWrapper parameters and keys.
 ///
 /// Its authenticated keys, layout and release identities remain private to the recursion
@@ -1519,7 +1599,7 @@ pub struct KagemushaLoadedEqCommitWrapperArtifactsV1 {
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Loaded authenticated Ep CommitWrapper parameters and keys.
 ///
 /// Its authenticated keys, layout and release identities remain private to the recursion
@@ -1570,7 +1650,7 @@ pub struct KagemushaLoadedEpCommitWrapperArtifactsV1 {
         [[u8; 32]; KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Generated compact post-commit material before selecting its operation-specific wire family.
 ///
 /// This carrier deliberately has no Norito representation. Its private proof material can only
@@ -1593,7 +1673,7 @@ pub struct KagemushaGeneratedCommitWrapperProofV1 {
     ep_history: KagemushaEpAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Generated constant-size payment proof and its recursive carry material.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1610,7 +1690,7 @@ pub struct KagemushaGeneratedPaymentProofV1 {
     pub ep_current_accumulator: KagemushaEpAccumulatorV1,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 impl KagemushaGeneratedCommitWrapperProofV1 {
     fn validate_material(&self) -> Result<(), KagemushaArtifactGenerationErrorV1> {
@@ -1666,7 +1746,7 @@ impl KagemushaGeneratedCommitWrapperProofV1 {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "kagemusha-production-prover"))]
     /// Convert the compact proof into the payment wire family.
     ///
     /// # Errors
@@ -1708,7 +1788,7 @@ impl KagemushaGeneratedCommitWrapperProofV1 {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "kagemusha-production-prover"))]
     /// Convert the compact proof into the redemption wire family.
     ///
     /// # Errors
@@ -1751,7 +1831,7 @@ impl KagemushaGeneratedCommitWrapperProofV1 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 fn require_terminal_operation_v1(
     actual: KagemushaOperationV1,
@@ -3339,7 +3419,7 @@ pub fn prove_kagemusha_mint_authorization_hash_claim_v1(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Exact compiled candidate and Guard columns needed for one Terminal SHA planning parity.
 ///
 /// Nested proof bytes and successor histories are consumed by Terminal proving, after this
@@ -3357,7 +3437,7 @@ pub struct KagemushaTerminalAuthorizationHashClaimParityWitnessV1<'a, C: CurveAf
     pub terminal_guard_instances: &'a [Vec<C::ScalarExt>],
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Borrowed semantic input for Terminal's complete ordered SHA claim.
 ///
 /// This input deliberately precedes the Terminal claim, own audits, own protocol identities and
@@ -3380,7 +3460,7 @@ pub struct KagemushaTerminalAuthorizationHashClaimGenerationWitnessV1<'a> {
     pub ep: KagemushaTerminalAuthorizationHashClaimParityWitnessV1<'a, EpAffine>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Prove all ordered SHA jobs emitted by the shared Terminal semantic assignment.
 ///
 /// The resulting claim grants no terminal or wallet authority by itself. Terminal proving must
@@ -3453,7 +3533,11 @@ pub fn prove_kagemusha_terminal_authorization_hash_claim_v1(
     )
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Prove the exact ordered SHA queue consumed by the recursive aggregate-state circuit.
 ///
 /// Discovery runs the same typed relation and canonical proof parsers as state proving, then
@@ -5177,17 +5261,18 @@ fn fresh_online_issuer_recovery_seed_v1()
     })
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
-/// Generate both complete recursive state-role key pairs from one valid fixed-shape witness.
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+/// Build both complete recursive state circuits from the immutable typed witness.
 ///
-/// This is the only production state-key generator. The returned protocol digests and
-/// `halo2-base` layouts must be authenticated by the release manifest/profile alongside the
-/// returned content-addressed artifact bindings.
+/// Proving uses this relation to derive audits and verify the release-selected layout.
+/// The helper neither generates keys nor installs release or device authority.
 ///
 /// # Errors
-///
-/// Returns an error if recursive witness construction, fixed-profile validation, key generation,
-/// protocol compilation, or artifact-bound validation fails.
+/// Rejects invalid recursive proof, witness or reciprocal audit construction.
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_recursive_generation_pair_v1(
     eq_parameters: &ParamsIPA<EqAffine>,
@@ -5215,7 +5300,11 @@ fn build_recursive_generation_pair_v1(
     )
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[cfg(feature = "zk-halo2-ipa")]
 struct KagemushaPrivateCarrierProofV1 {
     eq_instances: Vec<Fp>,
@@ -5226,7 +5315,11 @@ struct KagemushaPrivateCarrierProofV1 {
     ep_history: KagemushaEpAccumulatorV1,
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_arguments)]
 fn prove_private_recursive_carrier_v1(
@@ -5853,7 +5946,11 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
     })
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 /// Produce both production recursive state proofs and their carried delayed histories.
 ///
 /// The circuit is rebuilt from the complete private witness and its derived layout must exactly
@@ -6140,7 +6237,7 @@ pub fn prove_kagemusha_recursive_state_v1(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_arguments)]
 fn terminal_authorization_internal_witness_v1<'a>(
@@ -6193,7 +6290,7 @@ fn terminal_authorization_internal_witness_v1<'a>(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_arguments)]
 fn commit_wrapper_internal_witness_v1<'a>(
@@ -6637,7 +6734,7 @@ pub fn generate_kagemusha_commit_wrapper_artifacts_v1(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Compare all claim/shard identities with independently authenticated release pins.
 #[cfg(feature = "zk-halo2-ipa")]
 fn validate_terminal_hash_protocol_pins_v1(
@@ -6652,7 +6749,7 @@ fn validate_terminal_hash_protocol_pins_v1(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Produce the internal candidate-plus-certificate proof after the hardware terminal commit.
 ///
 /// This non-Norito carrier is recursively consumed by CommitWrapper; it is never transported.
@@ -6870,7 +6967,7 @@ pub fn prove_kagemusha_terminal_authorization_v1(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 /// Produce the sole transported CommitWrapper pair from the genuine post-commit inner proof.
 ///
 /// Its exact 83-cell projection preserves the body, candidate, certificate, authenticated
@@ -8562,7 +8659,11 @@ fn read_ep_mint_vk(
     Ok(key)
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[cfg(feature = "zk-halo2-ipa")]
 fn recursive_public_instances<F: KagemushaPoseidonFieldV1>(
     state: &KagemushaStateRelationWitnessV1,
@@ -8587,7 +8688,7 @@ fn recursive_public_instances<F: KagemushaPoseidonFieldV1>(
     Ok(instances)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 fn terminal_authorization_public_instances<F: KagemushaPoseidonFieldV1>(
     public: &KagemushaTerminalAuthorizationPublicInputsV1,
@@ -8775,13 +8876,21 @@ where
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy, Debug)]
 enum KagemushaProofRecoveryPhaseV1 {
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     StateCarrier,
-    #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+    #[cfg(any(
+        test,
+        feature = "kagemusha-real-proof-harness",
+        feature = "kagemusha-production-prover"
+    ))]
     StateTransport,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "kagemusha-production-prover"))]
     TerminalAuthorization,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "kagemusha-production-prover"))]
     CommitWrapper,
     MintAuthorization,
     MintAuthorizationTransport,
@@ -8793,15 +8902,23 @@ enum KagemushaProofRecoveryPhaseV1 {
 impl KagemushaProofRecoveryPhaseV1 {
     const fn label(self) -> &'static str {
         match self {
-            #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+            #[cfg(any(
+                test,
+                feature = "kagemusha-real-proof-harness",
+                feature = "kagemusha-production-prover"
+            ))]
             Self::StateCarrier => "iroha:kagemusha:v1:proof-recovery:state-carrier",
-            #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+            #[cfg(any(
+                test,
+                feature = "kagemusha-real-proof-harness",
+                feature = "kagemusha-production-prover"
+            ))]
             Self::StateTransport => "iroha:kagemusha:v1:proof-recovery:state-transport",
-            #[cfg(test)]
+            #[cfg(any(test, feature = "kagemusha-production-prover"))]
             Self::TerminalAuthorization => {
                 "iroha:kagemusha:v1:proof-recovery:terminal-authorization"
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "kagemusha-production-prover"))]
             Self::CommitWrapper => "iroha:kagemusha:v1:proof-recovery:commit-wrapper",
             Self::MintAuthorization => "iroha:kagemusha:v1:proof-recovery:mint-authorization",
             Self::MintAuthorizationTransport => {
@@ -9597,7 +9714,7 @@ fn validate_mint_authorization_inner_profile(
         .map_err(|_| KagemushaArtifactGenerationErrorV1::CircuitProfileMismatch(parity))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 fn validate_terminal_authorization_profile(
     parity: KagemushaPastaParityV1,
@@ -9646,7 +9763,7 @@ fn validate_paired_proof_length(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "kagemusha-production-prover"))]
 #[cfg(feature = "zk-halo2-ipa")]
 fn validate_internal_recursive_proof_length<C>(
     parity: KagemushaPastaParityV1,
@@ -9709,7 +9826,11 @@ fn validate_transport_proof_profile(
     Ok(())
 }
 
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
 #[cfg(feature = "zk-halo2-ipa")]
 const fn recursive_public_instance_count() -> usize {
     state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT

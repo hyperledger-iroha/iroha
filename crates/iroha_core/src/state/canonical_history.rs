@@ -219,24 +219,26 @@ impl<'a> CanonicalHistorySource<'a> {
             crate::sumeragi::certified_chain::CommittedBlock,
         ) -> Result<(), QueryExecutionFail>,
     ) -> Result<(), QueryExecutionFail> {
-        self.visit_executed_backwards_while(first, last, before_read, |receipt| {
-            visit(receipt)?;
-            Ok(true)
+        self.visit_executed_backwards_until(first, last, before_read, |value| {
+            visit(value).map(|()| core::ops::ControlFlow::Continue(()))
         })
+        .map(drop)
     }
 
-    /// The same original-tip walk, stopping after an authenticated visitor returns false.
-    /// The visitor may choose an older target from a newly verified certificate without
-    /// reading or decoding the already authenticated prefix a second time.
-    pub(crate) fn visit_executed_backwards_while(
+    /// Authenticate one ancestry walk, stopping before older source I/O when requested.
+    ///
+    /// Returns whether the selected interval was exhausted. Skipped ancestors still
+    /// consume admitted source work and bytes before reading; every visited receipt
+    /// is bound to this original State tip through its exact parent identities.
+    pub(crate) fn visit_executed_backwards_until(
         self,
         first: NonZeroUsize,
         last: NonZeroUsize,
         mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
         mut visit: impl FnMut(
             crate::sumeragi::certified_chain::CommittedBlock,
-        ) -> Result<bool, QueryExecutionFail>,
-    ) -> Result<(), QueryExecutionFail> {
+        ) -> Result<core::ops::ControlFlow<()>, QueryExecutionFail>,
+    ) -> Result<bool, QueryExecutionFail> {
         if first > last {
             return Err(QueryExecutionFail::Conversion(
                 "native execution interval is reversed".into(),
@@ -293,11 +295,13 @@ impl<'a> CanonicalHistorySource<'a> {
                         invalid("native successor omits Iroha parent hash".into())
                     })?;
             }
-            if source_height <= selected_last && !visit(receipt)? {
-                return Ok(());
+            if source_height <= selected_last {
+                if visit(receipt)?.is_break() {
+                    return Ok(false);
+                }
             }
             if source_height == target {
-                return Ok(());
+                return Ok(true);
             }
         }
         Err(invalid(

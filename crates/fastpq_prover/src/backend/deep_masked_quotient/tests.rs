@@ -161,9 +161,9 @@ fn full_relation_plan_uses_actual_degrees_and_refuses_budget_and_source_mismatch
     let air = air();
     let plan = DeepQuotientPlan::new(&air, replay_plan(), policy()).unwrap();
     assert_eq!(plan.domain.rows(), 262_144);
-    assert_eq!(plan.numerator_bound, 196_751);
-    assert_eq!(plan.division.quotient_degree_bound(), 131_215);
-    assert_eq!(plan.pair.degree_bounds(), [65_601, 65_679]);
+    assert_eq!(plan.numerator_bound, 196_803);
+    assert_eq!(plan.division.quotient_degree_bound(), 131_267);
+    assert_eq!(plan.pair.degree_bounds(), [65_614, 65_731]);
     assert_eq!(plan.cycle, 2048);
     assert!(plan.payload_bytes > replay_plan().payload_bytes);
     assert!(plan.payload_bytes < 2 * (1 << 30));

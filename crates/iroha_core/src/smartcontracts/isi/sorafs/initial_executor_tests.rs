@@ -1,6 +1,77 @@
-// Exercise the production Initial dispatcher without genesis-only admission.
-fn initial_sorafs_block_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 5_000, 0)
+// Ordinary Initial scenarios execute after the original signed genesis. The
+// existing component World and governance enter the canonical producer before
+// immutable execution authority is captured; raw component fixtures stay separate.
+fn make_initial_sorafs_state() -> State {
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let component = make_state();
+    let mut config = TestChainConfig::new(component.world, 0);
+    config.chain_id = component.chain_id;
+    config.governance = Some(component.gov);
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("original signed SoraFS genesis");
+    let state = std::sync::Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished SoraFS State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        mode.into(),
+        None,
+    )
+    .expect("apply the original authenticated SoraFS genesis");
+    state
+}
+
+// Exercise the production Initial dispatcher with its actual committed parent.
+fn initial_sorafs_block_header(state: &State) -> iroha_data_model::block::BlockHeader {
+    use crate::state::StateReadOnly as _;
+    iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        5_000,
+        0,
+    )
+}
+
+#[test]
+fn initial_sorafs_fixture_owns_original_genesis_and_retains_component_policy() {
+    use crate::state::StateReadOnly as _;
+    let state = make_initial_sorafs_state();
+    let parent = state
+        .view()
+        .latest_block_hash()
+        .expect("committed original genesis");
+    assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+    let header = initial_sorafs_block_header(&state);
+    assert_eq!(header.prev_block_hash(), Some(parent));
+    let mut block = state.block(header);
+    let transaction = block.transaction();
+    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_ok());
+    assert!(transaction.gov.sorafs_telemetry.require_submitter);
+    assert_eq!(transaction.gov.sorafs_telemetry.submitters, vec![alice()]);
+    assert!(pin_fee_balance(&transaction, &alice()) > Quantity::zero());
+    let original_permissions = make_state()
+        .world
+        .account_permissions
+        .view()
+        .get(&alice())
+        .expect("component permissions")
+        .clone();
+    assert_eq!(
+        transaction.world.account_permissions.get(&alice()),
+        Some(&original_permissions)
+    );
+    drop(transaction);
+    drop(block);
+    let component = make_state();
+    let mut block = component.block(initial_sorafs_block_header(&component));
+    let transaction = block.transaction();
+    assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_err());
 }
 
 fn execute_initial_sorafs(
@@ -36,8 +107,8 @@ impl<T: Into<InstructionBox>> ExecuteInitialSorafs for T {}
 #[test]
 fn initial_executor_sorafs_direct_provider_owner_instructions_remain_closed() {
     use iroha_data_model::isi::Instruction as _;
-    let state = make_state();
-    let mut block = state.block(initial_sorafs_block_header());
+    let state = make_initial_sorafs_state();
+    let mut block = state.block(initial_sorafs_block_header(&state));
     let mut stx = block.transaction();
     let provider = ProviderId::new([0xA1; 32]);
     stx.world.provider_owners.insert(provider, alice());
@@ -71,7 +142,7 @@ fn initial_executor_sorafs_role_grant_use_and_revoke_are_exact() {
     };
     use iroha_executor_data_model::permission::sorafs::CanSetSorafsPricing;
 
-    let mut state = make_state();
+    let mut state = make_initial_sorafs_state();
     let role_id: RoleId = "sorafs_pricing_operator".parse().expect("role ID");
     let role = Role::new(role_id.clone(), alice())
         .add_permission(Permission::from(CanSetSorafsPricing))
@@ -81,7 +152,7 @@ fn initial_executor_sorafs_role_grant_use_and_revoke_are_exact() {
         crate::role::RoleIdWithOwner::new(alice(), role_id.clone()),
         (),
     );
-    let mut block = state.block(initial_sorafs_block_header());
+    let mut block = state.block(initial_sorafs_block_header(&state));
     let mut stx = block.transaction();
     let pricing = SetPricingSchedule {
         schedule: PricingScheduleRecord::launch_default(),
@@ -140,7 +211,7 @@ fn initial_executor_sorafs_rejects_malformed_unit_and_foreign_role_permissions()
     .into_iter()
     .enumerate()
     {
-        let mut state = make_state();
+        let mut state = make_initial_sorafs_state();
         let role_id: RoleId = format!("sorafs_invalid_pricing_{index}").parse().unwrap();
         let role = Role::new(role_id.clone(), alice())
             .add_permission(permission.clone())
@@ -152,7 +223,7 @@ fn initial_executor_sorafs_rejects_malformed_unit_and_foreign_role_permissions()
                 (),
             );
         }
-        let mut block = state.block(initial_sorafs_block_header());
+        let mut block = state.block(initial_sorafs_block_header(&state));
         let mut stx = block.transaction();
         // Invalid retained role payloads cannot authorize an operation even before
         // a new grant boundary is reached. A different valid permission is no substitute.

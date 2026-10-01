@@ -4692,49 +4692,46 @@ mod tests {
         );
     }
     #[cfg(feature = "quic")]
-    async fn run_publisher_transport_negotiation(
-        server: iroha_p2p::streaming::StreamingServer,
-        publisher_handle: StreamingHandle,
-        viewer_peer: Peer,
-    ) {
-        use norito::streaming::TransportCapabilities;
-        use tokio::time::{Duration as TokioDuration, sleep};
-        let mut conn = server.accept().await.expect("accept");
+    #[tokio::test(flavor = "multi_thread")]
+    async fn negotiate_transport_records_hashes() {
+        use iroha_p2p::streaming::{
+            StreamingServer,
+            quic::{Error, TransportConfigSettings},
+        };
+        use norito::streaming::{
+            AudioCapability, Resolution, TransportCapabilities, resolve_transport_capabilities,
+        };
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let refused = match StreamingServer::bind(server_addr, TransportConfigSettings::default())
+            .await
+        {
+            Ok(_) => panic!("shipping QUIC must remain closed pending transport requalification"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(refused, Error::TransportConfig(ref reason) if reason.contains("transport requalification"))
+        );
+
+        // Exercise the canonical negotiation codec and session owners directly.
+        // A component exchange does not qualify the deliberately closed shipping transport.
+        let publisher_keys = checked_random_ed25519_keypair();
+        let viewer_keys = checked_random_keypair();
+        let publisher_peer = make_peer(&publisher_keys, 21001);
+        let viewer_peer = make_peer(&viewer_keys, 21002);
+        let publisher_handle =
+            StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
+        let viewer_handle =
+            StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let mut publisher_caps = TransportCapabilities::kyber768_default();
         publisher_caps.max_segment_datagram_size = 1_100;
-        let (ack, resolution) = publisher_handle
-            .negotiate_publisher_transport(&viewer_peer, &mut conn, publisher_caps)
-            .await
-            .expect("publisher negotiation");
-        assert_eq!(ack.max_datagram_size, resolution.max_segment_datagram_size);
-        assert_eq!(
-            publisher_handle.transport_capabilities_hash(viewer_peer.id()),
-            Some(resolution.capabilities_hash())
-        );
-        sleep(TokioDuration::from_millis(50)).await;
-        conn.close();
-    }
-    #[cfg(feature = "quic")]
-    async fn run_viewer_transport_negotiation(
-        settings: iroha_p2p::streaming::quic::TransportConfigSettings,
-        listen_port: u16,
-        server_certificate_fingerprint: iroha_p2p::streaming::quic::CertificateFingerprint,
-        viewer_handle: StreamingHandle,
-        publisher_peer: Peer,
-    ) {
-        use iroha_p2p::streaming::StreamingClient;
-        use norito::streaming::{
-            AudioCapability, CapabilityFlags, Resolution, TransportCapabilities,
-        };
-        let mut client = StreamingClient::connect(
-            &format!("/ip4/127.0.0.1/udp/{listen_port}/quic"),
-            server_certificate_fingerprint,
-            settings,
-        )
-        .await
-        .expect("client");
         let mut viewer_caps = TransportCapabilities::kyber768_default();
         viewer_caps.max_segment_datagram_size = 1_000;
+        let resolution = resolve_transport_capabilities(&publisher_caps, &viewer_caps)
+            .expect("publisher resolution");
+        let viewer_resolution = resolve_transport_capabilities(&viewer_caps, &publisher_caps)
+            .expect("viewer resolution");
+        assert_eq!(resolution, viewer_resolution);
         let report = CapabilityReport {
             stream_id: hash_with(0x99),
             endpoint_role: CapabilityRole::Viewer,
@@ -4748,55 +4745,61 @@ mod tests {
                 ambisonics: false,
                 max_channels: 2,
             },
-            feature_bits: CapabilityFlags::from_bits(0b101),
+            feature_bits: viewer_handle
+                .normalize_viewer_feature_bits(CapabilityFlags::from_bits(0b101)),
             max_datagram_size: 950,
             dplpmtud: true,
         };
-        let (ack, resolution) = viewer_handle
-            .negotiate_viewer_transport(&publisher_peer, client.connection(), viewer_caps, report)
-            .await
-            .expect("viewer negotiation");
+        let report_frame = ControlFrame::CapabilityReport(report.clone());
+        let report_wire = norito::to_bytes(&report_frame).expect("encode viewer report");
+        let ControlFrame::CapabilityReport(decoded_report) =
+            norito::decode_canonical::<ControlFrame>(&report_wire).expect("decode viewer report")
+        else {
+            panic!("canonical viewer report retains its frame kind");
+        };
+        assert_eq!(decoded_report, report);
+        let ack = publisher_handle
+            .build_capability_ack(&decoded_report, resolution)
+            .expect("publisher acknowledgement");
+        let ack_wire = norito::to_bytes(&ControlFrame::CapabilityAck(ack))
+            .expect("encode publisher acknowledgement");
+        let ControlFrame::CapabilityAck(viewer_ack) =
+            norito::decode_canonical::<ControlFrame>(&ack_wire)
+                .expect("decode publisher acknowledgement")
+        else {
+            panic!("canonical publisher acknowledgement retains its frame kind");
+        };
+        assert_eq!(viewer_ack, ack);
         assert_eq!(ack.max_datagram_size, resolution.max_segment_datagram_size);
         assert_eq!(
-            viewer_handle.transport_capabilities_hash(publisher_peer.id()),
-            Some(resolution.capabilities_hash())
+            viewer_ack.max_datagram_size,
+            viewer_resolution.max_segment_datagram_size
         );
-        client.close().await;
-    }
-    #[cfg(feature = "quic")]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn negotiate_transport_records_hashes() {
-        use iroha_p2p::streaming::{StreamingServer, quic::TransportConfigSettings};
-        use norito::streaming::CapabilityFlags;
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-        let settings = TransportConfigSettings::default();
-        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let server = StreamingServer::bind(server_addr, settings)
-            .await
-            .expect("bind server");
-        let listen_addr = server.local_addr().expect("listen addr");
-        let server_certificate_fingerprint = server.certificate_fingerprint();
-        let publisher_keys = checked_random_ed25519_keypair();
-        let viewer_keys = checked_random_keypair();
-        let publisher_peer = make_peer(&publisher_keys, 21001);
-        let viewer_peer = make_peer(&viewer_keys, 21002);
-        let publisher_handle =
-            StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
-        let viewer_handle =
-            StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
-        let server_task = run_publisher_transport_negotiation(
-            server.clone(),
-            publisher_handle.clone(),
-            viewer_peer.clone(),
-        );
-        let viewer_task = run_viewer_transport_negotiation(
-            settings,
-            listen_addr.port(),
-            server_certificate_fingerprint,
-            viewer_handle.clone(),
-            publisher_peer.clone(),
-        );
-        tokio::join!(server_task, viewer_task);
+        for (handle, peer, role, resolved) in [
+            (
+                &publisher_handle,
+                &viewer_peer,
+                CapabilityRole::Publisher,
+                resolution,
+            ),
+            (
+                &viewer_handle,
+                &publisher_peer,
+                CapabilityRole::Viewer,
+                viewer_resolution,
+            ),
+        ] {
+            handle
+                .record_transport_capabilities(peer, role, resolved)
+                .expect("retain original resolved transport");
+            handle
+                .record_negotiated_capabilities(peer, role, ack.negotiated_features)
+                .expect("retain acknowledged features");
+            assert_eq!(
+                handle.transport_capabilities_hash(peer.id()),
+                Some(resolved.capabilities_hash())
+            );
+        }
         assert!(
             publisher_handle
                 .transport_capabilities_hash(viewer_peer.id())
@@ -4820,7 +4823,6 @@ mod tests {
         viewer_handle
             .validate_manifest_transport_capabilities(publisher_peer.id(), &manifest)
             .expect("manifest matches negotiated capabilities");
-        server.shutdown().await;
     }
     #[cfg(feature = "quic")]
     #[test]
@@ -5249,7 +5251,9 @@ mod tests {
     fn unsupported_feature_bits_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0));
-        // Request a feature bit outside the allowed mask (bit 14).
+        // Admit the mandatory codec bits, then request an unadvertised bit.
+        let unsupported_bit = 1_u32 << 31;
+        assert_eq!(handle.capabilities().bits() & unsupported_bit, 0);
         let report = CapabilityReport {
             stream_id: hash_with(0xDD),
             endpoint_role: CapabilityRole::Viewer,
@@ -5263,7 +5267,7 @@ mod tests {
                 ambisonics: false,
                 max_channels: 2,
             },
-            feature_bits: CapabilityFlags::from_bits(1 << 14),
+            feature_bits: handle.capabilities().insert(unsupported_bit),
             max_datagram_size: 900,
             dplpmtud: false,
         };
@@ -5273,7 +5277,8 @@ mod tests {
             .expect_err("publisher should reject unsupported feature bits");
         assert!(matches!(
             err,
-            StreamingProcessError::UnsupportedFeatures { .. }
+            StreamingProcessError::UnsupportedFeatures { requested_bits, supported_bits }
+                if requested_bits == unsupported_bit && supported_bits == handle.capabilities().bits()
         ));
     }
     #[cfg(feature = "quic")]

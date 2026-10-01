@@ -1505,37 +1505,47 @@ public sealed partial class ToriiClient : IDisposable
     }
 
     public async Task<ToriiContractCodeRecord> GetContractCodeAsync(
-        string codeHash,
+        ContractArtifactId artifactId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+        ArgumentNullException.ThrowIfNull(artifactId);
+        RequireCanonicalRequestCredentials(artifactId.Route);
 
         var response = await GetAsync<ToriiContractCodeRecord>(
-            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}",
+            artifactId.Route,
             cancellationToken: cancellationToken);
         ValidateContractCodeRecord(response, "contract code response");
+        ValidateContractArtifactResponse(response.NetworkId, response.ArtifactId, artifactId);
         return response;
     }
 
     public async Task<ToriiContractCodeBytesResponse> GetContractCodeBytesResponseAsync(
-        string codeHash,
+        ContractArtifactId artifactId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+        ArgumentNullException.ThrowIfNull(artifactId);
+        RequireCanonicalRequestCredentials(artifactId.Route);
 
         var response = await GetAsync<ToriiContractCodeBytesResponse>(
-            $"/v1/contracts/code-bytes/{EncodePathSegment(normalizedCodeHash)}",
+            artifactId.Route + "/bytes",
             cancellationToken: cancellationToken);
 
-        _ = response.DecodeBytes();
+        var bytes = response.DecodeBytes();
+        ValidateContractArtifactResponse(response.NetworkId, response.ArtifactId, artifactId);
+        var domain = Encoding.UTF8.GetBytes("iroha:ivm:contract-artifact:v1\0");
+        var committed = new byte[domain.Length + bytes.Length];
+        domain.CopyTo(committed, 0);
+        bytes.CopyTo(committed, domain.Length);
+        if (!CryptographicOperations.FixedTimeEquals(IrohaHash.Hash(committed), Convert.FromHexString(artifactId.CodeHashHex)))
+            throw new JsonException("contract code-byte response does not match its artifact_id code_hash.");
         return response;
     }
 
     public async Task<byte[]> GetContractCodeBytesAsync(
-        string codeHash,
+        ContractArtifactId artifactId,
         CancellationToken cancellationToken = default)
     {
-        var response = await GetContractCodeBytesResponseAsync(codeHash, cancellationToken);
+        var response = await GetContractCodeBytesResponseAsync(artifactId, cancellationToken);
         return response.DecodeBytes();
     }
 
@@ -1663,15 +1673,17 @@ public sealed partial class ToriiClient : IDisposable
     }
 
     public async Task<ToriiContractCodeView> GetContractCodeViewAsync(
-        string codeHash,
+        ContractArtifactId artifactId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+        ArgumentNullException.ThrowIfNull(artifactId);
+        RequireCanonicalRequestCredentials(artifactId.Route);
 
         var response = await GetAsync<ToriiContractCodeView>(
-            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}/contract-view",
+            artifactId.Route + "/contract-view",
             cancellationToken: cancellationToken);
         ValidateContractCodeView(response, "contract code-view response");
+        ValidateContractArtifactResponse(response.NetworkId, response.ArtifactId, artifactId);
         return response;
     }
 
@@ -1798,33 +1810,36 @@ public sealed partial class ToriiClient : IDisposable
     }
 
     public async Task<ToriiContractVerifiedSourceJob> SubmitContractVerifiedSourceJobAsync(
-        string codeHash,
+        ContractArtifactId artifactId,
         ToriiContractVerifiedSourceSubmission request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+        ArgumentNullException.ThrowIfNull(artifactId);
         var normalizedRequest = NormalizeContractVerifiedSourceSubmission(request);
+        RequireCanonicalRequestCredentials(artifactId.Route);
 
         var response = await PostAsync<ToriiContractVerifiedSourceSubmission, ToriiContractVerifiedSourceJob>(
-            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}/verified-source/jobs",
+            artifactId.Route + "/verified-source/jobs",
             normalizedRequest,
             cancellationToken: cancellationToken);
         ValidateContractVerifiedSourceJob(response, "contract verified-source job response");
+        ValidateContractArtifactResponse(response.NetworkId, response.ArtifactId, artifactId);
         return response;
     }
 
     public async Task<ToriiContractVerifiedSourceJob?> GetContractVerifiedSourceJobAsync(
-        string codeHash,
+        ContractArtifactId artifactId,
         string jobId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedCodeHash = NormalizeExactSizedHex(codeHash, nameof(codeHash), 32);
+        ArgumentNullException.ThrowIfNull(artifactId);
         var normalizedJobId = NormalizeExactValue(jobId, nameof(jobId));
+        RequireCanonicalRequestCredentials(artifactId.Route);
 
         using var response = await SendAllowingStatusAsync(
             HttpMethod.Get,
-            $"/v1/contracts/code/{EncodePathSegment(normalizedCodeHash)}/verified-source-jobs/{EncodePathSegment(normalizedJobId)}",
+            $"{artifactId.Route}/verified-source/jobs/{EncodePathSegment(normalizedJobId)}",
             query: null,
             content: null,
             HttpStatusCode.NotFound,
@@ -1837,6 +1852,9 @@ public sealed partial class ToriiClient : IDisposable
 
         var job = await DeserializeAsync<ToriiContractVerifiedSourceJob>(response, cancellationToken);
         ValidateContractVerifiedSourceJob(job, "contract verified-source job response");
+        ValidateContractArtifactResponse(job.NetworkId, job.ArtifactId, artifactId);
+        if (!string.Equals(job.JobId, normalizedJobId, StringComparison.Ordinal))
+            throw new JsonException("Contract verified-source response job_id differs from the requested job.");
         return job;
     }
 
@@ -2469,6 +2487,14 @@ public sealed partial class ToriiClient : IDisposable
         if (!string.Equals(BaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Sora VPN requests require an HTTPS Torii base URI.");
+        }
+    }
+
+    private void ValidateContractArtifactResponse(NetworkId networkId, ContractArtifactId actual, ContractArtifactId expected)
+    {
+        if (Options.NetworkId is null || networkId != Options.NetworkId || actual != expected)
+        {
+            throw new JsonException("Contract artifact response differs from the requested network or artifact identity.");
         }
     }
 
@@ -4268,7 +4294,10 @@ public sealed partial class ToriiClient : IDisposable
             nameof(instruction));
         var jsonBytes = reader.ReadField("payload");
         reader.RequireEnd();
-        var jsonText = DecodeCanonicalNoritoString(jsonBytes, context);
+        var jsonReader = new CanonicalNoritoReader(jsonBytes, $"{context} Json", nameof(instruction));
+        var jsonString = jsonReader.ReadField("value");
+        jsonReader.RequireEnd();
+        var jsonText = DecodeCanonicalNoritoString(jsonString, context);
         var value = JsonNode.Parse(jsonText)
             ?? throw new JsonException($"{context} custom instruction JSON must not be null.");
         var canonical = new MultisigCustomInstruction(value)
@@ -4313,6 +4342,19 @@ public sealed partial class ToriiClient : IDisposable
         return StrictUtf8.GetString(bytes);
     }
 
+    private static string DecodeCanonicalNoritoStringField(
+        ReadOnlySpan<byte> encoded,
+        string fieldName,
+        string context)
+    {
+        // Native TriggerId owns one Name field; native Json owns one String field.
+        // Both records retain their field boundary before the inner string bytes.
+        var reader = new CanonicalNoritoReader(encoded, context, nameof(encoded));
+        var value = reader.ReadField(fieldName);
+        reader.RequireEnd();
+        return DecodeCanonicalNoritoString(value, context);
+    }
+
     private static JsonObject RequireExactJsonObject(
         JsonNode? value,
         IReadOnlyCollection<string> expectedKeys,
@@ -4339,11 +4381,13 @@ public sealed partial class ToriiClient : IDisposable
             payload,
             $"{context} execute-trigger instruction",
             nameof(instruction));
-        var triggerId = DecodeCanonicalNoritoString(
+        var triggerId = DecodeCanonicalNoritoStringField(
             reader.ReadField("trigger"),
+            "name",
             context);
-        var argumentsText = DecodeCanonicalNoritoString(
+        var argumentsText = DecodeCanonicalNoritoStringField(
             reader.ReadField("args"),
+            "value",
             context);
         reader.RequireEnd();
         return (triggerId, JsonNode.Parse(argumentsText));
@@ -4381,7 +4425,7 @@ public sealed partial class ToriiClient : IDisposable
             triggerPayload,
             $"{context} trigger",
             nameof(instruction));
-        var triggerId = DecodeCanonicalNoritoString(trigger.ReadField("id"), context);
+        var triggerId = DecodeCanonicalNoritoStringField(trigger.ReadField("id"), "name", context);
         var actionPayload = trigger.ReadField("action");
         trigger.RequireEnd();
         if (!string.Equals(triggerId, expectedTriggerId, StringComparison.Ordinal))
@@ -4459,7 +4503,7 @@ public sealed partial class ToriiClient : IDisposable
         var authority = ReadRequiredNoritoOption(reader.ReadField("authority"), context);
         reader.RequireEnd();
         if (!string.Equals(
-                DecodeCanonicalNoritoString(triggerId, context),
+                DecodeCanonicalNoritoStringField(triggerId, "name", context),
                 expectedTriggerId,
                 StringComparison.Ordinal)
             || !authority.AsSpan().SequenceEqual(expectedAuthority))

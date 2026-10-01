@@ -10,6 +10,17 @@ import Foundation
 public enum KagemushaNoritoV1 {
   private static let model = "iroha_data_model::kagemusha::kagemusha_v1::"
   private static let deviceModel = "iroha_data_model::kagemusha::kagemusha_device_v1::"
+
+  /// Encode the canonical paired State proof shape; this grants no verifier authority.
+  public static func encodePairedProofShape(_ value: KagemushaPairedProofV1) throws -> Data {
+    try bounded(frame("KagemushaPairedProofV1", pairedProof(value), 8), 8192)
+  }
+
+  /// Decode one bounded canonical paired State archive with exact re-encoding equality.
+  public static func decodePairedProofShapeExact(_ bytes: Data) throws -> KagemushaPairedProofV1 {
+    try decodeExact(bytes, 8192, "KagemushaPairedProofV1", 8,
+      decodePairedProof, encodePairedProofShape)
+  }
   private static let deviceMintStageCommandSchema =
     deviceModel + "KagemushaDeviceMintStageCommandV1"
   private static let deviceMintStageResultSchema =

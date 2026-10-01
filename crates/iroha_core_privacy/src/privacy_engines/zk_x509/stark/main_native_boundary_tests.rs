@@ -87,9 +87,20 @@ impl NativeBoundaryRows {
                     start + local..start + end,
                 )
                 .expect("bounded native source replay");
+            assert_eq!(columns.len(), end - local);
+            assert_eq!(
+                columns.capacity(),
+                end - local,
+                "real source batch and final tail capacity"
+            );
             assert!(columns.len() <= 8);
             for (offset, column) in columns.iter().enumerate() {
                 assert_eq!(column.len(), registration.segment.trace_size());
+                assert_eq!(
+                    column.0.capacity(),
+                    registration.segment.trace_size(),
+                    "all registered native builders must meet replay admission"
+                );
                 for (&index, row) in self.indices.iter().zip(rows.iter_mut()) {
                     row[local + offset] = column[index];
                 }

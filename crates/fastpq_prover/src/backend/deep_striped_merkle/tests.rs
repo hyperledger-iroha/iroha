@@ -1,7 +1,6 @@
 //! Exhaustive small frontier parity against materialized natural-order trees.
 
 use super::*;
-use crate::backend::{MerkleTreeRoleV1, merkle_node_hash};
 
 fn limits() -> StreamLimits {
     StreamLimits {
@@ -11,11 +10,19 @@ fn limits() -> StreamLimits {
     }
 }
 fn hash(level: usize, index: usize, left: Digest, right: Digest) -> Result<Digest> {
-    merkle_node_hash(MerkleTreeRoleV1::Fri(9), level, index, left, right)
+    {
+        let mut hash = fastpq_isi::keccak256::Sha3_256V1::new();
+        hash.update(b"test:striped:parent:");
+        hash.update(&(level as u64).to_le_bytes());
+        hash.update(&(index as u64).to_le_bytes());
+        hash.update(left.as_bytes());
+        hash.update(right.as_bytes());
+        Ok(hash.finalize())
+    }
 }
 fn leaves(size: usize) -> Vec<Digest> {
     (0..size)
-        .map(|i| Digest::new(core::array::from_fn(|lane| (i * 7 + lane + 11) as u64)).unwrap())
+        .map(|i| Digest::from_bytes(core::array::from_fn(|lane| (i * 7 + lane + 11) as u8)))
         .collect()
 }
 fn reference(leaves: &[Digest]) -> Vec<Vec<Digest>> {
@@ -46,11 +53,11 @@ fn reference(leaves: &[Digest]) -> Vec<Vec<Digest>> {
 fn batch_hash(
     level: usize,
     indices: &[usize],
-    left: &[[u64; 6]],
-    right: &mut [[u64; 6]],
+    left: &[[u8; 32]],
+    right: &mut [[u8; 32]],
 ) -> Result<()> {
     for ((&index, &left), right) in indices.iter().zip(left).zip(right.iter_mut()) {
-        *right = hash(level, index, digest(left), digest(*right))?.words();
+        *right = hash(level, index, digest(left), digest(*right))?.into_bytes();
     }
     Ok(())
 }
@@ -86,7 +93,7 @@ fn batched_rows_preserve_every_small_frontier_and_canonical_parent_coordinate() 
                                 .collect::<Vec<_>>();
                             let mut values = SecretPolynomial::zeroed(length).unwrap();
                             for (&index, value) in indices.iter().zip(values.iter_mut()) {
-                                *value = leaves[index].words();
+                                *value = leaves[index].into_bytes();
                             }
                             stream
                                 .push_batch(&indices, &mut values, batch_hash, hash)
@@ -119,46 +126,28 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
         );
         assert!(
             stream
-                .push_batch(&[0], &mut [[0; 6]], batch_hash, hash)
+                .push_batch(&[0], &mut [[0; 32]], batch_hash, hash)
                 .is_err()
         );
         assert!(stream.finish(hash).is_err());
     }
-    let mut stream = StripedMerklePlan::new(4, 2, &[], limits())
-        .unwrap()
-        .start()
-        .unwrap();
-    assert!(
-        stream
-            .push_batch(
-                &[0],
-                &mut [[super::super::GOLDILOCKS_MODULUS; 6]],
-                batch_hash,
-                hash
-            )
-            .is_err()
-    );
-    assert!(stream.finish(hash).is_err());
-
-    for malformed_output in [false, true] {
+    // Every opaque digest bit pattern is valid; malformed field-word rejection
+    // belonged to the retired digest. Ordering/shape and callback failures remain.
+    for marker in [0_u8, 0xff] {
         let mut stream = StripedMerklePlan::new(4, 2, &[], limits())
             .unwrap()
             .start()
             .unwrap();
         stream
-            .push_batch(&[0, 2], &mut [[1; 6]; 2], batch_hash, hash)
+            .push_batch(&[0, 2], &mut [[1; 32]; 2], batch_hash, hash)
             .unwrap();
-        let partial = |_: usize, _: &[usize], _: &[[u64; 6]], right: &mut [[u64; 6]]| {
-            right[0] = [super::super::GOLDILOCKS_MODULUS; 6];
-            if malformed_output {
-                Ok(())
-            } else {
-                Err(invalid("partial parent failure"))
-            }
+        let partial = |_: usize, _: &[usize], _: &[[u8; 32]], right: &mut [[u8; 32]]| {
+            right[0] = [marker; 32];
+            Err(invalid("partial parent failure"))
         };
         assert!(
             stream
-                .push_batch(&[1, 3], &mut [[2; 6]; 2], partial, hash)
+                .push_batch(&[1, 3], &mut [[2; 32]; 2], partial, hash)
                 .is_err()
         );
         assert!(stream.finish(hash).is_err());
@@ -169,7 +158,7 @@ fn malformed_or_partial_parent_batches_poison_the_complete_stream() {
         .unwrap();
     assert!(
         stream
-            .push_batch(&[0, 1], &mut [[1; 6]; 2], batch_hash, |_, _, _, _| Err(
+            .push_batch(&[0, 1], &mut [[1; 32]; 2], batch_hash, |_, _, _, _| Err(
                 invalid("upper hash failure")
             ))
             .is_err()
@@ -193,7 +182,7 @@ fn full_capacity_batches_preserve_sparse_frontiers_across_run_boundaries() {
                 .collect::<Vec<_>>();
             let mut batch = SecretPolynomial::zeroed(indices.len()).unwrap();
             for (&index, value) in indices.iter().zip(batch.iter_mut()) {
-                *value = values[index].words();
+                *value = values[index].into_bytes();
             }
             stream
                 .push_batch(&indices, &mut batch, batch_hash, hash)
@@ -503,7 +492,7 @@ fn assert_full_row_plan_budget(
     })
     .unwrap();
     let plan = RowCommitmentPlan::new(full, binding, &[], limits()).unwrap();
-    assert!(plan.payload_bytes > full.payload_bytes + 7 * 65_536 * 48);
+    assert!(plan.payload_bytes > full.payload_bytes + 7 * 65_536 * 32);
     assert!(
         RowCommitmentPlan::new(
             full,
@@ -534,7 +523,7 @@ fn extra_push_after_complete_coverage_poisoned_even_if_error_is_ignored() {
         } else {
             assert!(
                 stream
-                    .push_batch(&[0], &mut [leaves(1)[0].words()], batch_hash, hash)
+                    .push_batch(&[0], &mut [leaves(1)[0].into_bytes()], batch_hash, hash)
                     .is_err()
             );
         }

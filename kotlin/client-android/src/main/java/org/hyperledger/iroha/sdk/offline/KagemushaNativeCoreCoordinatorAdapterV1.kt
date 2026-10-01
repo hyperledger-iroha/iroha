@@ -43,6 +43,7 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
 ) : KagemushaNativeCoreCoordinatorV1, AutoCloseable {
     private val enrollmentPhases = KagemushaNativeEnrollmentPhasesV1(bridge)
     private val recoveredEnrollment = KagemushaNativeRecoveredEnrollmentV1(bridge)
+    private val appIdentity = KagemushaNativeAppApprovalCoordinatorV1(bridge)
 
     /** Reuse this coordinator's sole native owner for bounded initial-enrollment phases. */
     fun initialEnrollment(): KagemushaNativeEnrollmentPhasesV1 = enrollmentPhases
@@ -50,11 +51,39 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
     /** Authenticate the original enrolled native owner after process restart. */
     fun recoveredEnrollment(): KagemushaNativeRecoveredEnrollmentV1 = recoveredEnrollment
 
+    /** Use the same actual native owner for non-monetary app approval and enrollment possession. */
+    fun appIdentityOperations(): KagemushaNativeAppApprovalCoordinatorV1 = appIdentity
+
     /** Revoke this native owner during logout or account switch. A new open needs a new process. */
     override fun close() {
         enrollmentPhases.revokeLocal()
         recoveredEnrollment.revokeLocal()
         bridge.close()
+    }
+
+    override fun authenticatedHardwarePolicy(): KagemushaAuthenticatedHardwarePolicyV1 {
+        val fields = bridge.invoke(KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY, emptyList())
+        return KagemushaAuthenticatedHardwarePolicyV1(fields[0], fields[1], fields[2])
+    }
+
+    override fun stageIncomingOriginal(kind: KagemushaIncomingStageKindV1, creditId: ByteArray): ByteArray =
+        bridge.invoke(KagemushaCoreCoordinatorMethodV1.STAGE_INCOMING_ORIGINAL,
+            listOf(u32(kind.code), creditId)).single()
+
+    override fun prepareIncomingFold(selector: KagemushaPendingCreditSelectorV1): KagemushaNativeIncomingFoldPreparationV1 {
+        val response = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD,
+            listOf(u32(selector.kind.ordinal), selector.creditId()))
+        return KagemushaNativeIncomingFoldPreparationV1(selector.kind, response[0], response[1], response[2],
+            response[3], response[4], response[5], response[6], BigInteger(1, response[7].reversedArray()),
+            response[8], response[9])
+    }
+
+    override fun completeIncomingFold(preparation: KagemushaNativeIncomingFoldPreparationV1,
+        evidence: KagemushaIncomingFoldEvidenceV1): ByteArray {
+        preparation.requireEvidence(evidence)
+        return bridge.invoke(KagemushaCoreCoordinatorMethodV1.COMPLETE_INCOMING_FOLD,
+            listOf(preparation.historyOperationId(), preparation.canonicalPairedProof(),
+                evidence.canonicalHardwareTransitionCertificate(), evidence.deviceRootSelectionSignature())).single()
     }
 
     override fun beginObservation(operation: Int, canonicalCommand: ByteArray): ByteArray =
@@ -120,9 +149,13 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
         operation: Int, requestId: ByteArray, canonicalCommand: ByteArray, canonicalReply: ByteArray,
         responseAuthenticator: ByteArray,
         qualification: KagemushaHardwareQualificationV1,
+        originalResponse: ByteArray?,
     ) {
-        bridge.invoke(KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY,
-            listOf(u32(operation), requestId, canonicalCommand, canonicalReply, responseAuthenticator) + qualificationFields(qualification))
+        val fields = listOf(u32(operation), requestId, canonicalCommand, canonicalReply, responseAuthenticator) + qualificationFields(qualification)
+        val request = if (operation == 12) fields + listOf(requireNotNull(originalResponse) {
+            "release acceptance requires its original signed response"
+        }.copyOf()) else fields
+        bridge.invoke(KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY, request)
     }
 
     override fun beginSenderTransition(
@@ -150,9 +183,9 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
         }
     }
 
-    override fun terminalEnvelope(candidate: KagemushaNativeSenderCandidateV1, authenticatedCommitReply: ByteArray): ByteArray =
+    override fun terminalEnvelope(candidate: KagemushaNativeSenderCandidateV1, originalCommitResponseFrame: ByteArray): ByteArray =
         bridge.invoke(KagemushaCoreCoordinatorMethodV1.BUILD_TERMINAL_ENVELOPE,
-            listOf(KagemushaCoreCoordinatorArchiveV1.encodeCandidateShape(candidate), authenticatedCommitReply))
+            listOf(KagemushaCoreCoordinatorArchiveV1.encodeCandidateShape(candidate), originalCommitResponseFrame))
             .single().also { KagemushaCoreCoordinatorArchiveV1.terminalEnvelopeDigestShape(it) }
 
     override fun acceptInstalledTerminal(
@@ -174,6 +207,9 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
         same(state.hardwareEpochId(), context.hardwareEpoch.epochId(), "terminal epoch")
         same(state.keyReference(), context.devicePolicyBinding.deviceKeyReference(), "terminal device key")
         same(state.hardwarePolicyId(), context.devicePolicyBinding.hardwarePolicyId(), "terminal hardware policy")
+        val installedPolicy = authenticatedHardwarePolicy()
+        same(state.releaseId(), installedPolicy.releaseId(), "terminal native installed release")
+        same(state.hardwarePolicyId(), installedPolicy.providerPolicyRoot(), "terminal native provider registry root")
         same(state.liabilityPoolId(), KagemushaNoritoV1.liabilityPoolId(
             state.networkId, state.asset, state.assetIncarnation), "terminal liability pool")
         return KagemushaHardwareTerminalResultV1(response[0], response[1])
@@ -296,7 +332,8 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
             "preparation hardware generation mismatch"
         }
         same(context.devicePolicyBinding.deviceKeyReference(), credential.deviceKeyReference(), "preparation device key")
-        same(context.devicePolicyBinding.hardwarePolicyId(), qualification.hardwarePolicyDigest(), "preparation policy")
+        val policy = authenticatedHardwarePolicy().also { it.requireQualification(qualification) }
+        same(context.devicePolicyBinding.hardwarePolicyId(), policy.providerPolicyRoot(), "preparation policy registry root")
         same(context.coreAuthorizationKeyReference(), qualification.coreAuthorizationKeyReference(), "preparation Core key")
     }
 

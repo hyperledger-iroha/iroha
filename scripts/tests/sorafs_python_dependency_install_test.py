@@ -31,14 +31,7 @@ def harness(tmp_path_factory):
     fixture_root = tmp_path_factory.mktemp("original-wheel-harness") / "fixtures"
     paths = (original_tests.SHELL_HARNESS, original_tests.VERIFIER)
     before = [path.read_bytes() for path in paths]
-    namespace = {"__name__": "__main__", "__file__": str(paths[0])}
-    argv = sys.argv
-    try:
-        sys.argv = [str(paths[0]), str(paths[1]), str(fixture_root)]
-        body = original_tests.extract_original_harness(before[0])
-        exec(compile(body, str(paths[0]) + ":unchanged-wheel-harness", "exec"), namespace)
-    finally:
-        sys.argv = argv
+    namespace = original_tests.load_pure_harness_builders(fixture_root)
     assert [path.read_bytes() for path in paths] == before
     return namespace
 

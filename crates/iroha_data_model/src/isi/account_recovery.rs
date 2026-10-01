@@ -1,5 +1,6 @@
 //! Native account controller replacement and social recovery instructions.
 use super::*;
+use std::num::NonZeroU64;
 isi! {
     /// Replace the controller governing an existing account while preserving linked state.
     #[norito_schema(name = "iroha_data_model::isi::account_recovery::ReplaceAccountController")]
@@ -28,6 +29,11 @@ isi! {
 impl SetAccountRecoveryPolicy {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.policy.set";
+    /// Set the recovery policy bound to this account's stable alias.
+    #[must_use]
+    pub fn new(account: AccountId, policy: crate::account::AccountRecoveryPolicy) -> Self {
+        Self { account, policy }
+    }
 }
 impl crate::seal::Instruction for SetAccountRecoveryPolicy {}
 isi! {
@@ -41,6 +47,11 @@ isi! {
 impl ClearAccountRecoveryPolicy {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.policy.clear";
+    /// Clear this account's stable-alias recovery policy.
+    #[must_use]
+    pub fn new(account: AccountId) -> Self {
+        Self { account }
+    }
 }
 impl crate::seal::Instruction for ClearAccountRecoveryPolicy {}
 isi! {
@@ -51,11 +62,26 @@ isi! {
         pub alias: crate::account::AccountAlias,
         /// New controller requested for the alias.
         pub new_controller: crate::account::AccountController,
+        /// Exact next alias-local recovery generation expected by the proposer.
+        pub request_generation: NonZeroU64,
     }
 }
 impl ProposeAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.propose";
+    /// Propose the exact next generation for a stable alias.
+    #[must_use]
+    pub fn new(
+        alias: crate::account::AccountAlias,
+        new_controller: crate::account::AccountController,
+        request_generation: NonZeroU64,
+    ) -> Self {
+        Self {
+            alias,
+            new_controller,
+            request_generation,
+        }
+    }
 }
 impl crate::seal::Instruction for ProposeAccountRecovery {}
 isi! {
@@ -64,11 +90,21 @@ isi! {
     pub struct ApproveAccountRecovery {
         /// Stable account alias whose pending recovery should receive an approval.
         pub alias: crate::account::AccountAlias,
+        /// Exact recovery request that this guardian approval authorizes.
+        pub request_generation: NonZeroU64,
     }
 }
 impl ApproveAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.approve";
+    /// Approve replacement for the exact current request generation.
+    #[must_use]
+    pub fn new(alias: crate::account::AccountAlias, request_generation: NonZeroU64) -> Self {
+        Self {
+            alias,
+            request_generation,
+        }
+    }
 }
 impl crate::seal::Instruction for ApproveAccountRecovery {}
 isi! {
@@ -77,11 +113,21 @@ isi! {
     pub struct CancelAccountRecovery {
         /// Stable account alias whose pending recovery should be cancelled.
         pub alias: crate::account::AccountAlias,
+        /// Exact recovery request that this cancellation authorizes.
+        pub request_generation: NonZeroU64,
     }
 }
 impl CancelAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.cancel";
+    /// Vote to cancel the exact current request generation.
+    #[must_use]
+    pub fn new(alias: crate::account::AccountAlias, request_generation: NonZeroU64) -> Self {
+        Self {
+            alias,
+            request_generation,
+        }
+    }
 }
 impl crate::seal::Instruction for CancelAccountRecovery {}
 isi! {
@@ -90,79 +136,69 @@ isi! {
     pub struct FinalizeAccountRecovery {
         /// Stable account alias whose pending recovery should be finalized.
         pub alias: crate::account::AccountAlias,
+        /// Exact recovery request that this finalization authorizes.
+        pub request_generation: NonZeroU64,
     }
 }
 impl FinalizeAccountRecovery {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.recovery.finalize";
+    /// Finalize the exact current request generation after quorum and timelock.
+    #[must_use]
+    pub fn new(alias: crate::account::AccountAlias, request_generation: NonZeroU64) -> Self {
+        Self {
+            alias,
+            request_generation,
+        }
+    }
 }
 impl crate::seal::Instruction for FinalizeAccountRecovery {}
 fn account_recovery_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-macro_rules! impl_decode_one_field {
-    ($ty:ident { $field:ident: $field_ty:ty }) => {
+macro_rules! impl_decode_fields {
+    ($ty:ident { $($field:ident: $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let flags = account_recovery_decode_flags();
                 let mut offset = 0usize;
-                let $field = super::decode_aos_canonical_field::<$field_ty>(
-                    super::read_aos_field(bytes, &mut offset, flags)?,
-                    flags,
-                )?;
+                $(let $field = super::decode_aos_canonical_field::<$field_ty>(
+                    super::read_aos_field(bytes, &mut offset, flags)?, flags,
+                )?;)+
                 if offset != bytes.len() {
                     return Err(norito::core::Error::LengthMismatch);
                 }
                 norito::core::note_payload_access(bytes, offset);
-                Ok((Self { $field }, offset))
+                Ok((Self { $($field),+ }, offset))
             }
         }
     };
 }
-macro_rules! impl_decode_two_fields {
-    ($ty:ident { $first:ident: $first_ty:ty, $second:ident: $second_ty:ty }) => {
-        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let flags = account_recovery_decode_flags();
-                let mut offset = 0usize;
-                let $first = super::decode_aos_canonical_field::<$first_ty>(
-                    super::read_aos_field(bytes, &mut offset, flags)?,
-                    flags,
-                )?;
-                let $second = super::decode_aos_canonical_field::<$second_ty>(
-                    super::read_aos_field(bytes, &mut offset, flags)?,
-                    flags,
-                )?;
-                if offset != bytes.len() {
-                    return Err(norito::core::Error::LengthMismatch);
-                }
-                norito::core::note_payload_access(bytes, offset);
-                Ok((Self { $first, $second }, offset))
-            }
-        }
-    };
-}
-impl_decode_two_fields!(ReplaceAccountController {
+impl_decode_fields!(ReplaceAccountController {
     account: AccountId,
     new_controller: crate::account::AccountController
 });
-impl_decode_two_fields!(SetAccountRecoveryPolicy {
+impl_decode_fields!(SetAccountRecoveryPolicy {
     account: AccountId,
     policy: crate::account::AccountRecoveryPolicy
 });
-impl_decode_one_field!(ClearAccountRecoveryPolicy { account: AccountId });
-impl_decode_two_fields!(ProposeAccountRecovery {
+impl_decode_fields!(ClearAccountRecoveryPolicy { account: AccountId });
+impl_decode_fields!(ProposeAccountRecovery {
     alias: crate::account::AccountAlias,
-    new_controller: crate::account::AccountController
+    new_controller: crate::account::AccountController,
+    request_generation: NonZeroU64
 });
-impl_decode_one_field!(ApproveAccountRecovery {
-    alias: crate::account::AccountAlias
+impl_decode_fields!(ApproveAccountRecovery {
+    alias: crate::account::AccountAlias,
+    request_generation: NonZeroU64
 });
-impl_decode_one_field!(CancelAccountRecovery {
-    alias: crate::account::AccountAlias
+impl_decode_fields!(CancelAccountRecovery {
+    alias: crate::account::AccountAlias,
+    request_generation: NonZeroU64
 });
-impl_decode_one_field!(FinalizeAccountRecovery {
-    alias: crate::account::AccountAlias
+impl_decode_fields!(FinalizeAccountRecovery {
+    alias: crate::account::AccountAlias,
+    request_generation: NonZeroU64
 });
 #[cfg(test)]
 mod tests {
@@ -219,10 +255,20 @@ mod tests {
         assert_slice_roundtrip(ProposeAccountRecovery {
             alias: alias(),
             new_controller: controller(0xD6),
+            request_generation: NonZeroU64::new(17).unwrap(),
         });
-        assert_slice_roundtrip(ApproveAccountRecovery { alias: alias() });
-        assert_slice_roundtrip(CancelAccountRecovery { alias: alias() });
-        assert_slice_roundtrip(FinalizeAccountRecovery { alias: alias() });
+        assert_slice_roundtrip(ApproveAccountRecovery {
+            alias: alias(),
+            request_generation: NonZeroU64::new(17).unwrap(),
+        });
+        assert_slice_roundtrip(CancelAccountRecovery {
+            alias: alias(),
+            request_generation: NonZeroU64::new(17).unwrap(),
+        });
+        assert_slice_roundtrip(FinalizeAccountRecovery {
+            alias: alias(),
+            request_generation: NonZeroU64::new(17).unwrap(),
+        });
     }
     #[test]
     fn account_recovery_registry_decodes_stable_ids() {
@@ -265,22 +311,129 @@ mod tests {
             ProposeAccountRecovery {
                 alias: alias(),
                 new_controller: controller(0xDB),
+                request_generation: NonZeroU64::new(17).unwrap(),
             },
         );
         assert_registry_decodes(
             &registry,
             ApproveAccountRecovery::WIRE_ID,
-            ApproveAccountRecovery { alias: alias() },
+            ApproveAccountRecovery {
+                alias: alias(),
+                request_generation: NonZeroU64::new(17).unwrap(),
+            },
         );
         assert_registry_decodes(
             &registry,
             CancelAccountRecovery::WIRE_ID,
-            CancelAccountRecovery { alias: alias() },
+            CancelAccountRecovery {
+                alias: alias(),
+                request_generation: NonZeroU64::new(17).unwrap(),
+            },
         );
         assert_registry_decodes(
             &registry,
             FinalizeAccountRecovery::WIRE_ID,
-            FinalizeAccountRecovery { alias: alias() },
+            FinalizeAccountRecovery {
+                alias: alias(),
+                request_generation: NonZeroU64::new(17).unwrap(),
+            },
         );
+    }
+
+    #[test]
+    fn account_recovery_generation_is_required_and_changes_native_instruction_identity() {
+        use norito::{codec::Encode, core::DecodeFromSlice};
+
+        #[derive(Encode)]
+        struct ProposalWithoutGeneration {
+            alias: AccountAlias,
+            new_controller: AccountController,
+        }
+        #[derive(Encode)]
+        struct ProposalWithZeroGeneration {
+            alias: AccountAlias,
+            new_controller: AccountController,
+            request_generation: u64,
+        }
+        #[derive(Encode)]
+        struct RequestWithoutGeneration {
+            alias: AccountAlias,
+        }
+        #[derive(Encode)]
+        struct RequestWithZeroGeneration {
+            alias: AccountAlias,
+            request_generation: u64,
+        }
+        assert!(
+            ProposeAccountRecovery::decode_from_slice(
+                &ProposalWithoutGeneration {
+                    alias: alias(),
+                    new_controller: controller(0xDD),
+                }
+                .encode()
+            )
+            .is_err()
+        );
+        assert!(
+            ProposeAccountRecovery::decode_from_slice(
+                &ProposalWithZeroGeneration {
+                    alias: alias(),
+                    new_controller: controller(0xDD),
+                    request_generation: 0,
+                }
+                .encode()
+            )
+            .is_err()
+        );
+        for malformed in [
+            RequestWithoutGeneration { alias: alias() }.encode(),
+            RequestWithZeroGeneration {
+                alias: alias(),
+                request_generation: 0,
+            }
+            .encode(),
+        ] {
+            assert!(ApproveAccountRecovery::decode_from_slice(&malformed).is_err());
+            assert!(CancelAccountRecovery::decode_from_slice(&malformed).is_err());
+            assert!(FinalizeAccountRecovery::decode_from_slice(&malformed).is_err());
+        }
+        let first = NonZeroU64::MIN;
+        let second = NonZeroU64::new(2).unwrap();
+        let propose = ProposeAccountRecovery::new(alias(), controller(0xDD), first);
+        let approve = ApproveAccountRecovery::new(alias(), first);
+        let cancel = CancelAccountRecovery::new(alias(), first);
+        let finalize = FinalizeAccountRecovery::new(alias(), first);
+        let pairs = [
+            (
+                InstructionBox::from(propose),
+                InstructionBox::from(ProposeAccountRecovery::new(
+                    alias(),
+                    controller(0xDD),
+                    second,
+                )),
+            ),
+            (
+                InstructionBox::from(approve),
+                InstructionBox::from(ApproveAccountRecovery::new(alias(), second)),
+            ),
+            (
+                InstructionBox::from(cancel),
+                InstructionBox::from(CancelAccountRecovery::new(alias(), second)),
+            ),
+            (
+                InstructionBox::from(finalize),
+                InstructionBox::from(FinalizeAccountRecovery::new(alias(), second)),
+            ),
+        ];
+        for (original, replacement) in pairs {
+            assert_ne!(
+                norito::codec::Encode::encode(&original),
+                norito::codec::Encode::encode(&replacement)
+            );
+            assert_ne!(
+                iroha_crypto::HashOf::new(&vec![original]),
+                iroha_crypto::HashOf::new(&vec![replacement])
+            );
+        }
     }
 }

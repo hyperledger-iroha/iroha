@@ -341,8 +341,8 @@ pub enum FastpqProofKindV1 {
 pub struct FastpqOrderedCompactAirCommitmentsV1 {
     /// Advertised exact segment count, to be checked against roots and frames.
     pub segment_count: u64,
-    /// Advertised canonical Digest384 row roots in chronological segment order.
-    pub segment_air_row_roots: Vec<GoldilocksDigest384V1>,
+    /// Advertised opaque SHA3-256 compact row roots in chronological segment order.
+    pub segment_air_row_roots: Vec<super::FastpqCommitmentV1>,
 }
 
 /// Untrusted commitment description with explicit, non-interchangeable meanings.
@@ -1086,8 +1086,8 @@ mod tests {
                 FastpqOrderedCompactAirCommitmentsV1 {
                     segment_count: 2,
                     segment_air_row_roots: vec![
-                        GoldilocksDigest384V1::new([1; 6]).unwrap(),
-                        GoldilocksDigest384V1::new([2; 6]).unwrap(),
+                        super::super::FastpqCommitmentV1::from_bytes([1; 32]),
+                        super::super::FastpqCommitmentV1::from_bytes([2; 32]),
                     ],
                 },
             ),
@@ -1113,8 +1113,8 @@ mod tests {
                         FastpqOrderedCompactAirCommitmentsV1 {
                             segment_count: 2,
                             segment_air_row_roots: vec![
-                                GoldilocksDigest384V1::new([2; 6]).unwrap(),
-                                GoldilocksDigest384V1::new([1; 6]).unwrap(),
+                                super::super::FastpqCommitmentV1::from_bytes([2; 32]),
+                                super::super::FastpqCommitmentV1::from_bytes([1; 32]),
                             ],
                         },
                     )
@@ -1124,8 +1124,8 @@ mod tests {
                         FastpqOrderedCompactAirCommitmentsV1 {
                             segment_count: 3,
                             segment_air_row_roots: vec![
-                                GoldilocksDigest384V1::new([1; 6]).unwrap(),
-                                GoldilocksDigest384V1::new([2; 6]).unwrap(),
+                                super::super::FastpqCommitmentV1::from_bytes([1; 32]),
+                                super::super::FastpqCommitmentV1::from_bytes([2; 32]),
                             ],
                         },
                     )
@@ -1149,21 +1149,10 @@ mod tests {
     #[test]
     fn commitment_descriptions_reject_noncanonical_words_without_truncating_roots() {
         let canonical = GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).unwrap();
-        for (commitment, expected_roots) in [
-            (
-                FastpqCommitmentDescriptionV1::LegacyPreprocessing(canonical),
-                1,
-            ),
-            (
-                FastpqCommitmentDescriptionV1::OrderedCompactAir(
-                    FastpqOrderedCompactAirCommitmentsV1 {
-                        segment_count: 2,
-                        segment_air_row_roots: vec![canonical; 2],
-                    },
-                ),
-                2,
-            ),
-        ] {
+        for (commitment, expected_roots) in [(
+            FastpqCommitmentDescriptionV1::LegacyPreprocessing(canonical),
+            1,
+        )] {
             let raw = norito::encode_canonical(&commitment).unwrap();
             assert_eq!(
                 norito::decode_canonical::<FastpqCommitmentDescriptionV1>(&raw).unwrap(),
@@ -1190,6 +1179,38 @@ mod tests {
                 .unwrap();
             assert!(norito::decode_canonical::<FastpqCommitmentDescriptionV1>(&frame).is_err());
         }
+    }
+
+    #[test]
+    fn compact_commitment_descriptions_preserve_all_opaque_bits_and_exact_root_order() {
+        let roots = vec![
+            super::super::FastpqCommitmentV1::from_bytes([0xff; 32]),
+            super::super::FastpqCommitmentV1::from_bytes([0x80; 32]),
+        ];
+        let commitment = FastpqCommitmentDescriptionV1::OrderedCompactAir(
+            FastpqOrderedCompactAirCommitmentsV1 {
+                segment_count: 2,
+                segment_air_row_roots: roots.clone(),
+            },
+        );
+        let raw = norito::encode_canonical(&commitment).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<FastpqCommitmentDescriptionV1>(&raw).unwrap(),
+            commitment
+        );
+        for root in roots {
+            assert_eq!(
+                raw.windows(32)
+                    .filter(|bytes| *bytes == root.as_bytes())
+                    .count(),
+                1
+            );
+        }
+        let mut reversed = commitment.clone();
+        if let FastpqCommitmentDescriptionV1::OrderedCompactAir(ref mut c) = reversed {
+            c.segment_air_row_roots.reverse();
+        }
+        assert_ne!(norito::encode_canonical(&reversed).unwrap(), raw);
     }
 
     #[test]

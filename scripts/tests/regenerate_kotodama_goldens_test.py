@@ -292,6 +292,73 @@ class SourcePolicyTests(unittest.TestCase):
                     MODULE.partition_source_policy(Path("/repository"), (source,))
 
 
+class StagingModeTests(unittest.TestCase):
+    def test_private_compiler_output_is_rendered_publicly_without_source_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            source = stage / "release/example.to"
+            source.parent.mkdir()
+            source.write_bytes(b"canonical artifact")
+            source.chmod(0o600)
+            before = source.stat()
+            rows = [MODULE.Golden("standard", Path("example.ko"), Path("example.to"))]
+            with mock.patch.object(MODULE, "COMPILER_MANIFESTS", {}):
+                rendered = MODULE.rendered_files(stage, rows)
+            self.assertEqual(rendered, (MODULE.RenderedFile(Path("example.to"), 0o644, b"canonical artifact"),))
+            self.assertEqual(MODULE._metadata_identity(source.stat()), MODULE._metadata_identity(before))
+            self.assertEqual(source.read_bytes(), b"canonical artifact")
+
+    def test_compiler_staging_refuses_nonprivate_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "output.to"
+            source.write_bytes(b"artifact")
+            for mode in (0o400, 0o620, 0o644, 0o666, 0o700):
+                with self.subTest(mode=oct(mode)):
+                    source.chmod(mode)
+                    with self.assertRaisesRegex(MODULE.GoldenError, "mode 0600"):
+                        MODULE.read_compiler_output(source)
+
+    def test_runtime_manifest_accepts_exact_bytes_under_both_safe_staging_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "compiler.json"
+            destination = Path(temporary) / "runtime.json"
+            source.write_bytes(b'{"artifact":"same"}')
+            source.chmod(0o600)
+            destination.write_bytes(source.read_bytes())
+            for mode in (0o600, 0o644):
+                with self.subTest(mode=oct(mode)):
+                    destination.chmod(mode)
+                    MODULE.compare_runtime_manifest(source, destination)
+                    self.assertEqual(destination.stat().st_mode & 0o7777, mode)
+
+    def test_runtime_manifest_rejects_changed_bytes_or_unsafe_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "compiler.json"
+            destination = Path(temporary) / "runtime.json"
+            source.write_bytes(b"canonical")
+            source.chmod(0o600)
+            destination.write_bytes(source.read_bytes())
+            for mode in (0o400, 0o620, 0o666, 0o700):
+                with self.subTest(mode=oct(mode)):
+                    destination.chmod(mode)
+                    with self.assertRaisesRegex(MODULE.GoldenError, "runtime manifest must use mode"):
+                        MODULE.compare_runtime_manifest(source, destination)
+            destination.chmod(0o644)
+            destination.write_bytes(b"changed")
+            with self.assertRaisesRegex(MODULE.GoldenError, "differs from compiler"):
+                MODULE.compare_runtime_manifest(source, destination)
+
+    def test_checked_publication_still_requires_exact_public_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "artifact.to"
+            destination.write_bytes(b"canonical")
+            destination.chmod(0o600)
+            with self.assertRaisesRegex(MODULE.GoldenError, "expected 0644, got 0600"):
+                MODULE.compare_payload(b"canonical", destination)
+            destination.chmod(0o644)
+            MODULE.compare_payload(b"canonical", destination)
+
+
 class StagedPublicationTests(unittest.TestCase):
     def test_publish_and_check_touch_only_the_distinct_output_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

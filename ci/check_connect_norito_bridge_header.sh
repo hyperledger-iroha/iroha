@@ -16,6 +16,9 @@ TESTNET_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_tes
 MODE="${1:-}"
 
 SELF_TESTS=(
+  --self-test-missing-domain-header-symbol
+  --self-test-missing-domain-rust-symbol
+  --self-test-bad-domain-length-width
   --self-test-missing-top-up-binding-header
   --self-test-missing-top-up-binding-rust
   --self-test-bad-top-up-binding-width
@@ -27,6 +30,9 @@ SELF_TESTS=(
   --self-test-missing-reserve-finality-request-binding
   --self-test-missing-kagemusha-header-symbol
   --self-test-missing-kagemusha-close-header-symbol
+  --self-test-missing-kagemusha-install-header-symbol
+  --self-test-missing-kagemusha-install-rust-symbol
+  --self-test-bad-kagemusha-install-signature
   --self-test-missing-kagemusha-testnet-observation-header-symbol
   --self-test-missing-kagemusha-rust-symbol
   --self-test-bad-kagemusha-signature
@@ -69,6 +75,7 @@ SELF_TESTS=(
   --self-test-forbidden-retired-transaction-signer
   --self-test-bad-deallocator-signature
   --self-test-umbrella-drift
+  --self-test-umbrella-comment-growth
 )
 
 usage() {
@@ -141,6 +148,7 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
     "connect_norito_kagemusha_contract_vector_v1",
     "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_install_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
@@ -506,7 +514,7 @@ require_signature_parity(
     | HIJIRI_EXPORTS
     | PRIVATE_SETTLEMENT_EXPORTS
     | rust_transaction_signers
-    | {"connect_norito_bridge_abi_version", "connect_norito_free"}
+    | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1"}
 )
 
 require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+25\b", header, "C bridge ABI version")
@@ -577,13 +585,16 @@ require(r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_S
 require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1\s+41\b", header, "C Parliament page summary width")
 require(r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1\s+32\b", header, "C Parliament trust anchor width")
 
-if umbrella.strip() != """// Umbrella header for NoritoBridge
-#ifndef NORITOBRIDGE_H
-#define NORITOBRIDGE_H
+def umbrella_contract(contents: str) -> list[str]:
+    # Documentation and formatting do not alter the sole canonical include owner.
+    without_comments = re.sub(r"/\*.*?\*/|//[^\n]*", "", contents, flags=re.S)
+    return without_comments.split()
 
-#include \"connect_norito_bridge.h\"
 
-#endif // NORITOBRIDGE_H""":
+if umbrella_contract(umbrella) != [
+    "#ifndef", "NORITOBRIDGE_H", "#define", "NORITOBRIDGE_H",
+    "#include", '"connect_norito_bridge.h"', "#endif",
+]:
     raise SystemExit("[connect-norito-header] umbrella header drift")
 
 print(
@@ -731,6 +742,20 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-missing-domain-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_domain_id_validate_v1" "removed_domain_id_validate_v1"
+      ;;
+    --self-test-missing-domain-rust-symbol)
+      replace_once "${tmp_rust}" \
+        'pub unsafe extern "C" fn connect_norito_domain_id_validate_v1' \
+        'pub unsafe extern "C" fn removed_domain_id_validate_v1'
+      ;;
+    --self-test-bad-domain-length-width)
+      replace_once "${tmp_header}" \
+        'connect_norito_domain_id_validate_v1(const char* input, unsigned long input_len)' \
+        'connect_norito_domain_id_validate_v1(const char* input, uint32_t input_len)'
+      ;;
     --self-test-bad-parliament-page-rust-width)
       replace_once "${tmp}/parliament_timed_ovn_ffi.rs" \
         'pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1: usize = 41;' \
@@ -796,6 +821,24 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         "connect_norito_kagemusha_v1_payment_validate" \
         "removed_kagemusha_v1_payment_validate"
+      ;;
+    --self-test-missing-kagemusha-install-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_core_coordinator_install_v1" \
+        "removed_kagemusha_core_coordinator_install_v1"
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_core_coordinator_install_v1']"
+      ;;
+    --self-test-missing-kagemusha-install-rust-symbol)
+      replace_once "${tmp_rust}" \
+        'pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_install_v1' \
+        'pub unsafe extern "C" fn removed_kagemusha_core_coordinator_install_v1'
+      expected_diagnostic="Rust KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_core_coordinator_install_v1']"
+      ;;
+    --self-test-bad-kagemusha-install-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_core_coordinator_install_v1\s*\([^;]*?)size_t storage_path_length' \
+        '\g<1>uint32_t storage_path_length'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_core_coordinator_install_v1"
       ;;
     --self-test-missing-kagemusha-close-header-symbol)
       replace_once "${tmp_header}" \
@@ -995,6 +1038,19 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         "void connect_norito_free(uint8_t *ptr);" \
         "void connect_norito_free(const uint8_t *ptr);"
+      ;;
+    --self-test-umbrella-comment-growth)
+      printf '\n/* Documentary growth preserves the canonical include owner. */\n// Additional source guidance.\n' >> "${tmp_umbrella}"
+      run_contract_check \
+        "${tmp_rust}" "${tmp_header}" "${tmp_umbrella}" \
+        "${tmp}/privacy.rs" "${tmp}/parliament_timed_ovn_ffi.rs" \
+        "${tmp}/validation_fee_api.rs" "${tmp}/private_settlement_ffi.rs" \
+        "${tmp}/kagemusha_reserve_finality_v1.rs" \
+        "${tmp}/kagemusha_testnet_observation_v1.rs" \
+        "${tmp}/kagemusha_testnet_native_value_ledger_v1.rs" \
+        "${tmp}/kagemusha_testnet_native_startup_v1.rs"
+      echo "[connect-norito-header] positive control preserved canonical umbrella: ${MODE}"
+      exit 0
       ;;
     --self-test-umbrella-drift)
       replace_once "${tmp_umbrella}" \

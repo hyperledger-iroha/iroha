@@ -5,11 +5,9 @@ use super::*;
 fn agent_apartment_deploy_rejects_lease_height_overflow_without_state() -> Result<(), eyre::Report>
 {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
+    let state = state_with_initial_soracloud_permission(&kura)?;
     let manifest = sample_agent_manifest_with_capabilities("overflow_agent", &[]);
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     let error = iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
@@ -42,11 +40,9 @@ fn agent_apartment_deploy_rejects_lease_height_overflow_without_state() -> Resul
 fn agent_apartment_renew_rejects_lease_height_overflow_without_mutation() -> Result<(), eyre::Report>
 {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
+    let state = state_with_initial_soracloud_permission(&kura)?;
     let manifest = sample_agent_manifest_with_capabilities("overflow_agent", &[]);
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
@@ -155,10 +151,8 @@ fn agent_text_helpers_preserve_free_form_bytes_and_reject_aliases() {
 fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Result<(), eyre::Report>
 {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let state = state_with_initial_soracloud_permission(&kura)?;
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     let apartment_name: iroha_model_base::name::Name =
@@ -338,11 +332,9 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
 #[test]
 fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
+    let state = state_with_initial_soracloud_permission(&kura)?;
     let manifest = sample_agent_manifest_with_capabilities("ops_agent", &["agent.autonomy.run"]);
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
@@ -438,7 +430,7 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
 fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
 -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
+    let state = state_with_initial_soracloud_permission(&kura)?;
     let ops_manifest = sample_agent_manifest_with_capabilities(
         "ops_agent",
         &[
@@ -450,9 +442,7 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     );
     let worker_manifest =
         sample_agent_manifest_with_capabilities("worker_agent", &["agent.mailbox.receive"]);
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     let wallet_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
@@ -685,14 +675,12 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
 #[test]
 fn auto_approved_agent_wallet_request_id_cannot_be_replayed() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
+    let state = state_with_initial_soracloud_permission(&kura)?;
     let manifest = sample_agent_manifest_with_capabilities(
         "auto_wallet_agent",
         &["wallet.sign", "wallet.auto_approve"],
     );
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     let asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
@@ -782,14 +770,12 @@ fn auto_approved_agent_wallet_request_id_cannot_be_replayed() -> Result<(), eyre
 #[test]
 fn record_agent_autonomy_execution_is_exactly_once_and_audited() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
-    let state = state_with_soracloud_permission(&kura)?;
+    let state = state_with_initial_soracloud_permission(&kura)?;
     let ops_manifest = sample_agent_manifest_with_capabilities(
         "ops_agent",
         &["agent.autonomy.allow", "agent.autonomy.run"],
     );
-    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-        .as_ref()
-        .header();
+    let block_header = initial_soracloud_header(&state, 2);
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {

@@ -1419,3 +1419,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod test_allocations;

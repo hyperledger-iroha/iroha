@@ -4,8 +4,7 @@
 fn issue_replication_order_rejects_duplicates() {
     let state = make_state();
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     insert_manifest_with_status_at_epoch(
         &mut stx,
         default_digest(),
@@ -59,8 +58,7 @@ fn issue_replication_order_rejects_duplicates() {
 fn complete_replication_order_updates_status() {
     let state = make_state_with_completion_anchor();
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     insert_manifest_with_status_at_epoch(
         &mut stx,
         default_digest(),
@@ -155,8 +153,7 @@ fn complete_replication_order_updates_status() {
 fn future_dated_completion_fails_without_mutating_the_order() {
     let state = make_state_with_completion_anchor();
     let mut block = state.block(block_header());
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
     insert_manifest_with_status_at_epoch(
         &mut stx,
         default_digest(),

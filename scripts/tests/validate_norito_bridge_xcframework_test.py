@@ -41,6 +41,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "scripts/check_mobile_sdk_artifacts.sh",
             "crates/connect_norito_bridge/include/connect_norito_bridge.h",
             "crates/connect_norito_bridge/include/NoritoBridge.h",
+            "crates/soranet_pq/include/soranet_pq.h",
             "crates/connect_norito_bridge/module.modulemap.template",
             "crates/connect_norito_bridge/src/lib.rs",
             "crates/iroha_data_model/src/privacy/protocol.rs",
@@ -174,9 +175,13 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         header = (
             ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
         ).read_text(encoding="utf-8")
+        pq_header = (ROOT / "crates/soranet_pq/include/soranet_pq.h").read_text(
+            encoding="utf-8"
+        )
         for symbol in validator.EXPECTED_REQUIRED_SYMBOLS:
             with self.subTest(symbol=symbol):
-                self.assertRegex(header, rf"\b{re.escape(symbol)}\s*\(")
+                owner = pq_header if symbol.startswith("soranet_mldsa_") else header
+                self.assertRegex(owner, rf"\b{re.escape(symbol)}\s*\(")
 
         builder = (ROOT / "scripts/build_norito_xcframework.sh").read_text(
             encoding="utf-8"
@@ -308,6 +313,23 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
+
+    def test_rejects_manifest_missing_current_domain_or_mldsa_exports(self) -> None:
+        for missing in (
+            "connect_norito_domain_id_validate_v1",
+            "soranet_mldsa_parameters",
+            "soranet_mldsa_generate_keypair",
+            "soranet_mldsa_sign",
+            "soranet_mldsa_verify",
+        ):
+            with self.subTest(missing=missing):
+                self.payload["required_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                    if symbol != missing
+                ]
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                    self.validate()
 
     def test_rejects_manifests_missing_either_mint_stage_export(self) -> None:
         for missing in (

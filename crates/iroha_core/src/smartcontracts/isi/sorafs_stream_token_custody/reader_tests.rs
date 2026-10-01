@@ -40,13 +40,15 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
     };
     // The configuration is applied and durable, but its block's local CommitQC does not verify.
     assert_eq!(
-        commit_uncertified(
+        commit(
             &mut chain,
             1_000,
             vec![sign(&state, configure.into(), 1, 1_000)]
         ),
         [true]
     );
+    let original = chain.committed(2);
+    chain.corrupt_local_quorum_for_test(2, crate::sumeragi::test_chain::Signers::BelowQuorum);
     assert_eq!(
         read(&policy.binding, 2),
         Err(Error::FinalityUnavailable),
@@ -62,6 +64,30 @@ fn current_stream_token_custody_requires_same_state_finality_and_grants_no_opera
         "absence of a provider row cannot bypass finality"
     );
     assert_eq!(read(&policy.binding, 0), Err(Error::StaleHeight));
+    // Restore only the exact original QC before advancing. A later valid block
+    // cannot replace a missing historical certificate in the required prefix.
+    state
+        .kura()
+        .corrupt_commit_certificate_for_testing(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            Some(
+                original
+                    .block()
+                    .commit_certificate()
+                    .unwrap()
+                    .commit_qc()
+                    .to_vec(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        chain
+            .committed(2)
+            .block()
+            .executed_block_wire_identity()
+            .unwrap(),
+        original.block().executed_block_wire_identity().unwrap()
+    );
     // A certified successor: the retained row is current at a certified block.
     assert!(commit(&mut chain, 1_500, Vec::new()).is_empty());
     let current = read(&policy.binding, 3)

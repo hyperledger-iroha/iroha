@@ -1408,6 +1408,67 @@ mod tests {
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }
+    /// Apply the original signed genesis before exercising a trigger's executor.
+    fn authenticated_trigger_state() -> State {
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+
+        let config = TestChainConfig::new(World::default(), 0);
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        let consensus_mode = config.consensus_mode;
+        let prepared =
+            CertifiedTestChain::prepare(config).expect("prepare trigger fixture genesis");
+        let state = std::sync::Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished trigger fixture State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            consensus_mode.into(),
+            None,
+        )
+        .expect("apply the trigger fixture's signed genesis");
+        state
+    }
+    fn authenticated_trigger_header(state: &State) -> BlockHeader {
+        use crate::state::StateReadOnly as _;
+        BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            state.view().latest_block_hash(),
+            None,
+            1,
+            0,
+        )
+    }
+    #[test]
+    fn by_call_fixture_requires_an_original_applied_root_before_dispatch() {
+        use crate::state::StateReadOnly as _;
+        let state = authenticated_trigger_state();
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(state.kura().blocks_count(), 1);
+        let parent = state
+            .view()
+            .latest_block_hash()
+            .expect("original genesis hash");
+        assert_eq!(state.network_id_ref().into_genesis_hash(), parent);
+        let header = authenticated_trigger_header(&state);
+        assert_eq!(header.prev_block_hash(), Some(parent));
+        let mut block = state.block(header);
+        let transaction = block.transaction_for_callback_testing();
+        assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_ok());
+        drop(transaction);
+        drop(block);
+        let component = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = component.block(authenticated_trigger_header(&component));
+        let transaction = block.transaction_for_callback_testing();
+        assert!(crate::executor::root_scope::execution_root_scope(&transaction).is_err());
+    }
     fn assert_smart_contract_error_contains(error: &Error, expected: &str) {
         let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = error else {
             panic!("expected a smart-contract parameter error, got {error:?}");
@@ -2170,21 +2231,9 @@ mod tests {
         use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
         use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
         use iroha_logger::Level;
-        // Build state
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
-        // Prepare a block and state transaction
-        let mut state_block = state.block(BlockHeader::new(
-            NonZeroU64::new(1).unwrap(),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let state = authenticated_trigger_state();
+        let mut state_block = state.block(authenticated_trigger_header(&state));
         let mut stx = state_block.transaction_for_callback_testing();
-        stx._curr_block
-            .set_height(NonZeroU64::new(2).expect("nonzero"));
         // Create domain and account
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
@@ -2266,18 +2315,8 @@ mod tests {
     fn by_call_self_replacement_keeps_the_fresh_repeat_budget() {
         use crate::smartcontracts::triggers::specialized::LoadedActionTrait as _;
         use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
-        let state = State::new(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let mut state_block = state.block(BlockHeader::new(
-            NonZeroU64::new(2).unwrap(),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let state = authenticated_trigger_state();
+        let mut state_block = state.block(authenticated_trigger_header(&state));
         let mut stx = state_block.transaction_for_callback_testing();
         Register::domain(Domain::new(
             DomainId::try_new("wonderland", "universal").unwrap(),

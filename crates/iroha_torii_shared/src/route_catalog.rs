@@ -1252,8 +1252,44 @@ pub mod kagemusha {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)
     .with_cors_options(true);
+    /// Complete name originals; the handler additionally requires the native genesis-issued read root.
+    pub const RESOURCE_NAMES_STATE: RouteDescriptor = RouteDescriptor::new(
+        "ledger.resource_names_state",
+        HttpMethod::Get,
+        "/v1/ledger/resource-names/{challenge}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::OPENAPI)
+    .with_cors_options(true);
+    /// Scoped account/fee originals for an existing native full-ledger read holder.
+    pub const AUTHORITY_ORIGINALS: RouteDescriptor = RouteDescriptor::new(
+        "ledger.authority_originals",
+        HttpMethod::Post,
+        "/v1/ledger/authority-originals",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::OPENAPI)
+    .with_cors_options(true);
     /// Canonical first-release KAGEMUSHA API catalog.
-    pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION, AUTHORITY_STATE];
+    pub const ROUTES: &[RouteDescriptor] = &[
+        READINESS,
+        TOP_UP,
+        REDEEM,
+        OPERATION,
+        AUTHORITY_STATE,
+        RESOURCE_NAMES_STATE,
+        AUTHORITY_ORIGINALS,
+    ];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
@@ -4280,6 +4316,7 @@ pub mod contracts_and_verification_keys {
         ACCOUNT_RECOVERY_PROPOSE_POST => app_account_mutation_post("contracts.account_recovery_propose_post", "/v1/accounts/recovery/propose");
         ACCOUNT_RECOVERY_APPROVE_POST => app_account_mutation_post("contracts.account_recovery_approve_post", "/v1/accounts/recovery/approve");
         ACCOUNT_RECOVERY_FINALIZE_POST => app_account_mutation_post("contracts.account_recovery_finalize_post", "/v1/accounts/recovery/finalize");
+        ACCOUNT_RECOVERY_CANCEL_POST => app_account_mutation_post("contracts.account_recovery_cancel_post", "/v1/accounts/recovery/cancel");
         ACCOUNT_RECOVERY_STATUS_POST => app_account_read_post("contracts.account_recovery_status_post", "/v1/accounts/recovery/status");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_account_read_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_account_compute_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");

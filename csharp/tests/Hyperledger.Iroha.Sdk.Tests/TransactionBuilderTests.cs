@@ -53,7 +53,7 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => context.EncodeOptionalString(" memo "));
         Assert.Throws<ArgumentNullException>(() => context.EncodeQuantity(null!));
         Assert.Throws<ArgumentException>(() => context.EncodeAssetDefinitionId(" 62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
-        Assert.Throws<ArgumentException>(() => context.EncodeNftId(" dragon$wonderland"));
+        Assert.Throws<ArgumentException>(() => context.EncodeNftId(" dragon$wonderland.universal"));
         Assert.Throws<ArgumentException>(() => context.EncodeHashLiteral(" " + new string('a', 64)));
         Assert.Throws<ArgumentException>(() => context.EncodeFixedBytesLiteral(" 0x0102", expectedLength: 2));
     }
@@ -640,9 +640,9 @@ public sealed class TransactionBuilderTests
         var builder = NewTransactionBuilder();
 
         Assert.Throws<ArgumentException>(() => builder.TransferAsset(FixtureAssetDefinitionId, "1", accountId));
-        Assert.Throws<ArgumentException>(() => builder.TransferDomain("wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => builder.TransferDomain("wonderland.universal", accountId));
         Assert.Throws<ArgumentException>(() => builder.TransferAssetDefinition(FixtureAssetDefinitionId, accountId));
-        Assert.Throws<ArgumentException>(() => builder.TransferNft("dragon$wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => builder.TransferNft("dragon$wonderland.universal", accountId));
         Assert.Throws<ArgumentException>(() => builder.MintAsset(FixtureAssetDefinitionId, "1", accountId));
         Assert.Throws<ArgumentException>(() => builder.BurnAsset(FixtureAssetDefinitionId, "1", accountId));
         Assert.Throws<ArgumentException>(
@@ -653,9 +653,9 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => builder.RemoveAccountKeyValue(accountId, "display_name"));
 
         Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, "1", accountId));
-        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferDomain("wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferDomain("wonderland.universal", accountId));
         Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferAssetDefinition(FixtureAssetDefinitionId, accountId));
-        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferNft("dragon$wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferNft("dragon$wonderland.universal", accountId));
         Assert.Throws<ArgumentException>(() => TransactionInstruction.MintAsset(FixtureAssetDefinitionId, "1", accountId));
         Assert.Throws<ArgumentException>(() => TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, "1", accountId));
         Assert.Throws<ArgumentException>(
@@ -671,9 +671,9 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => TransactionInstruction.RemoveAccountKeyValue(accountId, "display_name"));
 
         Assert.Throws<ArgumentException>(() => new TransferAssetInstruction(FixtureAssetDefinitionId, "1", accountId));
-        Assert.Throws<ArgumentException>(() => new TransferDomainInstruction("wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => new TransferDomainInstruction("wonderland.universal", accountId));
         Assert.Throws<ArgumentException>(() => new TransferAssetDefinitionInstruction(FixtureAssetDefinitionId, accountId));
-        Assert.Throws<ArgumentException>(() => new TransferNftInstruction("dragon$wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => new TransferNftInstruction("dragon$wonderland.universal", accountId));
         Assert.Throws<ArgumentException>(() => new MintAssetInstruction(FixtureAssetDefinitionId, "1", accountId));
         Assert.Throws<ArgumentException>(() => new BurnAssetInstruction(FixtureAssetDefinitionId, "1", accountId));
         Assert.Throws<ArgumentException>(
@@ -689,9 +689,9 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => new RemoveAccountKeyValueInstruction(accountId, "display_name"));
 
         var transferAsset = TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
-        var transferDomain = TransactionInstruction.TransferDomain("wonderland", FixtureAccountId);
+        var transferDomain = TransactionInstruction.TransferDomain("wonderland.universal", FixtureAccountId);
         var transferDefinition = TransactionInstruction.TransferAssetDefinition(FixtureAssetDefinitionId, FixtureAccountId);
-        var transferNft = TransactionInstruction.TransferNft("dragon$wonderland", FixtureAccountId);
+        var transferNft = TransactionInstruction.TransferNft("dragon$wonderland.universal", FixtureAccountId);
         var mint = TransactionInstruction.MintAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
         var burn = TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
         var setAsset = TransactionInstruction.SetAssetKeyValue(
@@ -882,11 +882,11 @@ public sealed class TransactionBuilderTests
 
     [Theory]
     [InlineData("")]
-    [InlineData(" dragon$wonderland")]
-    [InlineData("dragon$wonderland ")]
+    [InlineData(" dragon$wonderland.universal")]
+    [InlineData("dragon$wonderland.universal ")]
     [InlineData("dragon$ wonderland")]
-    [InlineData("dra gon$wonderland")]
-    [InlineData("dra\u0000gon$wonderland")]
+    [InlineData("dra gon$wonderland.universal")]
+    [InlineData("dra\u0000gon$wonderland.universal")]
     public void TransactionEncodingContextRejectsNonExactNftIds(string nftId)
     {
         var context = new TransactionEncodingContext(FixtureAccountId);
@@ -1006,7 +1006,7 @@ public sealed class TransactionBuilderTests
     [Fact]
     public void EncodeInstructionBoxRejectsNonExactAuthority()
     {
-        var instruction = TransactionInstruction.TransferDomain("wonderland", FixtureAccountId);
+        var instruction = TransactionInstruction.TransferDomain("wonderland.universal", FixtureAccountId);
 
         Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(" " + FixtureAccountId));
         Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(FixtureAccountId + " "));
@@ -1253,7 +1253,7 @@ public sealed class TransactionBuilderTests
         var setPayload = SkipNoritoHeader(instructions[0].Payload);
         _ = ReadField(setPayload, out var setOffsetAfterAsset);
         var setKey = ReadNoritoString(ReadField(setPayload[setOffsetAfterAsset..], out var setOffsetAfterKey));
-        var setValue = ReadNoritoString(ReadField(setPayload[(setOffsetAfterAsset + setOffsetAfterKey)..], out _));
+        var setValue = ReadWrappedString(ReadField(setPayload[(setOffsetAfterAsset + setOffsetAfterKey)..], out _));
         Assert.Equal("display_name", setKey);
         Assert.Equal("\"Treasury buffer\"", setValue);
 
@@ -1274,11 +1274,11 @@ public sealed class TransactionBuilderTests
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetDomainKeyValue(
-                "wonderland",
+                "wonderland.universal",
                 "display_name",
                 JsonValue.Create("Treasury buffer")))
             .AddInstruction(TransactionInstruction.RemoveDomainKeyValue(
-                "wonderland",
+                "wonderland.universal",
                 "legacy_flag"))
             .AddInstruction(TransactionInstruction.SetAccountKeyValue(
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
@@ -1313,11 +1313,11 @@ public sealed class TransactionBuilderTests
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetDomainKeyValue(
-                "wonderland",
+                "wonderland.universal",
                 "display_name",
                 JsonValue.Create("Treasury buffer"))
             .RemoveDomainKeyValue(
-                "wonderland",
+                "wonderland.universal",
                 "legacy_flag")
             .SetAccountKeyValue(
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
@@ -1344,49 +1344,59 @@ public sealed class TransactionBuilderTests
         Assert.Equal("iroha.set_key_value", instructions[0].WireId);
         var setDomainPayload = SkipNoritoHeader(instructions[0].Payload);
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(setDomainPayload[..4]));
-        _ = ReadField(setDomainPayload[4..], out var setDomainOffsetAfterObject);
-        var setDomainKey = ReadNoritoString(ReadField(setDomainPayload[(4 + setDomainOffsetAfterObject)..], out var setDomainOffsetAfterKey));
-        var setDomainValue = ReadNoritoString(ReadField(setDomainPayload[(4 + setDomainOffsetAfterObject + setDomainOffsetAfterKey)..], out _));
+        var setDomain = ReadField(setDomainPayload[4..], out var setDomainFieldLength);
+        Assert.Equal(setDomainPayload.Length - 4, setDomainFieldLength);
+        var setDomainId = ReadField(setDomain, out var setDomainOffsetAfterObject);
+        Assert.Equal("wonderland.universal", ReadDomainId(setDomainId));
+        var setDomainKey = ReadNoritoString(ReadField(setDomain[setDomainOffsetAfterObject..], out var setDomainOffsetAfterKey));
+        var setDomainValue = ReadWrappedString(ReadField(setDomain[(setDomainOffsetAfterObject + setDomainOffsetAfterKey)..], out _));
         Assert.Equal("display_name", setDomainKey);
         Assert.Equal("\"Treasury buffer\"", setDomainValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[1].WireId);
         var removeDomainPayload = SkipNoritoHeader(instructions[1].Payload);
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(removeDomainPayload[..4]));
-        _ = ReadField(removeDomainPayload[4..], out var removeDomainOffsetAfterObject);
-        var removeDomainKey = ReadNoritoString(ReadField(removeDomainPayload[(4 + removeDomainOffsetAfterObject)..], out _));
+        var removeDomain = ReadField(removeDomainPayload[4..], out var removeDomainFieldLength);
+        Assert.Equal(removeDomainPayload.Length - 4, removeDomainFieldLength);
+        var removeDomainId = ReadField(removeDomain, out var removeDomainOffsetAfterObject);
+        Assert.Equal("wonderland.universal", ReadDomainId(removeDomainId));
+        var removeDomainKey = ReadNoritoString(ReadField(removeDomain[removeDomainOffsetAfterObject..], out _));
         Assert.Equal("legacy_flag", removeDomainKey);
 
         Assert.Equal("iroha.set_key_value", instructions[2].WireId);
         var setAccountPayload = SkipNoritoHeader(instructions[2].Payload);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(setAccountPayload[..4]));
-        _ = ReadField(setAccountPayload[4..], out var setAccountOffsetAfterObject);
-        var setAccountKey = ReadNoritoString(ReadField(setAccountPayload[(4 + setAccountOffsetAfterObject)..], out var setAccountOffsetAfterKey));
-        var setAccountValue = ReadNoritoString(ReadField(setAccountPayload[(4 + setAccountOffsetAfterObject + setAccountOffsetAfterKey)..], out _));
+        var setAccountFields = ReadVariantFields(setAccountPayload);
+        _ = ReadField(setAccountFields, out var setAccountOffsetAfterObject);
+        var setAccountKey = ReadNoritoString(ReadField(setAccountFields[(setAccountOffsetAfterObject)..], out var setAccountOffsetAfterKey));
+        var setAccountValue = ReadWrappedString(ReadField(setAccountFields[(setAccountOffsetAfterObject + setAccountOffsetAfterKey)..], out _));
         Assert.Equal("display_name", setAccountKey);
         Assert.Equal("\"Treasury buffer\"", setAccountValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[3].WireId);
         var removeAccountPayload = SkipNoritoHeader(instructions[3].Payload);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(removeAccountPayload[..4]));
-        _ = ReadField(removeAccountPayload[4..], out var removeAccountOffsetAfterObject);
-        var removeAccountKey = ReadNoritoString(ReadField(removeAccountPayload[(4 + removeAccountOffsetAfterObject)..], out _));
+        var removeAccountFields = ReadVariantFields(removeAccountPayload);
+        _ = ReadField(removeAccountFields, out var removeAccountOffsetAfterObject);
+        var removeAccountKey = ReadNoritoString(ReadField(removeAccountFields[(removeAccountOffsetAfterObject)..], out _));
         Assert.Equal("legacy_flag", removeAccountKey);
 
         Assert.Equal("iroha.set_key_value", instructions[4].WireId);
         var setAssetDefinitionPayload = SkipNoritoHeader(instructions[4].Payload);
         Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(setAssetDefinitionPayload[..4]));
-        _ = ReadField(setAssetDefinitionPayload[4..], out var setAssetDefinitionOffsetAfterObject);
-        var setAssetDefinitionKey = ReadNoritoString(ReadField(setAssetDefinitionPayload[(4 + setAssetDefinitionOffsetAfterObject)..], out var setAssetDefinitionOffsetAfterKey));
-        var setAssetDefinitionValue = ReadNoritoString(ReadField(setAssetDefinitionPayload[(4 + setAssetDefinitionOffsetAfterObject + setAssetDefinitionOffsetAfterKey)..], out _));
+        var setAssetDefinitionFields = ReadVariantFields(setAssetDefinitionPayload);
+        _ = ReadField(setAssetDefinitionFields, out var setAssetDefinitionOffsetAfterObject);
+        var setAssetDefinitionKey = ReadNoritoString(ReadField(setAssetDefinitionFields[(setAssetDefinitionOffsetAfterObject)..], out var setAssetDefinitionOffsetAfterKey));
+        var setAssetDefinitionValue = ReadWrappedString(ReadField(setAssetDefinitionFields[(setAssetDefinitionOffsetAfterObject + setAssetDefinitionOffsetAfterKey)..], out _));
         Assert.Equal("ticker", setAssetDefinitionKey);
         Assert.Equal("\"XOR\"", setAssetDefinitionValue);
 
         Assert.Equal("iroha.remove_key_value", instructions[5].WireId);
         var removeAssetDefinitionPayload = SkipNoritoHeader(instructions[5].Payload);
         Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(removeAssetDefinitionPayload[..4]));
-        _ = ReadField(removeAssetDefinitionPayload[4..], out var removeAssetDefinitionOffsetAfterObject);
-        var removeAssetDefinitionKey = ReadNoritoString(ReadField(removeAssetDefinitionPayload[(4 + removeAssetDefinitionOffsetAfterObject)..], out _));
+        var removeAssetDefinitionFields = ReadVariantFields(removeAssetDefinitionPayload);
+        _ = ReadField(removeAssetDefinitionFields, out var removeAssetDefinitionOffsetAfterObject);
+        var removeAssetDefinitionKey = ReadNoritoString(ReadField(removeAssetDefinitionFields[(removeAssetDefinitionOffsetAfterObject)..], out _));
         Assert.Equal("deprecated_label", removeAssetDefinitionKey);
 
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
@@ -1400,11 +1410,11 @@ public sealed class TransactionBuilderTests
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetNftKeyValue(
-                "dragon$wonderland",
+                "dragon$wonderland.universal",
                 "rarity",
                 JsonValue.Create("legendary")))
             .AddInstruction(TransactionInstruction.RemoveNftKeyValue(
-                "dragon$wonderland",
+                "dragon$wonderland.universal",
                 "legacy_flag"))
             .AddInstruction(TransactionInstruction.SetTriggerKeyValue(
                 "settlement_window",
@@ -1438,11 +1448,11 @@ public sealed class TransactionBuilderTests
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetNftKeyValue(
-                "dragon$wonderland",
+                "dragon$wonderland.universal",
                 "rarity",
                 JsonValue.Create("legendary"))
             .RemoveNftKeyValue(
-                "dragon$wonderland",
+                "dragon$wonderland.universal",
                 "legacy_flag")
             .SetTriggerKeyValue(
                 "settlement_window",
@@ -1467,12 +1477,13 @@ public sealed class TransactionBuilderTests
         Assert.Equal("iroha.set_key_value", instructions[0].WireId);
         var setNftPayload = SkipNoritoHeader(instructions[0].Payload);
         Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(setNftPayload[..4]));
-        var setNftObject = ReadField(setNftPayload[4..], out var setNftOffsetAfterObject);
-        var setNftDomain = ReadNoritoString(ReadField(setNftObject, out var setNftOffsetAfterDomain));
+        var setNftFields = ReadVariantFields(setNftPayload);
+        var setNftObject = ReadField(setNftFields, out var setNftOffsetAfterObject);
+        var setNftDomain = ReadDomainId(ReadField(setNftObject, out var setNftOffsetAfterDomain));
         var setNftName = ReadNoritoString(ReadField(setNftObject[setNftOffsetAfterDomain..], out _));
-        var setNftKey = ReadNoritoString(ReadField(setNftPayload[(4 + setNftOffsetAfterObject)..], out var setNftOffsetAfterKey));
-        var setNftValue = ReadNoritoString(ReadField(setNftPayload[(4 + setNftOffsetAfterObject + setNftOffsetAfterKey)..], out _));
-        Assert.Equal("wonderland", setNftDomain);
+        var setNftKey = ReadNoritoString(ReadField(setNftFields[(setNftOffsetAfterObject)..], out var setNftOffsetAfterKey));
+        var setNftValue = ReadWrappedString(ReadField(setNftFields[(setNftOffsetAfterObject + setNftOffsetAfterKey)..], out _));
+        Assert.Equal("wonderland.universal", setNftDomain);
         Assert.Equal("dragon", setNftName);
         Assert.Equal("rarity", setNftKey);
         Assert.Equal("\"legendary\"", setNftValue);
@@ -1480,20 +1491,22 @@ public sealed class TransactionBuilderTests
         Assert.Equal("iroha.remove_key_value", instructions[1].WireId);
         var removeNftPayload = SkipNoritoHeader(instructions[1].Payload);
         Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(removeNftPayload[..4]));
-        var removeNftObject = ReadField(removeNftPayload[4..], out var removeNftOffsetAfterObject);
-        var removeNftDomain = ReadNoritoString(ReadField(removeNftObject, out var removeNftOffsetAfterDomain));
+        var removeNftFields = ReadVariantFields(removeNftPayload);
+        var removeNftObject = ReadField(removeNftFields, out var removeNftOffsetAfterObject);
+        var removeNftDomain = ReadDomainId(ReadField(removeNftObject, out var removeNftOffsetAfterDomain));
         var removeNftName = ReadNoritoString(ReadField(removeNftObject[removeNftOffsetAfterDomain..], out _));
-        var removeNftKey = ReadNoritoString(ReadField(removeNftPayload[(4 + removeNftOffsetAfterObject)..], out _));
-        Assert.Equal("wonderland", removeNftDomain);
+        var removeNftKey = ReadNoritoString(ReadField(removeNftFields[(removeNftOffsetAfterObject)..], out _));
+        Assert.Equal("wonderland.universal", removeNftDomain);
         Assert.Equal("dragon", removeNftName);
         Assert.Equal("legacy_flag", removeNftKey);
 
         Assert.Equal("iroha.set_key_value", instructions[2].WireId);
         var setTriggerPayload = SkipNoritoHeader(instructions[2].Payload);
         Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(setTriggerPayload[..4]));
-        var setTriggerId = ReadNoritoString(ReadField(setTriggerPayload[4..], out var setTriggerOffsetAfterObject));
-        var setTriggerKey = ReadNoritoString(ReadField(setTriggerPayload[(4 + setTriggerOffsetAfterObject)..], out var setTriggerOffsetAfterKey));
-        var setTriggerValue = ReadNoritoString(ReadField(setTriggerPayload[(4 + setTriggerOffsetAfterObject + setTriggerOffsetAfterKey)..], out _));
+        var setTriggerFields = ReadVariantFields(setTriggerPayload);
+        var setTriggerId = ReadWrappedString(ReadField(setTriggerFields, out var setTriggerOffsetAfterObject));
+        var setTriggerKey = ReadNoritoString(ReadField(setTriggerFields[(setTriggerOffsetAfterObject)..], out var setTriggerOffsetAfterKey));
+        var setTriggerValue = ReadWrappedString(ReadField(setTriggerFields[(setTriggerOffsetAfterObject + setTriggerOffsetAfterKey)..], out _));
         Assert.Equal("settlement_window", setTriggerId);
         Assert.Equal("mode", setTriggerKey);
         Assert.Equal("\"strict\"", setTriggerValue);
@@ -1501,31 +1514,34 @@ public sealed class TransactionBuilderTests
         Assert.Equal("iroha.remove_key_value", instructions[3].WireId);
         var removeTriggerPayload = SkipNoritoHeader(instructions[3].Payload);
         Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(removeTriggerPayload[..4]));
-        var removeTriggerId = ReadNoritoString(ReadField(removeTriggerPayload[4..], out var removeTriggerOffsetAfterObject));
-        var removeTriggerKey = ReadNoritoString(ReadField(removeTriggerPayload[(4 + removeTriggerOffsetAfterObject)..], out _));
+        var removeTriggerFields = ReadVariantFields(removeTriggerPayload);
+        var removeTriggerId = ReadWrappedString(ReadField(removeTriggerFields, out var removeTriggerOffsetAfterObject));
+        var removeTriggerKey = ReadNoritoString(ReadField(removeTriggerFields[(removeTriggerOffsetAfterObject)..], out _));
         Assert.Equal("settlement_window", removeTriggerId);
         Assert.Equal("legacy_flag", removeTriggerKey);
 
         Assert.Equal("iroha.mint", instructions[4].WireId);
         var mintTriggerPayload = SkipNoritoHeader(instructions[4].Payload);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(mintTriggerPayload[..4]));
-        var mintTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(mintTriggerPayload[4..], out var mintTriggerOffsetAfterRepetitions));
-        var mintTriggerId = ReadNoritoString(ReadField(mintTriggerPayload[(4 + mintTriggerOffsetAfterRepetitions)..], out _));
+        var mintTriggerFields = ReadVariantFields(mintTriggerPayload);
+        var mintTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(mintTriggerFields, out var mintTriggerOffsetAfterRepetitions));
+        var mintTriggerId = ReadWrappedString(ReadField(mintTriggerFields[(mintTriggerOffsetAfterRepetitions)..], out _));
         Assert.Equal(3u, mintTriggerRepetitions);
         Assert.Equal("settlement_window", mintTriggerId);
 
         Assert.Equal("iroha.burn", instructions[5].WireId);
         var burnTriggerPayload = SkipNoritoHeader(instructions[5].Payload);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(burnTriggerPayload[..4]));
-        var burnTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(burnTriggerPayload[4..], out var burnTriggerOffsetAfterRepetitions));
-        var burnTriggerId = ReadNoritoString(ReadField(burnTriggerPayload[(4 + burnTriggerOffsetAfterRepetitions)..], out _));
+        var burnTriggerFields = ReadVariantFields(burnTriggerPayload);
+        var burnTriggerRepetitions = BinaryPrimitives.ReadUInt32LittleEndian(ReadField(burnTriggerFields, out var burnTriggerOffsetAfterRepetitions));
+        var burnTriggerId = ReadWrappedString(ReadField(burnTriggerFields[(burnTriggerOffsetAfterRepetitions)..], out _));
         Assert.Equal(1u, burnTriggerRepetitions);
         Assert.Equal("settlement_window", burnTriggerId);
 
         Assert.Equal("iroha.execute_trigger", instructions[6].WireId);
         var executeTriggerPayload = SkipNoritoHeader(instructions[6].Payload);
-        var executeTriggerId = ReadNoritoString(ReadField(executeTriggerPayload, out var executeTriggerOffsetAfterId));
-        var executeTriggerArgs = ReadNoritoString(ReadField(executeTriggerPayload[executeTriggerOffsetAfterId..], out _));
+        var executeTriggerId = ReadWrappedString(ReadField(executeTriggerPayload, out var executeTriggerOffsetAfterId));
+        var executeTriggerArgs = ReadWrappedString(ReadField(executeTriggerPayload[executeTriggerOffsetAfterId..], out _));
         Assert.Equal("settlement_window", executeTriggerId);
         Assert.Equal("{\"force\":true}", executeTriggerArgs);
 
@@ -1548,13 +1564,13 @@ public sealed class TransactionBuilderTests
             FixtureAccountId,
             "display_name",
             assetValue);
-        var setDomain = TransactionInstruction.SetDomainKeyValue("wonderland", "display_name", domainValue);
+        var setDomain = TransactionInstruction.SetDomainKeyValue("wonderland.universal", "display_name", domainValue);
         var setAccount = TransactionInstruction.SetAccountKeyValue(FixtureAccountId, "display_name", accountValue);
         var setAssetDefinition = TransactionInstruction.SetAssetDefinitionKeyValue(
             FixtureAssetDefinitionId,
             "ticker",
             assetDefinitionValue);
-        var setNft = TransactionInstruction.SetNftKeyValue("dragon$wonderland", "rarity", nftValue);
+        var setNft = TransactionInstruction.SetNftKeyValue("dragon$wonderland.universal", "rarity", nftValue);
         var setTrigger = TransactionInstruction.SetTriggerKeyValue(
             "settlement_window",
             "mode",
@@ -1644,16 +1660,21 @@ public sealed class TransactionBuilderTests
         static string ReadSetJsonPayload(byte[] framedPayload, int prefixLength)
         {
             var payload = SkipNoritoHeader(framedPayload);
+            if (prefixLength == 4)
+            {
+                payload = ReadVariantFields(payload);
+                prefixLength = 0;
+            }
             _ = ReadField(payload[prefixLength..], out var offsetAfterObject);
             _ = ReadField(payload[(prefixLength + offsetAfterObject)..], out var offsetAfterKey);
-            return ReadNoritoString(ReadField(payload[(prefixLength + offsetAfterObject + offsetAfterKey)..], out _));
+            return ReadWrappedString(ReadField(payload[(prefixLength + offsetAfterObject + offsetAfterKey)..], out _));
         }
 
         static string ReadExecuteTriggerJsonPayload(byte[] framedPayload)
         {
             var payload = SkipNoritoHeader(framedPayload);
             _ = ReadField(payload, out var offsetAfterTriggerId);
-            return ReadNoritoString(ReadField(payload[offsetAfterTriggerId..], out _));
+            return ReadWrappedString(ReadField(payload[offsetAfterTriggerId..], out _));
         }
     }
 
@@ -1917,17 +1938,17 @@ public sealed class TransactionBuilderTests
         yield return
         [
             "domain id",
-            (Action<TransactionBuilder>)(builder => builder.TransferDomain(" wonderland", FixtureAccountId)),
+            (Action<TransactionBuilder>)(builder => builder.TransferDomain(" wonderland.universal", FixtureAccountId)),
         ];
         yield return
         [
             "domain id internal whitespace",
-            (Action<TransactionBuilder>)(builder => builder.TransferDomain("wonder land", FixtureAccountId)),
+            (Action<TransactionBuilder>)(builder => builder.TransferDomain("wonder land.universal", FixtureAccountId)),
         ];
         yield return
         [
             "domain transfer destination",
-            (Action<TransactionBuilder>)(builder => builder.TransferDomain("wonderland", FixtureAccountId + " ")),
+            (Action<TransactionBuilder>)(builder => builder.TransferDomain("wonderland.universal", FixtureAccountId + " ")),
         ];
         yield return
         [
@@ -1946,12 +1967,12 @@ public sealed class TransactionBuilderTests
         yield return
         [
             "nft id",
-            (Action<TransactionBuilder>)(builder => builder.TransferNft("dragon$wonderland ", FixtureAccountId)),
+            (Action<TransactionBuilder>)(builder => builder.TransferNft("dragon$wonderland.universal ", FixtureAccountId)),
         ];
         yield return
         [
             "nft transfer destination",
-            (Action<TransactionBuilder>)(builder => builder.TransferNft("dragon$wonderland", FixtureAccountId + "\u0000")),
+            (Action<TransactionBuilder>)(builder => builder.TransferNft("dragon$wonderland.universal", FixtureAccountId + "\u0000")),
         ];
         yield return
         [
@@ -2017,7 +2038,7 @@ public sealed class TransactionBuilderTests
         [
             "domain metadata key",
             (Action<TransactionBuilder>)(builder => builder.SetDomainKeyValue(
-                "wonderland",
+                "wonderland.universal",
                 "display_name ",
                 JsonValue.Create("Treasury buffer"))),
         ];
@@ -2025,7 +2046,7 @@ public sealed class TransactionBuilderTests
         [
             "domain metadata id",
             (Action<TransactionBuilder>)(builder => builder.SetDomainKeyValue(
-                "wonderland\u0000",
+                "wonderland\u0000.universal",
                 "display_name",
                 JsonValue.Create("Treasury buffer"))),
         ];
@@ -2033,14 +2054,14 @@ public sealed class TransactionBuilderTests
         [
             "remove domain metadata key",
             (Action<TransactionBuilder>)(builder => builder.RemoveDomainKeyValue(
-                "wonderland",
+                "wonderland.universal",
                 "\u00A0display_name")),
         ];
         yield return
         [
             "remove domain metadata id",
             (Action<TransactionBuilder>)(builder => builder.RemoveDomainKeyValue(
-                " wonderland",
+                " wonderland.universal",
                 "display_name")),
         ];
         yield return
@@ -2107,7 +2128,7 @@ public sealed class TransactionBuilderTests
         [
             "nft metadata id",
             (Action<TransactionBuilder>)(builder => builder.SetNftKeyValue(
-                " dragon$wonderland",
+                " dragon$wonderland.universal",
                 "rarity",
                 JsonValue.Create("legendary"))),
         ];
@@ -2115,7 +2136,7 @@ public sealed class TransactionBuilderTests
         [
             "nft metadata key",
             (Action<TransactionBuilder>)(builder => builder.SetNftKeyValue(
-                "dragon$wonderland",
+                "dragon$wonderland.universal",
                 "rarity ",
                 JsonValue.Create("legendary"))),
         ];
@@ -2123,14 +2144,14 @@ public sealed class TransactionBuilderTests
         [
             "remove nft metadata id",
             (Action<TransactionBuilder>)(builder => builder.RemoveNftKeyValue(
-                "dragon$wonderland\u0000",
+                "dragon$wonderland.universal\u0000",
                 "rarity")),
         ];
         yield return
         [
             "remove nft metadata key",
             (Action<TransactionBuilder>)(builder => builder.RemoveNftKeyValue(
-                "dragon$wonderland",
+                "dragon$wonderland.universal",
                 "\u00A0rarity")),
         ];
         yield return
@@ -2200,13 +2221,13 @@ public sealed class TransactionBuilderTests
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.TransferDomain(
-                "wonderland",
+                "wonderland.universal",
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"))
             .AddInstruction(TransactionInstruction.TransferAssetDefinition(
                 "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"))
             .AddInstruction(TransactionInstruction.TransferNft(
-                "dragon$wonderland",
+                "dragon$wonderland.universal",
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"));
 
         Assert.Collection(
@@ -2223,9 +2244,9 @@ public sealed class TransactionBuilderTests
         var destination = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
 
         var envelope = new TransactionBuilder(FixtureNetworkId, authority, EmptyAuthorityFeePayment)
-            .TransferDomain("wonderland", destination)
+            .TransferDomain("wonderland.universal", destination)
             .TransferAssetDefinition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", destination)
-            .TransferNft("dragon$wonderland", destination)
+            .TransferNft("dragon$wonderland.universal", destination)
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
             .SetNonce(17)
@@ -2237,34 +2258,60 @@ public sealed class TransactionBuilderTests
         Assert.Equal("iroha.transfer", instructions[0].WireId);
         var domainTransferPayload = SkipNoritoHeader(instructions[0].Payload);
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(domainTransferPayload[..4]));
-        _ = ReadField(domainTransferPayload[4..], out var domainTransferOffsetAfterSource);
-        var transferredDomain = ReadNoritoString(ReadField(domainTransferPayload[(4 + domainTransferOffsetAfterSource)..], out var domainTransferOffsetAfterObject));
-        var domainTransferDestination = ReadField(domainTransferPayload[(4 + domainTransferOffsetAfterSource + domainTransferOffsetAfterObject)..], out _);
-        Assert.Equal("wonderland", transferredDomain);
+        var domainTransfer = ReadField(domainTransferPayload[4..], out var domainTransferFieldLength);
+        Assert.Equal(domainTransferPayload.Length - 4, domainTransferFieldLength);
+        _ = ReadField(domainTransfer, out var domainTransferOffsetAfterSource);
+        var transferredDomain = ReadDomainId(ReadField(domainTransfer[domainTransferOffsetAfterSource..], out var domainTransferOffsetAfterObject));
+        var domainTransferDestination = ReadField(domainTransfer[(domainTransferOffsetAfterSource + domainTransferOffsetAfterObject)..], out _);
+        Assert.Equal("wonderland.universal", transferredDomain);
         Assert.NotEmpty(domainTransferDestination);
 
         Assert.Equal("iroha.transfer", instructions[1].WireId);
         var assetDefinitionTransferPayload = SkipNoritoHeader(instructions[1].Payload);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(assetDefinitionTransferPayload[..4]));
-        _ = ReadField(assetDefinitionTransferPayload[4..], out var assetDefinitionTransferOffsetAfterSource);
-        var transferredAssetDefinition = ReadField(assetDefinitionTransferPayload[(4 + assetDefinitionTransferOffsetAfterSource)..], out var assetDefinitionTransferOffsetAfterObject);
-        var assetDefinitionTransferDestination = ReadField(assetDefinitionTransferPayload[(4 + assetDefinitionTransferOffsetAfterSource + assetDefinitionTransferOffsetAfterObject)..], out _);
+        var assetDefinitionTransferFields = ReadVariantFields(assetDefinitionTransferPayload);
+        _ = ReadField(assetDefinitionTransferFields, out var assetDefinitionTransferOffsetAfterSource);
+        var transferredAssetDefinition = ReadField(assetDefinitionTransferFields[(assetDefinitionTransferOffsetAfterSource)..], out var assetDefinitionTransferOffsetAfterObject);
+        var assetDefinitionTransferDestination = ReadField(assetDefinitionTransferFields[(assetDefinitionTransferOffsetAfterSource + assetDefinitionTransferOffsetAfterObject)..], out _);
         Assert.Equal(32, transferredAssetDefinition.Length);
         Assert.NotEmpty(assetDefinitionTransferDestination);
 
         Assert.Equal("iroha.transfer", instructions[2].WireId);
         var nftTransferPayload = SkipNoritoHeader(instructions[2].Payload);
         Assert.Equal(3u, BinaryPrimitives.ReadUInt32LittleEndian(nftTransferPayload[..4]));
-        _ = ReadField(nftTransferPayload[4..], out var nftTransferOffsetAfterSource);
-        var transferredNft = ReadField(nftTransferPayload[(4 + nftTransferOffsetAfterSource)..], out var nftTransferOffsetAfterObject);
-        var transferredNftDomain = ReadNoritoString(ReadField(transferredNft, out var nftOffsetAfterDomain));
+        var nftTransferFields = ReadVariantFields(nftTransferPayload);
+        _ = ReadField(nftTransferFields, out var nftTransferOffsetAfterSource);
+        var transferredNft = ReadField(nftTransferFields[(nftTransferOffsetAfterSource)..], out var nftTransferOffsetAfterObject);
+        var transferredNftDomain = ReadDomainId(ReadField(transferredNft, out var nftOffsetAfterDomain));
         var transferredNftName = ReadNoritoString(ReadField(transferredNft[nftOffsetAfterDomain..], out _));
-        var nftTransferDestination = ReadField(nftTransferPayload[(4 + nftTransferOffsetAfterSource + nftTransferOffsetAfterObject)..], out _);
-        Assert.Equal("wonderland", transferredNftDomain);
+        var nftTransferDestination = ReadField(nftTransferFields[(nftTransferOffsetAfterSource + nftTransferOffsetAfterObject)..], out _);
+        Assert.Equal("wonderland.universal", transferredNftDomain);
         Assert.Equal("dragon", transferredNftName);
         Assert.NotEmpty(nftTransferDestination);
 
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+    }
+
+    private static byte[] ReadVariantFields(ReadOnlySpan<byte> payload)
+    {
+        var fields = ReadField(payload[4..], out var consumed);
+        Assert.Equal(payload.Length - 4, consumed);
+        return fields;
+    }
+
+    private static string ReadWrappedString(ReadOnlySpan<byte> payload)
+    {
+        var field = ReadField(payload, out var consumed);
+        Assert.Equal(payload.Length, consumed);
+        return ReadNoritoString(field);
+    }
+
+    private static string ReadDomainId(ReadOnlySpan<byte> encoded)
+    {
+        var domain = ReadNoritoString(ReadField(encoded, out var domainLength));
+        var dataspace = ReadNoritoString(ReadField(encoded[domainLength..], out var dataspaceLength));
+        Assert.Equal(encoded.Length, domainLength + dataspaceLength);
+        return domain + "." + dataspace;
     }
 
     private static byte[] ReadField(ReadOnlySpan<byte> bytes, out int consumed)

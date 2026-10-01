@@ -1,4 +1,4 @@
-import { validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1 } from "./contractManifestRules.js";
+import { validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1, validateManifestFieldsV1 } from "./contractManifestRules.js";
 import { parseGovernanceReferendumResponseV1, parseGovernanceTallyResponseV1, parseGovernanceLocksResponseV1 } from "./governancePlainV1.js";
 import { parseElectionTallyResponseV1 } from "./electionTallyV1.js";
 import { createSorafsAliasResponseNormalizers } from "./sorafsAliasResponses.js";
@@ -19371,42 +19371,13 @@ function normalizeManifestPayload(manifest, context) {
   if (!isPlainObject(manifest)) {
     rejectType(`${context} must be an object`);
   }
-  const allowedFields = new Set([
-    "seiyaku_name",
-    "seiyakuName",
-    "code_hash",
-    "codeHash",
-    "abi_hash",
-    "abiHash",
-    "compiler_fingerprint",
-    "compilerFingerprint",
-    "features_bitmap",
-    "featuresBitmap",
-    "access_set_hints",
-    "accessSetHints",
-    "entrypoints",
-    "entryPoints",
-    "states",
-    "error_types",
-    "errorTypes",
-    "error_messages",
-    "errorMessages",
-    "kotoba",
-    "provenance",
-  ]);
-  const unknownFields = Object.keys(manifest).filter((field) => !allowedFields.has(field));
-  if (unknownFields.length !== 0) {
-    rejectType(`${context} contains unsupported fields: ${unknownFields.sort().join(", ")}`);
-  }
+  validateManifestFieldsV1(manifest, context);
   const hasField = (...keys) =>
     keys.some((key) => Object.prototype.hasOwnProperty.call(manifest, key));
   const getField = (...keys) => {
     const present = keys.filter((key) =>
       Object.prototype.hasOwnProperty.call(manifest, key),
     );
-    if (present.length > 1) {
-      rejectType(`${context} contains conflicting aliases: ${present.join(", ")}`);
-    }
     return present.length === 0 ? undefined : manifest[present[0]];
   };
   const normalized = {

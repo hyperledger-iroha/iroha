@@ -121,7 +121,7 @@ async fn pipeline_status_string_query_preserves_decimal_hash_and_whitespace() {
     let padded_hash = format!(" {hash} ");
     let request = axum::http::Request::builder()
         .uri(format!(
-            "/v1/pipeline/transactions/status?hash=+{hash}+&scope=%20local%20"
+            "/v1/pipeline/transactions/status?hash=+{hash}+&scope=+local+"
         ))
         .body(())
         .expect("pipeline status request");
@@ -781,10 +781,11 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
                             iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1 {
                                 segment_count: 1,
                                 segment_air_row_roots: vec![
-                                    iroha_data_model::privacy::GoldilocksDigest384V1::new(
-                                        [u64::from(batch_index) + 1; 6],
-                                    )
-                                    .unwrap(),
+                                    iroha_data_model::fastpq::FastpqCommitmentV1::from_bytes(
+                                        [u8::try_from(batch_index)
+                                            .expect("fixture batch index fits u8")
+                                            + 1; 32],
+                                    ),
                                 ],
                             },
                         ),

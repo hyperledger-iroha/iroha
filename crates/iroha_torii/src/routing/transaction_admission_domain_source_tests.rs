@@ -31,6 +31,7 @@ mod transaction_admission_domain_source_tests {
             "handle_post_account_recovery_propose",
             "handle_post_account_recovery_approve",
             "handle_post_account_recovery_finalize",
+            "handle_post_account_recovery_cancel",
             "handle_post_vk_register",
             "handle_post_vk_update",
             "handle_post_contract_alias_set",

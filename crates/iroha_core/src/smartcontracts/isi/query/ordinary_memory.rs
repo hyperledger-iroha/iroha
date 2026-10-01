@@ -1574,7 +1574,7 @@ mod tests {
     }
     #[test]
     fn singular_source_admission_audit_covers_every_variant() {
-        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 102);
+        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 101);
         let mut names = std::collections::BTreeSet::new();
         for (name, class) in SINGULAR_SOURCE_ADMISSION_AUDIT {
             assert!(!name.is_empty());

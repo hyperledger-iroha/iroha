@@ -75,9 +75,9 @@ pub fn available_goldilocks_transform_backend_v1() -> Option<GoldilocksTransform
 
 // Shared with Metal's actual pool policy when this module is wired. Charging
 // the complete pool independently of this request also covers oversized cache
-// entries reused for a smaller request. Stage twiddles are only one u64/stage.
+// entries reused for a smaller request. The same cache also holds factorized
+// exact-root tables; charge its largest entry regardless of the current layout.
 use crate::gpu_memory::{METAL_PAGE_BYTES, METAL_POOL_MAX_CACHED_BYTES};
-pub(crate) const EXACT_ROOT_METAL_TWIDDLE_ENTRIES_V1: usize = 64;
 
 /// Conservative additional host/shared payload for one bounded Metal FFT.
 ///
@@ -117,7 +117,7 @@ pub fn metal_goldilocks_transform_extra_payload_v1(
         private,
         padding,
         METAL_POOL_MAX_CACHED_BYTES,
-        (EXACT_ROOT_METAL_TWIDDLE_ENTRIES_V1 + 2) * 32 * 8,
+        crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE,
         1 << 20,
     ]
     .into_iter()
@@ -414,7 +414,7 @@ mod tests {
                 2 * columns * (1 << 22) * 8
                     + columns * 16383
                     + (64 << 20)
-                    + 66 * 32 * 8
+                    + 66 * 4 * 256 * 8
                     + (1 << 20)
             );
         }

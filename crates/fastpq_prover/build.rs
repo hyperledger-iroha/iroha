@@ -35,6 +35,7 @@ fn main() {
     println!("cargo:rerun-if-changed=metal/kernels/exact_root.metal");
     println!("cargo:rerun-if-changed=metal/kernels/poseidon.metal");
     println!("cargo:rerun-if-changed=metal/kernels/digest384.metal");
+    println!("cargo:rerun-if-changed=metal/kernels/keccak256.metal");
     println!("cargo:rerun-if-changed=metal/kernels/bn254.metal");
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();
@@ -153,6 +154,7 @@ fn compile_metal_shaders() -> Result<(), String> {
         ("exact_root", Path::new("metal/kernels/exact_root.metal")),
         ("poseidon", Path::new("metal/kernels/poseidon.metal")),
         ("digest384", Path::new("metal/kernels/digest384.metal")),
+        ("keccak256", Path::new("metal/kernels/keccak256.metal")),
         ("bn254", Path::new("metal/kernels/bn254.metal")),
     ];
     let include_dir = Path::new("metal/include");

@@ -119,6 +119,14 @@ fn query_decoding_checks_raw_acceptance_unbiased_range_occupancy_and_sorted_cens
         words(10, raw).decode().unwrap(),
         RawTapeMessageV1::Queries((0..u32::try_from(QUERY_COUNT).unwrap()).collect())
     );
+    // Accepted large field words must retain the highest initial-domain positions.
+    let raw = (0..87)
+        .map(|offset| limit - 1 - offset)
+        .chain([u64::MAX; 6]);
+    assert_eq!(
+        words(10, raw).decode().unwrap(),
+        RawTapeMessageV1::Queries((8_388_531..8_388_608).collect())
+    );
     // There are already 77 distinct positions, but fewer than 87 accepted field
     // words: accepting here would change the defined whole-message decoder.
     let raw =

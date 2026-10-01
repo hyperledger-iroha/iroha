@@ -39552,4 +39552,4 @@ mod conformance;
 
 // TODO: this unused plaintext candidate does not select or enable BFV encryption.
 #[cfg(test)]
-mod plaintext_packing_candidate;
+pub(crate) mod plaintext_packing_candidate;

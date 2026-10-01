@@ -855,6 +855,9 @@ mod account {
             /// Recovery request approval was recorded.
             Approved(AccountRecoveryApproved),
             #[has_origin(event => &event.account)]
+            /// Independent guardian cancellation approval was recorded.
+            CancellationApproved(AccountRecoveryCancellationApproved),
+            #[has_origin(event => &event.account)]
             /// Recovery request was cancelled.
             Cancelled(AccountRecoveryCancelled),
             #[has_origin(event => &event.account)]
@@ -1001,6 +1004,23 @@ mod account {
             /// Updated request after approval was recorded.
             pub request: crate::account::AccountRecoveryRequest,
         }
+        /// Recovery-request cancellation approval payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[norito(no_fast_from_json)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::events::data::events::account::model::AccountRecoveryCancellationApproved"
+        )]
+        pub struct AccountRecoveryCancellationApproved {
+            /// Account currently active behind the alias.
+            pub account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Guardian that voted for cancellation.
+            pub approver: AccountId,
+            /// Pending request after the cancellation vote was recorded.
+            pub request: crate::account::AccountRecoveryRequest,
+        }
         /// Recovery-request cancellation payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[norito(no_fast_from_json)]
@@ -1068,6 +1088,7 @@ impl_json_via_norito_bytes!(
     AccountRecoveryPolicyCleared,
     AccountRecoveryProposed,
     AccountRecoveryApproved,
+    AccountRecoveryCancellationApproved,
     AccountRecoveryCancelled,
     AccountRecoveryFinalized
 );
@@ -2778,10 +2799,10 @@ pub mod prelude {
         HasOrigin,
         account::{
             AccountControllerReplaced, AccountCreated, AccountEvent, AccountEventSet,
-            AccountPermissionChanged, AccountRecoveryApproved, AccountRecoveryCancelled,
-            AccountRecoveryEvent, AccountRecoveryEventSet, AccountRecoveryFinalized,
-            AccountRecoveryPolicyCleared, AccountRecoveryPolicySet, AccountRecoveryProposed,
-            AccountRoleChanged,
+            AccountPermissionChanged, AccountRecoveryApproved, AccountRecoveryCancellationApproved,
+            AccountRecoveryCancelled, AccountRecoveryEvent, AccountRecoveryEventSet,
+            AccountRecoveryFinalized, AccountRecoveryPolicyCleared, AccountRecoveryPolicySet,
+            AccountRecoveryProposed, AccountRoleChanged,
         },
         asset::{
             AssetBatchTransferLegStatus, AssetBatchTransferOutcome, AssetBatchTransferRejection,

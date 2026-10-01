@@ -2621,14 +2621,35 @@ mod tests {
             transaction::executable::{ContractArgumentRecord, ContractInvocation},
         };
         use iroha_core::{
-            kura::Kura,
-            query::store::LiveQueryStore,
             smartcontracts::code,
-            state::{State, World},
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
         };
         let authority_key_pair = fixture_key_pair(0x33);
         let authority = AccountId::new(authority_key_pair.public_key().clone());
         let mut ctx = TestContext::new(authority.clone());
+        let fixture_domain =
+            Domain::new(DomainId::try_new("fixture", "universal").expect("valid fixture domain"))
+                .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut world = World::with([fixture_domain], [account], []);
+        let mut permissions = Permissions::new();
+        assert!(permissions.insert(Permission::new(
+            "CanManageSmartContractCode".to_owned(),
+            iroha_primitives::json::Json::new(()),
+        )));
+        assert!(permissions.insert(Permission::new(
+            "Admin".to_owned(),
+            iroha_primitives::json::Json::new(()),
+        )));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
+        // Live contract lookup authenticates its root scope from committed genesis metadata.
+        let mut chain_config = TestChainConfig::new(world, 1_000);
+        chain_config.chain_id = ctx.config().chain.clone();
+        let chain = CertifiedTestChain::start(chain_config).expect("certified contract test chain");
+        ctx.cfg.network_id = chain.network_id();
         let source = concat!(
             include_str!("contracts/fixtures/debug_parity.ko"),
             "        "
@@ -2694,55 +2715,17 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        let fixture_domain =
-            Domain::new(DomainId::try_new("fixture", "universal").expect("valid fixture domain"))
-                .build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
-        let mut world = World::with([fixture_domain], [account], []);
-        let mut permissions = Permissions::new();
-        assert!(permissions.insert(Permission::new(
-            "CanManageSmartContractCode".to_owned(),
-            iroha_primitives::json::Json::new(()),
-        )));
-        assert!(permissions.insert(Permission::new(
-            "Admin".to_owned(),
-            iroha_primitives::json::Json::new(()),
-        )));
-        world
-            .account_permissions_mut_for_testing()
-            .insert(authority.clone(), permissions);
-        let state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            ctx.config().chain.clone(),
-            ctx.config().network_id,
-        );
-        {
-            let header = BlockHeader::new(
-                std::num::NonZeroU64::new(1).expect("non-zero block height"),
-                None,
-                None,
-                0,
-                0,
-            );
-            let mut block = state.block(header.clone());
-            let mut transaction = block.transaction();
+        chain.setup_world_at(2_000, |transaction| {
             let registered_hash = code::register_code_bytes(
                 &authority,
                 DataSpaceId::UNIVERSAL,
                 program.clone(),
-                &mut transaction,
+                transaction,
             )
             .expect("register contract bytecode");
             assert_eq!(registered_hash, code_hash);
-            code::register_manifest(
-                &authority,
-                DataSpaceId::UNIVERSAL,
-                manifest,
-                &mut transaction,
-            )
-            .expect("register contract manifest");
+            code::register_manifest(&authority, DataSpaceId::UNIVERSAL, manifest, transaction)
+                .expect("register contract manifest");
             transaction
                 .world
                 .bind_inactive_contract_subject_for_testing(
@@ -2754,15 +2737,11 @@ mod tests {
                 contract_address.clone(),
                 1,
                 code_hash,
-                &mut transaction,
+                transaction,
             )
             .expect("activate contract instance");
-            transaction.apply();
-            block
-                .commit_world_overlay_for_testing()
-                .expect("commit contract deployment");
-            state.append_committed_block_header_for_tests(header);
-        }
+        });
+        let state = chain.state();
         let tx = TransactionBuilder::new(
             ctx.config().network_id,
             authority.clone(),

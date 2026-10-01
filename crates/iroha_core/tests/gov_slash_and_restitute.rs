@@ -227,9 +227,8 @@ fn double_vote_slashes_plain_lock() {
         );
     let (escrow_id, _) = gen_account_in("wonderland");
     let (slash_id, _) = gen_account_in("wonderland");
-    let world = governance_world_with_accounts(def_id.clone(), &escrow_id, &slash_id);
-    let mut config = TestChainConfig::new(world, 1_000);
-    let mut governance = iroha_config::parameters::actual::Governance::default();
+    let mut initial_state = governance_state_with_accounts(def_id.clone(), &escrow_id, &slash_id);
+    let mut governance = initial_state.gov.clone();
     governance.plain_voting_enabled = true;
     governance.voting_asset_id = def_id.clone();
     governance.citizenship_asset_id = def_id.clone();
@@ -239,23 +238,17 @@ fn double_vote_slashes_plain_lock() {
     governance.bond_escrow_account = escrow_id.clone();
     governance.slash_receiver_account = slash_id.clone();
     governance.slash_double_vote_bps = 2_000;
-    config.governance = Some(governance);
-    config.lane_manifests = Some(governance_lane_manifests(
-        &iroha_config::parameters::actual::Nexus::default(),
-        &fixture_validators(),
-    ));
-    let original = CertifiedTestChain::prepare(config).expect("original signed genesis");
-    let state = Arc::clone(&original.state);
+    initial_state.set_gov(governance.clone());
     let alice = ALICE_ID.clone();
-    // Explicit pre-genesis World fixture: fund and cast the initial ballot.
-    // This is not a claim that those direct calls were signed genesis intents.
+    // The original World supplies the retained voter snapshot and permission.
+    // The initial monetary ballot itself executes as Alice's signed genesis intent.
     let rid = "rid-slash-plain".to_string();
     {
         // The direct ballot fixture publishes native transfer transcripts.
-        let fixture_witness_guard = iroha_core::exec_witness::exec_witness_guard();
+        let _fixture_witness_guard = iroha_core::exec_witness::exec_witness_guard();
         // This is explicit test world setup, not a finalized genesis output.
         // Signed genesis executes separately against the resulting funded world.
-        let mut sblock1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut sblock1 = initial_state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut citizen_setup = sblock1.transaction_for_fastpq_testing(iroha_crypto::Hash::new(
             b"plain-ballot-citizenship-setup",
         ));
@@ -307,26 +300,32 @@ fn double_vote_slashes_plain_lock() {
         Grant::account_permission(perm, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx1)
             .expect("grant ballot permission");
-        let ballot_ok = iroha_data_model::isi::governance::CastPlainBallot {
-            referendum_id: rid.clone(),
-            direction: 0,
-            owner: ALICE_ID.clone(),
-            amount: 20_u64.into(),
-            duration_blocks: 200,
-        };
-        ballot_ok
-            .execute(&ALICE_ID, &mut stx1)
-            .expect("first ballot should succeed");
         stx1.apply();
         sblock1
             .commit_world_overlay_for_testing()
-            .expect("retain direct funded governance fixture world without block history");
-        // Signed-block validation acquires its own non-reentrant recorder guard.
-        drop(fixture_witness_guard);
-        assert!(state.view().block_hashes().is_empty());
+            .expect("retain original governance fixture world without block history");
+        assert!(initial_state.view().block_hashes().is_empty());
     }
+    let ballot_ok = iroha_data_model::isi::governance::CastPlainBallot {
+        referendum_id: rid.clone(),
+        direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 20_u64.into(),
+        duration_blocks: 200,
+    };
+    let mut config = TestChainConfig::new(initial_state.world, 1_000);
+    config.governance = Some(governance);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    config.genesis_instructions = vec![ballot_ok.into()];
     let mut chain =
-        CertifiedTestChain::from_prepared(original).expect("actual signed genesis execution");
+        CertifiedTestChain::start(config).expect("actual signed initial ballot genesis");
+    let state = Arc::clone(chain.state());
+    assert_eq!(chain.validators(), fixture_validators().as_slice());
+    state
+        .lane_manifests
+        .read()
+        .validate_materialized_source_projection()
+        .expect("signed genesis retains a frozen canonical lane source");
     assert!(
         chain
             .genesis()
@@ -559,6 +558,8 @@ fn restitution_restores_slashed_balance() {
     {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
         let mut sblock = state.block(header);
+        // Lower custody component: use the finite mandatory source owner, without
+        // claiming a signed Network input or finalized carrier publication.
         let mut stx = sblock.transaction_for_fastpq_protocol_testing();
         // Grant restitution permission to ALICE.
         let perm: Permission = CanRestituteGovernanceLock {
@@ -771,6 +772,8 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
+    // Lower custody component: retain the protocol-purpose pool independently
+    // of any signed user invocation or finalized carrier authority.
     let mut tx = block.transaction_for_fastpq_protocol_testing();
     iroha_core::query::standalone_plain_test_fixture::fund_voter(
         &mut tx,

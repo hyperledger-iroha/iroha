@@ -918,6 +918,59 @@ def test_koto_receives_the_authenticated_source_through_an_inherited_fd(
     assert binding == "test-binding"
 
 
+
+def test_default_package_closure_binds_the_current_koto_producer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path.resolve() / "repo"
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text(
+        "[workspace]\n[workspace.dependencies]\n"
+        "ivm = { path = 'crates/ivm' }\n"
+        "kotodama_lang = { path = 'crates/kotodama_lang' }\n"
+        "ivm_artifact_admission = { path = 'crates/ivm_artifact_admission' }\n",
+        encoding="utf-8",
+    )
+    dependencies = {
+        "kotodama_toolchain": (
+            "[[bin]]\nname='koto'\npath='src/bin/koto.rs'\n"
+            "[dependencies]\nivm.workspace=true\nkotodama_lang.workspace=true\n"
+        ),
+        "ivm": "[dependencies]\nivm_artifact_admission.workspace=true\n",
+        "kotodama_lang": "",
+        "ivm_artifact_admission": "",
+    }
+    for name, dependency_table in dependencies.items():
+        package = repo / f"crates/{name}"
+        package.mkdir(parents=True)
+        (package / "Cargo.toml").write_text(
+            f"[package]\nname='{name}'\nversion='0.1.0'\n{dependency_table}",
+            encoding="utf-8",
+        )
+    available = frozenset(
+        {Path("Cargo.toml")}
+        | {Path(f"crates/{name}/Cargo.toml") for name in dependencies}
+    )
+    monkeypatch.setattr(MODULE, "REPOSITORY_ROOT", repo)
+
+    # Keep the production ROOT_PACKAGES: an obsolete IVM root misses both the
+    # executable owner and compiler even though admission remains reachable.
+    snapshots, packages = MODULE._package_source_closure(available)
+
+    assert packages == {Path(f"crates/{name}") for name in dependencies}
+    assert set(snapshots) == set(available)
+    assert MODULE._is_build_package_path(
+        Path("crates/kotodama_toolchain/src/bin/koto.rs"), packages
+    )
+    assert MODULE._is_build_package_path(
+        Path("crates/kotodama_lang/src/lib.rs"), packages
+    )
+    assert not MODULE._is_build_package_path(
+        Path("crates/kotodama_lang/tests/parser.rs"), packages
+    )
+
+
 def test_local_package_closure_follows_workspace_build_and_patch_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

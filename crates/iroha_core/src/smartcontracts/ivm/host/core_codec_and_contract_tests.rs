@@ -643,9 +643,27 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
     let domain = Domain::new(fixture_domain_id()).build(authority);
     let account = build_fixture_account(authority, authority);
     let world = World::with([domain], [account], []);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    let config = TestChainConfig::new(world, 0);
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let consensus_mode = config.consensus_mode;
+    let prepared = CertifiedTestChain::prepare(config).expect("prepare signed host genesis");
+    // Keep the original configured State and execute its signed genesis. A routing
+    // parameter by itself cannot authorize deployed artifact lookup or execution.
+    let state = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("unpublished host fixture State is unique"));
+    startup::apply_genesis(
+        &state,
+        prepared.genesis.block().clone(),
+        &genesis_account,
+        consensus_mode.into(),
+        None,
+    )
+    .expect("apply signed host genesis");
     grant_named_permission_to_account(
         &state,
         authority,
@@ -660,6 +678,53 @@ pub(super) fn contract_test_state(authority: &AccountId) -> State {
     );
     state
 }
+#[test]
+fn deployed_host_fixture_retains_original_genesis_and_artifact_scope() {
+    let authority = ALICE_ID.clone();
+    let world = World::with(
+        [Domain::new(fixture_domain_id()).build(&authority)],
+        [build_fixture_account(&authority, &authority)],
+        [],
+    );
+    let unprepared = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    assert!(
+        crate::sumeragi::lanes::routing::committed_root_scope(unprepared.view().world()).is_none()
+    );
+    let state = contract_test_state(&authority);
+    let parent = state
+        .view()
+        .latest_block_hash()
+        .expect("original signed genesis");
+    assert_eq!(state.committed_height(), 1);
+    assert!(crate::sumeragi::lanes::routing::committed_root_scope(state.view().world()).is_some());
+    assert!(state.view().world().account(&authority).is_ok());
+    let address = install_contract(
+        &state,
+        &authority,
+        "seiyaku OriginalHostFixture { view fn inspect() -> int { return 8; } }",
+        73,
+    );
+    assert_eq!(
+        address,
+        ContractAddress::derive(
+            state.network_id_ref(),
+            &authority,
+            73,
+            DataSpaceId::UNIVERSAL
+        )
+        .expect("original network-derived contract address")
+    );
+    assert!(
+        crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &address).is_some()
+    );
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.view().latest_block_hash(), Some(parent));
+}
+
 pub(super) fn install_contract(
     state: &State,
     authority: &AccountId,
@@ -718,7 +783,13 @@ fn install_contract_with_interface_and_lifecycle(
         .ok()
         .and_then(core::num::NonZeroU64::new)
         .expect("next block height must fit in u64 and be non-zero");
-    let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(
+        next_height,
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ));
     let mut tx = block.transaction();
     tx.world.add_account_permission(
         authority,
@@ -731,9 +802,7 @@ fn install_contract_with_interface_and_lifecycle(
     register_manifest(authority, DataSpaceId::UNIVERSAL, manifest, &mut tx)
         .expect("register contract manifest");
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+        state.network_id_ref(),
         authority,
         nonce,
         DataSpaceId::UNIVERSAL,

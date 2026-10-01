@@ -1,4 +1,4 @@
-import { validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1 } from "./contractManifestRules.js";
+import { validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1, validateManifestFieldsV1 } from "./contractManifestRules.js";
 import { normalizeContractErrorMessagesV1, normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { Buffer } from "buffer";
 import { analyzeEntrypointValueTypeV1, MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 } from "./entrypointSchema.js";
@@ -76,40 +76,26 @@ export function createContractManifestNormalizer(
   }
 
   function normalizeManifestHash(value, name) {
-    if (typeof value === "string") {
-      const literal = value.trim();
-      const bytes = literal.startsWith("hash:")
-        ? parseHashLiteralToBuffer(literal, name)
-        : /^[0-9A-Fa-f]{64}$/u.test(literal)
-          ? Buffer.from(literal, "hex")
-          : null;
-      if (bytes !== null && (bytes[31] & 1) !== 1) {
-        fail(V_CODE_INVALID_HEX, `${name} must set the Iroha Hash marker bit`, name);
-      }
+    if (value === undefined || value === null) return null;
+    // Snapshot binary caller storage once before either validation or encoding.
+    const input = typeof value === "string" ? value : normalizeByteArray(value, name);
+    const normalized = normalizeOptionalHash(input, name);
+    const bytes = typeof input === "string"
+      ? input.trim().startsWith("hash:")
+        ? parseHashLiteralToBuffer(input, name)
+        : Buffer.from(input.trim(), "hex")
+      : input;
+    if ((bytes[31] & 1) !== 1) {
+      fail(V_CODE_INVALID_HEX, `${name} must set the Iroha Hash marker bit`, name);
     }
-    return normalizeOptionalHash(value, name);
+    return normalized;
   }
 
   function normalizeContractManifest(manifest) {
     const source = assertPlainObject(manifest, "manifest");
-    const fields = [
-      ["seiyaku_name", "seiyakuName"], ["code_hash", "codeHash"],
-      ["abi_hash", "abiHash"], ["compiler_fingerprint", "compilerFingerprint"],
-      ["features_bitmap", "featuresBitmap"], ["access_set_hints", "accessSetHints"],
-      ["entrypoints", "entryPoints"], ["error_types", "errorTypes"],
-      ["error_messages", "errorMessages"], ["states"], ["kotoba"], ["provenance"],
-    ];
-    const allowed = new Set(fields.flat());
-    const unknown = Object.keys(source).filter(key => !allowed.has(key));
-    if (unknown.length !== 0) {
-      fail(V_CODE_INVALID_OBJECT, `manifest contains unsupported fields: ${unknown.sort().join(", ")}`, "manifest");
-    }
-    for (const aliases of fields) {
-      const present = aliases.filter(key => Object.hasOwn(source, key));
-      if (present.length > 1) {
-        fail(V_CODE_INVALID_OBJECT, `manifest contains conflicting aliases: ${present.join(", ")}`, "manifest");
-      }
-    }
+    validateManifestFieldsV1(source, "manifest", (message) =>
+      fail(V_CODE_INVALID_OBJECT, message, "manifest"),
+    );
     const seiyakuName = source.seiyaku_name ?? source.seiyakuName;
     const compilerFingerprint = source.compiler_fingerprint ?? source.compilerFingerprint;
     const featuresBitmap = source.features_bitmap ?? source.featuresBitmap;
@@ -346,7 +332,7 @@ export function createContractManifestNormalizer(
 
   function normalizeEntrypoint(entry, name) {
     const source = assertPlainObject(entry, name);
-    const entrypointName = assertString(source.name, `${name}.name`).trim();
+    const entrypointName = assertString(source.name, `${name}.name`);
     if (!entrypointName) {
       fail(
         V_CODE_INVALID_STRING,

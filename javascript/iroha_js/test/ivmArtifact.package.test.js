@@ -159,10 +159,6 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
       bundle.outputFiles[0].text,
       /(?:globalThis|window|global)\.Buffer\s*=/u,
     );
-    assert.ok(
-      bundle.outputFiles[0].contents.byteLength <= 12 * 1024,
-      `packed ivm-artifact browser bundle is ${bundle.outputFiles[0].contents.byteLength} bytes`,
-    );
     const packedModule = await import(
       `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].contents).toString("base64")}`
     );

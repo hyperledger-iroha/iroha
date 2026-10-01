@@ -186,6 +186,9 @@ impl BlockHashes {
         let required = existing
             .bytes()
             .checked_add(additional.bytes())
+            // The shared map owner cannot be refunded while this history lives.
+            // Include its original charge in the permanent capacity bound.
+            .and_then(|bytes| bytes.checked_add(ChargedBlockHashMap::layout().size()))
             .ok_or(iroha_allocation::AllocationRefusal::DemandOverflow)?;
         if required > self.budget.limit_bytes() {
             return Err(iroha_allocation::AllocationRefusal::ExceedsLimit {

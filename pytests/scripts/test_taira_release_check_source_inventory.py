@@ -264,25 +264,42 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                         with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
                             gate.require_tests(missing, stages)
 
-    def test_deployment_engine_controls_follow_their_current_library_owner(self):
-        expected = (
+    def test_generated_genesis_controls_follow_the_deploy_library_owner(self):
+        required = (
             "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
             "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
+            "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
+            "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
+            "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+            "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
+            "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
+            "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
+            "localnet::tests::generated_localnet_bootstraps_universal_kagemusha_asset",
+            "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
+            "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
         )
-        self.assertEqual(gate.HARNESS_TARGETS["deploy"][3], ["-p", "iroha_deploy", "--lib"])
+        self.assertEqual(gate.HARNESS_TARGETS["deploy"][1:], (
+            "iroha_deploy", "lib", ["-p", "iroha_deploy", "--lib"]))
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
-            deploy = tuple(name for _, tests in selected["deploy"] for name in tests)
-            kagami = tuple(name for _, tests in selected["kagami"] for name in tests)
-            gate.validate_selected_source_test_inventory(SCRIPT.parents[1], {"deploy": selected["deploy"]})
-            for name in expected:
-                self.assertEqual(deploy.count(name), 1)
-                self.assertNotIn(name, kagami)
-                focused = gate.focused_regression_stages(scope, ("deploy=" + name,))
-                self.assertEqual(tuple(focused), ("deploy",))
-                missing = "\n".join(case + ": test" for case in deploy if case != name)
-                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
-                    gate.require_tests(missing, selected["deploy"])
+            stages = selected["deploy"]
+            names = tuple(name for _, tests in stages for name in tests)
+            self.assertEqual(names, required)
+            kagami_leaves = {name.rsplit("::", 1)[-1]
+                             for _, tests in selected["kagami"] for name in tests}
+            self.assertTrue(kagami_leaves.isdisjoint(
+                name.rsplit("::", 1)[-1] for name in required))
+            gate.validate_selected_source_test_inventory(SCRIPT.parents[1], {"deploy": stages})
+            for name in required:
+                with self.subTest(scope=scope, test=name):
+                    focused = gate.focused_regression_stages(scope, ("deploy=" + name,))
+                    self.assertEqual(tuple(focused), ("deploy",))
+                    missing = "\n".join(case + ": test" for case in names if case != name)
+                    with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                        gate.require_tests(missing, stages)
+            with patch.dict(gate.HARNESS_TARGETS, {"deploy": gate.HARNESS_TARGETS["kagami"]}):
+                with self.assertRaisesRegex(gate.CheckError, "selected test declarations absent"):
+                    gate.validate_selected_source_test_inventory(SCRIPT.parents[1], {"deploy": stages})
 
     def test_cli_seating_selectors_follow_actual_module_aliases_and_entrypoint(self):
         sources = {

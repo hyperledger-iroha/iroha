@@ -2002,12 +2002,12 @@ pub struct Network {
     pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
     /// Request QUIC transport (feature-gated).
     ///
-    /// Runtime startup rejects `true` before binding while the lockfile resolves
-    /// `quinn 0.11.9` / vulnerable `quinn-proto 0.11.15`. TLS-over-TCP remains available.
+    /// Runtime startup rejects `true` before binding pending transport requalification
+    /// with locked `quinn 0.11.12` / `quinn-proto 0.11.18`. TLS-over-TCP remains available.
     pub quic_enabled: bool,
     /// Request QUIC DATAGRAM support for best-effort topics (gossip/health).
     ///
-    /// Runtime startup rejects `true` until quinn-proto 0.11.17 or later is
+    /// Runtime startup rejects `true` until quinn-proto 0.11.18 or later is
     /// locked and requalified. The disabled path uses reliable streams.
     pub quic_datagrams_enabled: bool,
     /// Upper bound (bytes) for QUIC datagram payloads.

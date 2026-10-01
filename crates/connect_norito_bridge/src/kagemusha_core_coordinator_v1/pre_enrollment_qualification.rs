@@ -119,6 +119,7 @@ pub(super) mod tests {
         let c = fixture::journal_context(selected);
         let enrollment = iroha_core_zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1 {
             enrollment_id: c.owner.enrollment_id().unwrap(),
+            core_authorization_key_reference: crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_key_reference_v1(&c.native_authorization_public_key),
             owner: c.owner,
         };
         KagemushaPreEnrollmentQualificationOwnerV1::new(

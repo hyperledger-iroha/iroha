@@ -1,8 +1,19 @@
+const isArray = Array.isArray.bind(Array);
+const stringify = JSON.stringify.bind(JSON);
+const TEXT_MUST_BE = "must be ";
+const TEXT_STATECURSOR = "StateCursor";
+const TEXT_CONTAINS_A = "contains a ";
+const TEXT_ACCOUNTID = "AccountId";
+const TEXT_ASSETDEFINITIONID = "AssetDefinitionId";
+const TEXT_OPTION = "Option";
+const TEXT_NONCANONICAL_STRUCT = "noncanonical struct ";
+const TEXT_ENTRYPOINT = "entrypoint ";
+function rejectError(ErrorType, ...args) { throw new ErrorType(...args); }
 import { normalizeContractErrorTypeV1 } from "./contractErrorTypes.js";
 import { isCanonicalKotodamaIdentifier, isCanonicalKotodamaStructName } from "./kotodamaIdentifiers.js";
 
 const TEXT_IS_NOT_ONE_COMPLETE_CANONICAL_PREFIX_TYPE_TREE = "is not one complete canonical prefix type tree";
-const TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE = "is not a V1 entrypoint value-type node";
+const TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE = ("is not a V1 " + TEXT_ENTRYPOINT + "value-type node");
 
 
 /** Maximum initialized words in one V1 argument or result table. */
@@ -21,8 +32,8 @@ const LEAF_TYPE_NAMES = new Map([
   ["String", "string"],
   ["Json", "Json"],
   ["Name", "Name"],
-  ["AccountId", "AccountId"],
-  ["AssetDefinitionId", "AssetDefinitionId"],
+  [(TEXT_ACCOUNTID), (TEXT_ACCOUNTID)],
+  [(TEXT_ASSETDEFINITIONID), (TEXT_ASSETDEFINITIONID)],
   ["AssetId", "AssetId"],
   ["DomainId", "DomainId"],
   ["NftId", "NftId"],
@@ -31,17 +42,17 @@ const LEAF_TYPE_NAMES = new Map([
 ]);
 
 const CORE_QUERY_VIEWS = new Map([
-  ["AccountView", { fields: ["id", "metadata"], children: ["AccountId", "Json"] }],
+  ["AccountView", { fields: ["id", "metadata"], children: [(TEXT_ACCOUNTID), "Json"] }],
   ["AssetView", { fields: ["id", "amount"], children: ["AssetId", "quantity"] }],
   [
     "AssetDefinitionView",
     {
       fields: ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
       children: [
-        "AssetDefinitionId",
+        (TEXT_ASSETDEFINITIONID),
         "string",
-        "Option<string>",
-        "AccountId",
+        (TEXT_OPTION + "<string>"),
+        (TEXT_ACCOUNTID),
         "quantity",
         "Json",
       ],
@@ -49,25 +60,25 @@ const CORE_QUERY_VIEWS = new Map([
   ],
   [
     "DomainView",
-    { fields: ["id", "owned_by", "metadata"], children: ["DomainId", "AccountId", "Json"] },
+    { fields: ["id", "owned_by", "metadata"], children: ["DomainId", (TEXT_ACCOUNTID), "Json"] },
   ],
   [
     "NftView",
-    { fields: ["id", "owned_by", "content"], children: ["NftId", "AccountId", "Json"] },
+    { fields: ["id", "owned_by", "content"], children: ["NftId", (TEXT_ACCOUNTID), "Json"] },
   ],
 ]);
 
 function fail(context, message) {
-  throw new TypeError(`${context} ${message}`);
+  rejectError(TypeError, `${context} ${message}`);
 }
 
 function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return value !== null && typeof value === "object" && !isArray(value);
 }
 
 function requireExactKeys(value, expected, context) {
   if (!isRecord(value)) {
-    fail(context, "must be an object");
+    fail(context, (TEXT_MUST_BE + "an object"));
   }
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
@@ -85,16 +96,16 @@ function normalizeUnsignedInteger(value, maximum, context) {
     normalized = value;
   } else if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) {
-      fail(context, "must be a safe unsigned integer");
+      fail(context, (TEXT_MUST_BE + "a safe unsigned integer"));
     }
     normalized = BigInt(value);
   } else if (typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value)) {
     normalized = BigInt(value);
   } else {
-    fail(context, "must be an unsigned integer");
+    fail(context, (TEXT_MUST_BE + "an unsigned integer"));
   }
   if (normalized < 0n || normalized > BigInt(maximum)) {
-    fail(context, `must be in 0..${maximum}`);
+    fail(context, `${TEXT_MUST_BE}in 0..${maximum}`);
   }
   return Number(normalized);
 }
@@ -105,7 +116,7 @@ function childCount(node, context) {
       return node.value.fields.length;
     case "Tuple":
       return normalizeUnsignedInteger(node.value, 0xffff, `${context}.value`);
-    case "Option":
+    case (TEXT_OPTION):
     case "List":
       return 1;
     case "Result":
@@ -113,7 +124,7 @@ function childCount(node, context) {
     case "Leaf":
     case "Unit":
     case "Error":
-    case "StateCursor":
+    case (TEXT_STATECURSOR):
       return 0;
     default:
       fail(`${context}.kind`, TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE);
@@ -123,7 +134,7 @@ function childCount(node, context) {
 function validateNode(node, context) {
   requireExactKeys(node, ["kind", "value"], context);
   if (typeof node.kind !== "string") {
-    fail(`${context}.kind`, "must be a string");
+    fail(`${context}.kind`, (TEXT_MUST_BE + "a string"));
   }
   switch (node.kind) {
     case "Struct": {
@@ -133,14 +144,14 @@ function validateNode(node, context) {
       if (
         (!reservedSchemaName &&
           !isCanonicalKotodamaStructName(node.value.name)) ||
-        !Array.isArray(node.value.fields)
+        !isArray(node.value.fields)
       ) {
-        fail(context, "contains a noncanonical struct descriptor");
+        fail(context, (TEXT_CONTAINS_A + TEXT_NONCANONICAL_STRUCT + "descriptor"));
       }
       const fields = new Set();
       for (const field of node.value.fields) {
         if (!isCanonicalKotodamaIdentifier(field) || fields.has(field)) {
-          fail(context, "contains a duplicate or noncanonical struct field");
+          fail(context, (TEXT_CONTAINS_A + "duplicate or " + TEXT_NONCANONICAL_STRUCT + "field"));
         }
         fields.add(field);
       }
@@ -149,15 +160,15 @@ function validateNode(node, context) {
     case "Tuple": {
       const arity = normalizeUnsignedInteger(node.value, 0xffff, `${context}.value`);
       if (arity < 2) {
-        fail(`${context}.value`, "must be in the V1 tuple range 2..65535");
+        fail(`${context}.value`, (TEXT_MUST_BE + "in the V1 tuple range 2..65535"));
       }
       break;
     }
     case "Unit":
-    case "Option":
+    case (TEXT_OPTION):
     case "Result":
       if (node.value !== null) {
-        fail(`${context}.value`, "must be null");
+        fail(`${context}.value`, (TEXT_MUST_BE + "null"));
       }
       break;
     case "List": {
@@ -171,20 +182,20 @@ function validateNode(node, context) {
         capacity < MIN_ENTRYPOINT_LIST_CAPACITY_V1 ||
         capacity > MAX_ENTRYPOINT_LIST_CAPACITY_V1
       ) {
-        fail(`${context}.value.capacity`, "must be in the V1 range 1..64");
+        fail(`${context}.value.capacity`, (TEXT_MUST_BE + "in the V1 range 1..64"));
       }
       break;
     }
     case "Error":
       normalizeContractErrorTypeV1(node.value, `${context}.value`);
       break;
-    case "StateCursor":
+    case (TEXT_STATECURSOR):
       if (node.value?.kind === "Json") fail(context, "cannot use Json cursor keys");
       // Cursor schemas carry one exact scalar key-kind descriptor.
     case "Leaf": {
       requireExactKeys(node.value, ["kind", "value"], `${context}.value`);
       if (!LEAF_TYPE_NAMES.has(node.value.kind) || node.value.value !== null) {
-        fail(`${context}.value`, "is not a canonical V1 entrypoint value kind");
+        fail(`${context}.value`, ("is not a canonical V1 " + TEXT_ENTRYPOINT + "value kind"));
       }
       break;
     }
@@ -200,10 +211,10 @@ function validateNode(node, context) {
  * exact schema. Lists carry only their capacity; their single element subtree
  * is the next complete subtree in `nodes`.
  */
-export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value type") {
+export function analyzeEntrypointValueTypeV1(value, context = (TEXT_ENTRYPOINT + "value type")) {
   requireExactKeys(value, ["nodes"], context);
   if (
-    !Array.isArray(value.nodes) ||
+    !isArray(value.nodes) ||
     value.nodes.length === 0 ||
     value.nodes.length > MAX_ENTRYPOINT_TYPE_NODES_V1
   ) {
@@ -233,7 +244,7 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
     }
     maxDepth = Math.max(maxDepth, depth);
 
-    const handle = node.kind === "Option" || node.kind === "Result" || node.kind === "List";
+    const handle = node.kind === (TEXT_OPTION) || node.kind === "Result" || node.kind === "List";
     const children = childCount(node, `${context}.nodes[${index}]`);
     if (!suppressWords && (handle || children === 0)) {
       wordCount += 1;
@@ -266,30 +277,30 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
         const reserved = CORE_QUERY_VIEWS.get(node.value.name);
         if (reserved !== undefined) {
           if (
-            JSON.stringify(node.value.fields) !== JSON.stringify(reserved.fields) ||
-            JSON.stringify(childValues.map((child) => child.canonicalName)) !==
-              JSON.stringify(reserved.children)
+            stringify(node.value.fields) !== stringify(reserved.fields) ||
+            stringify(childValues.map((child) => child.canonicalName)) !==
+              stringify(reserved.children)
           ) {
-            fail(context, "contains a forged reserved query-view schema");
+            fail(context, (TEXT_CONTAINS_A + "forged reserved query-view schema"));
           }
           result = { canonicalName: node.value.name, coreView: node.value.name };
         } else if (node.value.name === "StatePage") {
           const [items, next] = childValues;
           const pair = items?.elementChildren;
-          if (JSON.stringify(node.value.fields) !== JSON.stringify(["items", "next"]) || items?.kind !== "List" || pair?.length !== 2 || !pair[0].scalarKind || pair[0].scalarKind === "Json" || next?.canonicalName !== `Option<StateCursor<${pair[0].canonicalName}>>`) {
-            fail(context, "contains a forged StatePage schema");
+          if (stringify(node.value.fields) !== stringify(["items", "next"]) || items?.kind !== "List" || pair?.length !== 2 || !pair[0].scalarKind || pair[0].scalarKind === "Json" || next?.canonicalName !== `${TEXT_OPTION}<${TEXT_STATECURSOR}<${pair[0].canonicalName}>>`) {
+            fail(context, (TEXT_CONTAINS_A + "forged StatePage schema"));
           }
           result = { canonicalName: `StatePage<${pair[0].canonicalName}, ${pair[1].canonicalName}, ${items.capacity}>` };
         } else if (node.value.name === "QueryPage") {
           const [items, nextOffset] = childValues;
           if (
-            JSON.stringify(node.value.fields) !== JSON.stringify(["items", "next_offset"]) ||
+            stringify(node.value.fields) !== stringify(["items", "next_offset"]) ||
             items?.kind !== "List" ||
             items.capacity !== 64 ||
             items.listElementCoreView === undefined ||
-            nextOffset?.canonicalName !== "Option<int>"
+            nextOffset?.canonicalName !== (TEXT_OPTION + "<int>")
           ) {
-            fail(context, "contains a forged QueryPage schema");
+            fail(context, (TEXT_CONTAINS_A + "forged QueryPage schema"));
           }
           result = { canonicalName: `QueryPage<${items.listElementCoreView}>` };
         } else {
@@ -303,8 +314,8 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
           tupleChildren: childValues,
         };
         break;
-      case "Option":
-        result = { canonicalName: `Option<${childValues[0].canonicalName}>` };
+      case (TEXT_OPTION):
+        result = { canonicalName: `${TEXT_OPTION}<${childValues[0].canonicalName}>` };
         break;
       case "Result":
         result = {
@@ -320,8 +331,8 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
           elementChildren: childValues[0].tupleChildren,
         };
         break;
-      case "StateCursor":
-        result = { canonicalName: `StateCursor<${LEAF_TYPE_NAMES.get(node.value.kind)}>` };
+      case (TEXT_STATECURSOR):
+        result = { canonicalName: `${TEXT_STATECURSOR}<${LEAF_TYPE_NAMES.get(node.value.kind)}>` };
         break;
       case "Unit":
         result = { canonicalName: "()" };

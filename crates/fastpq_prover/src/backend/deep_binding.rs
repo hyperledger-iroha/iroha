@@ -1,22 +1,25 @@
 //! Fixed DEEP context, typed commitments and atomic whole-tape transcript.
 //!
-//! Canonical PrefixFrame/BodyV1 serialization and six-lane hashing are owned by
-//! `compact_v1`. This private candidate supplies only a closed geometry and message
+//! Canonical PrefixFrame/BodyV1 serialization and SHA3/SHAKE hashing are owned by
+//! `compact_sha3`. This private candidate supplies only a closed geometry and message
 //! schedule. Context construction authenticates no public statement; the caller
 //! must perform the OOD AIR identity and all opening/degree checks separately.
 //! The bounded engine and producer use this schedule through the offline facade.
 //! TODO: Qualify the complete protocol and authenticate ledger context before
 //! replacing the node's replay verifier or changing production admission.
 
-use fastpq_isi::GoldilocksDigest384V1 as Digest;
+use fastpq_isi::{
+    compact_challenge::{RawTapeErrorV1, RawTapeMessageV1, RawTapeRoundV1, RawTapeV1},
+    keccak256::Sha3Digest256V1 as Digest,
+};
 use norito::NoritoSerialize;
 
-#[cfg(any(test, feature = "fastpq-gpu"))]
-use super::compact_v1::PreparedHashFrame;
+#[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
+use super::compact_sha3::PreparedHashFrame;
 use super::{
     compact_protocol::FixedAir,
     compact_public_columns::{COMMITTED_COLUMN_COUNT, LAYOUT_ID},
-    compact_v1::{BodyFields, Context as FramingContext, Frame},
+    compact_sha3::{BodyFields, Context as FramingContext, Frame},
     deep_geometry::{
         CONSTRAINTS, COSET_OFFSET, FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, LDE_ROOT, LDE_ROWS,
         QUERY_CANDIDATES, QUERY_COUNT, TRACE_ROWS,
@@ -26,7 +29,7 @@ use super::{
 use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1 as F};
 
 /// Complete protocol identity; every fixed geometry field is also in the context.
-pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:h6:g-field-blocks:row301:qpair+composition-mask:ood604:components606:mask-lambda0+terms-lambda1-606:trace-shift2:quotient-shift1:arity16-16-8-8-4:fri-degree2n:terminal-degree2-128:q64:c74:fixed-fri-fiber-wire:v1";
+pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:sha3-256:shake256-atomic-raw:row301:qpair+composition-mask:ood604:components606:mask-lambda0+terms-lambda1-606:trace-shift2:quotient-shift1:arity16-16-8-8-4:fri-degree2n:terminal-degree2-128:q77:c87:raw93:mask162-78:omit-first-known-fiber:v1";
 const MAX_STATEMENT_BYTES: usize = 240 * 1024;
 const MAX_RELATION_IDENTITY_BYTES: usize = 256;
 #[cfg(test)]
@@ -59,7 +62,7 @@ pub(super) enum BindingError {
     Phase,
     /// The shared canonical framing owner rejected the operation.
     #[error(transparent)]
-    Framing(#[from] super::compact_v1::CandidateError),
+    Framing(#[from] super::compact_sha3::CandidateError),
     /// Canonical Norito framing failed.
     #[error(transparent)]
     Encode(#[from] norito::core::Error),
@@ -85,17 +88,11 @@ impl Round {
             .ok_or(BindingError::Round)
     }
 
-    /// Fixed ordinal used by the sole framing owner.
-    pub(super) const fn ordinal(self) -> u8 {
-        self.0
-    }
-
     /// Include every materialized coordinate, including unused suffix values.
     pub(super) const fn tape_bytes(self) -> usize {
-        match self.0 {
-            2 => (CONSTRAINTS * 4).div_ceil(6) * 48,
-            10 => QUERY_CANDIDATES.div_ceil(6) * 48,
-            _ => 48,
+        match RawTapeRoundV1::new(self.0) {
+            Some(round) => round.tape_bytes(),
+            None => unreachable!(),
         }
     }
 }
@@ -107,7 +104,7 @@ pub(super) enum Message {
     Dummy,
     /// Independent alpha coefficients, one OOD point, or one lambda/beta scalar.
     Fields(Vec<F>),
-    /// Exactly 64 distinct, ascending initial-domain positions.
+    /// Exactly 77 distinct, ascending initial-domain positions.
     Queries(Vec<u32>),
 }
 
@@ -240,7 +237,7 @@ impl Context {
             statement: statement.to_vec(),
         })?;
         Ok(Self {
-            framing: FramingContext::new_deep(&encoded)?,
+            framing: FramingContext::new(&encoded)?,
         })
     }
 
@@ -252,16 +249,20 @@ impl Context {
     /// Exact maximum canonical frame scratch for one fixed-shape leaf or parent.
     /// Public zeros serve length counting only; no commitment or entropy is made.
     pub(super) fn tree_frame_bytes(&self, oracle: Oracle) -> Result<usize> {
+        let (leaf, parent) = self.tree_frame_lengths(oracle)?;
+        Ok(leaf.max(parent))
+    }
+    fn tree_frame_lengths(&self, oracle: Oracle) -> Result<(usize, usize)> {
         let (tag, round, _, bytes) = oracle.shape()?;
         let zero = vec![0; bytes];
-        let child = [0; 48];
+        let child = [0; Digest::BYTES];
         let leaf = norito::canonical_frame_len(&self.framing.frame(
             1,
             tag,
             round,
             0,
             0,
-            48,
+            Digest::BYTES,
             BodyFields::One(&zero),
         ))?;
         let parent = norito::canonical_frame_len(&self.framing.frame(
@@ -270,10 +271,72 @@ impl Context {
             round,
             1,
             0,
-            48,
+            Digest::BYTES,
             BodyFields::Two(&child, &child),
         ))?;
-        Ok(leaf.max(parent))
+        Ok((leaf, parent))
+    }
+    /// Exact per-node Keccak permutations; the canonical framing owner counts
+    /// its actual body bytes, including fixed Norito header/sequence extents.
+    pub(super) fn tree_permutations(&self, oracle: Oracle) -> Result<(usize, usize)> {
+        let (leaf, parent) = self.tree_frame_lengths(oracle)?;
+        Ok((
+            self.framing.body_permutations(leaf)?,
+            self.framing.body_permutations(parent)?,
+        ))
+    }
+    /// Complete one-context transcript work: both cached prefixes, all ten
+    /// atomic SHAKE tapes, nine whole-tape chains, and the one OOD commitment.
+    pub(super) fn transcript_permutations(&self) -> Result<usize> {
+        let mut total = self.framing.prefix_permutations();
+        let root = [0; Digest::BYTES];
+        for ordinal in 1..=10 {
+            let round = Round(ordinal);
+            let g = self.framing.frame(
+                4,
+                0,
+                ordinal,
+                0,
+                0,
+                round.tape_bytes(),
+                BodyFields::One(&root),
+            );
+            total = total
+                .checked_add(
+                    self.framing
+                        .body_permutations(norito::canonical_frame_len(&g)?)?,
+                )
+                .and_then(|v| v.checked_add((round.tape_bytes() - 1) / crate::keccak_batch::RATE))
+                .ok_or(BindingError::Shape)?;
+            if ordinal < 10 {
+                let tape = vec![0; round.tape_bytes()];
+                let h = self.framing.frame(
+                    3,
+                    0,
+                    ordinal,
+                    0,
+                    0,
+                    Digest::BYTES,
+                    BodyFields::Two(&tape, &root),
+                );
+                total = total
+                    .checked_add(
+                        self.framing
+                            .body_permutations(norito::canonical_frame_len(&h)?)?,
+                    )
+                    .ok_or(BindingError::Shape)?;
+            }
+        }
+        let ood = vec![0; OOD_VALUES * F::BYTES];
+        let h = self
+            .framing
+            .frame(1, 5, 0, 0, 0, Digest::BYTES, BodyFields::One(&ood));
+        total
+            .checked_add(
+                self.framing
+                    .body_permutations(norito::canonical_frame_len(&h)?)?,
+            )
+            .ok_or(BindingError::Shape)
     }
 
     /// Hash only canonical complete fixed-shape leaves at valid positions.
@@ -288,13 +351,19 @@ impl Context {
         if index as usize >= leaves || payload.len() != bytes || !canonical_words(payload) {
             return Err(BindingError::Shape);
         }
-        Ok(self
-            .framing
-            .frame(1, tag, round, 0, index, 48, BodyFields::One(payload)))
+        Ok(self.framing.frame(
+            1,
+            tag,
+            round,
+            0,
+            index,
+            Digest::BYTES,
+            BodyFields::One(payload),
+        ))
     }
 
     /// Prepare a complete shape-checked leaf under the unchanged canonical owner.
-    #[cfg(any(test, feature = "fastpq-gpu"))]
+    #[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
     pub(super) fn prepare_leaf(
         &self,
         oracle: Oracle,
@@ -332,8 +401,8 @@ impl Context {
             round,
             level,
             index,
-            48,
-            BodyFields::Two(&left.to_le_bytes(), &right.to_le_bytes()),
+            Digest::BYTES,
+            BodyFields::Two(&left.into_bytes(), &right.into_bytes()),
         ))?)
     }
 
@@ -356,7 +425,7 @@ impl Context {
     }
 
     /// Prepare a complete parent; use the same strict shape checks as verification.
-    #[cfg(any(test, feature = "fastpq-gpu"))]
+    #[cfg(any(test, feature = "fastpq-gpu", feature = "simd"))]
     pub(super) fn prepare_parent(
         &self,
         oracle: Oracle,
@@ -386,8 +455,8 @@ impl Context {
             round,
             level,
             index,
-            48,
-            BodyFields::Two(&left.to_le_bytes(), &right.to_le_bytes()),
+            Digest::BYTES,
+            BodyFields::Two(&left.into_bytes(), &right.into_bytes()),
         ))
     }
 
@@ -399,13 +468,13 @@ impl Context {
             0,
             0,
             0,
-            48,
+            Digest::BYTES,
             BodyFields::One(&bytes),
         ))?)
     }
 
     fn chain(&self, round: Round, tape: &[u8], root: Digest) -> Result<Digest> {
-        if round.0 == 10 || tape.len() != round.tape_bytes() || !canonical_words(tape) {
+        if round.0 == 10 || tape.len() != round.tape_bytes() {
             return Err(BindingError::Phase);
         }
         Ok(self.framing.hash_frame(&self.framing.frame(
@@ -414,8 +483,8 @@ impl Context {
             round.0,
             0,
             0,
-            48,
-            BodyFields::Two(tape, &root.to_le_bytes()),
+            Digest::BYTES,
+            BodyFields::Two(tape, &root.into_bytes()),
         ))?)
     }
 }
@@ -427,7 +496,11 @@ fn canonical_words(bytes: &[u8]) -> bool {
             .all(|word| u64::from_le_bytes(word.try_into().expect("exact field word")) < MODULUS)
 }
 
-fn ood_bytes(current: &[F], next: &[F], quotient: &[F]) -> Result<Vec<u8>> {
+fn ood_bytes(
+    current: &[F],
+    next: &[F],
+    quotient: &[F],
+) -> Result<super::secret_polynomial::SecretPolynomial<u8>> {
     if current.len() != COMMITTED_COLUMN_COUNT
         || next.len() != COMMITTED_COLUMN_COUNT
         || quotient.len() != 2
@@ -439,74 +512,63 @@ fn ood_bytes(current: &[F], next: &[F], quotient: &[F]) -> Result<Vec<u8>> {
     {
         return Err(BindingError::Shape);
     }
-    let mut bytes = Vec::with_capacity(OOD_VALUES * F::BYTES);
-    for value in current.iter().chain(next).chain(quotient) {
-        bytes.extend_from_slice(&value.to_le_bytes());
+    let mut bytes = super::secret_polynomial::SecretPolynomial::<u8>::zeroed(OOD_VALUES * F::BYTES)
+        .map_err(|_| BindingError::Tape)?;
+    for (target, value) in bytes
+        .chunks_exact_mut(F::BYTES)
+        .zip(current.iter().chain(next).chain(quotient))
+    {
+        target.copy_from_slice(&value.to_le_bytes());
     }
     Ok(bytes)
 }
 
-fn decode(round: Round, raw: &[u8]) -> Result<Message> {
-    if raw.len() != round.tape_bytes() || !canonical_words(raw) {
-        return Err(BindingError::Tape);
-    }
-    if round.0 == 1 {
-        return Ok(Message::Dummy);
-    }
-    if round.0 == 10 {
-        let limit = MODULUS - MODULUS % LDE_ROWS as u64;
-        let mut queries = Vec::with_capacity(QUERY_COUNT);
-        for word in raw.chunks_exact(8).take(QUERY_CANDIDATES) {
-            let candidate = u64::from_le_bytes(word.try_into().expect("exact field word"));
-            if candidate >= limit {
-                continue;
-            }
-            let index = u32::try_from(candidate % LDE_ROWS as u64)
-                .expect("query index reduced below LDE_ROWS fits u32");
-            match queries.binary_search(&index) {
-                Ok(_) => {}
-                Err(at) => queries.insert(at, index),
-            }
-            if queries.len() == QUERY_COUNT {
-                return Ok(Message::Queries(queries));
-            }
-        }
-        return Err(BindingError::Exhausted);
-    }
-    let count = if round.0 == 2 { CONSTRAINTS } else { 1 };
-    let values: Vec<_> = raw[..count * F::BYTES]
-        .chunks_exact(F::BYTES)
-        .map(|bytes| {
-            F::new(core::array::from_fn(|i| {
-                u64::from_le_bytes(
-                    bytes[i * 8..(i + 1) * 8]
-                        .try_into()
-                        .expect("exact field word"),
-                )
-            }))
-            .expect("complete tape validated")
-        })
-        .collect();
-    if round.0 == 3 && values[0].coefficients()[1..].iter().all(|&v| v == 0) {
-        return Err(BindingError::BaseOod);
-    }
-    Ok(Message::Fields(values))
+fn decode_tape(tape: &RawTapeV1) -> Result<Message> {
+    let decoded = tape.decode().map_err(|error| match error {
+        RawTapeErrorV1::BaseOod => BindingError::BaseOod,
+        RawTapeErrorV1::Exhausted => BindingError::Exhausted,
+        RawTapeErrorV1::Allocation | RawTapeErrorV1::Length => BindingError::Tape,
+    })?;
+    Ok(match decoded {
+        RawTapeMessageV1::Dummy => Message::Dummy,
+        RawTapeMessageV1::Queries(queries) => Message::Queries(queries),
+        RawTapeMessageV1::Fields(values) => Message::Fields(
+            values
+                .into_iter()
+                .map(|v| F::new(v).expect("finite decoder returns canonical limbs"))
+                .collect(),
+        ),
+    })
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
+fn decode(round: Round, raw: &[u8]) -> Result<Message> {
+    let tape = RawTapeV1::from_bytes(
+        RawTapeRoundV1::new(round.0).ok_or(BindingError::Round)?,
+        raw,
+    )
+    .map_err(|_| BindingError::Tape)?;
+    decode_tape(&tape)
+}
+#[derive(Debug)]
 enum Phase {
     Ready(Round),
-    Pending { round: Round, raw: Vec<u8> },
+    Pending { round: Round, raw: RawTapeV1 },
     Complete,
     Aborted,
 }
 
 /// Fixed schedule; success here does not mean the proof or statement is valid.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct Transcript {
     context: Context,
     predecessor: Digest,
     phase: Phase,
+}
+
+impl Drop for Transcript {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.predecessor);
+    }
 }
 
 impl Transcript {
@@ -521,20 +583,23 @@ impl Transcript {
 
     /// Decode one entire tape; a sampling or framing failure permanently aborts.
     pub(super) fn challenge(&mut self) -> Result<Message> {
-        self.challenge_with(|context, round, body, output| {
-            Ok(context.framing.expand_deep(round, body, output)?)
+        self.challenge_owned(|context, round, body| {
+            Ok(context.framing.tape(
+                RawTapeRoundV1::new(round.0).ok_or(BindingError::Round)?,
+                body,
+            )?)
         })
     }
-
-    fn challenge_with(
+    fn challenge_owned(
         &mut self,
-        fill: impl FnOnce(&Context, Round, &[u8], &mut [u8]) -> Result<()>,
+        derive: impl FnOnce(&Context, Round, &[u8]) -> Result<RawTapeV1>,
     ) -> Result<Message> {
         let Phase::Ready(round) = self.phase else {
+            self.phase = Phase::Aborted;
             return Err(BindingError::Phase);
         };
         self.phase = Phase::Aborted;
-        let predecessor = self.predecessor.to_le_bytes();
+        let predecessor = self.predecessor.into_bytes();
         let frame = self.context.framing.frame(
             4,
             0,
@@ -544,10 +609,12 @@ impl Transcript {
             round.tape_bytes(),
             BodyFields::One(&predecessor),
         );
-        let encoded = norito::encode_canonical(&frame)?;
-        let mut raw = vec![0; round.tape_bytes()];
-        fill(&self.context, round, &encoded, &mut raw)?;
-        let message = decode(round, &raw)?;
+        let encoded = super::compact_sha3::encode_private_frame(&frame)?;
+        let raw = derive(&self.context, round, &encoded)?;
+        if raw.round().ordinal() != round.0 {
+            return Err(BindingError::Phase);
+        }
+        let message = decode_tape(&raw)?;
         self.phase = if round.0 == 10 {
             Phase::Complete
         } else {
@@ -555,10 +622,26 @@ impl Transcript {
         };
         Ok(message)
     }
+    #[cfg(test)]
+    fn challenge_with(
+        &mut self,
+        fill: impl FnOnce(&Context, Round, &[u8], &mut [u8]) -> Result<()>,
+    ) -> Result<Message> {
+        self.challenge_owned(|context, round, body| {
+            let mut bytes = zeroize::Zeroizing::new(vec![0; round.tape_bytes()]);
+            fill(context, round, body, &mut bytes)?;
+            RawTapeV1::from_bytes(
+                RawTapeRoundV1::new(round.0).ok_or(BindingError::Round)?,
+                &bytes,
+            )
+            .map_err(|_| BindingError::Tape)
+        })
+    }
 
     /// Commit exactly the oracle expected after this message; OOD has its own API.
     pub(super) fn commit_root(&mut self, oracle: Oracle, root: Digest) -> Result<()> {
         let Phase::Pending { round, .. } = &self.phase else {
+            self.phase = Phase::Aborted;
             return Err(BindingError::Phase);
         };
         let expected = match round.0 {
@@ -566,9 +649,13 @@ impl Transcript {
             2 => Oracle::QuotientAndMask,
             4..=8 => Oracle::Fri(round.0 - 4),
             9 => Oracle::Terminal,
-            _ => return Err(BindingError::Phase),
+            _ => {
+                self.phase = Phase::Aborted;
+                return Err(BindingError::Phase);
+            }
         };
         if oracle != expected {
+            self.phase = Phase::Aborted;
             return Err(BindingError::Phase);
         }
         self.commit_digest(root)
@@ -583,6 +670,7 @@ impl Transcript {
                 ..
             }
         ) {
+            self.phase = Phase::Aborted;
             return Err(BindingError::Phase);
         }
         let digest = match self.context.hash_ood(current, next, quotient) {
@@ -600,7 +688,7 @@ impl Transcript {
         else {
             return Err(BindingError::Phase);
         };
-        self.predecessor = self.context.chain(round, &raw, root)?;
+        self.predecessor = self.context.chain(round, raw.as_bytes(), root)?;
         self.phase = Phase::Ready(Round::new(round.0 + 1)?);
         Ok(())
     }
@@ -609,3 +697,11 @@ impl Transcript {
 #[cfg(test)]
 #[path = "deep_binding/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "deep_binding/retirement_tests.rs"]
+mod retirement_tests;
+
+#[cfg(test)]
+#[path = "deep_binding/core_retirement_tests.rs"]
+mod core_retirement_tests;

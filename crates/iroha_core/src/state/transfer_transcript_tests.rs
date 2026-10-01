@@ -437,29 +437,33 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
         .expect("commit existing-transaction detached block");
     let second_call_hash = iroha_crypto::Hash::prehashed([8_u8; iroha_crypto::Hash::LENGTH]);
     let (world_batch, _, _) = build_transfer_world(None);
-    let kura_batch = Kura::blank_kura_for_testing();
-    let query_batch = crate::query::store::LiveQueryStore::start_test();
-    let mut state_batch = State::new(world_batch, Arc::clone(&kura_batch), query_batch);
     let first_lane = LaneId::new(0);
     let second_lane = LaneId::new(1);
     let rejected_lane = LaneId::new(2);
-    {
-        let nexus = state_batch.nexus.get_mut();
-        nexus.lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-            nonzero!(3_u32),
-            (0..3)
-                .map(|index| iroha_data_model::nexus::LaneConfig {
-                    id: LaneId::new(index),
-                    alias: format!("grouped-transfer-{index}"),
-                    ..iroha_data_model::nexus::LaneConfig::default()
-                })
-                .collect(),
-        )
-        .expect("three distinct routing lanes");
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-    }
-    state_batch.reseed_static_lane_incarnations_for_tests();
+    let catalog = iroha_data_model::nexus::LaneCatalog::new(
+        nonzero!(3_u32),
+        (0..3)
+            .map(|index| iroha_data_model::nexus::LaneConfig {
+                id: LaneId::new(index),
+                alias: format!("grouped-transfer-{index}"),
+                ..iroha_data_model::nexus::LaneConfig::default()
+            })
+            .collect(),
+    )
+    .expect("three distinct routing lanes");
+    let nexus = iroha_config::parameters::actual::Nexus {
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog),
+        lane_catalog: catalog.clone(),
+        configured_lane_catalog: catalog,
+        ..Default::default()
+    };
+    // Admit the original lane catalog and its exact incarnations at construction,
+    // before any transcript borrows its frozen runtime cut.
+    let state_batch = State::new_with_nexus_for_testing(
+        world_batch,
+        nexus,
+        crate::query::store::LiveQueryStore::start_test(),
+    );
     let mut block_batch = state_batch.block(header);
     let batch_start_fragments = block_batch.committed_fragment_count();
     let mut first_delta = DetachedStateTransactionDelta::default();

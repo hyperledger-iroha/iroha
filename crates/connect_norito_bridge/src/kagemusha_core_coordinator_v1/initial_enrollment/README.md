@@ -74,14 +74,17 @@ unknown global owner or uncertain platform/store result is rejected. No native
 provisioner returns `Unavailable`. Callable ABI inventory is metadata and does not
 establish an installed backend.
 
-The installed adapter automatically consumes the one freshly verified admission
-after durable phase-5 publication and passes it to the provisioner's
-`retain_fresh_admission`. That owner must retain the original consuming value and
-perform the separate enrolled account/device open and actual paired-proof,
-hardware/journal bootstrap. A failed handoff cannot reconstruct the admission from
-the retained certificate. An exact successful phase-5 retry returns original bytes
-without another handoff. Post-handoff qualification reads go to the selected
-enrolled platform coordinator, never back to the pre-enrollment observer.
+The installed adapter consumes the one freshly verified admission after durable
+phase-5 publication into `KagemushaNativeFreshCoreBootstrapV1`. The provisioner's
+`bootstrap_source` supplies independently retained physical inputs, original real
+paired proof/Guard, current native time, selected child paths and private-key custody.
+It supplies no software Core backend. The concrete bridge creates the native journals,
+performs the original hardware INITIAL checkpoint transaction, and retains its exact
+exclusive initialized checkpoint across uncertain delivery and fresh-selection loss.
+No previous usable machine or replacement issuer admission escapes. Only verified
+publication composes the concrete recovered coordinator. An exact successful phase-5
+retry reads original bytes without selecting the source again. A missing physical
+proof/key/transport refuses a subsequent Open without reopening the issuer journal.
 
 `FreshIssuerAdmissionV1::into_current_bootstrap_evidence` consumes the original
 still-live native admission and reauthenticates its exact app assertion, issuer
@@ -102,6 +105,15 @@ checkpoint/capacity operations, and its current-checkpoint read requires an alre
 initialized lane and journal prefixes. It cannot be used as an invented generic
 pre-enrollment revision CAS. A governed nonforking OEM journal service or independently
 authenticated monotonic external store must supply that physical boundary.
+
+For an existing completed production Core, the native provisioner instead consumes
+`KagemushaNativeEnrollmentProvisioningV1::from_recovered_core` with the original
+storage selection and native key. It retains the concrete Core and held journals,
+without reopening a fresh enrollment journal or recreating issuer authority.
+The [recovered owner contract](../recovered_owner.md) defines separate method-12
+phases 9–11 for exact account/device possession and a revocable observation session.
+Its immutable, hardware-checkpointed enrollment binding retains the original
+Core authorization key reference, distinct from the device's eSE key reference.
 
 `PendingIssuerEnrollmentV1::begin_selected` consumes the original live selection
 after verifying the issuer-signed 273-byte preparation, the independent verifier's

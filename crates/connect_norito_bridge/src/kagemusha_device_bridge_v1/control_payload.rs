@@ -668,6 +668,26 @@ struct WalletRecoverySnapshotReplyV1 {
     retry_outbox_count: u128,
 }
 
+/// Decode the sole canonical operation-21 body as bounded public data only.
+/// No parsed snapshot authenticates custody, freshness or monetary authority.
+pub(super) fn decode_wallet_recovery_snapshot_reply_v1(
+    bytes: &[u8],
+) -> Result<(Option<Vec<u8>>, u128, u128, u128)> {
+    let reply: WalletRecoverySnapshotReplyV1 = exact(bytes, WALLET_SNAPSHOT_REPLY_MAX)?;
+    header(reply.version, reply.operation, RECOVER_WALLET_SNAPSHOT)?;
+    if let Some(state_bytes) = &reply.canonical_aggregate_state {
+        bound(state_bytes, KAGEMUSHA_AGGREGATE_STATE_MAX_BYTES_V1)?;
+        KagemushaAggregateStateCommitmentV1::decode_canonical_exact(state_bytes)
+            .map_err(|_| ControlErrorV1::PublicShape)?;
+    }
+    Ok((
+        reply.canonical_aggregate_state,
+        reply.journal_revision,
+        reply.pending_credit_count,
+        reply.retry_outbox_count,
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::SignedPaymentRequestReplyV1",
@@ -687,6 +707,7 @@ pub(super) fn validate_observation_reply_context_v1(
     bytes: &[u8],
     qualification: &super::QualificationProjectionV1,
     wallet: &super::ObservationWalletContextV1,
+    provider_policy_root: &[u8; 32],
 ) -> Result<()> {
     match operation {
         READ_CREDENTIAL | READ_TIME_OR_LEASE => Ok(()),
@@ -706,7 +727,8 @@ pub(super) fn validate_observation_reply_context_v1(
                 let state = KagemushaAggregateStateCommitmentV1::decode_canonical_exact(&bytes)
                     .map_err(|_| ControlErrorV1::PublicShape)?;
                 if state.release_id != qualification.release_id
-                    || state.hardware_policy_id != qualification.hardware_policy_digest
+                    || *provider_policy_root == [0; 32]
+                    || state.hardware_policy_id != *provider_policy_root
                     || state.network_id != wallet.network_id
                     || state.lane_id != wallet.lane_id
                     || state.asset != wallet.asset
@@ -882,13 +904,7 @@ pub(super) fn validate_control_reply_v1(command: &ControlCommandV1, bytes: &[u8]
             Ok(())
         }
         ControlCommandV1::RecoverWalletSnapshot => {
-            let reply: WalletRecoverySnapshotReplyV1 = exact(bytes, WALLET_SNAPSHOT_REPLY_MAX)?;
-            header(reply.version, reply.operation, command.operation())?;
-            if let Some(state_bytes) = &reply.canonical_aggregate_state {
-                bound(state_bytes, KAGEMUSHA_AGGREGATE_STATE_MAX_BYTES_V1)?;
-                KagemushaAggregateStateCommitmentV1::decode_canonical_exact(state_bytes)
-                    .map_err(|_| ControlErrorV1::PublicShape)?;
-            }
+            decode_wallet_recovery_snapshot_reply_v1(bytes)?;
             Ok(())
         }
         ControlCommandV1::CreateSignedPaymentRequest {
@@ -1193,6 +1209,69 @@ pub(crate) fn canonical_request_id_for_tests(operation: u8) -> Option<[u8; 32]> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wallet_snapshot_projection_preserves_original_absence_and_all_counts() {
+        let reply = WalletRecoverySnapshotReplyV1 {
+            version: VERSION,
+            operation: RECOVER_WALLET_SNAPSHOT,
+            canonical_aggregate_state: None,
+            journal_revision: 3,
+            pending_credit_count: 2,
+            retry_outbox_count: 1,
+        };
+        let original = encode(&reply, WALLET_SNAPSHOT_REPLY_MAX).unwrap();
+        assert_eq!(
+            decode_wallet_recovery_snapshot_reply_v1(&original),
+            Ok((None, 3, 2, 1))
+        );
+        assert!(
+            validate_control_reply_v1(&ControlCommandV1::RecoverWalletSnapshot, &original).is_ok()
+        );
+        let mut tail = original.clone();
+        tail.push(0);
+        assert!(decode_wallet_recovery_snapshot_reply_v1(&tail).is_err());
+        assert!(decode_wallet_recovery_snapshot_reply_v1(&original[..original.len() - 1]).is_err());
+        assert!(
+            decode_wallet_recovery_snapshot_reply_v1(&vec![1; WALLET_SNAPSHOT_REPLY_MAX + 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn wallet_snapshot_projection_rejects_wrong_operation_version_and_aggregate_codec() {
+        let mut reply = WalletRecoverySnapshotReplyV1 {
+            version: VERSION,
+            operation: RECOVER_WALLET_SNAPSHOT,
+            canonical_aggregate_state: None,
+            journal_revision: 3,
+            pending_credit_count: 2,
+            retry_outbox_count: 1,
+        };
+        reply.operation = 20;
+        assert_eq!(
+            decode_wallet_recovery_snapshot_reply_v1(
+                &encode(&reply, WALLET_SNAPSHOT_REPLY_MAX).unwrap()
+            ),
+            Err(ControlErrorV1::Binding)
+        );
+        reply.operation = RECOVER_WALLET_SNAPSHOT;
+        reply.version = VERSION + 1;
+        assert_eq!(
+            decode_wallet_recovery_snapshot_reply_v1(
+                &encode(&reply, WALLET_SNAPSHOT_REPLY_MAX).unwrap()
+            ),
+            Err(ControlErrorV1::Binding)
+        );
+        reply.version = VERSION;
+        reply.canonical_aggregate_state = Some(vec![1]);
+        assert!(
+            decode_wallet_recovery_snapshot_reply_v1(
+                &encode(&reply, WALLET_SNAPSHOT_REPLY_MAX).unwrap()
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn single_credit_fold_binds_credit_and_operation_ids() {

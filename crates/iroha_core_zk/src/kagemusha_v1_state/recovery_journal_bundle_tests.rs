@@ -22,7 +22,7 @@ type SelectedFixture = (
 fn response_context(machine: &Machine) -> KagemushaResponseEvidenceContextV1 {
     KagemushaResponseEvidenceContextV1 {
         canonical_credential: norito::encode_canonical(
-            &machine.accepted_credential_floor().credential,
+            machine.accepted_credential_floor().oem_original().unwrap(),
         )
         .unwrap(),
         release_id: machine.state.release_id,
@@ -277,7 +277,11 @@ fn advanced_pair_reconciles_complete_prepared_core_operation_index_after_restore
     let account = super::machine().2;
     let intent = intent(
         &machine,
-        machine.accepted_credential_floor().credential.credential_id,
+        machine
+            .accepted_credential_floor()
+            .oem_original()
+            .unwrap()
+            .credential_id,
         account,
         id(28),
     );
@@ -315,7 +319,11 @@ fn advanced_pair_rejects_missing_index_operation_even_when_selected_prefix_match
     let account = super::machine().2;
     let intent = intent(
         &machine,
-        machine.accepted_credential_floor().credential.credential_id,
+        machine
+            .accepted_credential_floor()
+            .oem_original()
+            .unwrap()
+            .credential_id,
         account,
         id(30),
     );
@@ -350,7 +358,11 @@ fn advanced_pair_failure_never_appends_pending_sender_retirement() {
     let account = super::machine().2;
     let intent = intent(
         &machine,
-        machine.accepted_credential_floor().credential.credential_id,
+        machine
+            .accepted_credential_floor()
+            .oem_original()
+            .unwrap()
+            .credential_id,
         account,
         id(32),
     );

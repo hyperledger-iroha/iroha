@@ -998,6 +998,8 @@ fn diagnostic_enrollment_binding(
     Ok(KagemushaRecoveryEnrollmentBindingV1 {
         enrollment_id: owner.enrollment_id().map_err(|error| error.to_string())?,
         owner,
+        // This diagnostic selector grants no production enrollment authority.
+        core_authorization_key_reference: [0xd4; 32],
     })
 }
 

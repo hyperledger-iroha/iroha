@@ -2,8 +2,8 @@
 //! Masked trace rows use fresh cryptographic entropy; a complete reviewed
 //! zero-knowledge guarantee remains a separate qualification requirement.
 //!
-//! The two routes verify complete ordered bundles under the fixed six-lane DEEP
-//! implementation with 64 bounded queries and one OOD AIR evaluation per segment. The caller supplies independent expected public inputs and AXT
+//! The two routes verify complete ordered bundles under the fixed SHA3/SHAKE DEEP
+//! implementation with 77 bounded queries and one OOD AIR evaluation per segment. The caller supplies independent expected public inputs and AXT
 //! context; artifact bytes cannot select another value domain or protocol.
 //! Success establishes mathematical consistency with those expectations, not
 //! their authority, ledger finality, replay admission or production qualification.
@@ -44,13 +44,13 @@
 //! explicit [`ProvingLimits`] choice and fails if the required device is unavailable.
 
 use iroha_data_model::{
+    fastpq::FastpqCommitmentV1,
     fastpq::{
         FastpqArtifactIdentityDescriptionV1, FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1,
         FastpqCompactArtifactDecodeError, FastpqCompactArtifactDecodeLimits,
         FastpqCompactProfileIdV1, FastpqPublicInputs, FastpqPublicTransferStatementV1,
     },
     nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1},
-    privacy::GoldilocksDigest384V1,
 };
 use norito::core::DecodeLimits;
 
@@ -468,7 +468,7 @@ impl VerifiedArtifact {
     }
 
     /// Complete verified AIR row roots in original segment order.
-    pub fn air_row_roots(&self) -> &[GoldilocksDigest384V1] {
+    pub fn air_row_roots(&self) -> &[FastpqCommitmentV1] {
         self.inner.bundle().row_roots()
     }
 
@@ -513,7 +513,7 @@ pub fn quantity_profile_id() -> FastpqCompactProfileIdV1 {
 
 /// Verify a complete ordinary quantity artifact against independent caller inputs.
 ///
-/// The entry point fixes the quantity value domain, ordinary semantics and the six-lane
+/// The entry point fixes the quantity value domain, ordinary semantics and the SHA3/SHAKE
 /// profile. It does not accept a generic AIR, profile selector or private witness.
 ///
 /// # Errors

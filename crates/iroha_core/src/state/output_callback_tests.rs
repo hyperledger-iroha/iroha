@@ -28,7 +28,7 @@ struct NestedCallbackFixture {
 }
 
 fn nested_callback_fixture(row_bytes: u64, depth: u8) -> NestedCallbackFixture {
-    let state = state(row_bytes);
+    let state = authenticated_state(row_bytes);
     {
         let mut parameters = state.world.parameters.block();
         parameters.smart_contract.execution_depth = depth;
@@ -58,36 +58,38 @@ fn nested_callback_fixture(row_bytes: u64, depth: u8) -> NestedCallbackFixture {
             instructions: ExecutionStep(child_instructions.clone().into()),
         },
     ];
-    let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
     {
-        let mut transaction = setup.transaction();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("register actual universal account");
-        for (id, instructions) in [
-            (child.clone(), child_instructions),
-            (parent.clone(), parent_instructions),
-        ] {
-            let action = Action::new(
-                instructions,
-                Repeats::Exactly(1),
-                ALICE_ID.clone(),
-                ExecuteTriggerEventFilter::new()
-                    .for_trigger(id.clone())
-                    .under_authority(ALICE_ID.clone()),
-            )
-            .expect("valid actual by-call action");
-            Register::trigger(Trigger::new(id, action))
+        let (mut setup, _setup_recording) = output_fixture_setup(&state);
+        {
+            let mut transaction = setup.transaction_for_callback_testing();
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut transaction)
-                .expect("register actual by-call action");
+                .expect("register actual universal account");
+            for (id, instructions) in [
+                (child.clone(), child_instructions),
+                (parent.clone(), parent_instructions),
+            ] {
+                let action = Action::new(
+                    instructions,
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                )
+                .expect("valid actual by-call action");
+                Register::trigger(Trigger::new(id, action))
+                    .execute(&ALICE_ID, &mut transaction)
+                    .expect("register actual by-call action");
+            }
+            // Setup only registers actions: no callback journal is discarded here.
+            transaction.apply();
         }
-        // Setup only registers actions: no callback journal is discarded here.
-        transaction.apply();
+        setup
+            .commit_world_overlay_for_testing()
+            .expect("commit fixture registry");
     }
-    setup
-        .commit_world_overlay_for_testing()
-        .expect("commit fixture registry");
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    let header = output_fixture_header(&state);
     let mut transaction = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),

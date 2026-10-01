@@ -39,11 +39,9 @@ fn tiered_complete_and_incremental_capture_retain_values_on_default_stack() {
             world.tx_sequences.insert(BOB_ID.clone(), 11);
             // Equal hashes in distinct dataspaces remain separate snapshot keys.
             let hash = Hash::new(b"contract");
-            let removed = iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                hash,
-            );
-            let inserted = iroha_data_model::smart_contract::ContractArtifactId::new(
+            let removed =
+                ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, hash);
+            let inserted = ContractArtifactId::new(
                 iroha_model_base::topology::DataSpaceId::new(u64::MAX),
                 hash,
             );

@@ -87,6 +87,12 @@ fn signed_genesis_templates_bind_the_actual_genesis_hash_and_canonical_journal()
             state.network_id_ref().as_bytes(),
             chain.genesis().hash().as_ref()
         );
+        assert!(
+            native::read_finalized_provider_admission_v1(&state.view(), provider, NOW).is_err(),
+            "the original signed proposal requires its actual H2 execution anchor"
+        );
+        assert!(chain.commit_at(NOW * 1000 + 1, Vec::new()).is_empty());
+        assert_eq!(chain.height(), 2);
         let actual = native::read_finalized_provider_admission_v1(&state.view(), provider, NOW)
             .unwrap()
             .unwrap();

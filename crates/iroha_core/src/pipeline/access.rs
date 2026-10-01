@@ -4744,11 +4744,7 @@ seiyaku DynamicAccessCounter {
         let foreign = ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash);
         let mut world = World::default();
         world.contract_code.insert(owned, program);
-        let state = State::new(
-            world,
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-        );
+        let state = crate::pipeline::overlay::test_support::state_after_genesis(world);
         let view = state.view();
         assert!(prepared_contract_for_access(&view, owned).is_some());
         assert!(

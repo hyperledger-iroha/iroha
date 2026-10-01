@@ -2974,7 +2974,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
     upstream_task.abort();
 }
 
-fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
+fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
     use iroha_data_model::{
         block::consensus::{SumeragiRootScope, ValidatorPower},
         parameter::{
@@ -2985,7 +2985,6 @@ fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
             },
         },
     };
-    let world = World::new();
     let validators = iroha_core::sumeragi::test_chain::fixture_validators()
         .into_iter()
         .map(|(validator, _)| ValidatorPower {
@@ -3012,13 +3011,10 @@ fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
         sumeragi_context: context,
     };
     metadata.validate().unwrap();
-    let app = mk_app_state_for_tests_with_world(world);
     {
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = app.state.block(header);
-        let mut transaction = block.transaction();
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(Default::default(), 0);
         transaction
-            .world_mut_for_testing()
             .parameters_mut_for_testing()
             .get_mut()
             .set_parameter(Parameter::Custom(CustomParameter::new(
@@ -3026,11 +3022,9 @@ fn app_with_root_scope_for_token_test(private: bool) -> SharedAppState {
                 Json::new(metadata),
             )));
         transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit explicit root scope");
+        block.commit();
     }
-    app
+    mk_app_state_for_tests_with_world(world)
 }
 
 #[tokio::test]
@@ -3038,7 +3032,7 @@ async fn private_root_listener_token_closes_public_gateway_and_config_bypass() {
     use tower::ServiceExt as _;
     for private in [false, true] {
         for configured in [false, true] {
-            let mut app = app_with_root_scope_for_token_test(private);
+            let mut app = app_with_root_scope_for_handler_test(World::new(), private);
             assert_eq!(app.is_private_root(), private);
             let app_mut = Arc::get_mut(&mut app).unwrap();
             // Even a false local setting cannot open an authenticated private root.

@@ -72,7 +72,7 @@ fn assert_inclusive_limits(
     exact.transport.max_bundle_frame_bytes = frame_len;
     exact.bundle.max_wire_bytes = frame_len;
     exact.bundle.max_segments = count;
-    exact.bundle.max_total_queries = 64 * count;
+    exact.bundle.max_total_queries = 77 * count;
     exact.bundle.max_total_statement_bytes = accepted.statement_bytes();
     exact.bundle.max_total_segment_bytes = accepted.work().proof_bytes;
     exact.bundle.segment.max_proof_bytes = maximum_child_bytes;
@@ -84,7 +84,7 @@ fn assert_inclusive_limits(
             1 => low.transport.max_bundle_frame_bytes = frame_len - 1,
             2 => low.bundle.max_wire_bytes = frame_len - 1,
             3 => low.bundle.max_segments = count - 1,
-            4 => low.bundle.max_total_queries = 64 * count - 1,
+            4 => low.bundle.max_total_queries = 77 * count - 1,
             5 => low.bundle.max_total_statement_bytes = accepted.statement_bytes() - 1,
             6 => low.bundle.max_total_segment_bytes = accepted.work().proof_bytes - 1,
             7 => low.bundle.segment.max_proof_bytes = maximum_child_bytes - 1,
@@ -267,8 +267,8 @@ pub fn verify_count(
     assert_eq!(accepted.work().transcripts, count);
     assert_eq!(accepted.work().air_evaluations, count);
     assert_eq!(accepted.work().terminal_degree_checks, count);
-    assert_eq!(accepted.work().row_leaves, 64 * count);
-    assert_eq!(accepted.work().oracle_leaves, 64 * count);
+    assert_eq!(accepted.work().row_leaves, 77 * count);
+    assert_eq!(accepted.work().oracle_leaves, 77 * count);
     assert!(accepted.work().proof_bytes <= count * 512 * 1024);
     let maximum_child_bytes = maximum_child_bytes.unwrap_or_else(|| accepted.work().proof_bytes);
     assert!(maximum_child_bytes <= limits.bundle.segment.max_proof_bytes);

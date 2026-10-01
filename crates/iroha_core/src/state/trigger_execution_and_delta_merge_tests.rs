@@ -145,7 +145,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let time_origin_ms = 0;
+    let time_origin_ms = 1_000;
 
     let replacer_id: TriggerId = "a_time_sibling_replacer".parse().unwrap();
     let replaced_id: TriggerId = "b_time_sibling_replaced".parse().unwrap();
@@ -199,6 +199,15 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
     let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
     chain.take_events().unwrap();
     let state = Arc::clone(chain.state());
+    assert!(
+        state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            < Duration::from_millis(time_origin_ms + 1)
+    );
     let block2 = chain.proposal(Some(time_origin_ms + 2), Vec::new());
     chain.commit_proposal(
         block2,
@@ -272,7 +281,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let time_origin_ms = 0;
+    let time_origin_ms = 1_000;
 
     let mut genesis_instructions = Vec::<InstructionBox>::new();
     {
@@ -299,6 +308,15 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
     let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
     chain.take_events().unwrap();
     let state = Arc::clone(chain.state());
+    assert!(
+        state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            < Duration::from_millis(time_origin_ms + 1)
+    );
     let block2 = chain.proposal(Some(time_origin_ms + 6), Vec::new());
     {
         let view = state.view();
@@ -412,7 +430,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let time_origin_ms = 0;
+    let time_origin_ms = 1_000;
 
     let mut genesis_instructions = Vec::<InstructionBox>::new();
     {
@@ -439,6 +457,15 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
     chain.take_events().unwrap();
     let state = Arc::clone(chain.state());
+    assert!(
+        state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            < Duration::from_millis(time_origin_ms + 1)
+    );
     let block2 = chain.proposal(Some(time_origin_ms + 6), Vec::new());
     {
         let view = state.view();
@@ -534,7 +561,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let time_origin_ms = 0;
+    let time_origin_ms = 1_000;
 
     let mut genesis_instructions = Vec::<InstructionBox>::new();
     {
@@ -562,6 +589,15 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
     let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config).unwrap();
     chain.take_events().unwrap();
     let state = Arc::clone(chain.state());
+    assert!(
+        state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            < Duration::from_millis(time_origin_ms + 1)
+    );
     let block2 = chain.proposal(Some(time_origin_ms + 2), Vec::new());
     {
         let view = state.view();
@@ -738,11 +774,18 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     };
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(World::default(), kura, query_handle);
+    let mut state = authenticate_trigger_fixture(State::new(World::default(), kura, query_handle));
     let mut pipeline = state.pipeline.clone();
     pipeline.ivm_max_cycles_upper_bound = NonZeroU64::new(1).expect("one is non-zero");
     state.set_pipeline(pipeline);
-    let block = new_dummy_block_with_payload(|_| {});
+    let block = ValidBlock::new_unverified_for_tests(
+        state
+            .view()
+            .latest_block()
+            .expect("original trigger parent")
+            .as_ref()
+            .clone(),
+    );
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -783,6 +826,7 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     stx.apply_callback_for_testing()
         .expect("capture successful component callbacks");
     state_block.commit_world_overlay_for_testing().unwrap();
+    let block = trigger_component_block(&state, 2);
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
     let evt = ExecuteTriggerEvent {
@@ -802,6 +846,12 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
 }
 #[test]
 fn ivm_time_trigger_reuses_cache_across_blocks() {
+    // Positive reuse requires enabled retention throughout both owner lifetimes.
+    let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+        capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+        max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        max_decoded_ops: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+    });
     use iroha_data_model::{
         events::time::{ExecutionTime, TimeEventFilter},
         transaction::{Executable, IvmBytecode},
@@ -846,26 +896,20 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
         .unwrap();
     stx.apply();
     state_block.commit_world_overlay_for_testing().unwrap();
-    let block2 = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(2).unwrap());
-        h.creation_time_ms = 2;
-    });
-    let mut state_block2 = state.block(block2.as_ref().header());
-    let outputs =
-        crate::state::run_empty_network_owner_fixture(&mut state_block2, Some(block2.as_ref()));
+    let state = authenticate_trigger_fixture(state);
+    let block2 = trigger_component_block(&state, 2);
+    let (mut state_block2, recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, block2.as_ref());
     assert_eq!(outputs.len(), 1);
     assert!(
         matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok())
     );
     state_block2.commit_world_overlay_for_testing().unwrap();
     let after_first = state.trigger_ivm_cache.lock().stats();
-    let block3 = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(3).unwrap());
-        h.creation_time_ms = 3;
-    });
-    let mut state_block3 = state.block(block3.as_ref().header());
-    let outputs =
-        crate::state::run_empty_network_owner_fixture(&mut state_block3, Some(block3.as_ref()));
+    drop(recording);
+    let block3 = trigger_component_block(&state, 3);
+    let (mut state_block3, _recording, outputs, _) =
+        crate::state::run_empty_network_owner_fixture(&state, block3.as_ref());
     assert_eq!(outputs.len(), 1);
     assert!(
         matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok())
@@ -899,6 +943,12 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
 }
 #[test]
 fn contract_query_cache_isolated_and_reuses_owned_runtime() {
+    // Positive reuse requires enabled retention throughout both owner lifetimes.
+    let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+        capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+        max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        max_decoded_ops: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+    });
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     const GAS_LIMIT: u64 = 10_000;
     let kura = Kura::blank_kura_for_testing();
@@ -1734,7 +1784,7 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query_handle);
+    let state = authenticate_trigger_fixture(State::new(World::default(), kura, query_handle));
     state
         .lane_manifests
         .read()
@@ -1748,7 +1798,11 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let flag_key: Name = "trigger_authority".parse().unwrap();
     let trigger_id: TriggerId = "data_trigger_registered_authority".parse().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+    let header = state
+        .view()
+        .latest_block()
+        .expect("original trigger parent")
+        .header();
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction_for_callback_testing();
@@ -1801,7 +1855,7 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
             .expect("capture successful component callbacks");
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 2, 0);
+    let header = trigger_component_block(&state, 2).as_ref().header();
     let signed = signed_callback_boundary_source(
         &state,
         header,
@@ -1810,9 +1864,8 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
     builder.push_transaction(signed);
     let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
-    let _guard = crate::exec_witness::exec_witness_guard();
-    crate::exec_witness::start_block();
-    let mut state_block = state.block(source.header());
+    let (mut state_block, _recording) = ValidBlock::start_component_execution(&source, &state)
+        .expect("capture original signed Mint source before any effects");
     state_block
         .reserve_ordinary_execution_outputs(&source)
         .expect("reserve actual signed Mint source output");

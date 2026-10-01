@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-import re
 from functools import lru_cache
 from fractions import Fraction
 from math import prod
 from pathlib import Path
+from runpy import run_path
 
 CAP = 512 * 1024
 AXT_INNER_CAP = 1024 * 1024
@@ -77,7 +77,7 @@ def min_strided_merkle_fri_bytes(
 ) -> tuple[int, tuple[int, ...]]:
     """Minimize FRI value plus 48-byte frontier costs over fold partitions.
 
-    This is only a byte screen for the current strided-group Merkle-opening
+    This is only a byte screen for the explicit full-fiber/48-byte-hash Merkle-opening
     model. It makes no claim that another fold schedule is sound or implemented.
     """
     assert len(positions) == len(set(positions))
@@ -173,7 +173,7 @@ def hypothetical_frame(
     assert lde_rows & (lde_rows - 1) == 0
     rows = min(2 * query_count, lde_rows)
     # RowValues is one fixed-size canonical little-endian byte field. The
-    # earlier variable-row vector overcounted 350 bytes per current row.
+    # earlier variable-row vector overcounted 350 bytes per hypothetical q375 row.
     row_element = record(4, row_width * 8)
     query_element = record(4, 32, 32)
     round_payload = 8
@@ -223,7 +223,7 @@ def hypothetical_frame(
 
 
 def miss_probability(good: int, domain: int, queries: int) -> Fraction:
-    """Exact subset-miss term from the current conditional AIR reduction."""
+    """Exact subset-miss term for the explicitly supplied conditional AIR geometry."""
     assert 0 <= queries <= good <= domain
     numerator = prod(good - i for i in range(queries))
     denominator = prod(domain - i for i in range(queries))
@@ -231,10 +231,14 @@ def miss_probability(good: int, domain: int, queries: int) -> Fraction:
 
 
 def base_field_hiding_degree_screen(deep_frame_bytes: int) -> dict[str, int]:
-    """Unqualified `<2N` DEEP/masking byte and degree screen, not a proof."""
+    """Hypothetical q64/full-fiber/48-byte-digest `<2N` inline-mask screen.
+
+    The argument is that model's exact reference frame, never the current q77
+    frame. Its mathematical margins remain useful but qualify no implementation.
+    """
     n, h, lde_rows, queries, retained = 65_536, 32_768, 8_388_608, 64, 301
     if deep_frame_bytes != 502_895:
-        raise ValueError("DEEP DTO frame changed; review the hiding candidate")
+        raise ValueError("hypothetical q64 reference frame changed; review the byte model")
     trace_bound = n + h
     numerator_bound = max(2 * trace_bound - 1 + (n - n // 512), trace_bound + n - 1)
     quotient_bound = numerator_bound - n
@@ -242,7 +246,7 @@ def base_field_hiding_degree_screen(deep_frame_bytes: int) -> dict[str, int]:
     # Candidate appends R(x) to the same fixed inline RowValues field, with
     # no per-cell framing or new Merkle tree. Both lengths use two-byte varints.
     row_mask_bytes = field(retained * 8 + 32) - field(retained * 8)
-    # The implemented candidate already carries R as a framed quotient field.
+    # The hypothetical reference carries R as a framed quotient field.
     # This separate hypothetical layout relocates R into the inline row.
     frame_bytes = deep_frame_bytes - queries * field(32) + queries * row_mask_bytes
     segment_margin = CAP - frame_bytes
@@ -272,29 +276,22 @@ def base_field_hiding_degree_screen(deep_frame_bytes: int) -> dict[str, int]:
     }
 
 
-deep_source = (
-    Path(__file__).resolve().parents[2]
-    / "crates/fastpq_prover/src/backend/deep_proof.rs"
-).read_text()
-deep_matches = re.findall(r"MAX_FRAME_BYTES: usize = ([\d_]+);", deep_source)
-if len(deep_matches) != 1:
-    raise ValueError("expected one DEEP DTO frame bound in source")
-base_field_hiding = base_field_hiding_degree_screen(
-    int(deep_matches[0].replace("_", ""))
-)
+source_budget = run_path(str(Path(__file__).with_name("check_compact_source_budget.py")))
+current_source = source_budget["budget"](source_budget["load_sources"]())
+base_field_hiding = base_field_hiding_degree_screen(502_895)
 
 
-current = hypothetical_frame(375, 342, 524288, 4, (2,) * 17)
+hypothetical_q375 = hypothetical_frame(375, 342, 524288, 4, (2,) * 17)
 vertical64 = hypothetical_frame(64, 32, 8388608, 4, (8,) * 7)
 vertical72 = hypothetical_frame(72, 32, 8388608, 4, (8,) * 7)
-assert current["frame_bytes"] == 4_017_376
+assert hypothetical_q375["frame_bytes"] == 4_017_376
 assert vertical64["frame_bytes"] == 469_093
 assert vertical72["frame_bytes"] == 519_326
 
 # A transcript can select this exact 375-element subset: its first 375
 # canonical query coordinates can encode the distinct indices directly.
 # For this one valid subset, even the cheapest power-of-two fold schedule
-# using the current full-group values and Merkle frontiers is over 512 KiB.
+# using the hypothetical full-group values and Merkle frontiers is over 512 KiB.
 spread_queries = tuple(index * 524_288 // 375 for index in range(375))
 assert len(set(spread_queries)) == 375
 arity_min, arity_schedule = min_strided_merkle_fri_bytes(
@@ -303,21 +300,22 @@ arity_min, arity_schedule = min_strided_merkle_fri_bytes(
 assert (arity_min, arity_schedule) == (556_496, (3, 3, 3, 8))
 assert arity_min - CAP == 32_208
 assert min_strided_merkle_fri_bytes(spread_queries, 524_288, 4, 3)[0] == 561_104
-implemented_arity_min, implemented_arity_schedule = min_strided_merkle_fri_bytes(
+arity16_min, arity16_schedule = min_strided_merkle_fri_bytes(
     spread_queries, 524_288, 4, 4
 )
-assert (implemented_arity_min, implemented_arity_schedule) == (558_544, (3, 3, 3, 4, 4))
+assert (arity16_min, arity16_schedule) == (558_544, (3, 3, 3, 4, 4))
 all_partitions = exhaustive_strided_merkle_fri_bytes(spread_queries, 524_288, 4, 17)
-implemented_partitions = exhaustive_strided_merkle_fri_bytes(spread_queries, 524_288, 4, 4)
+arity16_partitions = exhaustive_strided_merkle_fri_bytes(spread_queries, 524_288, 4, 4)
 assert all_partitions[:2] == (arity_min, arity_schedule)
-assert implemented_partitions[:2] == (implemented_arity_min, implemented_arity_schedule)
+assert arity16_partitions[:2] == (arity16_min, arity16_schedule)
 
 miss64 = miss_probability(360447, 524288, 64)
 miss72 = miss_probability(360447, 524288, 72)
 assert Fraction(1, 2**35) < miss64 < Fraction(1, 2**34)
 assert Fraction(1, 2**39) < miss72 < Fraction(1, 2**38)
 
-print("current fixed-row q375/w342, binary, maximal-frame model:", current)
+print("current source-owned q77 profile (unqualified):", current_source["offline_deep"])
+print("hypothetical full-group q375/w342 with 48-byte digests:", hypothetical_q375)
 print("screened q64/w32/N=2^20/L=2^23, seven arity-8 groups:", vertical64)
 print("screened q72/w32/N=2^20/L=2^23, seven arity-8 groups:", vertical72)
 print("q64 per-segment headroom:", CAP - vertical64["frame_bytes"])
@@ -332,10 +330,10 @@ print(
 )
 print("q375 strided Merkle FRI minimum for one valid subset:", arity_min, arity_schedule)
 print("q375 exhaustive fold partitions (all powers):", all_partitions)
-print("q375 exhaustive fold partitions (arity at most 16):", implemented_partitions)
+print("q375 exhaustive fold partitions (arity at most 16):", arity16_partitions)
 print("q64 conditional blowup-8 query term strictly between 2^-35 and 2^-34")
 print("q72 conditional blowup-8 query term strictly between 2^-39 and 2^-38")
 print("q64 hypothetical raw LDE u64 matrix:", 8388608 * 32 * 8)
-print("current raw LDE u64 matrix:", 524288 * 342 * 8)
-print("unqualified base-field-hiding <2N DEEP candidate screen:", base_field_hiding)
+print("hypothetical q375 raw LDE u64 matrix:", 524288 * 342 * 8)
+print("hypothetical q64 base-field-hiding <2N screen:", base_field_hiding)
 print("qualification: false")

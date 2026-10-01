@@ -80,6 +80,9 @@ mod gpu;
 mod gpu_memory;
 #[cfg(feature = "fastpq-gpu")]
 mod gpu_secret;
+mod keccak_batch;
+#[cfg(feature = "fastpq-gpu")]
+mod keccak_gpu;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
 mod metal_config;

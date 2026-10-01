@@ -14,7 +14,7 @@ fn initial_executor_denies_transfer_asset_without_owner_signature() {
         [alice_account, user1_account, user2_account],
         [],
     );
-    let state = component_state_after_genesis(world);
+    let state = state_after_genesis(world);
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let executor = super::Executor::Initial;
