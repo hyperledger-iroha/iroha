@@ -17,6 +17,13 @@ does not change the V1 header, payload layout, checksum or signed bytes.
 `DeserializePayload<'a>` owns `deserialize` and `try_deserialize` within the
 active bounded payload context. Both typed frame directions are blanket
 implementations over the corresponding payload trait and `NoritoSchema`.
+`NoritoSchema::static_nominal_name()` may expose a complete literal nominal
+identity without copying it. `schema::identity::nominal_name::<T>()` borrows that
+literal or retains the existing owned generic composition. Derives expose a
+literal only when there are no type, const, or erased lifetime arguments. This
+changes no identity bytes, frame projection, payload layout, or schema hash;
+generic-name and serializer resource admission remain separate obligations.
+
 `NoritoSchema` declares one nominal identity and one root-frame projection;
 `schema::identity::frame_hash` computes the fixed digest used by every typed
 reader and writer. Neither direction has an independent hash method.

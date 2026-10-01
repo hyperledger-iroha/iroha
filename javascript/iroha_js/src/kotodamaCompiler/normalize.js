@@ -1,3 +1,59 @@
+const propertyDescriptor = Object.getOwnPropertyDescriptor.bind(Object);
+const ownKeys = Reflect.ownKeys.bind(Reflect);
+const isSafeInteger = Number.isSafeInteger.bind(Number);
+const isArray = Array.isArray.bind(Array);
+const stringify = JSON.stringify.bind(JSON);
+const TEXT_MUST_BE_SHARED = "must be ";
+const TEXT_KOTODAMA_SHARED = "Kotodama ";
+const TEXT_HAS_AN_INVALID = "has an invalid ";
+const TEXT_CANONICAL = "canonical ";
+const TEXT_MANIFEST = "manifest ";
+const TEXT_MUST_USE_SHARED = "must use ";
+const TEXT_DO_NOT_MATCH_THE_EMBEDDED = "do not match the embedded ";
+const TEXT_CONTAINS_SHARED = "contains ";
+const TEXT_PLAIN_DATA_ONLY_OBJECT = "plain data-only object";
+const TEXT_DENSE_DATA_ONLY_ARRAY = "dense data-only array";
+const TEXT_LENGTH = "length";
+const TEXT_IS_NOT = "is not ";
+const TEXT_POINTER_TLV = "pointer TLV ";
+const TEXT_CONTAIN_SHARED = "contain ";
+const TEXT_COMPILER_FINGERPRINT = "compiler_fingerprint";
+const TEXT_ERROR_MESSAGES = "error_messages";
+const TEXT_ARTIFACTBYTES = "artifactBytes";
+const TEXT_FUNCTION_NAME = "function_name";
+const TEXT_IS_INVALID = "is invalid";
+const TEXT_SEIYAKU_NAME = "seiyaku_name";
+const TEXT_STRING = "string";
+const TEXT_IS_MISSING = "is missing ";
+const TEXT_INTERFACE = "interface";
+const TEXT_FEATURES_BITMAP = "features_bitmap";
+const TEXT_ENTRYPOINTS = "entrypoints";
+const TEXT_CODE_HASH = "code_hash";
+const TEXT_DECLARED = "declared ";
+const TEXT_BRANDED_LIFECYCLE_SELECTOR = "branded lifecycle selector";
+const TEXT_SIDECAR_ENTRY = "sidecar entry ";
+const TEXT_DYNAMIC_WRITES = "dynamic_writes";
+const TEXT_BYTE_START = "byte_start";
+const TEXT_WRITE_KEYS = "write_keys";
+const TEXT_HAJIMARI = "Hajimari";
+const TEXT_MESSAGE = "message";
+const TEXT_ABIHASH = "abiHash";
+const TEXT_MANIFEST_SHARED = "manifest";
+const TEXT_ABI_HASH = "abi_hash";
+const TEXT_FORWARD = "forward ";
+const TEXT_ACCESS_HINT_DIAGNOSTICS = "access_hint_diagnostics";
+const TEXT_DYNAMIC_READS = "dynamic_reads";
+const TEXT_RETURN_SCHEMA = "return_schema";
+const TEXT_DECLARATION_IDENTIFIER = "declaration identifier";
+const TEXT_EXCEEDS_THE_SHARED = "exceeds the ";
+const TEXT_FIELDS = "fields";
+const TEXT_READ_KEYS = "read_keys";
+const TEXT_ACCESS_HINTS_COMPLETE = "access_hints_complete";
+const TEXT_TRANSLATIONS = "translations";
+const TEXT_ACCESS_HINTS_SKIPPED = "access_hints_skipped";
+const TEXT_BOOLEAN = "boolean";
+const TEXT_FRAME_BYTES = "frame_bytes";
+function rejectError(ErrorType, ...args) { throw new ErrorType(...args); }
 import { normalizeContractErrorMessagesV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../contractErrorTypes.js";
 import { crc64Xz as noritoCrc64 } from "../crc64Xz.js";
 import { blake2b256 } from "../blake2b.js";
@@ -17,27 +73,27 @@ import {
 } from "../entrypointSchema.js";
 
 const TEXT_DOES_NOT_MATCH = " does not match ";
-const TEXT_RESPONSE_CONTAINS_AN_INVALID = "response contains an invalid ";
-const TEXT_CONTAINS_DUPLICATE = "contains duplicate ";
+const TEXT_RESPONSE_CONTAINS_AN_INVALID = ("response " + TEXT_CONTAINS_SHARED + "an invalid ");
+const TEXT_CONTAINS_DUPLICATE = (TEXT_CONTAINS_SHARED + "duplicate ");
 const TEXT_IS_TRUNCATED = " is truncated";
-const TEXT_MUST_BE_A = " must be a ";
-const TEXT_MUST_BE_UNIQUE_AND_CANONICAL = " must be unique and canonical";
+const TEXT_MUST_BE_A = (" " + TEXT_MUST_BE_SHARED + "a ");
+const TEXT_MUST_BE_UNIQUE_AND_CANONICAL = (" " + TEXT_MUST_BE_SHARED + "unique and canonical");
 const TEXT_DESCRIPTOR = " descriptor ";
-const TEXT_ARTIFACT_BYTES_MUST_CONTAIN = "artifactBytes must contain ";
+const TEXT_ARTIFACT_BYTES_MUST_CONTAIN = (TEXT_ARTIFACTBYTES + " must " + TEXT_CONTAIN_SHARED);
 const TEXT_ACCESS_SET_HINTS = "access_set_hints";
 const TEXT_ARTIFACT_BYTES_DO_NOT_MATCH_CODE_HASH = "artifact bytes do not match codeHash";
 
 
-const TEXT_KOTODAMA_COMPILER = "Kotodama compiler ";
-const TEXT_KOTODAMA_MANIFEST = "Kotodama manifest ";
-const TEXT_EXCEEDS_THE = " exceeds the ";
-const TEXT_FAILED_KOTODAMA_COMPILATION_MUST = "failed Kotodama compilation must ";
-const TEXT_MUST_BE_A_DENSE_ARRAY_WITHOUT_EXTRA_FIELDS = (TEXT_MUST_BE_A + "dense array without extra fields");
-const TEXT_MUST_CONTAIN = " must contain ";
-const TEXT_MUST_BE_A_STABLE_PLAIN_DATA_ONLY_OBJECT = (TEXT_MUST_BE_A + "stable plain data-only object");
-const TEXT_MUST_BE_A_STABLE_DENSE_DATA_ONLY_ARRAY = (TEXT_MUST_BE_A + "stable dense data-only array");
-const TEXT_MUST_USE_CANONICAL_BASE64_PADDING_BITS = " must use canonical base64 padding bits";
-const TEXT_KOTODAMA_EMBEDDED_CONTRACT = "Kotodama embedded contract ";
+const TEXT_KOTODAMA_COMPILER = (TEXT_KOTODAMA_SHARED + "compiler ");
+const TEXT_KOTODAMA_MANIFEST = (TEXT_KOTODAMA_SHARED + TEXT_MANIFEST);
+const TEXT_EXCEEDS_THE = (" " + TEXT_EXCEEDS_THE_SHARED);
+const TEXT_FAILED_KOTODAMA_COMPILATION_MUST = ("failed " + TEXT_KOTODAMA_SHARED + "compilation must ");
+const TEXT_MUST_BE_A_DENSE_ARRAY_WITHOUT_EXTRA_FIELDS = (TEXT_MUST_BE_A + ("dense array without extra " + TEXT_FIELDS));
+const TEXT_MUST_CONTAIN = (" must " + TEXT_CONTAIN_SHARED);
+const TEXT_MUST_BE_A_STABLE_PLAIN_DATA_ONLY_OBJECT = (TEXT_MUST_BE_A + ("stable " + TEXT_PLAIN_DATA_ONLY_OBJECT));
+const TEXT_MUST_BE_A_STABLE_DENSE_DATA_ONLY_ARRAY = (TEXT_MUST_BE_A + ("stable " + TEXT_DENSE_DATA_ONLY_ARRAY));
+const TEXT_MUST_USE_CANONICAL_BASE64_PADDING_BITS = (" " + TEXT_MUST_USE_SHARED + TEXT_CANONICAL + "base64 padding bits");
+const TEXT_KOTODAMA_EMBEDDED_CONTRACT = (TEXT_KOTODAMA_SHARED + "embedded contract ");
 const TEXT_LITERAL_TRIGGER_SPEC_DECODE_FAILURES = "literal_trigger_spec_decode_failures";
 
 
@@ -54,7 +110,7 @@ const DIAGNOSTIC_SEVERITIES = new Set(["error", "warning"]);
 const MANIFEST_ENTRYPOINT_KINDS = new Set([
   "Kotoage",
   "View",
-  "Hajimari",
+  (TEXT_HAJIMARI),
   "Kaizen",
 ]);
 const MAX_DIAGNOSTICS = 64;
@@ -81,19 +137,19 @@ const IVM_ABI_HASH_BYTES = 32;
 const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
 const NORITO_FRAME_HEADER_BYTES = 40;
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype);
-const TYPED_ARRAY_TAG_GETTER = Object.getOwnPropertyDescriptor(
+const TYPED_ARRAY_TAG_GETTER = propertyDescriptor(
   TYPED_ARRAY_PROTOTYPE,
   Symbol.toStringTag,
 )?.get;
-const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
+const TYPED_ARRAY_BUFFER_GETTER = propertyDescriptor(
   TYPED_ARRAY_PROTOTYPE,
   "buffer",
 )?.get;
-const TYPED_ARRAY_BYTE_OFFSET_GETTER = Object.getOwnPropertyDescriptor(
+const TYPED_ARRAY_BYTE_OFFSET_GETTER = propertyDescriptor(
   TYPED_ARRAY_PROTOTYPE,
   "byteOffset",
 )?.get;
-const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+const TYPED_ARRAY_BYTE_LENGTH_GETTER = propertyDescriptor(
   TYPED_ARRAY_PROTOTYPE,
   "byteLength",
 )?.get;
@@ -117,7 +173,7 @@ function rejectType(message) {
 }
 
 function isRecord(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (value === null || typeof value !== "object" || isArray(value)) {
     return false;
   }
   const prototype = Object.getPrototypeOf(value);
@@ -129,24 +185,24 @@ function requireRecord(value, label) {
   try {
     record = isRecord(value);
   } catch {
-    rejectType(`${label}${TEXT_MUST_BE_A}plain data-only object`);
+    rejectType(`${label}${TEXT_MUST_BE_A}${TEXT_PLAIN_DATA_ONLY_OBJECT}`);
   }
   if (!record) {
-    rejectType(`${label} must be an object`);
+    rejectType(`${label} ${TEXT_MUST_BE_SHARED}an object`);
   }
   let keys;
   try {
-    keys = Reflect.ownKeys(value);
+    keys = ownKeys(value);
   } catch {
-    rejectType(`${label}${TEXT_MUST_BE_A}plain data-only object`);
+    rejectType(`${label}${TEXT_MUST_BE_A}${TEXT_PLAIN_DATA_ONLY_OBJECT}`);
   }
   for (const key of keys) {
-    if (typeof key !== "string") {
-      rejectType(`${label} must not contain symbol fields`);
+    if (typeof key !== (TEXT_STRING)) {
+      rejectType(`${label} must not ${TEXT_CONTAIN_SHARED}symbol ${TEXT_FIELDS}`);
     }
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const descriptor = propertyDescriptor(value, key);
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-      rejectType(`${label}.${key} must be an enumerable data property`);
+      rejectType(`${label}.${key} ${TEXT_MUST_BE_SHARED}an enumerable data property`);
     }
   }
   return value;
@@ -161,9 +217,9 @@ function snapshotRecord(value, label) {
     rejectType(`${label}${TEXT_MUST_BE_A_STABLE_PLAIN_DATA_ONLY_OBJECT}`);
   }
   const snapshot = Object.create(null);
-  for (const key of Reflect.ownKeys(descriptors)) {
+  for (const key of ownKeys(descriptors)) {
     const descriptor = descriptors[key];
-    if (typeof key !== "string" || !("value" in descriptor) || !descriptor.enumerable) {
+    if (typeof key !== (TEXT_STRING) || !("value" in descriptor) || !descriptor.enumerable) {
       rejectType(`${label}${TEXT_MUST_BE_A_STABLE_PLAIN_DATA_ONLY_OBJECT}`);
     }
     snapshot[key] = descriptor.value;
@@ -173,51 +229,51 @@ function snapshotRecord(value, label) {
 
 function requireExactKeys(value, keys, label) {
   requireRecord(value, label);
-  const actual = Reflect.ownKeys(value).sort();
+  const actual = ownKeys(value).sort();
   const expected = [...keys].sort();
   if (
     actual.length !== expected.length ||
     actual.some((key, index) => key !== expected[index])
   ) {
-    rejectType(`${label} has an invalid field set`);
+    rejectType(`${label} ${TEXT_HAS_AN_INVALID}field set`);
   }
 }
 
 function requireDenseArray(value, label, maximum = MAX_MANIFEST_ITEMS) {
-  if (!Array.isArray(value)) {
-    rejectType(`${label} must be an array`);
+  if (!isArray(value)) {
+    rejectType(`${label} ${TEXT_MUST_BE_SHARED}an array`);
   }
   let length;
   let keys;
   try {
-    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    const lengthDescriptor = propertyDescriptor(value, (TEXT_LENGTH));
     length = lengthDescriptor?.value;
-    keys = Reflect.ownKeys(value);
+    keys = ownKeys(value);
   } catch {
-    rejectType(`${label}${TEXT_MUST_BE_A}dense data-only array`);
+    rejectType(`${label}${TEXT_MUST_BE_A}${TEXT_DENSE_DATA_ONLY_ARRAY}`);
   }
-  if (!Number.isSafeInteger(length) || length < 0 || length > maximum) {
-    throw new RangeError(`${label}${TEXT_MUST_CONTAIN}at most ${maximum} items`);
+  if (!isSafeInteger(length) || length < 0 || length > maximum) {
+    rejectError(RangeError, `${label}${TEXT_MUST_CONTAIN}at most ${maximum} items`);
   }
-  if (keys.some((key) => typeof key !== "string")) {
-    rejectType(`${label} must not contain symbol fields`);
+  if (keys.some((key) => typeof key !== (TEXT_STRING))) {
+    rejectType(`${label} must not ${TEXT_CONTAIN_SHARED}symbol ${TEXT_FIELDS}`);
   }
-  const elementKeys = keys.filter((key) => key !== "length");
+  const elementKeys = keys.filter((key) => key !== (TEXT_LENGTH));
   if (elementKeys.length !== length) {
     rejectType(`${label}${TEXT_MUST_BE_A_DENSE_ARRAY_WITHOUT_EXTRA_FIELDS}`);
   }
   for (let index = 0; index < length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    const descriptor = propertyDescriptor(value, String(index));
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-      rejectType(`${label}${TEXT_MUST_BE_A}dense data-only array`);
+      rejectType(`${label}${TEXT_MUST_BE_A}${TEXT_DENSE_DATA_ONLY_ARRAY}`);
     }
   }
   return value;
 }
 
 function snapshotDenseArray(value, label, maximum = MAX_MANIFEST_ITEMS) {
-  if (!Array.isArray(value)) {
-    rejectType(`${label} must be an array`);
+  if (!isArray(value)) {
+    rejectType(`${label} ${TEXT_MUST_BE_SHARED}an array`);
   }
   let descriptors;
   try {
@@ -226,10 +282,10 @@ function snapshotDenseArray(value, label, maximum = MAX_MANIFEST_ITEMS) {
     rejectType(`${label}${TEXT_MUST_BE_A_STABLE_DENSE_DATA_ONLY_ARRAY}`);
   }
   const length = descriptors.length?.value;
-  if (!Number.isSafeInteger(length) || length < 0 || length > maximum) {
-    throw new RangeError(`${label}${TEXT_MUST_CONTAIN}at most ${maximum} items`);
+  if (!isSafeInteger(length) || length < 0 || length > maximum) {
+    rejectError(RangeError, `${label}${TEXT_MUST_CONTAIN}at most ${maximum} items`);
   }
-  if (Reflect.ownKeys(descriptors).length !== length + 1) {
+  if (ownKeys(descriptors).length !== length + 1) {
     rejectType(`${label}${TEXT_MUST_BE_A_DENSE_ARRAY_WITHOUT_EXTRA_FIELDS}`);
   }
   const snapshot = [];
@@ -258,21 +314,21 @@ function validateUnicodeScalarString(value) {
 }
 
 function requireString(value, label, { allowEmpty = false, maximum = MAX_STRING_BYTES } = {}) {
-  if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
-    rejectType(`${label} must be ${allowEmpty ? "a" : "a non-empty"} string`);
+  if (typeof value !== (TEXT_STRING) || (!allowEmpty && value.length === 0)) {
+    rejectType(`${label} ${TEXT_MUST_BE_SHARED}${allowEmpty ? "a" : "a non-empty"} ${TEXT_STRING}`);
   }
   if (!validateUnicodeScalarString(value)) {
     rejectType(`${label}${TEXT_MUST_CONTAIN}valid Unicode scalar values`);
   }
   if (UTF8_ENCODER.encode(value).length > maximum) {
-    throw new RangeError(`${label}${TEXT_EXCEEDS_THE}${maximum}-byte limit`);
+    rejectError(RangeError, `${label}${TEXT_EXCEEDS_THE}${maximum}-byte limit`);
   }
   return value;
 }
 
 function requireUnsignedInteger(value, maximum, label) {
-  if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
-    rejectType(`${label} must be an unsigned safe integer in 0..${maximum}`);
+  if (!isSafeInteger(value) || value < 0 || value > maximum) {
+    rejectType(`${label} ${TEXT_MUST_BE_SHARED}an unsigned safe integer in 0..${maximum}`);
   }
   return value;
 }
@@ -293,14 +349,14 @@ function validateBoundedJson(value, label) {
     const current = stack.pop();
     nodes += 1;
     if (nodes > MAX_JSON_NODES) {
-      throw new RangeError(`${label}${TEXT_EXCEEDS_THE}${MAX_JSON_NODES}-node JSON limit`);
+      rejectError(RangeError, `${label}${TEXT_EXCEEDS_THE}${MAX_JSON_NODES}-node JSON limit`);
     }
     if (current.depth > MAX_JSON_DEPTH) {
-      throw new RangeError(`${label}${TEXT_EXCEEDS_THE}${MAX_JSON_DEPTH}-level JSON depth limit`);
+      rejectError(RangeError, `${label}${TEXT_EXCEEDS_THE}${MAX_JSON_DEPTH}-level JSON depth limit`);
     }
     const item = current.value;
-    if (item === null || typeof item === "boolean") continue;
-    if (typeof item === "string") {
+    if (item === null || typeof item === (TEXT_BOOLEAN)) continue;
+    if (typeof item === (TEXT_STRING)) {
       requireString(item, current.label, { allowEmpty: true });
       continue;
     }
@@ -310,7 +366,7 @@ function validateBoundedJson(value, label) {
       }
       continue;
     }
-    if (Array.isArray(item)) {
+    if (isArray(item)) {
       requireDenseArray(item, current.label);
       for (let index = item.length - 1; index >= 0; index -= 1) {
         stack.push({
@@ -322,7 +378,7 @@ function validateBoundedJson(value, label) {
       continue;
     }
     requireRecord(item, current.label);
-    for (const key of Reflect.ownKeys(item)) {
+    for (const key of ownKeys(item)) {
       requireString(key, `${current.label} key`, { maximum: MAX_SOURCE_PATH_BYTES });
       stack.push({
         value: item[key],
@@ -339,13 +395,13 @@ function parseJson(raw, label) {
   try {
     return JSON.parse(raw);
   } catch {
-    rejectType(`${label} is not valid JSON`);
+    rejectType(`${label} ${TEXT_IS_NOT}valid JSON`);
   }
 }
 
 function normalizeHashHex(value, label) {
-  if (typeof value !== "string") {
-    rejectType(`${TEXT_KOTODAMA_COMPILER}response is missing ${label}`);
+  if (typeof value !== (TEXT_STRING)) {
+    rejectType(`${TEXT_KOTODAMA_COMPILER}response ${TEXT_IS_MISSING}${label}`);
   }
   if (/^[0-9a-fA-F]{64}$/u.test(value)) {
     return requireIrohaHashMarker(value.toLowerCase(), label);
@@ -353,7 +409,7 @@ function normalizeHashHex(value, label) {
   const literal = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u.exec(value);
   if (literal === null) {
     rejectType(
-      `${TEXT_KOTODAMA_COMPILER}${TEXT_RESPONSE_CONTAINS_AN_INVALID}or noncanonical ${label}`,
+      `${TEXT_KOTODAMA_COMPILER}${TEXT_RESPONSE_CONTAINS_AN_INVALID}or non${TEXT_CANONICAL}${label}`,
     );
   }
   const [, body, checksum] = literal;
@@ -408,14 +464,13 @@ function snapshotUint8Array(value) {
     const byteOffset = TYPED_ARRAY_BYTE_OFFSET_GETTER.call(value);
     const byteLength = TYPED_ARRAY_BYTE_LENGTH_GETTER.call(value);
     if (byteLength > MAX_ARTIFACT_BYTES) {
-      throw new RangeError(
-        `${TEXT_KOTODAMA_COMPILER}${TEXT_ARTIFACT_BYTES_MUST_CONTAIN}1..${MAX_ARTIFACT_BYTES} bytes`,
+      rejectError(RangeError, `${TEXT_KOTODAMA_COMPILER}${TEXT_ARTIFACT_BYTES_MUST_CONTAIN}1..${MAX_ARTIFACT_BYTES} bytes`,
       );
     }
     return new Uint8Array(buffer, byteOffset, byteLength).slice();
   } catch (error) {
     if (error instanceof RangeError) throw error;
-    rejectType((TEXT_KOTODAMA_COMPILER + "artifactBytes" + TEXT_MUST_BE_A + "readable Uint8Array"));
+    rejectType((TEXT_KOTODAMA_COMPILER + (TEXT_ARTIFACTBYTES) + TEXT_MUST_BE_A + "readable Uint8Array"));
   }
 }
 
@@ -424,10 +479,10 @@ function normalizeArtifactBytes(value) {
   const byteView = snapshotUint8Array(value);
   if (byteView !== null) {
     bytes = byteView;
-  } else if (Array.isArray(value)) {
+  } else if (isArray(value)) {
     const snapshot = snapshotDenseArray(
       value,
-      (TEXT_KOTODAMA_COMPILER + "artifactBytes"),
+      (TEXT_KOTODAMA_COMPILER + (TEXT_ARTIFACTBYTES)),
       MAX_ARTIFACT_BYTES,
     );
     if (snapshot.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)) {
@@ -435,7 +490,7 @@ function normalizeArtifactBytes(value) {
     }
     bytes = Uint8Array.from(snapshot);
   } else {
-    rejectType((TEXT_KOTODAMA_COMPILER + "response is missing artifactBytes"));
+    rejectType((TEXT_KOTODAMA_COMPILER + ("response " + TEXT_IS_MISSING + TEXT_ARTIFACTBYTES)));
   }
   if (bytes.length === 0 || bytes.length > MAX_ARTIFACT_BYTES) {
     rejectType(
@@ -492,17 +547,17 @@ function readCompactLength(bytes, state, label) {
   const start = state.offset;
   for (;;) {
     if (state.offset >= bytes.length || state.offset - start >= 8) {
-      rejectType(`${label} contains a truncated or oversized compact length`);
+      rejectType(`${label} ${TEXT_CONTAINS_SHARED}a truncated or oversized compact ${TEXT_LENGTH}`);
     }
     const byte = bytes[state.offset];
     state.offset += 1;
     value |= BigInt(byte & 0x7f) << shift;
     if ((byte & 0x80) === 0) {
       if (state.offset - start > 1 && byte === 0) {
-        rejectType(`${label} contains a noncanonical compact length`);
+        rejectType(`${label} ${TEXT_CONTAINS_SHARED}a non${TEXT_CANONICAL}compact ${TEXT_LENGTH}`);
       }
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new RangeError(`${label} compact length exceeds the safe integer range`);
+        rejectError(RangeError, `${label} compact ${TEXT_LENGTH} ${TEXT_EXCEEDS_THE_SHARED}safe integer range`);
       }
       return Number(value);
     }
@@ -511,7 +566,7 @@ function readCompactLength(bytes, state, label) {
 }
 
 function readCompactField(bytes, state, label) {
-  const length = readCompactLength(bytes, state, `${label}.length`);
+  const length = readCompactLength(bytes, state, `${label}.${TEXT_LENGTH}`);
   const end = state.offset + length;
   if (end > bytes.length) {
     rejectType(`${label} payload${TEXT_IS_TRUNCATED}`);
@@ -525,19 +580,19 @@ function decodeEmbeddedString(field, label) {
   const state = { offset: 0 };
   const encoded = readCompactField(field, state, label);
   if (state.offset !== field.length) {
-    rejectType(`${label} contains trailing bytes`);
+    rejectType(`${label} ${TEXT_CONTAINS_SHARED}trailing bytes`);
   }
   try {
     return UTF8_DECODER.decode(encoded);
   } catch {
-    rejectType(`${label} is not valid UTF-8`);
+    rejectType(`${label} ${TEXT_IS_NOT}valid UTF-8`);
   }
 }
 
 function visitEmbeddedVector(field, label, maximum, visit = () => {}) {
   const count = readU64Le(field, 0, `${label}.count`);
   if (count > BigInt(maximum)) {
-    throw new RangeError(`${label}${TEXT_EXCEEDS_THE}${maximum}-item limit`);
+    rejectError(RangeError, `${label}${TEXT_EXCEEDS_THE}${maximum}-item limit`);
   }
   const state = { offset: 8 };
   for (let index = 0; index < Number(count); index += 1) {
@@ -559,13 +614,13 @@ function validateEmbeddedCallables(field, headerMode, minimumCount, label) {
       const idBytes = readCompactField(role, state, roleLabel);
       const id = idBytes[0] | (idBytes[1] << 8);
       if (idBytes.length !== 2 || state.offset !== role.length || id < 1 || id > 0x12) {
-        rejectType(`${roleLabel} has an invalid pointer role`);
+        rejectType(`${roleLabel} ${TEXT_HAS_AN_INVALID}pointer role`);
       }
       if (kind === 8 && ((headerMode & 1) === 0 || id < 0x10)) {
         rejectType(`${roleLabel} requires a numeric private role in ZK mode`);
       }
     } else if (kind > 7 || role.length !== 4) {
-      rejectType(`${roleLabel} has an invalid call-word role`);
+      rejectType(`${roleLabel} ${TEXT_HAS_AN_INVALID}call-word role`);
     }
   };
   const count = visitEmbeddedVector(field, label, MAX_MANIFEST_ITEMS, (item, itemLabel) => {
@@ -573,10 +628,10 @@ function validateEmbeddedCallables(field, headerMode, minimumCount, label) {
     const fields = Array.from({ length: 4 }, (_, index) =>
       readCompactField(item, state, `${itemLabel}.field${index}`));
     if (state.offset !== item.length || fields[0].length !== 8 || fields[1].length !== 4) {
-      rejectType(`${itemLabel} has an invalid callable descriptor`);
+      rejectType(`${itemLabel} ${TEXT_HAS_AN_INVALID}callable descriptor`);
     }
     const entryPc = readU64Le(fields[0], 0, `${itemLabel}.entry_pc`);
-    const frameBytes = readU32Le(fields[1], 0, `${itemLabel}.frame_bytes`);
+    const frameBytes = readU32Le(fields[1], 0, `${itemLabel}.${TEXT_FRAME_BYTES}`);
     if (entryPc <= lastEntryPc || entryPc % 4n !== 0n ||
         frameBytes % 16 !== 0 || frameBytes > MAX_CALL_FRAME_BYTES) {
       rejectType(`${itemLabel} requires ordered aligned roots and bounded aligned frames`);
@@ -594,12 +649,12 @@ function validateEmbeddedCallables(field, headerMode, minimumCount, label) {
 }
 
 function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex) {
-  const label = (TEXT_KOTODAMA_EMBEDDED_CONTRACT + "interface");
+  const label = (TEXT_KOTODAMA_EMBEDDED_CONTRACT + (TEXT_INTERFACE));
   if (frame.length < NORITO_FRAME_HEADER_BYTES) {
     rejectType(`${label} is shorter than its Norito frame header`);
   }
   if (!equalBytes(frame.subarray(0, 4), Uint8Array.from([0x4e, 0x52, 0x54, 0x30]))) {
-    rejectType(`${label} is not an NRT0 frame`);
+    rejectType(`${label} ${TEXT_IS_NOT}an NRT0 frame`);
   }
   if (frame[4] !== 0 || frame[5] !== 0) {
     rejectType(`${label} uses an unsupported Norito version`);
@@ -608,48 +663,48 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     rejectType(`${label} has the wrong Norito schema hash`);
   }
   if (frame[22] !== 0 || frame[39] !== NORITO_COMPACT_LENGTHS_FLAG) {
-    rejectType(`${label} must use canonical uncompressed compact-length framing`);
+    rejectType(`${label} ${TEXT_MUST_USE_SHARED}${TEXT_CANONICAL}uncompressed compact-${TEXT_LENGTH} framing`);
   }
-  const payloadLength = readU64Le(frame, 23, `${label} payload length`);
+  const payloadLength = readU64Le(frame, 23, `${label} payload ${TEXT_LENGTH}`);
   if (payloadLength === 0n || payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
-    rejectType(`${label} has an invalid payload length`);
+    rejectType(`${label} ${TEXT_HAS_AN_INVALID}payload ${TEXT_LENGTH}`);
   }
   const safePayloadLength = Number(payloadLength);
   const paddingLength = frame.length - NORITO_FRAME_HEADER_BYTES - safePayloadLength;
   if (paddingLength !== NORITO_EMBEDDED_INTERFACE_PADDING_BYTES) {
-    rejectType(`${label} has a noncanonical alignment padding length`);
+    rejectType(`${label} has a non${TEXT_CANONICAL}alignment padding ${TEXT_LENGTH}`);
   }
   const payloadOffset = NORITO_FRAME_HEADER_BYTES + paddingLength;
   if (frame.subarray(NORITO_FRAME_HEADER_BYTES, payloadOffset).some((byte) => byte !== 0)) {
-    rejectType(`${label} contains non-zero alignment padding`);
+    rejectType(`${label} ${TEXT_CONTAINS_SHARED}non-zero alignment padding`);
   }
   const payload = frame.subarray(payloadOffset);
   if (payload.length !== safePayloadLength) {
     rejectType(`${label} payload${TEXT_IS_TRUNCATED}`);
   }
   if (noritoCrc64(payload) !== readU64Le(frame, 31, `${label} CRC64`)) {
-    rejectType(`${label} has an invalid CRC64`);
+    rejectType(`${label} ${TEXT_HAS_AN_INVALID}CRC64`);
   }
 
   const state = { offset: 0 };
   const fields = Array.from({ length: 11 }, (_, index) =>
     readCompactField(payload, state, `${label}.field${index}`));
   if (state.offset !== payload.length) {
-    rejectType(`${label} contains trailing or unknown fields`);
+    rejectType(`${label} ${TEXT_CONTAINS_SHARED}trailing or unknown ${TEXT_FIELDS}`);
   }
-  const embeddedName = decodeEmbeddedString(fields[0], `${label}.seiyaku_name`);
+  const embeddedName = decodeEmbeddedString(fields[0], `${label}.${TEXT_SEIYAKU_NAME}`);
   const embeddedFingerprint = decodeEmbeddedString(
     fields[1],
-    `${label}.compiler_fingerprint`,
+    `${label}.${TEXT_COMPILER_FINGERPRINT}`,
   );
   if (fields[2].length !== IVM_ABI_HASH_BYTES || toHex(fields[2]) !== abiHashHex) {
     rejectType(
-      (TEXT_KOTODAMA_EMBEDDED_CONTRACT + "interface ABI hash" + TEXT_DOES_NOT_MATCH + "the compiler response"),
+      (TEXT_KOTODAMA_EMBEDDED_CONTRACT + (TEXT_INTERFACE + " ABI hash") + TEXT_DOES_NOT_MATCH + "the compiler response"),
     );
   }
-  const embeddedFeatures = readU64Le(fields[3], 0, `${label}.features_bitmap`);
+  const embeddedFeatures = readU64Le(fields[3], 0, `${label}.${TEXT_FEATURES_BITMAP}`);
   if (fields[3].length !== 8 || embeddedFeatures > BigInt(Number.MAX_SAFE_INTEGER)) {
-    rejectType(`${label}.features_bitmap is not a canonical safe u64`);
+    rejectType(`${label}.${TEXT_FEATURES_BITMAP} ${TEXT_IS_NOT}a ${TEXT_CANONICAL}safe u64`);
   }
   if (
     embeddedName !== manifest.seiyaku_name ||
@@ -657,7 +712,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     Number(embeddedFeatures) !== manifest.features_bitmap
   ) {
     rejectType(
-      (TEXT_KOTODAMA_MANIFEST + "identity/capabilities do not match the embedded contract interface"),
+      (TEXT_KOTODAMA_MANIFEST + ("identity/capabilities " + TEXT_DO_NOT_MATCH_THE_EMBEDDED + "contract " + TEXT_INTERFACE)),
     );
   }
   if (Number(embeddedFeatures) !== (headerMode & 0x03)) {
@@ -673,48 +728,48 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
       readCompactField(field, optionState, `${optionLabel}.value`);
       if (optionState.offset === field.length) return true;
     }
-    rejectType(`${optionLabel} has a noncanonical option envelope`);
+    rejectType(`${optionLabel} has a non${TEXT_CANONICAL}option envelope`);
   };
   const expectedAccessHints = manifest.access_set_hints !== null;
   if (optionPresent(fields[4], `${label}.${TEXT_ACCESS_SET_HINTS}`) !== expectedAccessHints) {
-    rejectType((TEXT_KOTODAMA_MANIFEST + "access hints do not match the embedded interface"));
+    rejectType((TEXT_KOTODAMA_MANIFEST + ("access hints " + TEXT_DO_NOT_MATCH_THE_EMBEDDED + TEXT_INTERFACE)));
   }
   for (const [fieldIndex, manifestValue, fieldLabel] of [
     [5, manifest.kotoba ?? [], "kotoba"],
-    [6, manifest.entrypoints, "entrypoints"],
+    [6, manifest.entrypoints, (TEXT_ENTRYPOINTS)],
     [8, manifest.states, "states"],
     [9, manifest.error_types ?? [], "error_types"],
-    [10, manifest.error_messages ?? [], "error_messages"],
+    [10, manifest.error_messages ?? [], (TEXT_ERROR_MESSAGES)],
   ]) {
     if (visitEmbeddedVector(fields[fieldIndex], `${label}.${fieldLabel}`, MAX_MANIFEST_ITEMS) !== manifestValue.length) {
       rejectType(
-        `${TEXT_KOTODAMA_MANIFEST}${fieldLabel} count${TEXT_DOES_NOT_MATCH}the embedded interface`,
+        `${TEXT_KOTODAMA_MANIFEST}${fieldLabel} count${TEXT_DOES_NOT_MATCH}the embedded ${TEXT_INTERFACE}`,
       );
     }
   }
   const messages = [];
-  visitEmbeddedVector(fields[10], `${label}.error_messages`, MAX_MANIFEST_ITEMS, (entry, entryLabel) => {
+  visitEmbeddedVector(fields[10], `${label}.${TEXT_ERROR_MESSAGES}`, MAX_MANIFEST_ITEMS, (entry, entryLabel) => {
     const cursor = { offset: 0 };
     const identity = readCompactField(entry, cursor, `${entryLabel}.error_type`);
     const code = readCompactField(entry, cursor, `${entryLabel}.code`);
-    const message = readCompactField(entry, cursor, `${entryLabel}.message`);
-    if (cursor.offset !== entry.length || code.length !== 4) rejectType(`${entryLabel} has an invalid error message record`);
+    const message = readCompactField(entry, cursor, `${entryLabel}.${TEXT_MESSAGE}`);
+    if (cursor.offset !== entry.length || code.length !== 4) rejectType(`${entryLabel} ${TEXT_HAS_AN_INVALID}error ${TEXT_MESSAGE} record`);
     messages.push({ error_type: decodeEmbeddedString(identity, `${entryLabel}.error_type`),
-      code: readU32Le(code, 0, `${entryLabel}.code`), message: decodeEmbeddedString(message, `${entryLabel}.message`) });
+      code: readU32Le(code, 0, `${entryLabel}.code`), message: decodeEmbeddedString(message, `${entryLabel}.${TEXT_MESSAGE}`) });
   });
-  const normalizedMessages = normalizeContractErrorMessagesV1(messages, manifest.error_types, `${label}.error_messages`);
-  if (JSON.stringify(normalizedMessages) !== JSON.stringify(manifest.error_messages ?? [])) {
-    rejectType(`${TEXT_KOTODAMA_MANIFEST}error_messages do not match the embedded contract interface`);
+  const normalizedMessages = normalizeContractErrorMessagesV1(messages, manifest.error_types, `${label}.${TEXT_ERROR_MESSAGES}`);
+  if (stringify(normalizedMessages) !== stringify(manifest.error_messages ?? [])) {
+    rejectType(`${TEXT_KOTODAMA_MANIFEST}${TEXT_ERROR_MESSAGES} ${TEXT_DO_NOT_MATCH_THE_EMBEDDED}contract ${TEXT_INTERFACE}`);
   }
   return validateEmbeddedCallables(fields[7], headerMode, manifest.entrypoints.length, `${label}.callables`);
 }
 
 function validateLiteralSection(bytes, start) {
-  const label = "Kotodama IVM literal section";
+  const label = (TEXT_KOTODAMA_SHARED + "IVM literal section");
   if (start + 16 > bytes.length) rejectType(`${label}${TEXT_IS_TRUNCATED}`);
   const count = readU32Le(bytes, start + 4, `${label} count`);
   const padding = readU32Le(bytes, start + 8, `${label} padding`);
-  const dataLength = readU32Le(bytes, start + 12, `${label} data length`);
+  const dataLength = readU32Le(bytes, start + 12, `${label} data ${TEXT_LENGTH}`);
   if (count > 0x1_0000 || padding > 3) {
     rejectType(`${label} has invalid bounds`);
   }
@@ -730,7 +785,7 @@ function validateLiteralSection(bytes, start) {
     padding !== expectedPadding ||
     bytes.subarray(dataEnd, codeOffset).some((byte) => byte !== 0)
   ) {
-    rejectType(`${label} uses noncanonical alignment padding`);
+    rejectType(`${label} uses non${TEXT_CANONICAL}alignment padding`);
   }
   const descriptors = [];
   for (let index = 0; index < count; index += 1) {
@@ -742,7 +797,7 @@ function validateLiteralSection(bytes, start) {
     const kind = Number(descriptor >> 56n);
     const relativeOffsetBigInt = descriptor & 0x00ff_ffff_ffff_ffffn;
     if (relativeOffsetBigInt > BigInt(Number.MAX_SAFE_INTEGER)) {
-      rejectType(`${label}${TEXT_DESCRIPTOR}${index} offset is invalid`);
+      rejectType(`${label}${TEXT_DESCRIPTOR}${index} offset ${TEXT_IS_INVALID}`);
     }
     const relativeOffset = Number(relativeOffsetBigInt);
     const absoluteOffset = start + relativeOffset;
@@ -752,19 +807,19 @@ function validateLiteralSection(bytes, start) {
       absoluteOffset < dataStart ||
       absoluteOffset >= dataEnd
     ) {
-      rejectType(`${label}${TEXT_DESCRIPTOR}${index} is invalid`);
+      rejectType(`${label}${TEXT_DESCRIPTOR}${index} ${TEXT_IS_INVALID}`);
     }
     if (
       descriptors.length !== 0 &&
       absoluteOffset <= descriptors[descriptors.length - 1].absoluteOffset
     ) {
-      rejectType(`${label}${TEXT_DESCRIPTOR}targets must be strictly increasing`);
+      rejectType(`${label}${TEXT_DESCRIPTOR}targets ${TEXT_MUST_BE_SHARED}strictly increasing`);
     }
     descriptors.push({ kind, absoluteOffset });
   }
   if (descriptors.length === 0) {
     if (dataLength !== 0) {
-      rejectType(`${label} cannot contain unindexed literal data`);
+      rejectType(`${label} cannot ${TEXT_CONTAIN_SHARED}unindexed literal data`);
     }
   } else if (descriptors[0].absoluteOffset !== dataStart) {
     rejectType(`${label} first${TEXT_DESCRIPTOR}must target the first data byte`);
@@ -789,21 +844,21 @@ function validatePointerLiteralV1(bytes, label) {
   const typeId = (bytes[0] << 8) | bytes[1];
   const allowedType = typeId >= 0x0001 && typeId <= 0x0012;
   if (!allowedType) {
-    rejectType(`${label} pointer TLV type is not allowed by ABI v1`);
+    rejectType(`${label} ${TEXT_POINTER_TLV}type ${TEXT_IS_NOT}allowed by ABI v1`);
   }
   if (bytes[2] !== 1) {
-    rejectType(`${label} pointer TLV must use version 1`);
+    rejectType(`${label} ${TEXT_POINTER_TLV}${TEXT_MUST_USE_SHARED}version 1`);
   }
-  const payloadLength = readU32Be(bytes, 3, `${label} pointer TLV length`);
+  const payloadLength = readU32Be(bytes, 3, `${label} ${TEXT_POINTER_TLV}${TEXT_LENGTH}`);
   const expectedLength = 7 + payloadLength + 32;
   if (bytes.length !== expectedLength) {
-    rejectType(`${label} pointer TLV length${TEXT_DOES_NOT_MATCH}its envelope`);
+    rejectType(`${label} ${TEXT_POINTER_TLV}${TEXT_LENGTH}${TEXT_DOES_NOT_MATCH}its envelope`);
   }
   const payload = bytes.subarray(7, 7 + payloadLength);
   const expectedHash = blake2b256(payload);
   expectedHash[expectedHash.length - 1] |= 1;
   if (!equalBytes(bytes.subarray(7 + payloadLength), expectedHash)) {
-    rejectType(`${label} pointer TLV payload hash is invalid`);
+    rejectType(`${label} ${TEXT_POINTER_TLV}payload hash ${TEXT_IS_INVALID}`);
   }
 }
 
@@ -813,8 +868,7 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
     rejectType(`${label} is too short to be a deployable IVM contract`);
   }
   if (bytes.length - IVM_HEADER_BYTES > MAX_IVM_CODE_REGION_BYTES) {
-    throw new RangeError(
-      `${label} post-header image exceeds the ${MAX_IVM_CODE_REGION_BYTES}-byte IVM code-memory limit`,
+    rejectError(RangeError, `${label} post-header image ${TEXT_EXCEEDS_THE_SHARED}${MAX_IVM_CODE_REGION_BYTES}-byte IVM code-memory limit`,
     );
   }
   if (!equalBytes(bytes.subarray(0, 4), Uint8Array.from([0x49, 0x56, 0x4d, 0x00]))) {
@@ -824,26 +878,26 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
     rejectType(`${label} has unsupported IVM execution metadata`);
   }
   if (bytes[16] !== 1) {
-    rejectType(`${label} must use IVM ABI version 1`);
+    rejectType(`${label} ${TEXT_MUST_USE_SHARED}IVM ABI version 1`);
   }
   if (toHex(bytes.subarray(IVM_EXECUTION_HEADER_BYTES, IVM_HEADER_BYTES)) !== abiHashHex) {
-    rejectType(`${label} authenticated ABI hash${TEXT_DOES_NOT_MATCH}abiHash`);
+    rejectType(`${label} authenticated ABI hash${TEXT_DOES_NOT_MATCH}${TEXT_ABIHASH}`);
   }
   if (!equalBytes(
     bytes.subarray(IVM_HEADER_BYTES, IVM_HEADER_BYTES + 4),
     Uint8Array.from([0x43, 0x4e, 0x54, 0x52]),
   )) {
-    rejectType(`${label} is missing its required CNTR interface section`);
+    rejectType(`${label} ${TEXT_IS_MISSING}its required CNTR ${TEXT_INTERFACE} section`);
   }
   const interfaceLength = readU32Le(
     bytes,
     IVM_HEADER_BYTES + 4,
-    `${label} CNTR length`,
+    `${label} CNTR ${TEXT_LENGTH}`,
   );
   const interfaceStart = IVM_HEADER_BYTES + 8;
   const interfaceEnd = interfaceStart + interfaceLength;
   if (interfaceLength === 0 || interfaceEnd < interfaceStart || interfaceEnd > bytes.length) {
-    rejectType(`${label} has an invalid CNTR interface length`);
+    rejectType(`${label} ${TEXT_HAS_AN_INVALID}CNTR ${TEXT_INTERFACE} ${TEXT_LENGTH}`);
   }
   const lastCallablePc = validateEmbeddedInterfaceFrame(
     bytes.subarray(interfaceStart, interfaceEnd),
@@ -896,24 +950,24 @@ export function verifyCompiledContractArtifact(
   const normalizedArtifact = normalizeArtifactBytes(artifactBytes);
   const normalizedManifest = snapshotRecord(
     manifest,
-    "Kotodama deployment manifest",
+    (TEXT_KOTODAMA_SHARED + "deployment " + TEXT_MANIFEST_SHARED),
   );
   const codeHashHex = normalizeHashHex(codeHash, "codeHash");
-  const abiHashHex = normalizeHashHex(abiHash, "abiHash");
+  const abiHashHex = normalizeHashHex(abiHash, (TEXT_ABIHASH));
   if (artifactHashHex(normalizedArtifact) !== codeHashHex) {
     throw new Error((TEXT_KOTODAMA_COMPILER + TEXT_ARTIFACT_BYTES_DO_NOT_MATCH_CODE_HASH));
   }
   if (
-    normalizeHashHex(normalizedManifest.code_hash, "manifest code_hash") !==
+    normalizeHashHex(normalizedManifest.code_hash, (TEXT_MANIFEST + TEXT_CODE_HASH)) !==
     codeHashHex
   ) {
-    throw new Error((TEXT_KOTODAMA_COMPILER + "manifest code_hash" + TEXT_DOES_NOT_MATCH + "the artifact"));
+    throw new Error((TEXT_KOTODAMA_COMPILER + (TEXT_MANIFEST + TEXT_CODE_HASH) + TEXT_DOES_NOT_MATCH + "the artifact"));
   }
   if (
-    normalizeHashHex(normalizedManifest.abi_hash, "manifest abi_hash") !==
+    normalizeHashHex(normalizedManifest.abi_hash, (TEXT_MANIFEST + TEXT_ABI_HASH)) !==
     abiHashHex
   ) {
-    throw new Error((TEXT_KOTODAMA_COMPILER + "manifest abi_hash" + TEXT_DOES_NOT_MATCH + "abiHash"));
+    throw new Error((TEXT_KOTODAMA_COMPILER + (TEXT_MANIFEST + TEXT_ABI_HASH) + TEXT_DOES_NOT_MATCH + (TEXT_ABIHASH)));
   }
   validateCompilerManifest(normalizedManifest);
   validateCompiledArtifactV1(
@@ -935,7 +989,7 @@ function requireCanonicalBase64(value, label) {
     value.length % 4 !== 0 ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
   ) {
-    rejectType(`${label} must be exact standard-base64`);
+    rejectType(`${label} ${TEXT_MUST_BE_SHARED}exact standard-base64`);
   }
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   if (value.endsWith("==") && (alphabet.indexOf(value.at(-3)) & 0x0f) !== 0) {
@@ -949,13 +1003,13 @@ function requireCanonicalBase64(value, label) {
 
 function validateSourceLocation(value, label, { nullable = false } = {}) {
   if (nullable && value.source_id === null) {
-    for (const key of ["byte_start", "byte_end", "line", "column"]) {
+    for (const key of [(TEXT_BYTE_START), "byte_end", "line", "column"]) {
       if (value[key] !== null) {
-        rejectType(`${label} must use one consistent nullable source location`);
+        rejectType(`${label} ${TEXT_MUST_USE_SHARED}one consistent nullable source location`);
       }
     }
     if (value.source_path !== null) {
-      rejectType(`${label}.source_path must be null without a source location`);
+      rejectType(`${label}.source_path ${TEXT_MUST_BE_SHARED}null without a source location`);
     }
     return;
   }
@@ -963,74 +1017,74 @@ function validateSourceLocation(value, label, { nullable = false } = {}) {
     maximum: MAX_SOURCE_PATH_BYTES,
   });
   requireUnsignedInteger(value.source_id, U32_MAX, `${label}.source_id`);
-  requireUnsignedInteger(value.byte_start, U32_MAX, `${label}.byte_start`);
+  requireUnsignedInteger(value.byte_start, U32_MAX, `${label}.${TEXT_BYTE_START}`);
   requireUnsignedInteger(value.byte_end, U32_MAX, `${label}.byte_end`);
   requireUnsignedInteger(value.line, U32_MAX, `${label}.line`);
   requireUnsignedInteger(value.column, U32_MAX, `${label}.column`);
   if (value.byte_start > value.byte_end) {
-    rejectType(`${label} must use a forward UTF-8 byte range`);
+    rejectType(`${label} ${TEXT_MUST_USE_SHARED}a ${TEXT_FORWARD}UTF-8 byte range`);
   }
 }
 
 function validateSourceMapEntry(value, index) {
-  const label = `source-map sidecar entry ${index}`;
+  const label = `source-map ${TEXT_SIDECAR_ENTRY}${index}`;
   requireExactKeys(
     value,
     [
-      "function_name",
+      (TEXT_FUNCTION_NAME),
       "pc_start",
       "pc_end",
       "source_path",
       "source_id",
-      "byte_start",
+      (TEXT_BYTE_START),
       "byte_end",
       "line",
       "column",
     ],
     label,
   );
-  requireString(value.function_name, `${label}.function_name`);
+  requireString(value.function_name, `${label}.${TEXT_FUNCTION_NAME}`);
   requireUnsignedInteger(value.pc_start, Number.MAX_SAFE_INTEGER, `${label}.pc_start`);
   requireUnsignedInteger(value.pc_end, Number.MAX_SAFE_INTEGER, `${label}.pc_end`);
   if (value.pc_start > value.pc_end) {
-    rejectType(`${label} must use a forward PC range`);
+    rejectType(`${label} ${TEXT_MUST_USE_SHARED}a ${TEXT_FORWARD}PC range`);
   }
   validateSourceLocation(value, label);
 }
 
 function validateBudgetEntry(value, index) {
-  const label = `budget sidecar entry ${index}`;
+  const label = `budget ${TEXT_SIDECAR_ENTRY}${index}`;
   requireExactKeys(
     value,
     [
-      "function_name",
+      (TEXT_FUNCTION_NAME),
       "pc_start",
       "pc_end",
       "bytecode_bytes",
       "bytecode_words",
-      "frame_bytes",
+      (TEXT_FRAME_BYTES),
       "jump_span_words",
       "jump_range_risk",
       "source_path",
       "source_id",
-      "byte_start",
+      (TEXT_BYTE_START),
       "byte_end",
       "line",
       "column",
     ],
     label,
   );
-  requireString(value.function_name, `${label}.function_name`);
+  requireString(value.function_name, `${label}.${TEXT_FUNCTION_NAME}`);
   requireUnsignedInteger(value.pc_start, Number.MAX_SAFE_INTEGER, `${label}.pc_start`);
   requireUnsignedInteger(value.pc_end, Number.MAX_SAFE_INTEGER, `${label}.pc_end`);
-  for (const key of ["bytecode_bytes", "bytecode_words", "frame_bytes", "jump_span_words"]) {
+  for (const key of ["bytecode_bytes", "bytecode_words", (TEXT_FRAME_BYTES), "jump_span_words"]) {
     requireUnsignedInteger(value[key], U32_MAX, `${label}.${key}`);
   }
-  if (typeof value.jump_range_risk !== "boolean") {
-    rejectType(`${label}.jump_range_risk${TEXT_MUST_BE_A}boolean`);
+  if (typeof value.jump_range_risk !== (TEXT_BOOLEAN)) {
+    rejectType(`${label}.jump_range_risk${TEXT_MUST_BE_A}${TEXT_BOOLEAN}`);
   }
   if (value.pc_start > value.pc_end) {
-    rejectType(`${label} must use a forward PC range`);
+    rejectType(`${label} ${TEXT_MUST_USE_SHARED}a ${TEXT_FORWARD}PC range`);
   }
   validateSourceLocation(value, label, { nullable: true });
 }
@@ -1039,7 +1093,7 @@ function parseSidecar(raw, kind, artifactHash) {
   const label = `${kind} sidecar`;
   const sidecar = requireRecord(parseJson(raw, label), label);
   const expectedKeys = kind === "budget"
-    ? ["sidecar_version", "kind", "artifact_hash", "entries", "access_hint_diagnostics"]
+    ? ["sidecar_version", "kind", "artifact_hash", "entries", (TEXT_ACCESS_HINT_DIAGNOSTICS)]
     : ["sidecar_version", "kind", "artifact_hash", "entries"];
   requireExactKeys(sidecar, expectedKeys, label);
   if (
@@ -1055,7 +1109,7 @@ function parseSidecar(raw, kind, artifactHash) {
     requireExactKeys(
       sidecar.access_hint_diagnostics,
       ["state_wildcards", "isi_wildcards", TEXT_LITERAL_TRIGGER_SPEC_DECODE_FAILURES],
-      `${label}.access_hint_diagnostics`,
+      `${label}.${TEXT_ACCESS_HINT_DIAGNOSTICS}`,
     );
     for (const key of [
       "state_wildcards",
@@ -1065,7 +1119,7 @@ function parseSidecar(raw, kind, artifactHash) {
       requireUnsignedInteger(
         sidecar.access_hint_diagnostics[key],
         Number.MAX_SAFE_INTEGER,
-        `${label}.access_hint_diagnostics.${key}`,
+        `${label}.${TEXT_ACCESS_HINT_DIAGNOSTICS}.${key}`,
       );
     }
   }
@@ -1082,15 +1136,15 @@ function validateEntrypointType(value, label, maximumWords = MAX_ENTRYPOINT_WORD
 }
 
 function validateArgumentSchema(value, params, label) {
-  requireExactKeys(value, ["fields"], label);
-  requireDenseArray(value.fields, `${label}.fields`, MAX_ENTRYPOINT_PARAMETERS);
+  requireExactKeys(value, [(TEXT_FIELDS)], label);
+  requireDenseArray(value.fields, `${label}.${TEXT_FIELDS}`, MAX_ENTRYPOINT_PARAMETERS);
   if (value.fields.length === 0 || value.fields.length !== params.length) {
-    rejectType(`${label}.fields must exactly match the declared parameters`);
+    rejectType(`${label}.${TEXT_FIELDS} must exactly match the ${TEXT_DECLARED}parameters`);
   }
   const names = new Set();
   let words = 0;
   value.fields.forEach((field, index) => {
-    const fieldLabel = `${label}.fields[${index}]`;
+    const fieldLabel = `${label}.${TEXT_FIELDS}[${index}]`;
     requireExactKeys(field, ["name", "ty"], fieldLabel);
     if (!isCanonicalIdentifier(field.name) || names.has(field.name)) {
       rejectType(`${fieldLabel}.name${TEXT_MUST_BE_UNIQUE_AND_CANONICAL}`);
@@ -1099,7 +1153,7 @@ function validateArgumentSchema(value, params, label) {
     const analysis = validateEntrypointType(field.ty, `${fieldLabel}.ty`);
     words += analysis.wordCount;
     if (field.name !== params[index].name || analysis.canonicalName !== params[index].type_name) {
-      rejectType(`${fieldLabel}${TEXT_DOES_NOT_MATCH}its declared parameter`);
+      rejectType(`${fieldLabel}${TEXT_DOES_NOT_MATCH}its ${TEXT_DECLARED}parameter`);
     }
   });
   if (words > MAX_ENTRYPOINT_WORDS) {
@@ -1115,18 +1169,18 @@ function validateDynamicAccessHints(value, label) {
     requireString(hint.base_key, `${hintLabel}.base_key`);
     if (!isCanonicalKotodamaDynamicAccessBaseKey(hint.base_key)) {
       rejectType(
-        `${hintLabel}.base_key must be state: plus one canonical state declaration identifier`,
+        `${hintLabel}.base_key ${TEXT_MUST_BE_SHARED}state: plus one ${TEXT_CANONICAL}state ${TEXT_DECLARATION_IDENTIFIER}`,
       );
     }
     requireString(hint.key_type, `${hintLabel}.key_type`);
     if (!isKotodamaV1StateMapKeyTypeName(hint.key_type)) {
       rejectType(
-        `${hintLabel}.key_type must be an exact Kotodama V1 StateMap key scalar`,
+        `${hintLabel}.key_type ${TEXT_MUST_BE_SHARED}an exact ${TEXT_KOTODAMA_SHARED}V1 StateMap key scalar`,
       );
     }
     requireString(hint.bound_kind, `${hintLabel}.bound_kind`);
     if (!isKotodamaV1DynamicAccessBoundKind(hint.bound_kind)) {
-      rejectType(`${hintLabel}.bound_kind must be exactly take or page`);
+      rejectType(`${hintLabel}.bound_kind ${TEXT_MUST_BE_SHARED}exactly take or page`);
     }
     requireUnsignedInteger(
       hint.max_keys,
@@ -1134,7 +1188,7 @@ function validateDynamicAccessHints(value, label) {
       `${hintLabel}.max_keys`,
     );
     if (hint.max_keys === 0) {
-      rejectType(`${hintLabel}.max_keys must be in the V1 range 1..64`);
+      rejectType(`${hintLabel}.max_keys ${TEXT_MUST_BE_SHARED}in the V1 range 1..64`);
     }
   });
 }
@@ -1143,13 +1197,13 @@ function validateAccessSetHints(value, label) {
   if (value === null) return;
   requireExactKeys(
     value,
-    ["read_keys", "write_keys", "dynamic_reads", "dynamic_writes"],
+    [(TEXT_READ_KEYS), (TEXT_WRITE_KEYS), (TEXT_DYNAMIC_READS), (TEXT_DYNAMIC_WRITES)],
     label,
   );
-  requireStringArray(value.read_keys, `${label}.read_keys`);
-  requireStringArray(value.write_keys, `${label}.write_keys`);
-  validateDynamicAccessHints(value.dynamic_reads, `${label}.dynamic_reads`);
-  validateDynamicAccessHints(value.dynamic_writes, `${label}.dynamic_writes`);
+  requireStringArray(value.read_keys, `${label}.${TEXT_READ_KEYS}`);
+  requireStringArray(value.write_keys, `${label}.${TEXT_WRITE_KEYS}`);
+  validateDynamicAccessHints(value.dynamic_reads, `${label}.${TEXT_DYNAMIC_READS}`);
+  validateDynamicAccessHints(value.dynamic_writes, `${label}.${TEXT_DYNAMIC_WRITES}`);
 }
 
 function validateDynamicAccessHintStateMaps(accessSetHints, states, label) {
@@ -1161,30 +1215,30 @@ function validateDynamicAccessHintStateMaps(accessSetHints, states, label) {
       stateMaps.set(state.name, keyType);
     }
   }
-  for (const field of ["dynamic_reads", "dynamic_writes"]) {
+  for (const field of [(TEXT_DYNAMIC_READS), (TEXT_DYNAMIC_WRITES)]) {
     const seen = new Set();
     accessSetHints[field].forEach((hint, index) => {
       const hintLabel = `${label}.${field}[${index}]`;
-      const identity = JSON.stringify([
+      const identity = stringify([
         hint.base_key,
         hint.key_type,
         hint.bound_kind,
         hint.max_keys,
       ]);
       if (seen.has(identity)) {
-        rejectType(`${label}.${field} contains a duplicate dynamic access hint`);
+        rejectType(`${label}.${field} ${TEXT_CONTAINS_SHARED}a duplicate dynamic access hint`);
       }
       seen.add(identity);
       const stateName = hint.base_key.slice("state:".length);
       const expectedKeyType = stateMaps.get(stateName);
       if (expectedKeyType === undefined) {
         rejectType(
-          `${hintLabel}.base_key must reference a declared top-level StateMap`,
+          `${hintLabel}.base_key must reference a ${TEXT_DECLARED}top-level StateMap`,
         );
       }
       if (hint.key_type !== expectedKeyType) {
         rejectType(
-          `${hintLabel}.key_type ${hint.key_type}${TEXT_DOES_NOT_MATCH}declared StateMap key type ${expectedKeyType}`,
+          `${hintLabel}.key_type ${hint.key_type}${TEXT_DOES_NOT_MATCH}${TEXT_DECLARED}StateMap key type ${expectedKeyType}`,
         );
       }
     });
@@ -1193,13 +1247,13 @@ function validateDynamicAccessHintStateMaps(accessSetHints, states, label) {
 
 function validateTriggerRepeats(value, label) {
   requireRecord(value, label);
-  const keys = Reflect.ownKeys(value);
+  const keys = ownKeys(value);
   if (keys.length !== 1 || !["Indefinitely", "Exactly"].includes(keys[0])) {
-    rejectType(`${label}${TEXT_MUST_CONTAIN}exactly one canonical repeat policy`);
+    rejectType(`${label}${TEXT_MUST_CONTAIN}exactly one ${TEXT_CANONICAL}repeat policy`);
   }
   if (keys[0] === "Indefinitely") {
     if (value.Indefinitely !== null) {
-      rejectType(`${label}.Indefinitely must be null`);
+      rejectType(`${label}.Indefinitely ${TEXT_MUST_BE_SHARED}null`);
     }
   } else {
     requireUnsignedInteger(value.Exactly, U32_MAX, `${label}.Exactly`);
@@ -1231,10 +1285,10 @@ function validateTriggers(value, entrypointName, label) {
       trigger.callback.namespace !== null
       && !isCanonicalIdentifier(trigger.callback.namespace, { typeDeclaration: true })
     ) {
-      rejectType(`${triggerLabel}.callback.namespace${TEXT_MUST_BE_A}canonical type declaration`);
+      rejectType(`${triggerLabel}.callback.namespace${TEXT_MUST_BE_A}${TEXT_CANONICAL}type declaration`);
     }
     if (!isCanonicalEntrypointName(trigger.callback.entrypoint)) {
-      rejectType(`${triggerLabel}.callback.entrypoint must be canonical`);
+      rejectType(`${triggerLabel}.callback.entrypoint ${TEXT_MUST_BE_SHARED}canonical`);
     }
     if (trigger.callback.namespace === null && trigger.callback.entrypoint !== entrypointName) {
       rejectType(`${triggerLabel}.callback must target its declaring entrypoint`);
@@ -1252,12 +1306,12 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
       "params",
       "argument_schema",
       "return_type",
-      "return_schema",
+      (TEXT_RETURN_SCHEMA),
       "permission",
-      "read_keys",
-      "write_keys",
-      "access_hints_complete",
-      "access_hints_skipped",
+      (TEXT_READ_KEYS),
+      (TEXT_WRITE_KEYS),
+      (TEXT_ACCESS_HINTS_COMPLETE),
+      (TEXT_ACCESS_HINTS_SKIPPED),
       "triggers",
     ],
     label,
@@ -1265,7 +1319,7 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
   requireExactKeys(entry.kind, ["kind", "value"], `${label}.kind`);
   if (!isCanonicalEntrypointName(entry.name)) {
     rejectType(
-      `${label}.name is not a canonical V1 identifier or branded lifecycle selector`,
+      `${label}.name ${TEXT_IS_NOT}a ${TEXT_CANONICAL}V1 identifier or ${TEXT_BRANDED_LIFECYCLE_SELECTOR}`,
     );
   }
   if (names.has(entry.name)) {
@@ -1273,33 +1327,33 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
   }
   names.add(entry.name);
   if (!MANIFEST_ENTRYPOINT_KINDS.has(entry.kind.kind)) {
-    rejectType(`${label}.kind must be Kotoage, View, Hajimari, or Kaizen`);
+    rejectType(`${label}.kind ${TEXT_MUST_BE_SHARED}Kotoage, View, ${TEXT_HAJIMARI}, or Kaizen`);
   }
   if (entry.kind.value !== null) {
-    rejectType(`${label}.kind.value must be null`);
+    rejectType(`${label}.kind.value ${TEXT_MUST_BE_SHARED}null`);
   }
   const lifecycleKind =
     entry.name === "hajimari" || entry.name === "始まり"
-      ? "Hajimari"
+      ? (TEXT_HAJIMARI)
       : entry.name === "kaizen" || entry.name === "改善"
         ? "Kaizen"
         : null;
   if (
-    (lifecycleKind === null && ["Hajimari", "Kaizen"].includes(entry.kind.kind)) ||
+    (lifecycleKind === null && [(TEXT_HAJIMARI), "Kaizen"].includes(entry.kind.kind)) ||
     (lifecycleKind !== null && entry.kind.kind !== lifecycleKind)
   ) {
-    rejectType(`${label}.kind${TEXT_DOES_NOT_MATCH}its branded lifecycle selector`);
+    rejectType(`${label}.kind${TEXT_DOES_NOT_MATCH}its ${TEXT_BRANDED_LIFECYCLE_SELECTOR}`);
   }
-  if (entry.kind.kind === "Kotoage" && (typeof entry.permission !== "string" || entry.permission.trim() === "")) {
-    rejectType(`${label} kotoage/言挙げ is missing caller authorization`);
+  if (entry.kind.kind === "Kotoage" && (typeof entry.permission !== (TEXT_STRING) || entry.permission.trim() === "")) {
+    rejectType(`${label} kotoage/言挙げ ${TEXT_IS_MISSING}caller authorization`);
   }
-  if (["Hajimari", "Kaizen"].includes(entry.kind.kind) && entry.permission !== null) {
-    rejectType(`${label} hajimari/始まり and kaizen/改善 must use runtime authorization`);
+  if ([(TEXT_HAJIMARI), "Kaizen"].includes(entry.kind.kind) && entry.permission !== null) {
+    rejectType(`${label} hajimari/始まり and kaizen/改善 ${TEXT_MUST_USE_SHARED}runtime authorization`);
   }
   if (entry.permission !== null) requireString(entry.permission, `${label}.permission`);
   if (lifecycleKind !== null) {
     if (lifecycleKinds.has(lifecycleKind)) {
-      rejectType(`${TEXT_KOTODAMA_MANIFEST}${TEXT_CONTAINS_DUPLICATE}${lifecycleKind} entrypoints`);
+      rejectType(`${TEXT_KOTODAMA_MANIFEST}${TEXT_CONTAINS_DUPLICATE}${lifecycleKind} ${TEXT_ENTRYPOINTS}`);
     }
     lifecycleKinds.add(lifecycleKind);
   }
@@ -1317,30 +1371,30 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
   });
   if (entry.params.length === 0) {
     if (entry.argument_schema !== null) {
-      rejectType(`${label}.argument_schema must be null without parameters`);
+      rejectType(`${label}.argument_schema ${TEXT_MUST_BE_SHARED}null without parameters`);
     }
   } else {
     if (entry.argument_schema === null) {
-      rejectType(`${label}.argument_schema is required for declared parameters`);
+      rejectType(`${label}.argument_schema is required for ${TEXT_DECLARED}parameters`);
     }
     validateArgumentSchema(entry.argument_schema, entry.params, `${label}.argument_schema`);
   }
   if (entry.return_type === null || entry.return_schema === null) {
-    rejectType(`${label} return_type and return_schema must be present together`);
+    rejectType(`${label} return_type and ${TEXT_RETURN_SCHEMA} ${TEXT_MUST_BE_SHARED}present together`);
   }
   if (entry.return_schema !== null) {
     requireString(entry.return_type, `${label}.return_type`);
-    const analysis = validateEntrypointType(entry.return_schema, `${label}.return_schema`);
+    const analysis = validateEntrypointType(entry.return_schema, `${label}.${TEXT_RETURN_SCHEMA}`);
     if (analysis.canonicalName !== entry.return_type) {
-      rejectType(`${label}.return_type${TEXT_DOES_NOT_MATCH}return_schema`);
+      rejectType(`${label}.return_type${TEXT_DOES_NOT_MATCH}${TEXT_RETURN_SCHEMA}`);
     }
   }
-  requireStringArray(entry.read_keys, `${label}.read_keys`);
-  requireStringArray(entry.write_keys, `${label}.write_keys`);
-  if (entry.access_hints_complete !== null && typeof entry.access_hints_complete !== "boolean") {
-    rejectType(`${label}.access_hints_complete${TEXT_MUST_BE_A}boolean or null`);
+  requireStringArray(entry.read_keys, `${label}.${TEXT_READ_KEYS}`);
+  requireStringArray(entry.write_keys, `${label}.${TEXT_WRITE_KEYS}`);
+  if (entry.access_hints_complete !== null && typeof entry.access_hints_complete !== (TEXT_BOOLEAN)) {
+    rejectType(`${label}.${TEXT_ACCESS_HINTS_COMPLETE}${TEXT_MUST_BE_A}${TEXT_BOOLEAN} or null`);
   }
-  requireStringArray(entry.access_hints_skipped, `${label}.access_hints_skipped`);
+  requireStringArray(entry.access_hints_skipped, `${label}.${TEXT_ACCESS_HINTS_SKIPPED}`);
   validateTriggers(entry.triggers, entry.name, `${label}.triggers`);
 }
 
@@ -1351,20 +1405,20 @@ function validateCompilerManifestStates(states) {
     const label = `${TEXT_KOTODAMA_MANIFEST}state ${index}`;
     requireExactKeys(state, ["name", "type_name"], label);
     if (!isCanonicalIdentifier(state.name, { declaration: true })) {
-      rejectType(`${label}.name is not canonical`);
+      rejectType(`${label}.name ${TEXT_IS_NOT}canonical`);
     }
     if (names.has(state.name)) {
       rejectType(`${TEXT_KOTODAMA_MANIFEST}${TEXT_CONTAINS_DUPLICATE}state ${state.name}`);
     }
     names.add(state.name);
     if (!isCanonicalStateTypeName(state.type_name)) {
-      rejectType(`${label}.type_name is not a canonical V1 state type`);
+      rejectType(`${label}.type_name ${TEXT_IS_NOT}a ${TEXT_CANONICAL}V1 state type`);
     }
   });
 }
 
 function validateCompilerManifestErrorTypes(value) {
-  normalizeContractErrorTypesV1(value, "Kotodama manifest error_types");
+  normalizeContractErrorTypesV1(value, (TEXT_KOTODAMA_SHARED + TEXT_MANIFEST + "error_types"));
 }
 
 function validateKotoba(value) {
@@ -1373,16 +1427,16 @@ function validateKotoba(value) {
   const messageIds = new Set();
   value.forEach((entry, index) => {
     const label = `${TEXT_KOTODAMA_MANIFEST}kotoba[${index}]`;
-    requireExactKeys(entry, ["msg_id", "translations"], label);
+    requireExactKeys(entry, ["msg_id", (TEXT_TRANSLATIONS)], label);
     requireString(entry.msg_id, `${label}.msg_id`);
     if (messageIds.has(entry.msg_id)) {
       rejectType(`${TEXT_KOTODAMA_MANIFEST}kotoba ${TEXT_CONTAINS_DUPLICATE}msg_id ${entry.msg_id}`);
     }
     messageIds.add(entry.msg_id);
-    requireDenseArray(entry.translations, `${label}.translations`);
+    requireDenseArray(entry.translations, `${label}.${TEXT_TRANSLATIONS}`);
     const languages = new Set();
     entry.translations.forEach((translation, translationIndex) => {
-      const translationLabel = `${label}.translations[${translationIndex}]`;
+      const translationLabel = `${label}.${TEXT_TRANSLATIONS}[${translationIndex}]`;
       requireExactKeys(translation, ["lang", "text"], translationLabel);
       requireString(translation.lang, `${translationLabel}.lang`);
       requireString(translation.text, `${translationLabel}.text`, { allowEmpty: true });
@@ -1402,48 +1456,48 @@ function validateProvenance(value) {
   // a false authenticity claim. A later signed-manifest version must add full
   // cryptographic verification before this boundary accepts it.
   rejectType(
-    (TEXT_KOTODAMA_MANIFEST + "provenance must be null until signed provenance is verifiable"),
+    (TEXT_KOTODAMA_MANIFEST + ("provenance " + TEXT_MUST_BE_SHARED + "null until signed provenance is verifiable")),
   );
 }
 
 function validateCompilerManifest(manifest) {
-  requireRecord(manifest, "Kotodama manifest");
+  requireRecord(manifest, (TEXT_KOTODAMA_SHARED + TEXT_MANIFEST_SHARED));
   if (Object.hasOwn(manifest, "contract_name")) {
     rejectType(
-      (TEXT_KOTODAMA_MANIFEST + "must use seiyaku_name; contract_name is not a V1 field"),
+      (TEXT_KOTODAMA_MANIFEST + (TEXT_MUST_USE_SHARED + TEXT_SEIYAKU_NAME + "; contract_name " + TEXT_IS_NOT + "a V1 field")),
     );
   }
   requireExactKeys(
     manifest,
     [
-      "seiyaku_name",
-      "code_hash",
-      "abi_hash",
-      "compiler_fingerprint",
-      "features_bitmap",
+      (TEXT_SEIYAKU_NAME),
+      (TEXT_CODE_HASH),
+      (TEXT_ABI_HASH),
+      (TEXT_COMPILER_FINGERPRINT),
+      (TEXT_FEATURES_BITMAP),
       TEXT_ACCESS_SET_HINTS,
-      "entrypoints",
+      (TEXT_ENTRYPOINTS),
       "states",
       "error_types",
-      "error_messages",
+      (TEXT_ERROR_MESSAGES),
       "kotoba",
       "provenance",
     ],
-    "Kotodama manifest",
+    (TEXT_KOTODAMA_SHARED + TEXT_MANIFEST_SHARED),
   );
   if (!isCanonicalIdentifier(manifest.seiyaku_name, { typeDeclaration: true })) {
     rejectType(
-      (TEXT_KOTODAMA_MANIFEST + "seiyaku_name" + TEXT_MUST_BE_A + "canonical V1 type declaration identifier"),
+      (TEXT_KOTODAMA_MANIFEST + (TEXT_SEIYAKU_NAME) + TEXT_MUST_BE_A + (TEXT_CANONICAL + "V1 type " + TEXT_DECLARATION_IDENTIFIER)),
     );
   }
-  requireString(manifest.compiler_fingerprint, (TEXT_KOTODAMA_MANIFEST + "compiler_fingerprint"));
+  requireString(manifest.compiler_fingerprint, (TEXT_KOTODAMA_MANIFEST + (TEXT_COMPILER_FINGERPRINT)));
   requireUnsignedInteger(
     manifest.features_bitmap,
     3,
-    (TEXT_KOTODAMA_MANIFEST + "features_bitmap"),
+    (TEXT_KOTODAMA_MANIFEST + (TEXT_FEATURES_BITMAP)),
   );
   validateAccessSetHints(manifest.access_set_hints, (TEXT_KOTODAMA_MANIFEST + TEXT_ACCESS_SET_HINTS));
-  requireDenseArray(manifest.entrypoints, (TEXT_KOTODAMA_MANIFEST + "entrypoints"));
+  requireDenseArray(manifest.entrypoints, (TEXT_KOTODAMA_MANIFEST + (TEXT_ENTRYPOINTS)));
   const names = new Set();
   const lifecycleKinds = new Set();
   manifest.entrypoints.forEach((entry, index) =>
@@ -1455,7 +1509,7 @@ function validateCompilerManifest(manifest) {
     (TEXT_KOTODAMA_MANIFEST + TEXT_ACCESS_SET_HINTS),
   );
   validateCompilerManifestErrorTypes(manifest.error_types);
-  validateManifestErrorTypeBindingsV1(manifest, "Kotodama manifest");
+  validateManifestErrorTypeBindingsV1(manifest, (TEXT_KOTODAMA_SHARED + TEXT_MANIFEST_SHARED));
   validateKotoba(manifest.kotoba);
   validateProvenance(manifest.provenance);
 }
@@ -1463,9 +1517,9 @@ function validateCompilerManifest(manifest) {
 function validatePosition(value, label) {
   requireExactKeys(value, ["line", "column"], label);
   if (
-    !Number.isSafeInteger(value.line) ||
+    !isSafeInteger(value.line) ||
     value.line < 1 ||
-    !Number.isSafeInteger(value.column) ||
+    !isSafeInteger(value.column) ||
     value.column < 1
   ) {
     rejectType(`${label}${TEXT_MUST_CONTAIN}one-based safe-integer line and column values`);
@@ -1488,47 +1542,47 @@ function validateSpan(value, label) {
     value.start.line > value.end.line ||
     (value.start.line === value.end.line && value.start.column > value.end.column);
   if (startsAfterEnd) {
-    rejectType(`${label}${TEXT_MUST_BE_A}forward half-open range`);
+    rejectType(`${label}${TEXT_MUST_BE_A}${TEXT_FORWARD}half-open range`);
   }
   if (value.byte_range !== null) {
     requireExactKeys(value.byte_range, ["start", "end"], `${label}.byte_range`);
     if (
-      !Number.isSafeInteger(value.byte_range.start) ||
+      !isSafeInteger(value.byte_range.start) ||
       value.byte_range.start < 0 ||
-      !Number.isSafeInteger(value.byte_range.end) ||
+      !isSafeInteger(value.byte_range.end) ||
       value.byte_range.end < value.byte_range.start
     ) {
-      rejectType(`${label}.byte_range${TEXT_MUST_BE_A}forward safe-integer byte range`);
+      rejectType(`${label}.byte_range${TEXT_MUST_BE_A}${TEXT_FORWARD}safe-integer byte range`);
     }
   }
 }
 
 function validateDiagnostic(value, index) {
-  const label = `Kotodama diagnostic ${index}`;
+  const label = `${TEXT_KOTODAMA_SHARED}diagnostic ${index}`;
   requireExactKeys(
     value,
-    ["code", "severity", "phase", "message", "primary_span", "labels", "notes", "help", "fix"],
+    ["code", "severity", "phase", (TEXT_MESSAGE), "primary_span", "labels", "notes", "help", "fix"],
     label,
   );
-  if (typeof value.code !== "string" || !/^[EK][A-Z0-9_]+$/.test(value.code)) {
-    rejectType(`${label}.code is not a stable Kotodama diagnostic code`);
+  if (typeof value.code !== (TEXT_STRING) || !/^[EK][A-Z0-9_]+$/.test(value.code)) {
+    rejectType(`${label}.code ${TEXT_IS_NOT}a stable ${TEXT_KOTODAMA_SHARED}diagnostic code`);
   }
   if (!DIAGNOSTIC_SEVERITIES.has(value.severity)) {
-    rejectType(`${label}.severity is invalid`);
+    rejectType(`${label}.severity ${TEXT_IS_INVALID}`);
   }
   if (!DIAGNOSTIC_PHASES.has(value.phase)) {
-    rejectType(`${label}.phase is invalid`);
+    rejectType(`${label}.phase ${TEXT_IS_INVALID}`);
   }
-  requireString(value.message, `${label}.message`);
+  requireString(value.message, `${label}.${TEXT_MESSAGE}`);
   if (value.primary_span !== null) {
     validateSpan(value.primary_span, `${label}.primary_span`);
   }
   requireDenseArray(value.labels, `${label}.labels`);
   value.labels.forEach((entry, labelIndex) => {
     const entryLabel = `${label}.labels[${labelIndex}]`;
-    requireExactKeys(entry, ["span", "message"], entryLabel);
+    requireExactKeys(entry, ["span", (TEXT_MESSAGE)], entryLabel);
     validateSpan(entry.span, `${entryLabel}.span`);
-    requireString(entry.message, `${entryLabel}.message`, { allowEmpty: true });
+    requireString(entry.message, `${entryLabel}.${TEXT_MESSAGE}`, { allowEmpty: true });
   });
   requireStringArray(value.notes, `${label}.notes`);
   requireNullableString(value.help, `${label}.help`, { allowEmpty: true });
@@ -1540,14 +1594,14 @@ function validateDiagnostic(value, index) {
 }
 
 function parseDiagnostics(raw) {
-  const diagnostics = parseJson(raw, "Kotodama diagnosticsJson");
-  requireDenseArray(diagnostics, "Kotodama diagnostics", MAX_DIAGNOSTICS);
+  const diagnostics = parseJson(raw, (TEXT_KOTODAMA_SHARED + "diagnosticsJson"));
+  requireDenseArray(diagnostics, (TEXT_KOTODAMA_SHARED + "diagnostics"), MAX_DIAGNOSTICS);
   if (diagnostics.length === 0) {
     rejectType((TEXT_FAILED_KOTODAMA_COMPILATION_MUST + "return a non-empty diagnostic array"));
   }
   diagnostics.forEach(validateDiagnostic);
   if (!diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-    rejectType((TEXT_FAILED_KOTODAMA_COMPILATION_MUST + "contain at least one error diagnostic"));
+    rejectType((TEXT_FAILED_KOTODAMA_COMPILATION_MUST + (TEXT_CONTAIN_SHARED + "at least one error diagnostic")));
   }
   return diagnostics;
 }
@@ -1558,10 +1612,10 @@ export function normalizeCompilerOutput(output) {
   requireExactKeys(
     output,
     [
-      "artifactBytes",
-      "manifestJson",
+      (TEXT_ARTIFACTBYTES),
+      (TEXT_MANIFEST_SHARED + "Json"),
       "codeHash",
-      "abiHash",
+      (TEXT_ABIHASH),
       "sourceMapJson",
       "budgetReportJson",
     ],
@@ -1569,21 +1623,21 @@ export function normalizeCompilerOutput(output) {
   );
   const artifactBytes = normalizeArtifactBytes(output.artifactBytes);
   const codeHashHex = normalizeHashHex(output.codeHash, "codeHash");
-  const abiHashHex = normalizeHashHex(output.abiHash, "abiHash");
+  const abiHashHex = normalizeHashHex(output.abiHash, (TEXT_ABIHASH));
   const actualCodeHash = artifactHashHex(artifactBytes);
   if (actualCodeHash !== codeHashHex) {
     throw new Error((TEXT_KOTODAMA_COMPILER + TEXT_ARTIFACT_BYTES_DO_NOT_MATCH_CODE_HASH));
   }
 
   const manifest = requireRecord(
-    parseJson(output.manifestJson, "Kotodama manifestJson"),
-    "Kotodama manifest",
+    parseJson(output.manifestJson, (TEXT_KOTODAMA_SHARED + TEXT_MANIFEST_SHARED + "Json")),
+    (TEXT_KOTODAMA_SHARED + TEXT_MANIFEST_SHARED),
   );
-  if (normalizeHashHex(manifest.code_hash, "manifest code_hash") !== codeHashHex) {
-    throw new Error((TEXT_KOTODAMA_COMPILER + "manifest code_hash" + TEXT_DOES_NOT_MATCH + "the artifact"));
+  if (normalizeHashHex(manifest.code_hash, (TEXT_MANIFEST + TEXT_CODE_HASH)) !== codeHashHex) {
+    throw new Error((TEXT_KOTODAMA_COMPILER + (TEXT_MANIFEST + TEXT_CODE_HASH) + TEXT_DOES_NOT_MATCH + "the artifact"));
   }
-  if (normalizeHashHex(manifest.abi_hash, "manifest abi_hash") !== abiHashHex) {
-    throw new Error((TEXT_KOTODAMA_COMPILER + "manifest abi_hash" + TEXT_DOES_NOT_MATCH + "abiHash"));
+  if (normalizeHashHex(manifest.abi_hash, (TEXT_MANIFEST + TEXT_ABI_HASH)) !== abiHashHex) {
+    throw new Error((TEXT_KOTODAMA_COMPILER + (TEXT_MANIFEST + TEXT_ABI_HASH) + TEXT_DOES_NOT_MATCH + (TEXT_ABIHASH)));
   }
   validateCompilerManifest(manifest);
   validateCompiledArtifactV1(artifactBytes, manifest, abiHashHex);
@@ -1601,7 +1655,7 @@ export function normalizeCompilerOutput(output) {
       sourceEntry.pc_end !== budgetEntry.pc_end
     ) {
       rejectType(
-        `${TEXT_KOTODAMA_COMPILER}sidecar entry ${index} function identity does not match`,
+        `${TEXT_KOTODAMA_COMPILER}${TEXT_SIDECAR_ENTRY}${index} function identity does not match`,
       );
     }
   });
@@ -1630,7 +1684,7 @@ export function normalizeCompilerResult(result) {
   if (result.ok === true) {
     if (result.diagnosticsJson !== null) {
       rejectType(
-        "successful Kotodama compilation must contain an exact null diagnosticsJson sentinel",
+        ("successful " + TEXT_KOTODAMA_SHARED + "compilation must " + TEXT_CONTAIN_SHARED + "an exact null diagnosticsJson sentinel"),
       );
     }
     return { ok: true, output: normalizeCompilerOutput(result.output) };
@@ -1638,10 +1692,10 @@ export function normalizeCompilerResult(result) {
   if (result.ok === false) {
     if (result.output !== null) {
       rejectType(
-        (TEXT_FAILED_KOTODAMA_COMPILATION_MUST + "contain an exact null output sentinel"),
+        (TEXT_FAILED_KOTODAMA_COMPILATION_MUST + (TEXT_CONTAIN_SHARED + "an exact null output sentinel")),
       );
     }
     return { ok: false, diagnostics: parseDiagnostics(result.diagnosticsJson) };
   }
-  rejectType((TEXT_KOTODAMA_COMPILER + "result.ok" + TEXT_MUST_BE_A + "boolean"));
+  rejectType((TEXT_KOTODAMA_COMPILER + "result.ok" + TEXT_MUST_BE_A + (TEXT_BOOLEAN)));
 }

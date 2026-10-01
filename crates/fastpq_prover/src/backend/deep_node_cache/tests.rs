@@ -78,20 +78,25 @@ fn fixed_cache_envelope_charges_every_node_coverage_and_opening_buffer() {
         Oracle::Fri(3),
         Oracle::Fri(4),
     ];
+    // Pin the two initial trees and the five complete FRI group trees.
+    let expected_leaves = [8_388_608, 8_388_608, 524_288, 32_768, 4_096, 512, 128];
+    assert_eq!(Digest::BYTES, 32);
     let mut sum = 0;
-    for oracle in oracles {
+    for (oracle, leaves) in oracles.into_iter().zip(expected_leaves) {
         let plan = NodeCachePlan::new(oracle).unwrap();
+        assert_eq!(plan.leaves, leaves);
         assert_eq!(plan.nodes, plan.leaves - 1);
         assert_eq!(
             plan.payload_bytes,
-            plan.nodes * 48 + plan.nodes.div_ceil(64) * 8
+            plan.nodes * 32 + plan.nodes.div_ceil(64) * 8
         );
         assert!(
             opening_payload_bytes(oracle).unwrap() >= 3 * QUERY_COUNT * oracle.shape().unwrap().3
         );
         sum += plan.payload_bytes;
     }
-    assert_eq!(sum, 834_439_424);
+    // SHA3-256 internal nodes plus ceil(nodes / 64) coverage words.
+    assert_eq!(sum, 557_015_408);
     assert!(NodeCachePlan::new(Oracle::Terminal).is_err());
     assert!(NodeCachePlan::with_shape(Oracle::Fri(4), 3).is_err());
     assert!(NodeCachePlan::with_shape(Oracle::Row, LDE_ROWS * 2).is_err());
@@ -232,7 +237,7 @@ fn altered_regeneration_cache_nodes_and_partial_callbacks_cannot_publish() {
         .iter()
         .find(|p| p.level > 0)
         .unwrap();
-    corrupted.nodes.0[corrupted.plan.slot(sibling.level, sibling.index).unwrap()] = [0; 6];
+    corrupted.nodes.0[corrupted.plan.slot(sibling.level, sibling.index).unwrap()] = [0; 32];
     assert!(
         corrupted
             .bind(&binding, Oracle::Fri(4), root)
@@ -305,7 +310,7 @@ fn striped_cache_capture_matches_every_materialized_internal_coordinate() {
                     .collect::<Vec<_>>();
                 let mut values = SecretPolynomial::zeroed(indices.len()).unwrap();
                 for (&i, v) in indices.iter().zip(values.iter_mut()) {
-                    *v = levels[0][i].words();
+                    *v = levels[0][i].into_bytes();
                 }
                 stream
                     .push_batch(
@@ -313,7 +318,7 @@ fn striped_cache_capture_matches_every_materialized_internal_coordinate() {
                         &mut values,
                         |level, indices, left, right| {
                             for ((&index, &l), r) in indices.iter().zip(left).zip(right) {
-                                *r = hash(level, index, digest(l), digest(*r))?.words();
+                                *r = hash(level, index, digest(l), digest(*r))?.into_bytes();
                             }
                             Ok(())
                         },
@@ -329,7 +334,7 @@ fn striped_cache_capture_matches_every_materialized_internal_coordinate() {
             for (index, &expected) in nodes.iter().enumerate() {
                 assert_eq!(
                     cache.nodes.0[cache.plan.slot(level, index).unwrap()],
-                    expected.words()
+                    expected.into_bytes()
                 );
             }
         }

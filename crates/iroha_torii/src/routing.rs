@@ -45247,13 +45247,15 @@ mod validation_fee_torii_ingress_tests {
         let (contract_artifact, contract_manifest) = payout_contract_artifact();
         let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,
-iroha_model_base::topology::DataSpaceId::UNIVERSAL, contract_artifact,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            contract_artifact,
             &mut stx,
         )
         .expect("register payout-contract bytes");
         iroha_core::smartcontracts::code::register_manifest(
             authority,
-iroha_model_base::topology::DataSpaceId::UNIVERSAL, contract_manifest.signed(authority_key_pair),
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            contract_manifest.signed(authority_key_pair),
             &mut stx,
         )
         .expect("register signed payout-contract manifest");
@@ -45272,13 +45274,15 @@ iroha_model_base::topology::DataSpaceId::UNIVERSAL, contract_manifest.signed(aut
         let (pool_artifact, pool_manifest) = pool_contract_artifact();
         let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,
-iroha_model_base::topology::DataSpaceId::UNIVERSAL, pool_artifact,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            pool_artifact,
             &mut stx,
         )
         .expect("register pool-contract bytes");
         iroha_core::smartcontracts::code::register_manifest(
             authority,
-iroha_model_base::topology::DataSpaceId::UNIVERSAL, pool_manifest.signed(authority_key_pair),
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            pool_manifest.signed(authority_key_pair),
             &mut stx,
         )
         .expect("register signed pool-contract manifest");

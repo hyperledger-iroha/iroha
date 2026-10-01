@@ -10,12 +10,13 @@ use crate::{
         compact_axt_batch::AxtTransferBatch,
         compact_axt_context::tests::Fixture,
         compact_bundle::{self as bundle, AxtBundleWire, BundleLimits, BundleWire},
-        compact_protocol::shared_openings::prove_shared,
         compact_public_batch::{BatchContextLimits, PublicTransferBatch},
+        deep_fixture,
+        deep_geometry::QUERY_COUNT,
+        deep_trace_source::OwnedTraceSource,
     },
     gadgets::{
-        compact_smt_air::{COLUMN_COUNT, PATH_LEVELS, PHYSICAL_ROW_COUNT, SmtWitness},
-        compact_trace_columns::smt_row_cells,
+        compact_smt_air::{PATH_LEVELS, SmtWitness},
         public_transfer_statement::{PublicTransferLimits, public_claims_from_transcripts},
         transfer::attach_transfer_smt_witnesses,
     },
@@ -23,7 +24,7 @@ use crate::{
 use iroha_data_model::fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript};
 use sha2::{Digest as _, Sha256};
 
-type Columns = Vec<Vec<u64>>;
+type Columns = OwnedTraceSource;
 
 fn context(fixture: &Fixture) -> AxtVerificationContext<'_> {
     AxtVerificationContext {
@@ -40,11 +41,11 @@ fn policy(count: usize) -> BundleLimits {
         max_wire_bytes: 16 * 1024 * 1024,
         max_total_segment_bytes: 16 * 1024 * 1024,
         max_total_statement_bytes: 512 * 1024,
-        max_total_queries: 375 * count,
+        max_total_queries: QUERY_COUNT * count,
         max_total_decode_allocation_charges: 128 * 1024 * 1024,
         segment: VerifyLimits {
-            max_proof_bytes: 4_326_227,
-            max_queries: 375,
+            max_proof_bytes: super::super::deep_proof::MAX_FRAME_BYTES,
+            max_queries: QUERY_COUNT,
             ..VerifyLimits::default()
         },
     }
@@ -127,15 +128,7 @@ fn public_fixture_and_columns(
                 let witness = SmtWitness::from_inputs(statement, &siblings)
                     .unwrap()
                     .into_physical();
-                let mut columns: Columns = (0..COLUMN_COUNT)
-                    .map(|_| Vec::with_capacity(PHYSICAL_ROW_COUNT))
-                    .collect();
-                for row in witness.rows() {
-                    for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-                        column.push(value);
-                    }
-                }
-                columns
+                OwnedTraceSource::from_rows(witness.rows()).unwrap()
             })
             .collect()
     };
@@ -148,7 +141,7 @@ fn retain_public_frame(label: &str, bytes: &[u8]) -> String {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/fastpq-production-validation");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("compact-v1-{label}-{sha}.bin"));
+    let path = dir.join(format!("compact-q77-{label}-{sha}.bin"));
     std::fs::write(&path, bytes).unwrap();
     path.display().to_string()
 }
@@ -165,26 +158,16 @@ fn complete_candidate_axt_facade_drops_private_data_before_verification() {
     let bytes = {
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);
         let expected = fixture.expected(&prepared);
-        let air = AxtTransferAir::new(
+        let batch = AxtTransferBatch::new(
             &prepared,
             &expected,
-            &fixture.binding,
-            fixture.metadata(),
-            fixture.outer,
-            fixture.remote.as_deref(),
+            &[],
+            context(&fixture),
+            BatchContextLimits::default(),
         )
         .unwrap();
-        let columns = columns.pop().unwrap();
-        let proof = prove_shared(
-            &air,
-            &columns,
-            VerifyLimits {
-                max_proof_bytes: 16 * 1024 * 1024,
-                ..limits
-            },
-        )
-        .unwrap();
-        norito::encode_canonical(&proof).unwrap()
+        let relation = batch.segment(0).unwrap();
+        deep_fixture::prove(&relation, columns.pop().unwrap(), 0x077_100).unwrap()
     };
     drop(columns);
     let proving = proving_started.elapsed();
@@ -210,9 +193,9 @@ fn complete_candidate_axt_facade_drops_private_data_before_verification() {
     let result = result.unwrap();
     let verifying = verifying_started.elapsed();
     assert_eq!(result.public_io(), expected);
-    assert_eq!(result.work().air_evaluations, 375);
-    assert_eq!(result.work().transcripts, 1);
-    assert_eq!(result.work().terminal_degree_checks, 1);
+    assert_eq!(result.work().air_evaluations, 1);
+    assert_eq!(result.work().verifier_messages, 10);
+    assert_eq!(result.work().terminal_values, 128);
     assert_eq!(result.work().proof_bytes, bytes.len());
     let charges = usage.total_allocated_bytes();
     assert!(charges < 64 * 1024 * 1024);
@@ -251,7 +234,7 @@ fn complete_candidate_axt_facade_drops_private_data_before_verification() {
     );
 }
 
-/// Reject one valid AXT frame under a default budget, the ordinary route,
+/// Accept the default budget; reject a one-byte-short cap, the ordinary route,
 /// omitted remote preimages and a corrupted final byte.
 fn assert_single_axt_rejections(
     fixture: &Fixture,
@@ -260,7 +243,14 @@ fn assert_single_axt_rejections(
     bytes: &[u8],
     limits: VerifyLimits,
 ) {
-    assert!(verify_axt_transfer(prepared, expected, context(fixture), bytes, limits).is_err());
+    assert!(bytes.len() <= VerifyLimits::default().max_proof_bytes);
+    assert!(verify_axt_transfer(prepared, expected, context(fixture), bytes, limits).is_ok());
+    assert!(
+        matches!(verify_axt_transfer(prepared, expected, context(fixture), bytes,
+        VerifyLimits { max_proof_bytes: bytes.len() - 1, ..limits }),
+        Err(Error::VerifierLimitExceeded { limit: "max_proof_bytes", actual, max })
+            if actual == bytes.len() && max == bytes.len() - 1)
+    );
     let ordinary = fixture.prepare(ProofSemantics::StateTransition);
     assert!(
         verify_transfer_with_allocation(
@@ -351,7 +341,7 @@ fn complete_candidate_bundle(axt: bool) {
     assert_eq!(result.public_io(), expected);
     assert_eq!(result.segments(), 2);
     assert_eq!(result.work().transcripts, 2);
-    assert_eq!(result.work().air_evaluations, 750);
+    assert_eq!(result.work().air_evaluations, 2);
     assert_eq!(result.work().terminal_degree_checks, 2);
     assert_eq!(result.wire_bytes(), bytes.len());
     assert!(charges < limits.max_total_decode_allocation_charges);
@@ -366,11 +356,11 @@ fn complete_candidate_bundle(axt: bool) {
                 &bytes,
                 limits
             )
-            .is_err()
+            .is_ok()
         );
         assert_retagged_as_ordinary_rejected(&fixture, roots, frames, limits);
     } else {
-        assert!(bundle::verify_transfer_bundle(&prepared, &expected, &bytes, limits).is_err());
+        assert!(bundle::verify_transfer_bundle(&prepared, &expected, &bytes, limits).is_ok());
         assert_retagged_as_axt_rejected(&fixture, roots, frames, limits);
     }
     let label = if axt {
@@ -416,18 +406,15 @@ fn prove_axt_bundle(
     for (ordinal, columns) in columns.into_iter().enumerate() {
         let relation = batch.segment(ordinal).unwrap();
         let start = std::time::Instant::now();
-        let proof = prove_shared(
+        let bytes = deep_fixture::prove(
             &relation,
-            &columns,
-            VerifyLimits {
-                max_proof_bytes: 16 * 1024 * 1024,
-                ..limits.segment
-            },
+            columns,
+            0x077_200 + u64::try_from(ordinal).unwrap(),
         )
         .unwrap();
+        assert!(bytes.len() <= limits.segment.max_proof_bytes);
         proving_seconds.push(start.elapsed().as_secs_f64());
-        drop(columns);
-        frames.push(norito::encode_canonical(&proof).unwrap());
+        frames.push(bytes);
         eprintln!(
             "candidate AXT segment {ordinal} proved in {}s",
             proving_seconds[ordinal]
@@ -467,18 +454,15 @@ fn prove_ordinary_bundle(
     for (ordinal, columns) in columns.into_iter().enumerate() {
         let relation = batch.segment(ordinal).unwrap();
         let start = std::time::Instant::now();
-        let proof = prove_shared(
+        let bytes = deep_fixture::prove(
             &relation,
-            &columns,
-            VerifyLimits {
-                max_proof_bytes: 16 * 1024 * 1024,
-                ..limits.segment
-            },
+            columns,
+            0x077_200 + u64::try_from(ordinal).unwrap(),
         )
         .unwrap();
+        assert!(bytes.len() <= limits.segment.max_proof_bytes);
         proving_seconds.push(start.elapsed().as_secs_f64());
-        drop(columns);
-        frames.push(norito::encode_canonical(&proof).unwrap());
+        frames.push(bytes);
         eprintln!(
             "candidate ordinary segment {ordinal} proved in {}s",
             proving_seconds[ordinal]
@@ -497,7 +481,7 @@ fn prove_ordinary_bundle(
     (bytes, proving_seconds)
 }
 
-/// The measured charge is an exact cumulative boundary; query and default ceilings reject.
+/// The exact cumulative charge accepts; one less and undersized query/segment caps reject.
 fn assert_bundle_budget_boundaries(
     bytes: &[u8],
     limits: BundleLimits,
@@ -530,7 +514,7 @@ fn assert_bundle_budget_boundaries(
         verify(
             bytes,
             BundleLimits {
-                max_total_queries: 749,
+                max_total_queries: 2 * QUERY_COUNT - 1,
                 ..limits
             }
         ),

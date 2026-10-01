@@ -1,10 +1,7 @@
 //! Typed streamed commitments retain exact frontiers and complete terminal binding.
 
 use super::*;
-use crate::backend::{
-    GOLDILOCKS_MODULUS,
-    merkle_multiproof::{MultiproofLimits, MultiproofPlan},
-};
+use crate::backend::merkle_multiproof::{MultiproofLimits, MultiproofPlan};
 
 /// Narrow one small fixture position or level to its `u32` wire field.
 fn narrow_u32(value: usize) -> u32 {
@@ -32,9 +29,21 @@ fn dense(seed: u64) -> F {
 }
 
 fn changed_digest(digest: Digest) -> Digest {
-    let mut words = digest.words();
-    words[0] = (words[0] + 1) % GOLDILOCKS_MODULUS;
-    Digest::new(words).unwrap()
+    let mut bytes = digest.into_bytes();
+    bytes[0] ^= 1;
+    Digest::from_bytes(bytes)
+}
+
+#[test]
+fn changed_digest_flips_exactly_one_opaque_sha3_bit() {
+    for bytes in [[0_u8; 32], [0xff; 32], core::array::from_fn(|i| i as u8)] {
+        let original = Digest::from_bytes(bytes);
+        let changed = changed_digest(original);
+        assert_ne!(changed, original);
+        assert_eq!(changed.as_bytes()[0], bytes[0] ^ 1);
+        assert_eq!(&changed.as_bytes()[1..], &bytes[1..]);
+        assert_eq!(changed_digest(changed), original);
+    }
 }
 
 fn multiproof(leaves: usize, indices: &[usize]) -> MultiproofPlan {

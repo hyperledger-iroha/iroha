@@ -1055,7 +1055,7 @@ mod tests {
         inputs: PublicInputs,
         root_chain: &[[u8; 32]],
         original: &PublicTransferBatch,
-        roots: &[fastpq_isi::GoldilocksDigest384V1],
+        roots: &[fastpq_isi::keccak256::Sha3Digest256V1],
     ) {
         use crate::backend::deep_relation::tests as deep;
         use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;
@@ -1087,7 +1087,7 @@ mod tests {
     fn assert_shorter_quantity_bundle_rebinds(
         root_chain: &[[u8; 32]],
         original: &PublicTransferBatch,
-        roots: &[fastpq_isi::GoldilocksDigest384V1],
+        roots: &[fastpq_isi::keccak256::Sha3Digest256V1],
     ) {
         use crate::backend::deep_relation::tests as deep;
         use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;

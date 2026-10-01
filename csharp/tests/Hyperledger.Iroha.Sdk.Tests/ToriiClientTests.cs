@@ -89,7 +89,7 @@ public sealed partial class ToriiClientTests
     private const string ContractPayloadDigestHex =
         "f4c579858f567c505b44e7c3faae08b00eef6af8a7cef5940b4152c6deb032a5";
     private static readonly string SignedTransactionSchemaHashHex = new('e', 32);
-    private static readonly string ContractCodeHashHex = new('a', 64);
+    private static readonly string ContractCodeHashHex = new('b', 64);
     private static readonly string GovernedContractCodeHashHex = new string('a', 62) + "ab";
     private static readonly string ContractAbiHashHex = new('b', 64);
     private const string ContractManifestCodeHashLiteral =
@@ -6617,6 +6617,8 @@ public sealed partial class ToriiClientTests
         {
             Content = new StringContent($$"""
                 {
+                  "network_id": "{{CanonicalNetworkId}}",
+                  "artifact_id": {"dataspace_id":0,"code_hash":"{{ArtifactHashLiteral(ContractCodeHashHex)}}"},
                   "code_hash": "{{ContractCodeHashHex}}",
                   "declared_code_hash": "{{ContractCodeHashHex}}",
                   "abi_hash": "{{ContractAbiHashHex}}",
@@ -10384,7 +10386,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal("ProofVerified", verified.Event);
         Assert.Equal("halo2/ipa", verified.Backend);
         Assert.Equal(new string('3', 64), verified.ProofHash);
-        Assert.Equal(ContractCodeHashHex, verified.CallHash);
+        Assert.Equal(new string('a', 64), verified.CallHash);
         Assert.Equal(string.Concat(Enumerable.Repeat("10", 32)), verified.EnvelopeHash);
         Assert.Equal("halo2/ipa::vk_name", verified.VerificationKeyReference);
         Assert.Equal(new string('5', 64), verified.VerificationKeyCommitment);
@@ -14896,6 +14898,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent($$"""
                 {
+                  "network_id": "{{CanonicalNetworkId}}",
+                  "artifact_id": {"dataspace_id":0,"code_hash":"{{ArtifactHashLiteral(manifestCodeHash)}}"},
                   "manifest": {
                     "seiyaku_name": null,
                     "code_hash": "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
@@ -14915,12 +14919,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var record = await client.GetContractCodeAsync(manifestCodeHash, cancellationToken: TestContext.Current.CancellationToken);
+        using var client = CreateRuntimeAuthenticatedClient(handler);
+        var record = await client.GetContractCodeAsync(new ContractArtifactId(0, manifestCodeHash), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(manifestCodeHash, record.Manifest.CodeHash);
         Assert.Equal(manifestAbiHash, record.Manifest.AbiHash);
-        Assert.Equal($"/v1/contracts/code/{manifestCodeHash}", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal($"/v1/contracts/artifacts/0/{manifestCodeHash}", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object?[]> InvalidContractCodeHashReadOperations()
@@ -14974,20 +14978,23 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public async Task GetContractCodeBytesAsyncEncodesCodeHashAndDecodesBase64()
     {
+        const string artifactHash = "43aecd10536d570e5998476e55aebf5bbbd3dc8c90ac31cb6b87d7e2119c157d";
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent("""
+            Content = new StringContent($$"""
                 {
+                  "network_id": "{{CanonicalNetworkId}}",
+                  "artifact_id": {"dataspace_id":0,"code_hash":"{{ArtifactHashLiteral(artifactHash)}}"},
                   "code_b64": "AQIDBA=="
                 }
                 """),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var bytes = await client.GetContractCodeBytesAsync(ContractCodeHashHex, cancellationToken: TestContext.Current.CancellationToken);
+        using var client = CreateRuntimeAuthenticatedClient(handler);
+        var bytes = await client.GetContractCodeBytesAsync(new ContractArtifactId(0, artifactHash), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(new byte[] { 1, 2, 3, 4 }, bytes);
-        Assert.Equal($"/v1/contracts/code-bytes/{ContractCodeHashHex}", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal($"/v1/contracts/artifacts/0/{artifactHash}/bytes", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Theory]
@@ -15008,17 +15015,19 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent(new JsonObject
             {
+                ["network_id"] = CanonicalNetworkId,
+                ["artifact_id"] = JsonSerializer.SerializeToNode(new ContractArtifactId(0, ContractCodeHashHex)),
                 ["code_b64"] = codeBase64,
             }.ToJsonString()),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<FormatException>(() =>
-            client.GetContractCodeBytesAsync(ContractCodeHashHex, cancellationToken: TestContext.Current.CancellationToken));
+            client.GetContractCodeBytesAsync(new ContractArtifactId(0, ContractCodeHashHex), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedMessage, error.Message);
-        Assert.Equal($"/v1/contracts/code-bytes/{ContractCodeHashHex}", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal($"/v1/contracts/artifacts/0/{ContractCodeHashHex}/bytes", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object[]> InvalidContractCodeBytesRequiredFieldResponses()
@@ -15039,14 +15048,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetContractCodeBytesAsync(ContractCodeHashHex, cancellationToken: TestContext.Current.CancellationToken));
+            client.GetContractCodeBytesAsync(new ContractArtifactId(0, ContractCodeHashHex), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("code_b64", error.Message);
         Assert.Contains("must not be null", error.Message);
-        Assert.Equal($"/v1/contracts/code-bytes/{ContractCodeHashHex}", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal($"/v1/contracts/artifacts/0/{ContractCodeHashHex}/bytes", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object[]> InvalidRawContractCodeBytesEnvelopeResponses()
@@ -15113,7 +15122,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public void RawContractCodeBytesResponseWriteRejectsMalformedBase64()
     {
-        var response = new ToriiContractCodeBytesResponse { CodeBase64 = "AQIDBA==" };
+        var response = new ToriiContractCodeBytesResponse {
+            NetworkId = OnboardingFixtureNetworkId,
+            ArtifactId = new ContractArtifactId(0, ContractCodeHashHex), CodeBase64 = "AQIDBA==" };
         SetPrivateField(response, "codeBase64", "AQID BA==");
 
         var error = Assert.Throws<FormatException>(() => JsonSerializer.Serialize(response));
@@ -15132,7 +15143,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string expectedMessage)
     {
         var error = Assert.Throws<FormatException>(() =>
-            new ToriiContractCodeBytesResponse { CodeBase64 = codeBase64 });
+            new ToriiContractCodeBytesResponse {
+            NetworkId = OnboardingFixtureNetworkId,
+            ArtifactId = new ContractArtifactId(0, ContractCodeHashHex), CodeBase64 = codeBase64 });
 
         Assert.Contains(expectedMessage, error.Message);
     }
@@ -15328,7 +15341,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var client = operation == "contract-call"
             ? BoundContractToriiClient(handler)
-            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+            : CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -15360,7 +15373,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var client = operation == "contract-call"
             ? BoundContractToriiClient(handler)
-            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+            : CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -15413,7 +15426,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var client = operation == "contract-call"
             ? BoundContractToriiClient(handler)
-            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+            : CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -15485,6 +15498,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         var response = new ToriiContractCodeView
         {
+            NetworkId = OnboardingFixtureNetworkId,
+            ArtifactId = new ContractArtifactId(0, ContractCodeHashHex),
             CodeHash = ContractCodeHashHex,
             DeclaredCodeHash = ContractCodeHashHex,
             AbiHash = ContractAbiHashHex,
@@ -15683,7 +15698,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var client = operation == "contract-call"
             ? BoundContractToriiClient(handler)
-            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+            : CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -17366,6 +17381,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent($$"""
                 {
+                  "network_id": "{{CanonicalNetworkId}}",
+                  "artifact_id": {"dataspace_id":0,"code_hash":"{{ArtifactHashLiteral(ContractCodeHashHex)}}"},
                   "code_hash": "{{ContractCodeHashHex}}",
                   "declared_code_hash": null,
                   "abi_hash": "{{ContractAbiHashHex}}",
@@ -17390,14 +17407,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var view = await client.GetContractCodeViewAsync(ContractCodeHashHex, cancellationToken: TestContext.Current.CancellationToken);
+        using var client = CreateRuntimeAuthenticatedClient(handler);
+        var view = await client.GetContractCodeViewAsync(new ContractArtifactId(0, ContractCodeHashHex), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(ContractCodeHashHex, view.CodeHash);
         Assert.Equal("verified_source", view.RenderedSourceKind);
         Assert.Equal("seiyaku Demo { view fn main() {} }", view.RenderedSourceText);
         Assert.Equal((ulong)24, view.VerifiedSourceReference!.ContentLength);
-        Assert.Equal($"/v1/contracts/code/{ContractCodeHashHex}/contract-view", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal($"/v1/contracts/artifacts/0/{ContractCodeHashHex}/contract-view", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -17442,6 +17459,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string[] warnings = ["verified source record loaded"];
         var view = new ToriiContractCodeView
         {
+            NetworkId = OnboardingFixtureNetworkId,
+            ArtifactId = new ContractArtifactId(0, ContractCodeHashHex),
             CodeHash = ContractCodeHashHex,
             DeclaredCodeHash = ContractCodeHashHex,
             AbiHash = ContractAbiHashHex,
@@ -17722,6 +17741,70 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(responseFeePayment, response.FeePayment);
         Assert.Equal("/v1/contracts/call/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
+    }
+
+    [Fact]
+    public async Task ProposeMultisigContractCallAsyncAcceptsNativeExecuteTriggerFrame()
+    {
+        using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "Fixtures", "typed_transaction_v1.json")));
+        var native = fixture.RootElement;
+        Assert.Equal(1, native.GetProperty("fixture_version").GetInt32());
+        Assert.Equal(0x02, native.GetProperty("norito_layout_flags").GetInt32());
+        var execute = Assert.Single(native.GetProperty("cases").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "ExecuteTrigger");
+        var payload = new JsonObject { ["force"] = true };
+        var request = TrustedMultisigContractCallRequest() with
+        {
+            Payload = payload,
+            DraftIntent = ContractCallDraftIntent("router::dex.universal", "main", payload, [4, 5, 6]),
+        };
+        var responseJson = MultisigContractProposeResponseJsonObject(
+            request,
+            CanonicalMultisigAccountId,
+            request.FeePayment,
+            triggerId: native.GetProperty("trigger_id").GetString()!,
+            executeInstructionArchive: Convert.ToBase64String(Convert.FromHexString(
+                execute.GetProperty("instruction_box_frame_hex").GetString()!)));
+        using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
+        using var client = BoundToriiClient(handler);
+
+        var response = await client.ProposeMultisigContractCallAsync(
+            request, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(response.Ok);
+        Assert.False(response.Submitted);
+        Assert.Equal(responseJson["proposal_id"]!.GetValue<string>(), response.ProposalId);
+        Assert.Equal(response.ProposalId, response.InstructionsHash);
+    }
+
+    [Theory]
+    [InlineData("execute-trigger-id", "invalid Norito string length")]
+    [InlineData("execute-args", "invalid Norito string length")]
+    [InlineData("register-trigger-id", "invalid Norito string length")]
+    [InlineData("filter-trigger-id", "invalid Norito string length")]
+    [InlineData("execute-trigger-id-extra-field", "canonical nine-field TransactionPayload")]
+    [InlineData("execute-args-extra-field", "canonical nine-field TransactionPayload")]
+    public async Task ProposeMultisigContractCallAsyncRejectsRehashedMalformedTypedFields(
+        string malformedField,
+        string expectedError)
+    {
+        var request = TrustedMultisigContractCallRequest();
+        var responseJson = MultisigContractProposeResponseJsonObject(
+            request, CanonicalMultisigAccountId, request.FeePayment,
+            malformedTypedField: malformedField);
+        using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
+        using var client = BoundToriiClient(handler);
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.ProposeMultisigContractCallAsync(
+                request, cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(expectedError, error.Message);
+        if (malformedField.EndsWith("extra-field", StringComparison.Ordinal))
+        {
+            Assert.IsType<ArgumentException>(error.InnerException);
+        }
     }
 
     public static IEnumerable<object[]> InvalidMultisigContractCallProposeRequests()
@@ -19128,6 +19211,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Content = new StringContent($$"""
                 {
+                  "network_id": "{{CanonicalNetworkId}}",
+                  "artifact_id": {"dataspace_id":0,"code_hash":"{{ArtifactHashLiteral(ContractCodeHashHex)}}"},
                   "job_id": "job-1",
                   "code_hash": "{{ContractCodeHashHex}}",
                   "status": "verified",
@@ -19148,10 +19233,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var codeHash = new string('a', 64);
-        var job = await client.SubmitContractVerifiedSourceJobAsync(
-            codeHash,
+        using var client = CreateRuntimeAuthenticatedClient(handler);
+        var codeHash = ContractCodeHashHex;
+        var job = await client.SubmitContractVerifiedSourceJobAsync(new ContractArtifactId(0, codeHash),
             new ToriiContractVerifiedSourceSubmission
             {
                 Language = "kotodama",
@@ -19162,12 +19246,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("job-1", job.JobId);
         Assert.Equal("verified", job.Status);
         Assert.Equal((ulong)54, job.VerifiedSourceReference!.ContentLength);
-        Assert.Equal($"/v1/contracts/code/{codeHash}/verified-source/jobs", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal($"/v1/contracts/artifacts/0/{codeHash}/verified-source/jobs", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object[]> InvalidContractVerifiedSourceSubmissions()
     {
-        var validCodeHash = new string('a', 64);
+        var validCodeHash = ContractCodeHashHex;
         var valid = ValidContractVerifiedSourceSubmission();
         yield return new object[] { " " + validCodeHash, valid, "codeHash", "whitespace" };
         yield return new object[] { new string('a', 63), valid, "codeHash", "32-byte hex string" };
@@ -19190,10 +19274,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed verified-source request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.SubmitContractVerifiedSourceJobAsync(codeHash, request, cancellationToken: TestContext.Current.CancellationToken));
+            client.SubmitContractVerifiedSourceJobAsync(new ContractArtifactId(0, codeHash), request, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
@@ -19227,7 +19311,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var client = operation == "contract-call"
             ? BoundContractToriiClient(handler)
-            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+            : CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -19244,6 +19328,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent($$"""
                 {
+                  "network_id": "{{CanonicalNetworkId}}",
+                  "artifact_id": {"dataspace_id":0,"code_hash":"{{ArtifactHashLiteral(ContractCodeHashHex)}}"},
                   "job_id": "job-1",
                   "code_hash": "{{ContractCodeHashHex}}",
                   "status": "mismatch",
@@ -19255,13 +19341,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var job = await client.GetContractVerifiedSourceJobAsync(ContractCodeHashHex, "job-1", cancellationToken: TestContext.Current.CancellationToken);
+        using var client = CreateRuntimeAuthenticatedClient(handler);
+        var job = await client.GetContractVerifiedSourceJobAsync(new ContractArtifactId(0, ContractCodeHashHex), "job-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(job);
         Assert.Equal("mismatch", job!.Status);
         Assert.Equal(ContractAbiHashHex, job.ActualCodeHash);
-        Assert.Equal($"/v1/contracts/code/{ContractCodeHashHex}/verified-source-jobs/job-1", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal($"/v1/contracts/artifacts/0/{ContractCodeHashHex}/verified-source/jobs/job-1", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -19269,8 +19355,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var job = await client.GetContractVerifiedSourceJobAsync(ContractCodeHashHex, "missing-job", cancellationToken: TestContext.Current.CancellationToken);
+        using var client = CreateRuntimeAuthenticatedClient(handler);
+        var job = await client.GetContractVerifiedSourceJobAsync(new ContractArtifactId(0, ContractCodeHashHex), "missing-job", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(job);
     }
@@ -19287,10 +19373,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed verified-source job id reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.GetContractVerifiedSourceJobAsync(ContractCodeHashHex, jobId!, cancellationToken: TestContext.Current.CancellationToken));
+            client.GetContractVerifiedSourceJobAsync(new ContractArtifactId(0, ContractCodeHashHex), jobId!, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("jobId", error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
@@ -19804,6 +19890,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("<response body exceeds the 65536-byte limit>", exception.ResponseBody);
     }
 
+    private static string ArtifactHashLiteral(string codeHash) =>
+        JsonSerializer.SerializeToNode(new ContractArtifactId(0, codeHash))!["code_hash"]!.GetValue<string>();
+
     private static Task InvokeContractCodeReadOperationAsync(
         ToriiClient client,
         string operation,
@@ -19811,10 +19900,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "manifest" => client.GetContractCodeAsync(codeHash!),
-            "bytes" => client.GetContractCodeBytesResponseAsync(codeHash!),
-            "view" => client.GetContractCodeViewAsync(codeHash!),
-            "verified-source-job" => client.GetContractVerifiedSourceJobAsync(codeHash!, "job-1"),
+            "manifest" => client.GetContractCodeAsync(new ContractArtifactId(0, codeHash!)),
+            "bytes" => client.GetContractCodeBytesResponseAsync(new ContractArtifactId(0, codeHash!)),
+            "view" => client.GetContractCodeViewAsync(new ContractArtifactId(0, codeHash!)),
+            "verified-source-job" => client.GetContractVerifiedSourceJobAsync(new ContractArtifactId(0, codeHash!), "job-1"),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract code read operation."),
         };
     }
@@ -19825,16 +19914,15 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "contract-code" => client.GetContractCodeAsync(ContractCodeHashHex),
-            "contract-code-view" => client.GetContractCodeViewAsync(ContractCodeHashHex),
+            "contract-code" => client.GetContractCodeAsync(new ContractArtifactId(0, ContractCodeHashHex)),
+            "contract-code-view" => client.GetContractCodeViewAsync(new ContractArtifactId(0, ContractCodeHashHex)),
             "explorer-instruction-contract-view" => client.GetExplorerInstructionContractViewAsync("tx-detail", 2),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
             "contract-view-success" => client.ExecuteContractViewAsync(ValidContractViewRequest()),
             "contract-view-error" => client.ExecuteContractViewAsync(ValidContractViewRequest()),
-            "verified-source-submit" => client.SubmitContractVerifiedSourceJobAsync(
-                ContractCodeHashHex,
+            "verified-source-submit" => client.SubmitContractVerifiedSourceJobAsync(new ContractArtifactId(0, ContractCodeHashHex),
                 ValidContractVerifiedSourceSubmission()),
-            "verified-source-get" => client.GetContractVerifiedSourceJobAsync(ContractCodeHashHex, "job-1"),
+            "verified-source-get" => client.GetContractVerifiedSourceJobAsync(new ContractArtifactId(0, ContractCodeHashHex), "job-1"),
             "runtime-abi-hash" => client.GetRuntimeAbiHashAsync(),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract metadata hash response operation."),
         };
@@ -21031,6 +21119,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var abiHash = new string('d', 64);
         return new ToriiContractCodeRecord
         {
+            NetworkId = OnboardingFixtureNetworkId,
+            ArtifactId = new ContractArtifactId(0, new string('b', 64)),
             Manifest = new ToriiContractManifest
             {
                 CodeHash = codeHash,
@@ -21111,6 +21201,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new ToriiContractCodeView
         {
+            NetworkId = OnboardingFixtureNetworkId,
+            ArtifactId = new ContractArtifactId(0, ContractCodeHashHex),
             CodeHash = ContractCodeHashHex,
             DeclaredCodeHash = ContractCodeHashHex,
             AbiHash = ContractAbiHashHex,
@@ -21144,6 +21236,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new ToriiContractVerifiedSourceJob
         {
+            NetworkId = OnboardingFixtureNetworkId,
+            ArtifactId = new ContractArtifactId(0, ContractCodeHashHex),
             JobId = "job-1",
             CodeHash = ContractCodeHashHex,
             Status = "QUEUED",
@@ -27707,6 +27801,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var response = new JsonObject
         {
+            ["network_id"] = CanonicalNetworkId,
+            ["artifact_id"] = JsonSerializer.SerializeToNode(new ContractArtifactId(0, ContractCodeHashHex)),
             ["manifest"] = new JsonObject
             {
                 ["code_hash"] = ContractCodeHashHex,
@@ -28096,6 +28192,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new JsonObject
         {
+            ["network_id"] = CanonicalNetworkId,
+            ["artifact_id"] = JsonSerializer.SerializeToNode(new ContractArtifactId(0, ContractCodeHashHex)),
             ["code_hash"] = codeHash,
             ["declared_code_hash"] = declaredCodeHash,
             ["abi_hash"] = abiHash,
@@ -28538,6 +28636,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new JsonObject
         {
+            ["network_id"] = CanonicalNetworkId,
+            ["artifact_id"] = JsonSerializer.SerializeToNode(new ContractArtifactId(0, ContractCodeHashHex)),
             ["job_id"] = "job-1",
             ["code_hash"] = codeHash,
             ["status"] = "verified",
@@ -28600,6 +28700,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new JsonObject
         {
+            ["network_id"] = CanonicalNetworkId,
+            ["artifact_id"] = JsonSerializer.SerializeToNode(new ContractArtifactId(0, ContractCodeHashHex)),
             ["code_b64"] = codeBase64 switch
             {
                 null => null,
@@ -29276,23 +29378,26 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         FeePaymentIntent? transactionFeePayment = null,
         ulong creationTimeMilliseconds = 321,
         TransactionContractInvocation? transactionInvocation = null,
-        IReadOnlyDictionary<string, JsonNode?>? transactionMetadata = null)
+        IReadOnlyDictionary<string, JsonNode?>? transactionMetadata = null,
+        string triggerId = "multisig-contract-call-fixture",
+        string? executeInstructionArchive = null,
+        string? malformedTypedField = null)
     {
         var draftIntent = request.DraftIntent
             ?? throw new InvalidOperationException("Test request requires a draft intent.");
-        const string triggerId = "multisig-contract-call-fixture";
         var register = new TestContractCallRegisterInstruction(
             triggerId,
             resolvedMultisigAccountId,
             transactionInvocation ?? draftIntent.Invocation,
-            transactionMetadata ?? draftIntent.Metadata);
-        var execute = TransactionInstruction.ExecuteTrigger(
-            triggerId,
-            request.Payload ?? new JsonObject());
+            transactionMetadata ?? draftIntent.Metadata,
+            malformedTypedField);
+        TransactionInstruction execute = malformedTypedField?.StartsWith("execute-", StringComparison.Ordinal) == true
+            ? new TestMalformedExecuteTriggerInstruction(triggerId, request.Payload ?? new JsonObject(), malformedTypedField)
+            : TransactionInstruction.ExecuteTrigger(triggerId, request.Payload ?? new JsonObject());
         var nestedInstructions = new[]
         {
             register.EncodeInstructionBoxBase64(request.SignerAccountId),
-            execute.EncodeInstructionBoxBase64(request.SignerAccountId),
+            executeInstructionArchive ?? execute.EncodeInstructionBoxBase64(request.SignerAccountId),
         };
         var proposalHash = TestHashMultisigInstructions(nestedInstructions);
         var outer = TestMultisigProposeInstruction(
@@ -29512,7 +29617,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string TriggerId,
         string Authority,
         TransactionContractInvocation Invocation,
-        IReadOnlyDictionary<string, JsonNode?> Metadata)
+        IReadOnlyDictionary<string, JsonNode?> Metadata,
+        string? MalformedTypedField = null)
         : TransactionInstruction
     {
         internal override string WireId => "iroha.register";
@@ -29527,7 +29633,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
             var triggerIdOption = new CanonicalNoritoWriter();
             triggerIdOption.WriteByte(1);
-            triggerIdOption.WriteField(context.EncodeString(TriggerId));
+            triggerIdOption.WriteField(MalformedTypedField == "filter-trigger-id"
+                ? context.EncodeString(TriggerId)
+                : context.EncodeTriggerId(TriggerId));
             var authorityOption = new CanonicalNoritoWriter();
             authorityOption.WriteByte(1);
             authorityOption.WriteField(context.EncodeAccountId(Authority));
@@ -29547,7 +29655,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             action.WriteField(context.EncodeMetadata(Metadata));
 
             var trigger = new CanonicalNoritoWriter();
-            trigger.WriteField(context.EncodeString(TriggerId));
+            trigger.WriteField(MalformedTypedField == "register-trigger-id"
+                ? context.EncodeString(TriggerId)
+                : context.EncodeTriggerId(TriggerId));
             trigger.WriteField(action.ToArray());
             var register = new CanonicalNoritoWriter();
             register.WriteField(trigger.ToArray());
@@ -29555,6 +29665,37 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             registerBox.WriteUInt32LittleEndian(6);
             registerBox.WriteField(register.ToArray());
             return registerBox.ToArray();
+        }
+    }
+
+    private sealed record class TestMalformedExecuteTriggerInstruction(
+        string TriggerId,
+        JsonNode Arguments,
+        string MalformedField) : TransactionInstruction
+    {
+        internal override string WireId => "iroha.execute_trigger";
+        internal override string TypeName => "iroha_data_model::isi::transparent::ExecuteTrigger";
+
+        internal override byte[] EncodePayload(TransactionEncodingContext context)
+        {
+            var trigger = MalformedField == "execute-trigger-id"
+                ? context.EncodeString(TriggerId)
+                : context.EncodeTriggerId(TriggerId);
+            var arguments = MalformedField == "execute-args"
+                ? context.EncodeString(TransactionEncodingContext.CanonicalJson(Arguments))
+                : context.EncodeJson(Arguments);
+            if (MalformedField == "execute-trigger-id-extra-field")
+            {
+                trigger = [.. trigger, 0];
+            }
+            if (MalformedField == "execute-args-extra-field")
+            {
+                arguments = [.. arguments, 0];
+            }
+            var writer = new CanonicalNoritoWriter();
+            writer.WriteField(trigger);
+            writer.WriteField(arguments);
+            return writer.ToArray();
         }
     }
 

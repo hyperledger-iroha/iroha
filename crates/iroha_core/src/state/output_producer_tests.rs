@@ -30,8 +30,11 @@ use mv::storage::StorageReadOnly;
 use std::num::{NonZeroU32, NonZeroU64};
 
 fn state(row_bytes: u64) -> State {
+    // Execution still derives authority from committed genesis metadata.
     let state = State::new_for_testing(
-        World::default(),
+        crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
@@ -617,6 +620,15 @@ fn receipt_source(
         [Asset::new(source_asset.clone(), 10u32)],
         [],
     );
+    // Preserve the funded asset fixture and add its explicit global root owner
+    // before constructing State or admitting any transaction/callback.
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -654,7 +666,9 @@ fn receipt_source(
             1000u32,
         ),
     ]);
-    let header = BlockHeader::new(NonZeroU64::MIN, None, None, 7, 0);
+    // These direct ordinary transfer controls have no authenticated genesis
+    // source capability. Height two preserves their component-only scope.
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 7, 0);
     let mut transaction = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),

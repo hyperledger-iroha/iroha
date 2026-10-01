@@ -1132,16 +1132,45 @@ async fn app_api_vk_and_proofs_lists_ok() {
 }
 #[tokio::test]
 async fn app_api_get_by_id_not_found_returns_404() {
-    let app = mk_app_state_for_tests();
-    let headers = HeaderMap::new();
-    // Contract code by hash (non-existent)
+    let _auth_guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key = checked_torii_test_ed25519_keypair(0xA8, "missing artifact authenticated reader");
+    let caller = AccountId::new(key.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_root_scope_for_handler_test(
+        world_with_account(&caller),
+        false,
+    ));
+    let hash = "0000000000000000000000000000000000000000000000000000000000000000";
+    let uri: axum::http::Uri = format!("/v1/contracts/artifacts/0/{hash}").parse().unwrap();
+    let headers = signed_network_app_headers(
+        app.state.network_id_ref(),
+        &caller,
+        &key,
+        &axum::http::Method::GET,
+        &uri,
+        &[],
+    );
+    let verified = crate::app_auth::verify_canonical_request(
+        &app.state,
+        &headers,
+        &axum::http::Method::GET,
+        &uri,
+        &[],
+        Some(&caller),
+    )
+    .expect("valid exact-network artifact request signature")
+    .expect("authenticated artifact reader");
+    assert_eq!(verified.account, caller);
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(app.state.view().world()),
+        Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+    );
+    // Contract artifact in the authenticated public dataspace (non-existent).
     let resp = super::handler_get_contract_code(
         State(app.clone()),
         headers.clone(),
         crate::loopback_connect_info(),
-        axum::extract::Path(
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        ),
+        axum::extract::Path((DataSpaceId::UNIVERSAL.as_u64().to_string(), hash.to_owned())),
+        axum::Extension(verified),
     )
     .await
     .expect("ok mapping")

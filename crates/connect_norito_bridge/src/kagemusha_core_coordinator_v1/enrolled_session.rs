@@ -6,13 +6,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use iroha_core_zk::kagemusha_v1_state::{KagemushaAuthenticatedCoreOwnerV1, KagemushaRecoveryEnrollmentBindingV1};
+use iroha_core_zk::kagemusha_v1_state::{
+    KagemushaAuthenticatedCoreOwnerV1, KagemushaRecoveryEnrollmentBindingV1,
+};
 use iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1;
 
 use super::{
     enrolled_open::{
-        authenticated_recovery_source, EnrolledOpenAuthoritySourceV1, PendingEnrolledOpenV1, VerifiedEnrolledOpenEvidenceV1,
-        VerifiedEnrolledOpenV1,
+        EnrolledOpenAuthoritySourceV1, PendingEnrolledOpenV1, VerifiedEnrolledOpenEvidenceV1,
+        VerifiedEnrolledOpenV1, authenticated_recovery_source,
     },
     native_deadline::NativeDeadlineV1,
     session_registry::{InvocationResult, RegistryError, SessionRegistry},
@@ -45,19 +47,39 @@ pub(super) struct AuthenticatedRecoveredOwnerV1 {
 }
 
 impl AuthenticatedRecoveredOwnerV1 {
-    pub(super) fn new(core: KagemushaAuthenticatedCoreOwnerV1, native_key: KagemushaDevicePublicKeyV1) -> Result<Self> {
-        let observer = NativeStartupQualificationOwnerV1::from_authenticated_core_owner(&core, &native_key)
-            .map_err(|_| RegistryError::Rejected)?;
-        Ok(Self { core, native_key, observer, evidence: None })
+    pub(super) fn new(
+        core: KagemushaAuthenticatedCoreOwnerV1,
+        native_key: KagemushaDevicePublicKeyV1,
+    ) -> Result<Self> {
+        let observer =
+            NativeStartupQualificationOwnerV1::from_authenticated_core_owner(&core, &native_key)
+                .map_err(|_| RegistryError::Rejected)?;
+        Ok(Self {
+            core,
+            native_key,
+            observer,
+            evidence: None,
+        })
     }
     pub(super) fn require_pending_original(&self, pending: &BegunRecoveredSessionV1) -> Result<()> {
-        pending.deadline.check().map_err(|_| RegistryError::Rejected)?;
-        let selected = self.core.current_recovery_selection().map_err(|_| RegistryError::Rejected)?;
+        pending
+            .deadline
+            .check()
+            .map_err(|_| RegistryError::Rejected)?;
+        let selected = self
+            .core
+            .current_recovery_selection()
+            .map_err(|_| RegistryError::Rejected)?;
         if selected.enrollment_binding() != &pending.enrollment
-            || authenticated_recovery_source(&selected).map_err(|_| RegistryError::Rejected)? != pending.source {
+            || authenticated_recovery_source(&selected).map_err(|_| RegistryError::Rejected)?
+                != pending.source
+        {
             return Err(RegistryError::Rejected);
         }
-        pending.deadline.check().map_err(|_| RegistryError::Rejected)?;
+        pending
+            .deadline
+            .check()
+            .map_err(|_| RegistryError::Rejected)?;
         Ok(())
     }
 }
@@ -66,10 +88,16 @@ impl sealed::RecoveredOwner for AuthenticatedRecoveredOwnerV1 {}
 
 impl RecoveredOwnerAccessV1 for AuthenticatedRecoveredOwnerV1 {
     fn require_current(&self) -> Result<()> {
-        let selected = self.core.current_recovery_selection().map_err(|_| RegistryError::Rejected)?;
+        let selected = self
+            .core
+            .current_recovery_selection()
+            .map_err(|_| RegistryError::Rejected)?;
         if let Some(evidence) = &self.evidence {
             if evidence.enrollment_binding() != *selected.enrollment_binding()
-                || evidence.authority_source() != &authenticated_recovery_source(&selected).map_err(|_| RegistryError::Rejected)? {
+                || evidence.authority_source()
+                    != &authenticated_recovery_source(&selected)
+                        .map_err(|_| RegistryError::Rejected)?
+            {
                 return Err(RegistryError::Rejected);
             }
         }
@@ -80,16 +108,31 @@ impl RecoveredOwnerAccessV1 for AuthenticatedRecoveredOwnerV1 {
         PendingEnrolledOpenV1::from_authenticated_core_owner(&self.core, &self.native_key, deadline)
             .map_err(|_| RegistryError::Rejected)
     }
-    fn prepare_possession(&self, verified: VerifiedEnrolledOpenV1) -> Result<PreparedRecoveredOpenV1> {
-        let selected = self.core.current_recovery_selection().map_err(|_| RegistryError::Rejected)?;
-        let source = authenticated_recovery_source(&selected).map_err(|_| RegistryError::Rejected)?;
-        let release = self.core.authenticated_release().map_err(|_| RegistryError::Rejected)?;
+    fn prepare_possession(
+        &self,
+        verified: VerifiedEnrolledOpenV1,
+    ) -> Result<PreparedRecoveredOpenV1> {
+        let selected = self
+            .core
+            .current_recovery_selection()
+            .map_err(|_| RegistryError::Rejected)?;
+        let source =
+            authenticated_recovery_source(&selected).map_err(|_| RegistryError::Rejected)?;
+        let release = self
+            .core
+            .authenticated_release()
+            .map_err(|_| RegistryError::Rejected)?;
         let prepared = prepare_recovered_observer(&self.observer, selected.enrollment_binding(), &source,
             release.release_id(), release.hardware_policy_digest(),
             crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_key_reference_v1(&self.native_key), verified)?;
-        let current = self.core.current_recovery_selection().map_err(|_| RegistryError::Rejected)?;
+        let current = self
+            .core
+            .current_recovery_selection()
+            .map_err(|_| RegistryError::Rejected)?;
         if current.enrollment_binding() != selected.enrollment_binding()
-            || authenticated_recovery_source(&current).map_err(|_| RegistryError::Rejected)? != source {
+            || authenticated_recovery_source(&current).map_err(|_| RegistryError::Rejected)?
+                != source
+        {
             return Err(RegistryError::Rejected);
         }
         Ok(prepared)
@@ -98,7 +141,9 @@ impl RecoveredOwnerAccessV1 for AuthenticatedRecoveredOwnerV1 {
         self.observer = prepared.observer;
         self.evidence = Some(prepared.evidence);
     }
-    fn observer_mut(&mut self) -> &mut NativeStartupQualificationOwnerV1 { &mut self.observer }
+    fn observer_mut(&mut self) -> &mut NativeStartupQualificationOwnerV1 {
+        &mut self.observer
+    }
 }
 
 /// Immutable prepared replacement; construction requires all exact current-source checks.
@@ -175,7 +220,11 @@ impl<O: RecoveredOwnerAccessV1> RecoveredEnrolledSessionRegistryV1<O> {
         self.begin_checked(owner, || Ok(()))
     }
 
-    pub(super) fn begin_checked(&self, owner: Arc<Mutex<O>>, guard: impl Fn() -> Result<()>) -> Result<BegunRecoveredSessionV1> {
+    pub(super) fn begin_checked(
+        &self,
+        owner: Arc<Mutex<O>>,
+        guard: impl Fn() -> Result<()>,
+    ) -> Result<BegunRecoveredSessionV1> {
         let deadline = NativeDeadlineV1::start(super::enrolled_open::LIFETIME)
             .map_err(|_| RegistryError::Rejected)?;
         let mut begun = None;
@@ -221,11 +270,16 @@ impl<O: RecoveredOwnerAccessV1> RecoveredEnrolledSessionRegistryV1<O> {
         account_signature: &[u8],
         full_device_response: &[u8],
     ) -> Result<u64> {
-        self.complete_checked(attempt_id, account_signature, full_device_response, || Ok(()))
+        self.complete_checked(attempt_id, account_signature, full_device_response, || {
+            Ok(())
+        })
     }
 
     pub(super) fn complete_checked(
-        &self, attempt_id: u64, account_signature: &[u8], full_device_response: &[u8],
+        &self,
+        attempt_id: u64,
+        account_signature: &[u8],
+        full_device_response: &[u8],
         guard: impl Fn() -> Result<()>,
     ) -> Result<u64> {
         guard()?;
@@ -269,14 +323,18 @@ impl<O: RecoveredOwnerAccessV1> RecoveredEnrolledSessionRegistryV1<O> {
         handle: u64,
         operation: impl FnOnce(&mut NativeStartupQualificationOwnerV1) -> T,
     ) -> Result<InvocationResult<T>> {
-        let completed = self.registry
+        let completed = self
+            .registry
             .dispatch(self.registry.invocation(handle)?, |owner| {
                 owner.require_current()?;
                 let value = operation(owner.observer_mut());
                 owner.require_current()?;
                 Ok::<T, RegistryError>(value)
             })?;
-        Ok(InvocationResult { value: completed.value?, session_is_current: completed.session_is_current })
+        Ok(InvocationResult {
+            value: completed.value?,
+            session_is_current: completed.session_is_current,
+        })
     }
 }
 

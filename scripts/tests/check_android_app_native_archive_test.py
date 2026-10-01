@@ -511,6 +511,17 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
                         result.stderr,
                     )
 
+    def test_local_integration_scope_is_rejected_even_for_clean_source(self) -> None:
+        for dirty in (False, True):
+            with self.subTest(source_tree_dirty=dirty):
+                provenance = json.loads(json.dumps(self.provenance))
+                provenance["artifact_scope"] = "local-integration"
+                provenance["source_tree_dirty"] = dirty
+                self.replace_provenance(provenance)
+                result = self.verify(self.write_app_archive("apk"), "apk")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("field inventory is not exact", result.stderr)
+
     def test_rejects_dirty_or_mismatched_source_provenance(self) -> None:
         for field, replacement in (
             ("source_tree_dirty", True),

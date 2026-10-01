@@ -202,6 +202,14 @@ fn core_queries_return_typed_handles_and_specialists_remain_norito() {
     let nft_id: NftId = "ticket$wonderland.universal".parse().expect("nft id");
     let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
     let world = World::with_assets([domain], [account], [asset_def], [asset], [nft]);
+    // The positive contract-instance query reads an authenticated global root.
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);

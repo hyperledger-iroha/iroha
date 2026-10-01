@@ -13,9 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 106_534
-EXPECTED_ASSET_SHA256 = "4a61d276b2e5310c06b7c90bd795f53019819fe1835e9d40cbf6eb9da4d4709e"
-EXPECTED_SEMANTIC_SHA256 = "5d380c3bb92e52c66336265ee652d73997c2170be962ec8278092cb2c34a1ff9"
+# Manual asset formatting owner: one-space JSON indentation, enforced below.
+EXPECTED_ASSET_LENGTH = 109_610
+EXPECTED_ASSET_SHA256 = "dd5712b9432008b1c55ae38eb96ffd8ea833a65d9c58b70cce8263269c38c90e"
+EXPECTED_SEMANTIC_SHA256 = "f546351a80bd7d7d3ed4d0437068b9ca4845fde56b12cbfe909b4e1f7c9a748d"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -426,6 +427,20 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
 
     def test_current_asset_and_source_match_the_historical_inventory(self) -> None:
         validate(self.source, self.asset)
+
+    def test_asset_format_and_runtime_byte_limit_are_preserved(self) -> None:
+        # This asset is edited directly; there is no separate generator. Keep
+        # regeneration deterministic without growing the production byte cap.
+        canonical = (
+            json.dumps(json.loads(self.asset, object_pairs_hook=_strict_object), ensure_ascii=False, indent=1)
+            + "\n"
+        ).encode()
+        self.assertEqual(self.asset, canonical)
+        self.assertRegex(
+            self.source,
+            r"const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 \* 1024;",
+        )
+        self.assertLessEqual(len(self.asset), 128 * 1024)
 
     def test_prepared_account_schemas_are_closed_and_fully_typed(self) -> None:
         asset = json.loads(self.asset)

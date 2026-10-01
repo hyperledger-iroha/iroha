@@ -165,8 +165,8 @@ fn absolute_maximum_segments_fit_existing_security_caps_and_keep_degree_four() {
     for (value, gas) in [(17, 1), (i64::MIN as u64, 1), (i64::MIN as u64, 0)] {
         let (segment, records) = maximum_segment(value, gas);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        assert_eq!(segment.base_width_v1(), 1_351);
-        assert_eq!(segment.profile_constraint_count_v1(), 2_940);
+        assert_eq!(segment.base_width_v1(), 1_356);
+        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
         let protocol = segment.protocol_v1();
         protocol.validate().unwrap();
         assert_eq!(protocol.maximum_constraint_degree, 4);
@@ -184,8 +184,8 @@ fn absolute_maximum_segments_fit_existing_security_caps_and_keep_degree_four() {
         )
         .unwrap();
         let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-        assert_eq!(bound, 4_141_952);
-        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 52_352);
+        assert_eq!(bound, 4_153_152);
+        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [0xac + gas as u8; 32],
@@ -205,7 +205,7 @@ fn native_stark_proves_maximum_absolute_segment_and_binds_trap_state_code() {
         let (segment, records) = maximum_segment(value, gas);
         let columns = segment.columns(&records).unwrap();
         let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-        assert!(proof.len() <= 4_141_952);
+        assert!(proof.len() <= 4_153_152);
         verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
         for changed_field in 0..3 {
             let mut after = segment.after;

@@ -359,14 +359,23 @@ fn game_binary_decode_rechecks_public_invariants_and_rejects_alternate_json_enve
 #[test]
 fn cancel_upload_roundtrip_preserves_the_native_batch_instruction() {
     let native = iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
-        code_hash: json::from_value(field(&game("OpenGameSessionV1"), "session_id")).unwrap(),
+        artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::new(42),
+            json::from_value(field(&game("OpenGameSessionV1"), "session_id")).unwrap(),
+        ),
     };
     let value = object([(
         "CancelSmartContractCodeUpload",
-        object([("code_hash", json::to_value(&native.code_hash).unwrap())]),
+        object([(
+            "artifact_id",
+            crate::lifecycle_instructions::render_artifact_id(&native.artifact_id).unwrap(),
+        )]),
     )]);
     assert_roundtrip(&value);
-    let mut extra = object([("code_hash", json::to_value(&native.code_hash).unwrap())]);
+    let mut extra = object([(
+        "artifact_id",
+        crate::lifecycle_instructions::render_artifact_id(&native.artifact_id).unwrap(),
+    )]);
     extra
         .as_object_mut()
         .unwrap()

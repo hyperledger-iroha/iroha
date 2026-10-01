@@ -46,10 +46,10 @@ fn policy() -> VerificationLimits {
             max_wire_bytes: 500_000,
             max_total_segment_bytes: 400_000,
             max_total_statement_bytes: 500_000,
-            max_total_queries: 128,
+            max_total_queries: 154,
             max_total_decode_allocation_charges: 8_000_000,
             segment: VerifyLimits {
-                max_queries: 64,
+                max_queries: 77,
                 ..VerifyLimits::default()
             },
         },
@@ -64,13 +64,13 @@ fn public_resource_plan_exposes_masked_geometry_and_separate_carrier_costs() {
     let two = quantity_artifact_resources(2, policy().bundle.max_total_statement_bytes).unwrap();
     // The implemented base-field masking keeps the fixed wire below the existing
     // ceilings. Row payload alone is not the complete child/carrier budget.
-    assert_eq!(one.queries_per_segment, 64);
-    assert_eq!(one.minimum_segment_row_bytes, 64 * 301 * size_of::<u64>());
+    assert_eq!(one.queries_per_segment, 77);
+    assert_eq!(one.minimum_segment_row_bytes, 77 * 301 * size_of::<u64>());
     assert_eq!(
         two.minimum_bundle_row_bytes,
         2 * one.minimum_segment_row_bytes
     );
-    assert_eq!(one.maximum_segment_frame_bytes, 502_895);
+    assert_eq!(one.maximum_segment_frame_bytes, 500_084);
     assert!(one.maximum_segment_frame_bytes <= 512 * 1024);
     assert!(two.maximum_bundle_frame_bytes <= 1024 * 1024);
     assert!(one.maximum_segment_frame_bytes > policy().transport.max_bundle_frame_bytes);
@@ -411,7 +411,7 @@ fn public_verifier_enforces_cumulative_queries_frames_and_statement_caps_before_
             "max_bundle_queries",
             VerificationLimits {
                 bundle: BundleVerificationLimits {
-                    max_total_queries: 127,
+                    max_total_queries: 153,
                     ..policy().bundle
                 },
                 ..policy()
@@ -628,8 +628,8 @@ fn assert_producer_limits_reject(
             "max_public_transfer_transcripts" => limits.public_statement.max_transcripts = 0,
             "max_public_transfer_deltas" => limits.public_statement.max_deltas = 0,
             "max_bundle_segments" => limits.bundle.max_segments = 1,
-            "max_queries" => limits.bundle.segment.max_queries = 63,
-            "max_bundle_queries" => limits.bundle.max_total_queries = 127,
+            "max_queries" => limits.bundle.segment.max_queries = 76,
+            "max_bundle_queries" => limits.bundle.max_total_queries = 153,
             "max_proof_bytes" => limits.bundle.segment.max_proof_bytes = 0,
             "max_bundle_segment_bytes" => limits.bundle.max_total_segment_bytes = 0,
             "max_compact_prover_trace_cells" => work.max_total_trace_cells = 0,

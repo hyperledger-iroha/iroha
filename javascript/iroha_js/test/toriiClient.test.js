@@ -18072,6 +18072,7 @@ test("local manifest builder normalizes a scoped manifest without forwarding cre
         { name: "Votes", type_name: "StateMap<Name, bool>" },
       ],
       error_types: null,
+      error_messages: null,
       kotoba: [
         {
           msg_id: "contract.title",

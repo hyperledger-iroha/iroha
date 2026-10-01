@@ -23,7 +23,7 @@ use core::{
     time::Duration,
 };
 use futures::executor::block_on;
-use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
+use hex::encode as hex_encode;
 use iroha_core_privacy::{
     privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
@@ -153,7 +153,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     json::Json,
     numeric::{NumericSpec, Quantity, XorQuantity},

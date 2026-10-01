@@ -358,3 +358,58 @@ fn collection_streams_use_declared_generic_identities() {
         Err(norito::Error::SchemaMismatch)
     ));
 }
+
+#[test]
+fn static_nominal_names_borrow_exact_declarations_without_changing_frame_projection() {
+    use norito::schema::identity::nominal_name;
+
+    for (identity, expected) in [
+        (nominal_name::<u64>(), "u64"),
+        (nominal_name::<String>(), "alloc::string::String"),
+        (nominal_name::<&str>(), "&str"),
+        (
+            nominal_name::<Cow<'_, str>>(),
+            "alloc::borrow::Cow<'_, str>",
+        ),
+        (nominal_name::<Box<str>>(), "alloc::boxed::Box<str>"),
+        (nominal_name::<Marker>(), "example::Marker"),
+        (
+            nominal_name::<original::Leaf>(),
+            "norito_group_06::schema_identity::original::Leaf",
+        ),
+    ] {
+        assert!(matches!(identity, Cow::Borrowed(_)));
+        assert_eq!(identity, expected);
+    }
+    assert_ne!(
+        nominal_name::<original::Leaf>(),
+        original::Leaf::frame_name()
+    );
+    assert_eq!(original::Leaf::frame_name(), "example.status.leaf");
+    assert_ne!(nominal_name::<&str>(), <&str>::frame_name());
+    assert_eq!(
+        frame_hash::<original::Leaf>(),
+        frame_hash::<relocated::Leaf>()
+    );
+}
+
+#[test]
+fn composed_nominal_identities_keep_type_const_and_erased_lifetime_arguments() {
+    use norito::schema::identity::nominal_name;
+
+    for (identity, expected) in [
+        (nominal_name::<Vec<&str>>(), <Vec<&str>>::nominal_name()),
+        (
+            nominal_name::<Envelope<'_, Marker, 7, 'λ', true>>(),
+            <Envelope<'_, Marker, 7, 'λ', true>>::nominal_name(),
+        ),
+        (nominal_name::<[u64; 4]>(), <[u64; 4]>::nominal_name()),
+        (
+            nominal_name::<(u64, String)>(),
+            <(u64, String)>::nominal_name(),
+        ),
+    ] {
+        assert!(matches!(identity, Cow::Owned(_)));
+        assert_eq!(identity, expected);
+    }
+}

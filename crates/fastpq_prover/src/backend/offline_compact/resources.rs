@@ -258,11 +258,11 @@ mod tests {
     fn planner_reports_unavoidable_wire_bytes_and_sequential_work() {
         let one = quantity_artifact_resources(1, 0).unwrap();
         let two = quantity_artifact_resources(2, 256).unwrap();
-        assert_eq!(one.minimum_segment_row_bytes, 154_112);
-        assert_eq!(one.minimum_segment_proof_payload_bytes, 160_256);
-        assert_eq!(two.minimum_total_segment_payload_bytes, 320_512);
-        assert_eq!(two.minimum_bundle_row_bytes, 308_224);
-        assert_eq!(two.total_queries, 128);
+        assert_eq!(one.minimum_segment_row_bytes, 185_416);
+        assert_eq!(one.minimum_segment_proof_payload_bytes, 192_808);
+        assert_eq!(two.minimum_total_segment_payload_bytes, 385_616);
+        assert_eq!(two.minimum_bundle_row_bytes, 370_832);
+        assert_eq!(two.total_queries, 154);
         assert_eq!(one.trace_cells_per_segment, 342 * 65_536);
         assert_eq!(
             one.trace_replay_peak_bytes,

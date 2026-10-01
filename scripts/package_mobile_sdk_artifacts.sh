@@ -576,6 +576,8 @@ import zipfile
 entry = "assets/iroha/native-build-provenance-v1.json"
 with zipfile.ZipFile(sys.argv[1]) as archive:
     manifest = json.loads(archive.read(entry))
+if "artifact_scope" in manifest:
+    raise SystemExit("diagnostic Android artifact scope cannot enter release packaging")
 production = manifest.get("privacy_production_enabled")
 if type(production) is not bool:
     raise SystemExit("native provenance privacy_production_enabled is not boolean")

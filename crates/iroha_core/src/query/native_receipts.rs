@@ -164,31 +164,64 @@ pub fn private_dataspace_record_proof(
     height: u64,
     dataspace: iroha_model_base::topology::DataSpaceId,
 ) -> Result<Option<iroha_data_model::private_dataspace::PrivateDataspaceRecordProof>, String> {
-    use iroha_data_model::private_dataspace::{PrivateDataspaceRecord, PrivateDataspaceRecordProof};
+    use iroha_data_model::private_dataspace::{
+        PrivateDataspaceRecord, PrivateDataspaceRecordProof,
+    };
     let source = original_source(view, height)?;
     let key = iroha_data_model::private_dataspace::private_dataspace_record_witness_key(dataspace);
-    let Some(written) = source.witness.get().writes.iter().rev().find(|write| write.key == key) else {
+    let Some(written) = source
+        .witness
+        .get()
+        .writes
+        .iter()
+        .rev()
+        .find(|write| write.key == key)
+    else {
         return Ok(None);
     };
     let record: PrivateDataspaceRecord = norito::decode_canonical_with_limits(
-        &written.value, norito::canonical_decode_limits(written.value.len()),
-    ).map_err(|error| error.to_string())?;
+        &written.value,
+        norito::canonical_decode_limits(written.value.len()),
+    )
+    .map_err(|error| error.to_string())?;
     record.validate().map_err(|error| error.to_string())?;
     if record.dataspace_id != dataspace || record.witness_key() != written.key {
         return Err("private-root archive key differs from its record".into());
     }
-    let decoded = source.finality.decode_checked().map_err(|error| error.to_string())?;
+    let decoded = source
+        .finality
+        .decode_checked()
+        .map_err(|error| error.to_string())?;
     let block = norito::core::with_decode_limits_scope(
         norito::canonical_decode_limits(source.finality.block_wire.len()),
         || decode_versioned_signed_block(&source.finality.block_wire),
-    ).map_err(|error| error.to_string())?;
-    let certificate = block.commit_certificate().ok_or("private-root record carrier lacks a native certificate")?;
-    let result = iroha_data_model::sumeragi_finality::result_of_preimage(certificate.result_preimage());
-    let proof = PrivateDataspaceRecordProof::from_writes(*view.network_id(), height, result.0,
-        source.witness.get().writes.iter().map(|write| (write.key.as_slice(), write.value.as_slice())), record)
-        .map_err(|error| error.to_string())?;
+    )
+    .map_err(|error| error.to_string())?;
+    let certificate = block
+        .commit_certificate()
+        .ok_or("private-root record carrier lacks a native certificate")?;
+    let result =
+        iroha_data_model::sumeragi_finality::result_of_preimage(certificate.result_preimage());
+    let proof = PrivateDataspaceRecordProof::from_writes(
+        *view.network_id(),
+        height,
+        result.0,
+        source
+            .witness
+            .get()
+            .writes
+            .iter()
+            .map(|write| (write.key.as_slice(), write.value.as_slice())),
+        record,
+    )
+    .map_err(|error| error.to_string())?;
     let value = norito::encode_canonical(&proof.record).map_err(|error| error.to_string())?;
-    if proof.inclusion.root(&key, &value).map_err(|error| error.to_string())? != decoded.execution().ordinary_writes_root {
+    if proof
+        .inclusion
+        .root(&key, &value)
+        .map_err(|error| error.to_string())?
+        != decoded.execution().ordinary_writes_root
+    {
         return Err("private-root record differs from certified original writes".into());
     }
     Ok(Some(proof))

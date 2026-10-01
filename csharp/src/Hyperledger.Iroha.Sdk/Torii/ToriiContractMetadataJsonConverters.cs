@@ -54,6 +54,7 @@ internal static class ToriiContractMetadataJson
             }
         }
         ValidateOptionalVerifiedSourceReference(response.VerifiedSourceReference, $"{context}.verified_source_ref");
+        ToriiContractArtifactJson.Validate(response.NetworkId, response.ArtifactId, response.CodeHash, context);
     }
 
     internal static void ValidateContractViewAccessHints(ToriiContractViewAccessHints? response, string context)
@@ -158,6 +159,7 @@ internal static class ToriiContractMetadataJson
         ValidateOptionalExactNonEmptyText(response.Message, $"{context}.message");
         ToriiSseEventJson.RequireOptionalExactSizedHex(response.ActualCodeHash, $"{context}.actual_code_hash", 32);
         ValidateOptionalVerifiedSourceReference(response.VerifiedSourceReference, $"{context}.verified_source_ref");
+        ToriiContractArtifactJson.Validate(response.NetworkId, response.ArtifactId, response.CodeHash, context);
     }
 
     internal static JsonException DirectMetadataErrorToJsonException(ArgumentException error, string context)
@@ -412,6 +414,8 @@ internal static class ToriiContractMetadataJson
         {
             var response = new ToriiContractVerifiedSourceJob
             {
+                NetworkId = ToriiContractArtifactJson.ReadNetworkId(payload, context),
+                ArtifactId = ToriiContractArtifactJson.ReadArtifactId(payload, context),
                 JobId = ReadRequiredString(payload, "job_id", $"{context}.job_id"),
                 CodeHash = ReadRequiredString(payload, "code_hash", $"{context}.code_hash"),
                 Status = ReadRequiredString(payload, "status", $"{context}.status"),
@@ -441,6 +445,8 @@ internal static class ToriiContractMetadataJson
         {
             var response = new ToriiContractCodeView
             {
+                NetworkId = ToriiContractArtifactJson.ReadNetworkId(payload, context),
+                ArtifactId = ToriiContractArtifactJson.ReadArtifactId(payload, context),
                 CodeHash = ReadRequiredString(payload, "code_hash", $"{context}.code_hash"),
                 DeclaredCodeHash = ReadOptionalString(payload, "declared_code_hash", $"{context}.declared_code_hash"),
                 AbiHash = ReadOptionalString(payload, "abi_hash", $"{context}.abi_hash"),
@@ -630,6 +636,7 @@ internal static class ToriiContractMetadataJson
         ValidateVerifiedSourceJob(value, context);
 
         writer.WriteStartObject();
+        ToriiContractArtifactJson.WriteFields(writer, value.NetworkId, value.ArtifactId);
         writer.WriteString("job_id", value.JobId);
         writer.WriteString("code_hash", value.CodeHash);
         writer.WriteString("status", value.Status);
@@ -657,6 +664,7 @@ internal static class ToriiContractMetadataJson
         ValidateContractCodeView(value, context);
 
         writer.WriteStartObject();
+        ToriiContractArtifactJson.WriteFields(writer, value.NetworkId, value.ArtifactId);
         writer.WriteString("code_hash", value.CodeHash);
         WriteNullableString(writer, "declared_code_hash", value.DeclaredCodeHash);
         WriteNullableString(writer, "abi_hash", value.AbiHash);

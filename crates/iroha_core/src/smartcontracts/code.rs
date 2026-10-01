@@ -1379,8 +1379,11 @@ mod tests {
         assert_eq!(identity.contract_address, contract_address);
         assert_eq!(identity.code_hash, code_hash);
         assert_eq!(identity.contract_alias, None);
-        let borrowed = with_code_bytes(&view, &code_hash, |bytes| (bytes.as_ptr(), bytes.to_vec()))
-            .expect("borrow stored bytes");
+        let artifact_id = ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+        let borrowed = with_code_bytes(&view, &artifact_id, |bytes| {
+            (bytes.as_ptr(), bytes.to_vec())
+        })
+        .expect("borrow stored bytes");
         assert_eq!(borrowed.1, code);
         let stored_ptr = view
             .world()

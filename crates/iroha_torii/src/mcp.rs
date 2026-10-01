@@ -10646,7 +10646,7 @@ mod contract_artifact_route_tests {
     #[test]
     fn artifact_tools_require_exact_full_width_scope() {
         let hash = hex::encode(iroha_crypto::Hash::new(b"MCP artifact").as_ref());
-        let arguments = norito::json::json!({"path": {"dataspace_id": "18446744073709551615", "code_hash": (hash.clone())}});
+        let arguments = norito::json!({"path": {"dataspace_id": "18446744073709551615", "code_hash": (hash.clone())}});
         let arguments = arguments.as_object().unwrap();
         assert_eq!(
             contract_artifact_route(arguments, false).unwrap(),
@@ -10657,10 +10657,11 @@ mod contract_artifact_route_tests {
             format!("/v1/contracts/artifacts/{}/{hash}/bytes", u64::MAX)
         );
         for dataspace in ["", "00", "18446744073709551616", "../0"] {
-            let bad = norito::json::json!({"path": {"dataspace_id": dataspace, "code_hash": (hash.clone())}});
+            let bad =
+                norito::json!({"path": {"dataspace_id": dataspace, "code_hash": (hash.clone())}});
             assert!(contract_artifact_route(bad.as_object().unwrap(), false).is_err());
         }
-        let missing = norito::json::json!({"path": {"code_hash": hash}});
+        let missing = norito::json!({"path": {"code_hash": hash}});
         assert!(contract_artifact_route(missing.as_object().unwrap(), true).is_err());
     }
 }

@@ -103,12 +103,24 @@ fn replacement_state_musubi_scratch_refusal_preserves_published_predecessor_then
 fn check_direct_refusal(replacement: bool) {
     let (state, proposal) = fixture();
     let header = proposal.header();
+    let budget = state.ivm_execution_budget();
+    let initial_reserved = budget.reserved_bytes();
+    let successor_bytes = original_cell_successor_bytes(&state);
+    let [scalar_current, scalar_undo] =
+        mv::cell::Cell::<u64, iroha_allocation::AllocationCharge>::allocation_layouts();
     if replacement {
         // Establish a genuine published predecessor. The replacement takes the
         // original journals' rollback path, rather than reverting an empty State.
         staged_block(&state, header, false, false)
             .commit()
             .expect("original empty carrier publishes");
+        // Empty ordinary publication changes every identity and scalar undo,
+        // but keeps the untouched scalar current in its original foreign pool.
+        // Settle the retired tip undo before taking the retry baseline.
+        collect_original_ebr_until(
+            &budget,
+            initial_reserved + successor_bytes - scalar_current.size(),
+        );
     }
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let before_height = state.transactions.latest_height();
@@ -116,15 +128,15 @@ fn check_direct_refusal(replacement: bool) {
     let before_committed_height = state.committed_height();
     let before_kura_count = state.kura.blocks_count();
     assert!(state.world.musubi_public_directory.view().is_empty());
-    let budget = state.ivm_execution_budget();
     let before_reserved = budget.reserved_bytes();
     let block = staged_block(&state, header, replacement, true);
     let original_staged_bytes = budget.reserved_bytes() - before_reserved;
-    let successor_bytes = original_cell_successor_bytes(&state);
     assert_eq!(
         original_staged_bytes,
-        core::mem::size_of::<crate::state::WorldBlockFields<'_>>() + successor_bytes,
-        "the actual original World shell and complete Cell tokens are retained",
+        core::mem::size_of::<crate::state::WorldBlockFields<'_>>()
+            + successor_bytes
+            + original_native_tip_stage_bytes(),
+        "the actual World shell, complete Cell tokens and charged native tip generations are retained",
     );
     let requested_bytes = core::mem::size_of::<&MusubiOrderedPackageEntryV1>();
     assert_eq!(block.world.musubi_public_directory.len(), 1);
@@ -216,6 +228,7 @@ fn check_direct_refusal(replacement: bool) {
 
     // A fresh attempt obtains the real original World/membership writers and
     // completes every semantic/publication guard after the same owner releases.
+    let retirement_pin = crossbeam_epoch::pin();
     staged_block(&state, header, replacement, true)
         .commit()
         .expect("retry publishes after original pool release");
@@ -231,11 +244,47 @@ fn check_direct_refusal(replacement: bool) {
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
     );
+    // Populated publication owns both scalar generations in this exact pool.
+    // Every untracked Cell adds its funded identity once; native-tip identities
+    // and generations replace the already funded initial owners at equal sizes.
+    let published_bytes = initial_reserved + successor_bytes;
+    let [tip_current, tip_undo] = crate::state::native_execution_tip::TipCell::allocation_layouts();
+    let retired_bytes = if replacement {
+        // Replace publishes both tip generations. The first empty publication
+        // also left its scalar undo in this pool, while its current stayed foreign.
+        tip_current.size() + tip_undo.size() + scalar_undo.size()
+    } else {
+        // Ordinary unchanged native tip keeps its original current generation.
+        tip_undo.size()
+    };
+    retirement_pin.flush();
     assert_eq!(
         budget.reserved_bytes(),
-        before_reserved + if replacement { 0 } else { successor_bytes },
-        "successful publication retains the exact new Cell identities; replacement retires equally funded predecessors",
+        published_bytes + retired_bytes,
+        "the held epoch prevents refund of every retired original generation",
     );
+    drop(retirement_pin);
+    collect_original_ebr_until(&budget, published_bytes);
+    assert_eq!(
+        budget.reserved_bytes(),
+        published_bytes,
+        "successful publication retains exact identities and current/undo owners after retirement",
+    );
+    drop(state);
+    collect_original_ebr_until(&budget, 0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+fn original_native_tip_stage_bytes() -> usize {
+    // The native tip starts with fully funded generations and an identity.
+    // Acquisition overlaps two new EBR allocations and one successor token;
+    // successful publication replaces equally funded predecessors instead of
+    // adding these bytes to the retained first-publication delta below.
+    crate::state::native_execution_tip::TipCell::allocation_layouts()
+        .iter()
+        .map(std::alloc::Layout::size)
+        .sum::<usize>()
+        + mv::cell::CellPublicationSuccessor::allocation_layout().size()
 }
 
 fn original_cell_successor_bytes(state: &State) -> usize {
@@ -684,4 +733,17 @@ fn retained_state_da_capacity_refusal_keeps_original_bundle_and_all_writers_free
         state.transactions.latest_height(),
         header.height().get() as usize
     );
+}
+
+fn collect_original_ebr_until(budget: &iroha_allocation::AllocationBudget, expected: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while budget.reserved_bytes() != expected {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "original EBR custody {} != {expected}",
+            budget.reserved_bytes(),
+        );
+        crossbeam_epoch::pin().flush();
+        std::thread::yield_now();
+    }
 }

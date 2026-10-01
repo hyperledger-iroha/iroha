@@ -3987,7 +3987,8 @@ pub struct WorldData {
     /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
     pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -4662,7 +4663,8 @@ pub struct WorldBlockFields<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6335,7 +6337,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) sumeragi_amx:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellTransaction<'block, 'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces: CellTransaction<
+        'block,
+        'world,
+        iroha_data_model::private_dataspace::PrivateDataspaceRegistry,
+    >,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -8856,7 +8862,8 @@ pub struct WorldView<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -39338,16 +39345,19 @@ mod tiered_snapshot_diff_tests {
         world
             .musubi_domain_ownership_generations
             .insert(domain.clone(), 4);
-        let decoded =
-            decode_world_snapshot(world).expect("decode canonical Musubi generation snapshot");
+        let decoded = deserialize::decode_world_component_for_testing(&world)
+            .expect("decode canonical Musubi generation component");
         assert_eq!(
             decoded
                 .view()
-                .world
                 .musubi_domain_ownership_generations
                 .get(&domain),
             Some(&4)
         );
+        assert!(matches!(
+            decode_world_snapshot(world),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
         let mut missing = state_snapshot_value(World::default(), SNAPSHOT_CHAIN_ID);
         assert!(
             state_snapshot_world_mut(&mut missing)
@@ -39415,25 +39425,38 @@ mod tiered_snapshot_diff_tests {
         original
             .musubi_pin_outbox_high_waters
             .insert(owner.clone(), record.clone());
-        let restored = decode_world_snapshot(original)
-            .expect("canonical pin-outbox high-water survives snapshot restore");
+        let restored = deserialize::decode_world_component_for_testing(&original)
+            .expect("canonical pin-outbox high-water survives component decoding");
         assert_eq!(
-            restored
-                .view()
-                .world
-                .musubi_pin_outbox_high_waters
-                .get(&owner),
+            restored.view().musubi_pin_outbox_high_waters.get(&owner),
             Some(&record)
         );
+        assert!(matches!(
+            decode_world_snapshot(original),
+            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
 
-        let decode_substituted_high_waters = |world: World| {
-            let mut snapshot = state_snapshot_value(World::default(), SNAPSHOT_CHAIN_ID);
-            let encoded = norito::json::to_value(&world.musubi_pin_outbox_high_waters)
-                .expect("encode substituted high-water table");
-            state_snapshot_world_mut(&mut snapshot)
-                .insert("musubi_pin_outbox_high_waters".to_owned(), encoded);
-            decode_state_snapshot_value(snapshot)
+        let decode_substituted_high_waters = |world: World| -> Result<(), String> {
+            let decoded = deserialize::decode_world_component_for_testing(&world)
+                .map_err(|error| error.to_string())?;
+            // Exercise the actual authoritative-network validator separately
+            // from the closed committed-State snapshot installation path.
+            let mut component = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            assert_eq!(component.network_id, *DEFAULT_TEST_NETWORK_ID);
+            assert!(component.view().native_execution_tip().is_none());
+            component.world = decoded;
+            component.validate_musubi_pin_outbox_high_waters()
         };
+        let mut canonical = World::default();
+        canonical
+            .musubi_pin_outbox_high_waters
+            .insert(owner.clone(), record.clone());
+        decode_substituted_high_waters(canonical)
+            .expect("canonical high-water matches the actual State network");
 
         let mut mismatch = World::default();
         mismatch
@@ -42474,7 +42497,11 @@ impl StateTransaction<'_, '_> {
                     } else {
                         crate::smartcontracts::code::with_code_bytes(
                             self,
-                            &ContractArtifactId::for_address(&identity.contract_address, identity.code_hash).map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
+                            &ContractArtifactId::for_address(
+                                &identity.contract_address,
+                                identity.code_hash,
+                            )
+                            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
                             |bytecode| {
                                 cache.summarize_program_with_hash(identity.code_hash, bytecode)
                             },

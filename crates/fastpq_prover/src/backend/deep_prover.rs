@@ -8,7 +8,7 @@
 //! TODO: Complete the full resource diagnostic and independent soundness/hiding
 //! review; construction alone does not establish those qualification results.
 
-use fastpq_isi::GoldilocksDigest384V1 as Digest;
+use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
 use rand::TryCryptoRng;
 
 use super::{
@@ -205,7 +205,7 @@ impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
             limits,
             ..
         } = self;
-        crate::digest384_batch::preflight_last_fields_execution(limits.digest_execution)?;
+        super::deep_leaf_batch::preflight_execution(limits.digest_execution)?;
         let stream = stream_limits(limits);
         let geometry = DeepGeometry::new()?;
         let mut transcript = Transcript::new(binding.clone());
@@ -510,7 +510,7 @@ fn open_fri_rounds(
             .map(|(&index, values)| {
                 Ok(FriGroup {
                     index: opening_index(index)?,
-                    values: FriValues::new(values.to_vec())?,
+                    values: FriValues::omit(values, plans.omitted_coordinate(round, index)?)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -622,21 +622,42 @@ fn attempt_charges(
         )?,
     )?;
     let packing_work = mul(2 * LDE_ROWS, 8 * COMMITTED_COLUMN_COUNT + 3 * F::BYTES)?;
-    // A second complete quotient work allowance safely covers the bounded
-    // independent verifier/AIR check; it performs no quotient FFT or replay.
+    // Charge the producer's complete quotient/replay plan once. The independent
+    // verifier performs no private replay or mask sampling. Retain a separate
+    // conservative allowance containing every other quotient charge: full public
+    // preparation, all 4N point evaluations, FFT, division and pair arithmetic.
+    // This exceeds its actual single OOD AIR/public interpolation, q DEEP/FRI
+    // checks and terminal work (the dimension-coupled regression checks that
+    // domination). Hash/transcript work remains charged independently below.
     let work_units = add(
         add(
-            mul(2, quotient.work_units)?,
+            quotient_and_self_check_work(quotient.work_units, replay.work_units)?,
             add(cache_work, mul(opening_payload, 8)?)?,
         )?,
         add(commitments.work_units, add(polynomial_work, packing_work)?)?,
     )?;
     let hash_calls = hash_call_charges(&openings, commitments.tree_hashes)?;
+    let keccak_permutations = keccak_permutation_charges(binding, &openings)?;
+    // Count scalar-equivalent 64-bit Boolean/rotate operations, byte packing,
+    // padding and clearing. A Keccak round needs at most216 Boolean/shift ops
+    // (counting a rotate as three); 24 rounds use5184. 8192 also covers136
+    // absorbed bytes, output extraction and guarded state/scratch clearing.
+    // Like FFT work units, this is a source operation ledger, not instructions,
+    // wall time, driver work, or a claim about physical GPU registers.
+    let work_units = add(work_units, mul(8192, keccak_permutations)?)?;
     Ok(AttemptCharges {
         payload_bytes,
         work_units,
         hash_calls,
     })
+}
+
+/// Charge the complete producer and a separate public-only self-check allowance.
+fn quotient_and_self_check_work(quotient_work: usize, private_replay_work: usize) -> Result<usize> {
+    let public_allowance = quotient_work
+        .checked_sub(private_replay_work)
+        .ok_or_else(|| invalid("DEEP quotient work does not contain its private replay charge"))?;
+    add(quotient_work, public_allowance)
 }
 
 /// Checked payload and work of every node cache, plus the largest opening payload.
@@ -752,17 +773,77 @@ fn hash_call_charges(openings: &OpeningPlans, tree_hashes: usize) -> Result<usiz
     for plan in &openings.rounds {
         cached_opening_hashes = add(cached_opening_hashes, opening_hashes(plan)?)?;
     }
-    // 637 whole-tape blocks, nine chain commits and one OOD hash per side.
+    // Ten whole raw SHAKE tapes, nine chain commitments and one OOD H per
+    // prover/verifier replay, plus the eight independent cold SHA3 device KATs.
+    // Charge the cold public readiness bound for every execution policy.
     add(
-        crate::digest384_batch::MAX_PREFLIGHT_HASH_CALLS,
+        add(tree_hashes, 8)?,
         add(
-            tree_hashes,
-            add(
-                cached_opening_hashes,
-                add(verifier_tree_hashes, 2 * (637 + 9 + 1))?,
-            )?,
+            cached_opening_hashes,
+            add(verifier_tree_hashes, 2 * (10 + 9 + 1))?,
         )?,
     )
+}
+
+/// Exact source-derived Keccak permutation bound for committed trees, cached
+/// opening regeneration, independent self-check and both full transcripts.
+fn keccak_permutation_charges(binding: &Context, openings: &OpeningPlans) -> Result<usize> {
+    let mut total = mul(2, binding.transcript_permutations().map_err(binding_error)?)?;
+    // These fixed public messages are the exact Keccak device readiness corpus.
+    total = add(
+        total,
+        [0usize, 1, 135, 136, 137, 272, 4096, 8328]
+            .into_iter()
+            .map(|n| n / 136 + 1)
+            .sum(),
+    )?;
+    for oracle in [
+        Oracle::Row,
+        Oracle::QuotientAndMask,
+        Oracle::Fri(0),
+        Oracle::Fri(1),
+        Oracle::Fri(2),
+        Oracle::Fri(3),
+        Oracle::Fri(4),
+        Oracle::Terminal,
+    ] {
+        let (_, _, leaves, _) = oracle.shape().map_err(binding_error)?;
+        let (leaf_permutations, parent_permutations) =
+            binding.tree_permutations(oracle).map_err(binding_error)?;
+        // The singleton terminal commits one leaf and one duplicate parent.
+        let mut leaf_hashes = leaves;
+        let mut parent_hashes = (leaves - 1).max(1);
+        let plan = match oracle {
+            Oracle::Row | Oracle::QuotientAndMask => Some(&openings.initial),
+            Oracle::Fri(round) => Some(&openings.rounds[usize::from(round)]),
+            Oracle::Terminal => None,
+        };
+        if let Some(plan) = plan {
+            // One cached-opening pass and one independent verifier pass.
+            leaf_hashes = add(
+                leaf_hashes,
+                add(
+                    mul(2, plan.work().queried_leaves)?,
+                    plan.sibling_positions()
+                        .iter()
+                        .filter(|p| p.level == 0)
+                        .count(),
+                )?,
+            )?;
+            parent_hashes = add(parent_hashes, mul(2, plan.work().parent_hashes)?)?;
+        } else {
+            leaf_hashes = add(leaf_hashes, 1)?;
+            parent_hashes = add(parent_hashes, 1)?;
+        }
+        total = add(
+            total,
+            add(
+                mul(leaf_hashes, leaf_permutations)?,
+                mul(parent_hashes, parent_permutations)?,
+            )?,
+        )?;
+    }
+    Ok(total)
 }
 
 fn commit(
@@ -843,10 +924,15 @@ fn stream_limits(limits: ConstructionLimits) -> StreamLimits {
     }
 }
 fn maximal_queries() -> Vec<usize> {
-    // A preflight-only subset attaining all fixed tree frontier maxima together;
-    // proof queries are always sampled later from the complete transcript.
-    let mut indices: Vec<_> = (0..QUERY_COUNT)
-        .map(|i| (i | i << 6 | i << 12 | i << 18) & (LDE_ROWS - 1))
+    // A preflight-only subset attaining all fixed tree frontier maxima together.
+    // Parity-first seven-bit windows stay distinct for all 77 queries under
+    // every linked reduction, including the terminal 128-leaf group tree.
+    // Actual proof queries are sampled later from the complete transcript.
+    let mut indices: Vec<_> = (0usize..128)
+        .filter(|index| index.count_ones() % 2 == 1)
+        .chain((0usize..128).filter(|index| index.count_ones() % 2 == 0))
+        .take(QUERY_COUNT)
+        .map(|index| (index | index << 7 | index << 14 | index << 21) & (LDE_ROWS - 1))
         .collect();
     indices.sort_unstable();
     indices

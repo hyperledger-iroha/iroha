@@ -90,4 +90,105 @@ public sealed class ConfidentialProverNativeTests
         }
         finally { CryptographicOperations.ZeroMemory(key); CryptographicOperations.ZeroMemory(rho); }
     }
+
+    [Fact]
+    public async Task OneInputAtFullTreeBoundaryProvesWithBothEvidenceFormats()
+    {
+        const int capacity = 65_536;
+        const int lastIndex = capacity - 1;
+        // Fixed disposable material makes this local proof control reproducible.
+        var key = Word(91); byte[] diversifier = [];
+        var leaves = new byte[capacity][];
+        var rho = new byte[32];
+        try
+        {
+            diversifier = ConfidentialNotes.DefaultDiversifier();
+            var owner = ConfidentialNotes.OwnerTag(key, diversifier);
+            for (var index = 0; index < capacity; index++)
+            {
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(rho, (uint)index + 1);
+                leaves[index] = ConfidentialNotes.Commitment(Asset, 7, rho, owner);
+            }
+            using var path = ConfidentialNotes.MerklePath(leaves, lastIndex);
+            var root = path.Root;
+            Assert.Equal(capacity, leaves.Length);
+            Assert.Equal(lastIndex, path.LeafIndex);
+            Assert.Equal(ConfidentialNotes.Root(leaves), root);
+            using var prover = new ConfidentialProver(NetworkId.FromBytes(Word(1)), Asset, key);
+            using var completeInput = new ConfidentialInputNote(7, rho, diversifier, lastIndex);
+            var complete = await prover.ProveRedemptionAsync(
+                ConfidentialTreeEvidence.Commitments(root, leaves), [completeInput], 7);
+            using var pathInput = new ConfidentialInputNote(7, rho, diversifier, lastIndex);
+            var compact = await prover.ProveRedemptionAsync(
+                ConfidentialTreeEvidence.Paths(root, [path]), [pathInput], 7);
+            foreach (var proof in new[] { complete, compact })
+            {
+                Assert.Equal(ConfidentialProofRelation.FullRedemption, proof.Relation);
+                Assert.Equal("halo2/ipa", proof.Backend);
+                Assert.Equal(root, proof.Root);
+                Assert.NotEmpty(proof.Proof);
+                Assert.Single(proof.Nullifiers);
+                Assert.Empty(proof.OutputCommitments);
+            }
+            Assert.Equal(Assert.Single(complete.Nullifiers), Assert.Single(compact.Nullifiers));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(rho);
+            CryptographicOperations.ZeroMemory(diversifier);
+            foreach (var leaf in leaves) if (leaf is not null) CryptographicOperations.ZeroMemory(leaf);
+        }
+    }
+
+    [Fact]
+    public async Task DuplicateAndUnconservedRequestsDoNotCloseTheNativeOwner()
+    {
+        var key = Word(92); var rho = Word(93); var changeRho = Word(94);
+        byte[] diversifier = [];
+        try
+        {
+            diversifier = ConfidentialNotes.DefaultDiversifier();
+            var note = ConfidentialNotes.Commitment(Asset, 7, rho, ConfidentialNotes.OwnerTag(key, diversifier));
+            var leaves = new[] { note }; var root = ConfidentialNotes.Root(leaves);
+            using var prover = new ConfidentialProver(NetworkId.FromBytes(Word(1)), Asset, key);
+            using var first = new ConfidentialInputNote(7, rho, diversifier, 0);
+            using var duplicate = new ConfidentialInputNote(7, rho, diversifier, 0);
+            Assert.Equal(-17, Assert.Throws<ConfidentialProverException>(() =>
+            {
+                _ = prover.ProveRedemptionAsync(ConfidentialTreeEvidence.Commitments(root, leaves), [first, duplicate], 14);
+            }).Code);
+            using var overspent = new ConfidentialInputNote(7, rho, diversifier, 0);
+            Assert.Equal(-21, Assert.Throws<ConfidentialProverException>(() =>
+            {
+                _ = prover.ProveRedemptionAsync(ConfidentialTreeEvidence.Commitments(root, leaves), [overspent], 8);
+            }).Code);
+            using var wrongChangeInput = new ConfidentialInputNote(7, rho, diversifier, 0);
+            using var wrongChange = new ConfidentialChangeNote(3, changeRho);
+            Assert.Equal(-22, Assert.Throws<ConfidentialProverException>(() =>
+            {
+                _ = prover.ProveRedemptionAsync(ConfidentialTreeEvidence.Commitments(root, leaves), [wrongChangeInput], 5, wrongChange);
+            }).Code);
+            // Rejected requests consume their owners through the public API.
+            Assert.Equal(-2, Assert.Throws<ConfidentialProverException>(() =>
+            {
+                _ = prover.ProveRedemptionAsync(ConfidentialTreeEvidence.Commitments(root, leaves), [first], 7);
+            }).Code);
+            using var recovered = new ConfidentialInputNote(7, rho, diversifier, 0);
+            var proof = await prover.ProveRedemptionAsync(ConfidentialTreeEvidence.Commitments(root, leaves), [recovered], 7);
+            Assert.Equal(ConfidentialProofRelation.FullRedemption, proof.Relation);
+            Assert.Equal("halo2/ipa", proof.Backend);
+            Assert.Equal(root, proof.Root);
+            Assert.NotEmpty(proof.Proof);
+            Assert.Single(proof.Nullifiers);
+            Assert.Empty(proof.OutputCommitments);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(rho);
+            CryptographicOperations.ZeroMemory(changeRho);
+            CryptographicOperations.ZeroMemory(diversifier);
+        }
+    }
 }

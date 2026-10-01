@@ -16,7 +16,7 @@ public sealed class SignedQueryBuilder
     private string? dataspaceAlias;
     private string? domain;
     private string? assetDefinitionId;
-    private string? codeHash;
+    private ContractArtifactId? contractArtifactId;
     private string? committeeId;
     private string? proofBackend;
     private string? proofHash;
@@ -92,11 +92,11 @@ public sealed class SignedQueryBuilder
         return this;
     }
 
-    public SignedQueryBuilder FindContractManifestByCodeHash(string codeHash)
+    public SignedQueryBuilder FindContractManifestByArtifactId(ContractArtifactId artifactId)
     {
         ResetArguments();
-        singularQueryKind = ManagedSingularQueryKind.FindContractManifestByCodeHash;
-        this.codeHash = NormalizeRequiredValue(codeHash, nameof(codeHash));
+        singularQueryKind = ManagedSingularQueryKind.FindContractManifestByArtifactId;
+        contractArtifactId = artifactId ?? throw new ArgumentNullException(nameof(artifactId));
         return this;
     }
 
@@ -124,7 +124,7 @@ public sealed class SignedQueryBuilder
     {
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindDomainEndorsements;
-        domain = NormalizeRequiredValue(domainId, nameof(domainId));
+        domain = NormalizeRequiredDomainId(domainId, nameof(domainId));
         return this;
     }
 
@@ -132,7 +132,7 @@ public sealed class SignedQueryBuilder
     {
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindDomainEndorsementPolicy;
-        domain = NormalizeRequiredValue(domainId, nameof(domainId));
+        domain = NormalizeRequiredDomainId(domainId, nameof(domainId));
         return this;
     }
 
@@ -265,22 +265,22 @@ public sealed class SignedQueryBuilder
         {
             ManagedSingularQueryKind.FindExecutorDataModel => EncodeEnumVariant(0, Array.Empty<byte>()),
             ManagedSingularQueryKind.FindParameters => EncodeEnumVariant(1, Array.Empty<byte>()),
-            ManagedSingularQueryKind.FindAliasesByAccountId => EncodeEnumVariant(2, EncodeFindAliasesByAccountId(context)),
-            ManagedSingularQueryKind.FindProofRecordById => EncodeEnumVariant(3, EncodeFindProofRecordById(context)),
-            ManagedSingularQueryKind.FindContractManifestByCodeHash => EncodeEnumVariant(4, EncodeFindContractManifestByCodeHash(context)),
-            ManagedSingularQueryKind.FindAbiVersion => EncodeEnumVariant(5, Array.Empty<byte>()),
-            ManagedSingularQueryKind.FindAssetById => EncodeEnumVariant(6, EncodeFindAssetById(context)),
-            ManagedSingularQueryKind.FindAssetDefinitionById => EncodeEnumVariant(7, EncodeFindAssetDefinitionById(context)),
-            ManagedSingularQueryKind.FindTwitterBindingByHash => EncodeEnumVariant(8, EncodeFindTwitterBindingByHash(context)),
-            ManagedSingularQueryKind.FindDomainEndorsements => EncodeEnumVariant(9, EncodeFindDomainId(context)),
-            ManagedSingularQueryKind.FindDomainEndorsementPolicy => EncodeEnumVariant(10, EncodeFindDomainId(context)),
-            ManagedSingularQueryKind.FindDomainCommittee => EncodeEnumVariant(11, EncodeFindDomainCommittee(context)),
-            ManagedSingularQueryKind.FindDaPinIntentByTicket => EncodeEnumVariant(12, EncodeFindDaPinIntentByTicket(context)),
-            ManagedSingularQueryKind.FindDaPinIntentByManifest => EncodeEnumVariant(13, EncodeFindDaPinIntentByManifest(context)),
-            ManagedSingularQueryKind.FindDaPinIntentByAlias => EncodeEnumVariant(14, EncodeFindDaPinIntentByAlias(context)),
-            ManagedSingularQueryKind.FindDaPinIntentByLaneEpochSequence => EncodeEnumVariant(15, EncodeFindDaPinIntentByLaneEpochSequence(context)),
-            ManagedSingularQueryKind.FindSorafsProviderOwner => EncodeEnumVariant(16, EncodeFindSorafsProviderOwner(context)),
-            ManagedSingularQueryKind.FindDataspaceNameOwnerById => EncodeEnumVariant(17, EncodeFindDataspaceNameOwnerById(context)),
+            ManagedSingularQueryKind.FindAliasesByAccountId => EncodeEnumVariant(3, EncodeFindAliasesByAccountId(context)),
+            ManagedSingularQueryKind.FindProofRecordById => EncodeEnumVariant(6, EncodeFindProofRecordById(context)),
+            ManagedSingularQueryKind.FindContractManifestByArtifactId => EncodeEnumVariant(7, EncodeFindContractManifestByArtifactId(context)),
+            ManagedSingularQueryKind.FindAbiVersion => EncodeEnumVariant(8, Array.Empty<byte>()),
+            ManagedSingularQueryKind.FindAssetById => EncodeEnumVariant(9, EncodeFindAssetById(context)),
+            ManagedSingularQueryKind.FindAssetDefinitionById => EncodeEnumVariant(10, EncodeFindAssetDefinitionById(context)),
+            ManagedSingularQueryKind.FindTwitterBindingByHash => EncodeEnumVariant(13, EncodeFindTwitterBindingByHash(context)),
+            ManagedSingularQueryKind.FindDomainEndorsements => EncodeEnumVariant(19, EncodeFindDomainId(context)),
+            ManagedSingularQueryKind.FindDomainEndorsementPolicy => EncodeEnumVariant(20, EncodeFindDomainId(context)),
+            ManagedSingularQueryKind.FindDomainCommittee => EncodeEnumVariant(21, EncodeFindDomainCommittee(context)),
+            ManagedSingularQueryKind.FindDaPinIntentByTicket => EncodeEnumVariant(22, EncodeFindDaPinIntentByTicket(context)),
+            ManagedSingularQueryKind.FindDaPinIntentByManifest => EncodeEnumVariant(23, EncodeFindDaPinIntentByManifest(context)),
+            ManagedSingularQueryKind.FindDaPinIntentByAlias => EncodeEnumVariant(24, EncodeFindDaPinIntentByAlias(context)),
+            ManagedSingularQueryKind.FindDaPinIntentByLaneEpochSequence => EncodeEnumVariant(25, EncodeFindDaPinIntentByLaneEpochSequence(context)),
+            ManagedSingularQueryKind.FindSorafsProviderOwner => EncodeEnumVariant(30, EncodeFindSorafsProviderOwner(context)),
+            ManagedSingularQueryKind.FindDataspaceNameOwnerById => EncodeEnumVariant(83, EncodeFindDataspaceNameOwnerById(context)),
             _ => throw new InvalidOperationException("Unsupported managed singular query kind."),
         };
     }
@@ -311,33 +311,43 @@ public sealed class SignedQueryBuilder
         return writer.ToArray();
     }
 
-    private byte[] EncodeFindContractManifestByCodeHash(TransactionEncodingContext context)
+    private byte[] EncodeFindContractManifestByArtifactId(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeHashLiteral(RequireSelected(codeHash, nameof(codeHash))));
+        var artifactId = contractArtifactId ?? throw new InvalidOperationException("Contract artifact id is required.");
+        var identity = new CanonicalNoritoWriter();
+        var dataspace = new CanonicalNoritoWriter();
+        dataspace.WriteField(context.EncodeUInt64(artifactId.DataspaceId));
+        identity.WriteField(dataspace.ToArray());
+        identity.WriteField(Convert.FromHexString(artifactId.CodeHashHex));
+        writer.WriteField(identity.ToArray());
         return writer.ToArray();
     }
 
     private byte[] EncodeFindProofRecordById(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeString(RequireSelected(proofBackend, nameof(proofBackend))));
-        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(proofHash, nameof(proofHash)), expectedLength: 32));
+        var proof = new CanonicalNoritoWriter();
+        proof.WriteField(context.EncodeString(RequireSelected(proofBackend, nameof(proofBackend))));
+        proof.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(proofHash, nameof(proofHash)), expectedLength: 32));
+        writer.WriteField(proof.ToArray());
         return writer.ToArray();
     }
 
     private byte[] EncodeFindTwitterBindingByHash(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeString(RequireSelected(twitterPepperId, nameof(twitterPepperId))));
-        writer.WriteField(context.EncodeHashLiteral(RequireSelected(twitterBindingDigest, nameof(twitterBindingDigest))));
+        var keyed = new CanonicalNoritoWriter();
+        keyed.WriteField(context.EncodeString(RequireSelected(twitterPepperId, nameof(twitterPepperId))));
+        keyed.WriteField(context.EncodeHashLiteral(RequireSelected(twitterBindingDigest, nameof(twitterBindingDigest))));
+        writer.WriteField(keyed.ToArray());
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDomainId(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeName(RequireSelected(domain, nameof(domain))));
+        writer.WriteField(context.EncodeDomainId(RequireSelected(domain, nameof(domain))));
         return writer.ToArray();
     }
 
@@ -351,14 +361,18 @@ public sealed class SignedQueryBuilder
     private byte[] EncodeFindDaPinIntentByTicket(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(storageTicket, nameof(storageTicket)), expectedLength: 32));
+        var identity = new CanonicalNoritoWriter();
+        identity.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(storageTicket, nameof(storageTicket)), expectedLength: 32));
+        writer.WriteField(identity.ToArray());
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDaPinIntentByManifest(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(manifestDigest, nameof(manifestDigest)), expectedLength: 32));
+        var identity = new CanonicalNoritoWriter();
+        identity.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(manifestDigest, nameof(manifestDigest)), expectedLength: 32));
+        writer.WriteField(identity.ToArray());
         return writer.ToArray();
     }
 
@@ -372,7 +386,9 @@ public sealed class SignedQueryBuilder
     private byte[] EncodeFindDaPinIntentByLaneEpochSequence(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeUInt32(RequireSelected(laneId, nameof(laneId))));
+        var lane = new CanonicalNoritoWriter();
+        lane.WriteField(context.EncodeUInt32(RequireSelected(laneId, nameof(laneId))));
+        writer.WriteField(lane.ToArray());
         writer.WriteField(context.EncodeUInt64(RequireSelected(pinEpoch, nameof(pinEpoch))));
         writer.WriteField(context.EncodeUInt64(RequireSelected(pinSequence, nameof(pinSequence))));
         return writer.ToArray();
@@ -381,15 +397,24 @@ public sealed class SignedQueryBuilder
     private byte[] EncodeFindSorafsProviderOwner(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(providerId, nameof(providerId)), expectedLength: 32));
+        var identity = new CanonicalNoritoWriter();
+        identity.WriteField(context.EncodeFixedBytesLiteral(RequireSelected(providerId, nameof(providerId)), expectedLength: 32));
+        writer.WriteField(identity.ToArray());
         return writer.ToArray();
     }
 
     private byte[] EncodeFindDataspaceNameOwnerById(TransactionEncodingContext context)
     {
         var writer = new CanonicalNoritoWriter();
-        writer.WriteField(context.EncodeUInt64(RequireSelected(dataspaceOwnerId, nameof(dataspaceOwnerId))));
+        var identity = new CanonicalNoritoWriter();
+        identity.WriteField(context.EncodeUInt64(RequireSelected(dataspaceOwnerId, nameof(dataspaceOwnerId))));
+        writer.WriteField(identity.ToArray());
         return writer.ToArray();
+    }
+
+    private static string NormalizeRequiredDomainId(string value, string paramName)
+    {
+        return TransactionEncodingContext.CanonicalizeDomainId(value, paramName);
     }
 
     private static string RequireSelected(string? value, string field)
@@ -421,7 +446,7 @@ public sealed class SignedQueryBuilder
         dataspaceAlias = null;
         domain = null;
         assetDefinitionId = null;
-        codeHash = null;
+        contractArtifactId = null;
         committeeId = null;
         proofBackend = null;
         proofHash = null;
@@ -510,7 +535,7 @@ public sealed class SignedQueryBuilder
         FindParameters,
         FindAliasesByAccountId,
         FindProofRecordById,
-        FindContractManifestByCodeHash,
+        FindContractManifestByArtifactId,
         FindAbiVersion,
         FindAssetById,
         FindAssetDefinitionById,

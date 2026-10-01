@@ -14,8 +14,8 @@ pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-perm
 ///
 /// The pin binds the exact X5C1/X5C2 proof system rather than only its component name.
 pub(crate) const ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x9a, 0x34, 0xa7, 0x2f, 0x02, 0x05, 0x51, 0xe6, 0x54, 0x42, 0xc2, 0x4b, 0x58, 0xee, 0x07, 0x5f,
-    0x6c, 0x48, 0x5e, 0x36, 0xe0, 0xdf, 0x7c, 0x57, 0x9b, 0x24, 0x6b, 0x19, 0xd0, 0x19, 0x5b, 0x9a,
+    0x30, 0x79, 0x15, 0x05, 0x9a, 0xa0, 0xf1, 0x73, 0x35, 0x1f, 0xac, 0xf1, 0x34, 0xc2, 0xc0, 0x8d,
+    0xf7, 0x20, 0xe3, 0x65, 0xcf, 0xdb, 0x96, 0xc2, 0x39, 0xec, 0xa4, 0x4c, 0x07, 0xb6, 0x54, 0xbb,
 ];
 /// Failure of an implemented zk-X509 AIR primitive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -333,7 +333,8 @@ mod tests {
             "one-shared-deep-point-current+next",
             "all-four-terminal-families-algebraically-bound",
             "typed-outer-binding=public-root+channel+ordered-sha13+rfc91",
-            "shared-X5S1-pre-aux-after-six-main-plus-one-ca-base-roots",
+            "shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots",
+            "root-spki-channel=30+2*public-disclosures",
             "checked-native-lde-scratch-resident-and-work-ceilings",
             "producer-self-verifies",
         ] {

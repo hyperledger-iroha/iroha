@@ -1,3 +1,4 @@
+using Hyperledger.Iroha.Norito;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -214,7 +215,7 @@ internal static class ToriiContractManifestJson
     internal static ToriiContractCodeRecord ReadRecord(ref Utf8JsonReader reader, string context)
     {
         var root = ToriiExplorerJson.ReadObject(ref reader, context);
-        EnsureOnly(root, context, "manifest", "code_hash", "abi_hash");
+        EnsureOnly(root, context, "network_id", "artifact_id", "manifest", "code_hash", "abi_hash");
         var manifestObject = RequiredObject(root, "manifest", $"{context}.manifest");
         var manifest = ParseManifest(manifestObject, $"{context}.manifest");
         var codeHash = OptionalConvenienceHash(root, "code_hash", $"{context}.code_hash");
@@ -227,8 +228,12 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.abi_hash must exactly match manifest.abi_hash.");
         }
+        var artifactId = ToriiContractArtifactJson.ReadArtifactId(root, context);
+        ToriiContractArtifactJson.ValidateCodeHash(artifactId, codeHash, context);
         return new ToriiContractCodeRecord
         {
+            NetworkId = ToriiContractArtifactJson.ReadNetworkId(root, context),
+            ArtifactId = artifactId,
             Manifest = manifest,
             CodeHash = codeHash,
             AbiHash = abiHash,
@@ -242,6 +247,7 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.manifest is required.");
         }
+        ToriiContractArtifactJson.Validate(value.NetworkId, value.ArtifactId, value.CodeHash, context);
         _ = BuildManifestNode(value.Manifest, $"{context}.manifest");
         ValidateConvenienceHash(value.CodeHash, $"{context}.code_hash");
         ValidateConvenienceHash(value.AbiHash, $"{context}.abi_hash");
@@ -257,6 +263,8 @@ internal static class ToriiContractManifestJson
         ValidateRecord(value, context);
         var root = new JsonObject
         {
+            ["network_id"] = value.NetworkId.ToString(),
+            ["artifact_id"] = value.ArtifactId.ToJsonNode(),
             ["manifest"] = BuildManifestNode(value.Manifest, $"{context}.manifest"),
             ["code_hash"] = value.CodeHash,
             ["abi_hash"] = value.AbiHash,
@@ -2068,81 +2076,14 @@ internal static class ToriiContractManifestJson
             : throw new JsonException($"{context} must be a string.");
     }
 
-    private static string ParseManifestHash(string value, string context)
-    {
-        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
-        {
-            throw new JsonException($"{context} must not contain surrounding whitespace.");
-        }
-        if (value.Any(char.IsControl))
-        {
-            throw new JsonException($"{context} must not contain control characters.");
-        }
-        if (value.Length != 74
-            || !value.StartsWith("hash:", StringComparison.Ordinal)
-            || value[69] != '#')
-        {
-            throw new JsonException($"{context} must be a canonical checksummed Norito Hash literal.");
-        }
-        var body = value.Substring(5, 64);
-        var checksum = value.Substring(70, 4);
-        if (body.Any(character => !IsUpperHex(character))
-            || checksum.Any(character => !IsUpperHex(character))
-            || !ushort.TryParse(checksum, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var supplied)
-            || supplied != Crc16(Encoding.ASCII.GetBytes($"hash:{body}")))
-        {
-            throw new JsonException($"{context} has a malformed or invalid Norito Hash checksum.");
-        }
-        var normalized = body.ToLowerInvariant();
-        ValidateMarkerBit(normalized, context);
-        return normalized;
-    }
+    private static string ParseManifestHash(string value, string context) =>
+        CanonicalHashLiteral.Parse(value, context);
 
-    private static string FormatManifestHash(string value, string context)
-    {
-        ValidateConvenienceHash(value, context);
-        var body = value.ToUpperInvariant();
-        var checksum = Crc16(Encoding.ASCII.GetBytes($"hash:{body}"));
-        return $"hash:{body}#{checksum:X4}";
-    }
+    private static string FormatManifestHash(string value, string context) =>
+        CanonicalHashLiteral.Format(value, context);
 
-    private static void ValidateConvenienceHash(string? value, string context)
-    {
-        if (value is null)
-        {
-            return;
-        }
-        if (value.Length != 64 || value.Any(character => !IsLowerHex(character)))
-        {
-            throw new JsonException($"{context} must be canonical lowercase 64-hex.");
-        }
-        ValidateMarkerBit(value, context);
-    }
-
-    private static void ValidateMarkerBit(string value, string context)
-    {
-        if (!byte.TryParse(value.AsSpan(value.Length - 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var last)
-            || (last & 1) != 1)
-        {
-            throw new JsonException($"{context} must set the Iroha Hash marker bit.");
-        }
-    }
-
-    private static ushort Crc16(ReadOnlySpan<byte> bytes)
-    {
-        var crc = 0xffff;
-        foreach (var value in bytes)
-        {
-            crc ^= value << 8;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 0x8000) != 0
-                    ? ((crc << 1) ^ 0x1021) & 0xffff
-                    : (crc << 1) & 0xffff;
-            }
-        }
-        return (ushort)crc;
-    }
+    private static void ValidateConvenienceHash(string? value, string context) =>
+        CanonicalHashLiteral.ValidateHex(value, context);
 
     private static void ValidateCanonicalBase64(string value, string context)
     {
@@ -2489,15 +2430,7 @@ internal static class ToriiContractManifestJson
         return value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
     }
 
-    private static bool IsUpperHex(char value)
-    {
-        return value is >= '0' and <= '9' or >= 'A' and <= 'F';
-    }
 
-    private static bool IsLowerHex(char value)
-    {
-        return value is >= '0' and <= '9' or >= 'a' and <= 'f';
-    }
 
     private readonly record struct TypeAnalysis(
         int NextIndex,

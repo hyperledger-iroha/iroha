@@ -750,11 +750,25 @@ seiyaku GovernedReadFixture {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
-    let code_hash = register_code_bytes(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), artifact, &mut transaction)
-        .expect("register governed contract bytes");
+    let code_hash = register_code_bytes(
+        &harness.authority,
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        artifact,
+        &mut transaction,
+    )
+    .expect("register governed contract bytes");
     assert_eq!(code_hash, verified.code_hash);
-    register_manifest(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), signed_manifest, &mut transaction)
-        .expect("register governed contract manifest");
+    register_manifest(
+        &harness.authority,
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        signed_manifest,
+        &mut transaction,
+    )
+    .expect("register governed contract manifest");
     transaction
         .world_mut_for_testing()
         .bind_inactive_contract_subject_for_testing(
@@ -2575,12 +2589,16 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
 async fn governed_contract_read_rejects_removed_manifest_provenance() {
     let harness = mk_governance_harness(true);
     let (contract_address, code_hash) = install_governed_contract_for_test(&harness);
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+        contract_address.dataspace_id(),
+        code_hash,
+    );
     let mut manifest = harness
         .state
         .view()
         .world()
         .contract_manifests()
-        .get(&code_hash)
+        .get(&artifact_id)
         .cloned()
         .expect("registered manifest");
     manifest.provenance = None;
@@ -2590,7 +2608,7 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     transaction
         .world_mut_for_testing()
         .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+        .insert(artifact_id, manifest);
     transaction.apply();
     block
         .commit_world_overlay_for_testing()

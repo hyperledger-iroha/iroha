@@ -22,6 +22,10 @@ use std::{
     io::{self, Write},
 };
 
+#[path = "leaf/encoding_error.rs"]
+mod encoding_error;
+use encoding_error::{EncodingError, EncodingOperation, EncodingReason};
+
 const SCHEMA_START: &[u8] = b"iroha:state-table-substrate:schema:start:v1\0";
 const SCHEMA_FIELD: &[u8] = b"iroha:state-table-substrate:schema:field:v1\0";
 const KEY_PAYLOAD: &[u8] = b"iroha:state-table-substrate:key-payload:v1\0";
@@ -94,7 +98,12 @@ pub(crate) enum LeafError {
     DuplicateTable(&'static str),
     /// A canonical serializer or Merkle update failed without publishing a root.
     #[error("State table leaf construction failed: {0}")]
-    Encoding(String),
+    Encoding(EncodingError),
+    /// An existing source validator rejected its structural invariants.
+    /// This moves its original owned diagnostic without rendering another copy;
+    /// that validator's scratch/error custody remains separate from codec custody.
+    #[error("State table source validation failed: {0}")]
+    SourceValidation(String),
     /// A local allocation was refused before a canonical table frame was written.
     #[error("State table canonical frame allocation failed")]
     Allocation,
@@ -165,11 +174,11 @@ fn schema_name(schema: Schema) -> &'static str {
     }
 }
 
-fn schema_identity(schema: Schema) -> String {
+fn schema_identity(schema: Schema) -> std::borrow::Cow<'static, str> {
     match schema {
         Schema::Norito { nominal_name, .. } => nominal_name(),
         Schema::Semantic { identity, .. } | Schema::Required { identity, .. } => {
-            identity.to_owned()
+            std::borrow::Cow::Borrowed(identity)
         }
     }
 }
@@ -203,9 +212,9 @@ struct BoundedWriter<'a> {
 
 impl Write for BoundedWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > self.remaining {
+        if *self.exceeded || bytes.len() > self.remaining {
             *self.exceeded = true;
-            return Err(io::Error::other("canonical payload exceeds admitted bound"));
+            return Err(io::ErrorKind::InvalidData.into());
         }
         let written = self.inner.write(bytes)?;
         self.remaining -= written;
@@ -247,7 +256,7 @@ fn stream_bare_payload_digests<T: Encode>(
     max_payload_bytes: usize,
 ) -> Result<(Hash, Hash, usize), LeafError> {
     let max_payload_bytes = max_payload_bytes.min(u32::MAX as usize);
-    let mut length = 0_usize;
+    let mut encoded = Ok(0_usize);
     let mut exceeded = false;
     let first_raw = Hash::new_from_writer(|raw| {
         let mut bounded = BoundedWriter {
@@ -255,20 +264,27 @@ fn stream_bare_payload_digests<T: Encode>(
             remaining: max_payload_bytes,
             exceeded: &mut exceeded,
         };
-        length =
-            norito::codec::encode_adaptive_into(value, &mut bounded).map_err(io::Error::other)?;
+        // Lend the result out of the hash callback. Boxing it into io::Error
+        // would allocate on the refusal path and lose the original category.
+        encoded = norito::codec::encode_adaptive_into(value, &mut bounded);
         Ok(())
     });
-    if exceeded || length > max_payload_bytes {
+    if exceeded {
         return Err(LeafError::PayloadLimit);
     }
-    let first_raw = first_raw.map_err(|error| LeafError::Encoding(error.to_string()))?;
+    let length =
+        encoded.map_err(|error| EncodingError::codec(EncodingOperation::MeasurePayload, error))?;
+    if length > max_payload_bytes {
+        return Err(LeafError::PayloadLimit);
+    }
+    let first_raw =
+        first_raw.map_err(|error| EncodingError::io(EncodingOperation::MeasurePayload, error))?;
     let length32 = u32::try_from(length).map_err(|_| LeafError::PayloadLimit)?;
     let length64 = u64::from(length32);
     let identity_len = u64::try_from(schema_identity.len()).map_err(|_| LeafError::PayloadLimit)?;
     let mut second_raw = None;
     let mut ordered_digest = None;
-    let mut written = 0_usize;
+    let mut encoded = Ok(0_usize);
     let mut exceeded = false;
     let lookup_digest = Hash::new_from_writer(|lookup| {
         lookup.write_all(VALUE_PAYLOAD)?;
@@ -287,8 +303,7 @@ fn stream_bare_payload_digests<T: Encode>(
                     remaining: length,
                     exceeded: &mut exceeded,
                 };
-                written = norito::codec::encode_adaptive_into(value, &mut bounded)
-                    .map_err(io::Error::other)?;
+                encoded = norito::codec::encode_adaptive_into(value, &mut bounded);
                 Ok(())
             })?);
             Ok(())
@@ -296,16 +311,30 @@ fn stream_bare_payload_digests<T: Encode>(
         second_raw = Some(raw);
         lookup.write_all(&length64.to_le_bytes())
     });
-    if exceeded || written != length {
-        return Err(LeafError::Encoding(
-            "canonical table payload changed length between bounded passes".to_owned(),
-        ));
+    if exceeded {
+        return Err(EncodingError::new(
+            EncodingOperation::HashPairedValue,
+            EncodingReason::ChangedLength,
+        )
+        .into());
     }
-    let lookup_digest = lookup_digest.map_err(|error| LeafError::Encoding(error.to_string()))?;
+    let written =
+        encoded.map_err(|error| EncodingError::codec(EncodingOperation::HashPairedValue, error))?;
+    if written != length {
+        return Err(EncodingError::new(
+            EncodingOperation::HashPairedValue,
+            EncodingReason::ChangedLength,
+        )
+        .into());
+    }
+    let lookup_digest = lookup_digest
+        .map_err(|error| EncodingError::io(EncodingOperation::HashPairedValue, error))?;
     if second_raw != Some(first_raw) {
-        return Err(LeafError::Encoding(
-            "canonical table payload changed between bounded passes".to_owned(),
-        ));
+        return Err(EncodingError::new(
+            EncodingOperation::HashPairedValue,
+            EncodingReason::ChangedPayload,
+        )
+        .into());
     }
     Ok((
         ordered_digest.expect("successful digest frame has a digest"),
@@ -331,7 +360,7 @@ fn typed_bare_payload_digests<T: Encode + NoritoSchema>(
         return Err(LeafError::NonV1Layout(table));
     }
     let declared = nominal_name();
-    if declared != T::nominal_name() {
+    if declared != norito::schema::identity::nominal_name::<T>() {
         return Err(LeafError::TypeMismatch(table));
     }
     stream_bare_payload_digests(value, &declared, max_payload_bytes)
@@ -377,31 +406,36 @@ fn typed_payload_hash<T: Encode + NoritoSchema>(
         return Err(LeafError::NonV1Layout(table));
     }
     let declared = nominal_name();
-    if declared != T::nominal_name() {
+    if declared != norito::schema::identity::nominal_name::<T>() {
         return Err(LeafError::TypeMismatch(table));
     }
+    let name_len = u64::try_from(declared.len()).map_err(|_| LeafError::PayloadLimit)?;
     let mut exceeded = false;
+    let mut encoded = Ok(0_usize);
     let digest = Hash::new_from_writer(|writer| {
         writer.write_all(domain)?;
-        let name_len = u64::try_from(declared.len()).map_err(io::Error::other)?;
         writer.write_all(&name_len.to_le_bytes())?;
         writer.write_all(declared.as_bytes())?;
         writer.write_all(&[layout.major, layout.minor, layout.flags])?;
-        let payload_len = {
+        {
             let mut bounded = BoundedWriter {
                 inner: writer,
                 remaining: max_payload_bytes,
                 exceeded: &mut exceeded,
             };
-            norito::codec::encode_adaptive_into(value, &mut bounded).map_err(io::Error::other)?
-        };
-        let payload_len = u64::try_from(payload_len).map_err(io::Error::other)?;
-        writer.write_all(&payload_len.to_le_bytes())
+            encoded = norito::codec::encode_adaptive_into(value, &mut bounded);
+        }
+        if let Ok(length) = &encoded {
+            let length = u64::try_from(*length).map_err(|_| io::ErrorKind::InvalidData)?;
+            writer.write_all(&length.to_le_bytes())?;
+        }
+        Ok(())
     });
     if exceeded {
         return Err(LeafError::PayloadLimit);
     }
-    digest.map_err(|error| LeafError::Encoding(error.to_string()))
+    encoded.map_err(|error| EncodingError::codec(EncodingOperation::HashTypedPayload, error))?;
+    digest.map_err(|error| EncodingError::io(EncodingOperation::HashTypedPayload, error).into())
 }
 
 #[path = "leaf/frame.rs"]
@@ -421,7 +455,7 @@ fn bare_payload_hash(
         } => (nominal_name(), layout),
         Schema::Semantic {
             identity, layout, ..
-        } => (identity.to_owned(), layout),
+        } => (std::borrow::Cow::Borrowed(identity), layout),
         Schema::Required { .. } => return Err(LeafError::UnresolvedSchema(table)),
     };
     if layout != V1_LAYOUT {
@@ -985,3 +1019,11 @@ fn lookup_error(error: MerkleMapError, table: &'static str) -> LeafError {
 
 #[cfg(test)]
 mod lookup_funding_tests;
+
+#[cfg(test)]
+#[path = "leaf/literal_identity_tests.rs"]
+mod literal_identity_tests;
+
+#[cfg(test)]
+#[path = "leaf/encoding_custody_tests.rs"]
+mod encoding_custody_tests;

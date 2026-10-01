@@ -1578,4 +1578,46 @@ mod tests {
                 .any(|column| polynomial::degree_bound(column) > 4)
         );
     }
+    #[test]
+    fn compiled_hash_is_affine_in_every_private_next_column() {
+        use super::super::compact_public_columns::{PUBLIC_COLUMN_COUNT, PUBLIC_COLUMNS};
+
+        let compiled = CompiledLedger::compile();
+        let inputs: [PolynomialDegree; INPUT_CELLS] = core::array::from_fn(|index| {
+            let private_next = index >= hash::COLUMN_COUNT
+                && !PUBLIC_COLUMNS.contains(&(index - hash::COLUMN_COUNT));
+            PolynomialDegree::from_exclusive(if private_next { 2 } else { 1 })
+        });
+        assert_eq!(
+            inputs
+                .iter()
+                .filter(|degree| degree.exclusive() == 2)
+                .count(),
+            hash::COLUMN_COUNT - PUBLIC_COLUMN_COUNT
+        );
+        // Negative control: squaring the first private next cell has degree
+        // two (exclusive bound three), so it cannot pass the affine guard.
+        assert!(!PUBLIC_COLUMNS.contains(&0));
+        let mutant =
+            evaluate_node_degrees(&[Node::Input(hash::COLUMN_COUNT), Node::Mul(0, 0)], &inputs)
+                .unwrap();
+        assert_eq!(mutant[1].exclusive(), 3);
+        assert!(mutant[1].exclusive() > 2);
+
+        // Current/private values and all public selectors are constants in the
+        // next-variable grading. A future next*next term must fail this guard.
+        let bounds = compiled
+            .numerator_degree_bounds(&inputs, PolynomialDegree::from_exclusive(1))
+            .unwrap();
+        assert!(bounds.local.iter().all(|bound| bound.exclusive() <= 1));
+        for (slot, bound) in bounds.transitions.iter().enumerate() {
+            assert!(bound.exclusive() <= 2, "private-next hash slot {slot}");
+        }
+        assert!(
+            bounds
+                .transitions
+                .iter()
+                .any(|bound| bound.exclusive() == 2)
+        );
+    }
 }

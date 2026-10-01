@@ -11,6 +11,9 @@
 //! relation.  Composition/FRI challenge counts are deliberately outside this
 //! module and remain three.  Aggregate registration and consensus activation
 //! remain false until every terminal below is wired to its numeric consumer.
+#[cfg(test)]
+#[path = "rfc5280_ca_binding_tests.rs"]
+mod ca_binding_tests;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::private_table::{
     PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1, zeroize_words_v1,
@@ -7105,6 +7108,35 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
     ) -> Result<ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkErrorV1> {
         self.schedule.fixed_row(row)
     }
+    /// Fill caller-owned native columns, reconstructing each exact row once.
+    /// The caller owns the column allocation/clearing charge; this method only
+    /// uses one transient row, which is cleared after its selected cells copy.
+    /// All destination geometry is checked before any output is written.
+    pub(crate) fn fill_base_columns_v1(
+        &self,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        let end = first
+            .checked_add(outputs.len())
+            .filter(|&end| end <= ZK_X509_RFC5280_STARK_BASE_WIDTH_V1)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Shape)?;
+        if outputs.is_empty()
+            || outputs
+                .iter()
+                .any(|column| column.len() != ZK_X509_RFC5280_STARK_TRACE_SIZE_V1)
+        {
+            return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+        }
+        for index in 0..ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
+            let mut row = self.base_row(index)?;
+            for (column, output) in (first..end).zip(outputs.iter_mut()) {
+                output[index] = row[column];
+            }
+            zeroize_fields_v1(&mut row);
+        }
+        Ok(())
+    }
     pub(crate) fn build_base_column(
         &self,
         column: usize,
@@ -7844,6 +7876,14 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
         row: usize,
     ) -> Result<ZkX509Rfc5280StarkFixedRowV1, ZkX509Rfc5280StarkErrorV1> {
         self.material.fixed_row(row)
+    }
+    /// Replay caller-owned base columns without changing the bound phase.
+    pub(crate) fn fill_base_columns_v1(
+        &self,
+        first: usize,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        self.material.fill_base_columns_v1(first, outputs)
     }
     pub(crate) fn build_base_column_v1(
         &self,
@@ -10656,6 +10696,93 @@ mod tests {
             assert!(grammar_lookup_aux_column_descriptor_v1(column).is_none());
         }
     }
+    #[test]
+    fn batched_native_base_replay_matches_every_row_and_bound_provider() {
+        let trace = canonical_trace_v1();
+        let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+        let provider = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
+            &material,
+            der_challenges_v1(),
+            challenges_v1(),
+        )
+        .unwrap();
+        for first in [0, ZK_X509_RFC5280_STARK_BASE_WIDTH_V1 - 8] {
+            let mut columns = (0..8)
+                .map(|_| {
+                    PrivateTableV1::new(
+                        vec![F(97); ZK_X509_RFC5280_STARK_TRACE_SIZE_V1],
+                        zeroize_fields_v1,
+                    )
+                })
+                .collect::<Vec<_>>();
+            {
+                let mut targets = columns
+                    .iter_mut()
+                    .map(|column| column.as_mut_slice())
+                    .collect::<Vec<_>>();
+                material.fill_base_columns_v1(first, &mut targets).unwrap();
+            }
+            // The unchanged scalar path is an independent replay of one whole
+            // selected column; all eight columns additionally match every row.
+            let scalar = PrivateTableV1::new(
+                material.build_base_column(first).unwrap(),
+                zeroize_fields_v1,
+            );
+            assert_eq!(&*columns[0], &*scalar);
+            for index in 0..ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
+                let mut expected = material.base_row(index).unwrap();
+                for (offset, column) in columns.iter().enumerate() {
+                    assert_eq!(
+                        column[index],
+                        expected[first + offset],
+                        "row {index}, column {}",
+                        first + offset
+                    );
+                }
+                zeroize_fields_v1(&mut expected);
+            }
+            // Bound replay has the same base values even after transcript
+            // challenges exist; it must not accidentally return auxiliaries.
+            let mut bound = PrivateTableV1::new(
+                vec![F(98); ZK_X509_RFC5280_STARK_TRACE_SIZE_V1],
+                zeroize_fields_v1,
+            );
+            provider
+                .fill_base_columns_v1(first + 7, &mut [&mut bound])
+                .unwrap();
+            assert_eq!(&*bound, &*columns[7]);
+        }
+    }
+
+    #[test]
+    fn batched_native_base_replay_rejects_geometry_before_writing() {
+        let trace = canonical_trace_v1();
+        let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+        let mut valid = PrivateTableV1::new(
+            vec![F(71); ZK_X509_RFC5280_STARK_TRACE_SIZE_V1],
+            zeroize_fields_v1,
+        );
+        let mut short = [F(72); 3];
+        assert_eq!(
+            material.fill_base_columns_v1(0, &mut []),
+            Err(ZkX509Rfc5280StarkErrorV1::Shape)
+        );
+        for first in [ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, usize::MAX] {
+            assert_eq!(
+                material.fill_base_columns_v1(first, &mut [&mut valid]),
+                Err(ZkX509Rfc5280StarkErrorV1::Shape)
+            );
+        }
+        for first in [0, ZK_X509_RFC5280_STARK_BASE_WIDTH_V1 - 1] {
+            assert_eq!(
+                material.fill_base_columns_v1(first, &mut [&mut valid, &mut short]),
+                Err(ZkX509Rfc5280StarkErrorV1::Shape)
+            );
+        }
+        assert!(valid.iter().all(|value| *value == F(71)));
+        assert_eq!(short, [F(72); 3]);
+    }
+
     #[test]
     fn canonical_column_provider_replays_base_aux_and_proof_claims() {
         let trace = canonical_trace_v1();

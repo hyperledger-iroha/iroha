@@ -23,9 +23,9 @@ struct ExactFrameWriter<'a> {
 
 impl Write for ExactFrameWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > self.remaining {
+        if self.overrun_attempted || bytes.len() > self.remaining {
             self.overrun_attempted = true;
-            return Err(io::Error::other("value frame exceeds declared length"));
+            return Err(io::ErrorKind::InvalidData.into());
         }
         let written = self.inner.write(bytes)?;
         self.remaining -= written;
@@ -44,7 +44,9 @@ impl Write for ExactFrameWriter<'_> {
 /// not decode or validate arbitrary schema contents.
 ///
 /// # Errors
-/// Rejects producer failures or a frame shorter or longer than `length`.
+/// Propagates producer failures. A frame shorter or longer than `length` is
+/// rejected with [`io::ErrorKind::InvalidData`] without allocating a diagnostic.
+/// An attempted overrun remains rejected even if the producer ignores it.
 pub fn digest_norito_value_frame_v1(
     length: u32,
     write_frame: impl FnOnce(&mut dyn Write) -> io::Result<()>,
@@ -59,14 +61,10 @@ pub fn digest_norito_value_frame_v1(
         };
         write_frame(&mut frame)?;
         if frame.overrun_attempted {
-            return Err(io::Error::other(
-                "value frame attempted to exceed declared length",
-            ));
+            return Err(io::ErrorKind::InvalidData.into());
         }
         if frame.remaining != 0 {
-            return Err(io::Error::other(
-                "value frame is shorter than declared length",
-            ));
+            return Err(io::ErrorKind::InvalidData.into());
         }
         Ok(())
     })

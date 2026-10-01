@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-09-30. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-01. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -83,10 +83,16 @@ require the explicitly approved OVH target.
 ## Build and release qualification
 
 Default daemon/CLI binaries have scoped compilation coverage after compiler and
-runtime-owner extraction. Merged Core/test qualification, executable freshness,
-timing and full workspace execution remain incomplete. Dependency ownership and
-measured compiler memory are the active gates; code line-count gates are retired.
-See the [architecture plan](specs/first_release_architecture_redesign.md) and
+runtime-owner extraction. Last completed epoch9 Core/Kagami, CLI and schema
+builds pass; the completed Core control union has 1,146 executions over 1,088
+names, all passing. The workspace all-targets check fails on fixture/import API
+errors. Genuine four-validator startup fails on the embedded MCP descriptor byte
+limit. Reviewed successor repairs require normal rebuilds and reruns. Apple
+slices compile but packaging fails its export inventory; Swift host and device
+qualification remain open. Full workspace execution and same-candidate release
+validation remain incomplete. Dependency ownership and measured compiler memory
+are active gates; code line-count gates are retired. See the
+[architecture plan](specs/first_release_architecture_redesign.md) and
 [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
 Memory qualification retains a 25% model-baseline reduction, measured limits for
@@ -108,10 +114,14 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** complete FASTPQ/X509 relations and bounded work, ZK-ACE/qROM
-  and terminal-degree qualification, BFV/MKHE/Figure 9 design, independent review
-  and actual CPU/Metal/CUDA conformance. Unsupported paths stay fail closed under
-  the [ZK goals](specs/zk_first_release_goals.md).
+- **Privacy/crypto:** last completed epoch9 X509 maximum proof and separate replay
+  pass verification and byte/RSS limits, but proving takes 2,405.93 seconds against
+  300 seconds. The reviewed transform/sample-commit changes require native parity
+  and a new complete proof. Current q77 known-answer controls pass; ten FASTPQ
+  fixture failures have reviewed corrections, while current maximum ordinary/AXT
+  proofs remain unrun. Complete RAM-LFE encryption/execution and IVM
+  execution/finalized-State relations, protocol/side-channel and hardware/network
+  qualification remain open under the [ZK goals](specs/zk_first_release_goals.md).
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

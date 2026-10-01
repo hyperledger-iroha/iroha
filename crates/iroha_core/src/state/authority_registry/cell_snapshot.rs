@@ -77,7 +77,7 @@ fn hash_cell<T: Encode + NoritoSchema>(
         return Err(format!("State cell {id} uses a non-V1 layout"));
     }
     let declared = nominal_name();
-    if declared != T::nominal_name() {
+    if declared != norito::schema::identity::nominal_name::<T>() {
         return Err(format!("State cell {id} has a mismatched nominal type"));
     }
     let mut exceeded = false;

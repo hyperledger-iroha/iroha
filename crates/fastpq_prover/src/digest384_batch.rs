@@ -7,7 +7,7 @@
 use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
 #[cfg(any(test, feature = "fastpq-gpu"))]
 use fastpq_isi::GoldilocksDigest384V1;
-#[cfg(any(test, feature = "fastpq-gpu"))]
+#[cfg(test)]
 use rayon::prelude::*;
 
 #[cfg(test)]
@@ -23,10 +23,6 @@ use crate::{DigestExecutionV1, gpu::GpuError};
 pub const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
 pub const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
-/// Eight CPU/device known answers and one CPU/device public probe.
-/// The enclosing prover charges this cold bound even for CPU or warm execution.
-pub const MAX_PREFLIGHT_HASH_CALLS: usize = 18;
-
 /// Bound shared backing buffers, retained/oversized pool pages, returned digests
 /// and fixed readiness payload. Count the full pool even on CPU for stable admission.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
@@ -154,7 +150,7 @@ pub fn preflight_last_fields_execution(execution: DigestExecutionV1) -> crate::R
 /// Common geometry and payload charging precede either policy. Only required
 /// device execution constructs typed jobs; CPU preserves the optimized prefix
 /// owner without repeating its suffix absorption for unused device state.
-#[cfg(any(test, feature = "fastpq-gpu"))]
+#[cfg(test)]
 pub fn execute_last_fields_with_cpu<'a>(
     job_count: usize,
     total_final_field_bytes: usize,

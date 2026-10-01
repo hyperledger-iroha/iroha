@@ -11,8 +11,10 @@ use rand::{SeedableRng, TryRngCore, rngs::StdRng};
 mod diagnostic_artifact;
 
 const COMPLETE_CONTEXT: &[u8] = b"native producer diagnostic";
-const COMPLETE_BYTES: usize = 482_978;
-const COMPLETE_HASH: &str = "7d16efc5143e19aa9fe7d1c9d37605741fb338953ff282f91b3ab72af5509507";
+// Exact source-bound native q77 SHA3 seeded proof, reviewed before publication.
+// Verification, negative controls and required-Metal parity still check these bytes.
+const COMPLETE_BYTES: usize = 485_219;
+const COMPLETE_HASH: &str = "8a1a23ca4af35b6e0d7346ecf5f54fb489d1933244e267db893d1e9a3e08fdab";
 
 fn limits() -> ConstructionLimits {
     ConstructionLimits {
@@ -98,7 +100,7 @@ fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocati
     assert!(plan.work_units > plan.quotient.work_units);
     assert!(plan.hash_calls > 2 * (2 * LDE_ROWS - 1));
     assert!(plan.hash_calls < 3 * (2 * LDE_ROWS - 1));
-    assert!(plan.payload_bytes > 1_800_000_000);
+    assert!(plan.payload_bytes > plan.replay.payload_bytes);
     let exact = ConstructionLimits {
         digest_execution: DigestExecutionV1::Cpu,
         max_payload_bytes: plan.payload_bytes,
@@ -144,6 +146,88 @@ fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocati
 }
 
 #[test]
+fn self_check_work_keeps_the_producer_and_rejects_invalid_decomposition() {
+    assert_eq!(quotient_and_self_check_work(1000, 700).unwrap(), 1300);
+    assert_eq!(quotient_and_self_check_work(0, 0).unwrap(), 0);
+    assert_eq!(
+        quotient_and_self_check_work(usize::MAX, usize::MAX).unwrap(),
+        usize::MAX
+    );
+    assert!(quotient_and_self_check_work(0, 1).is_err());
+    assert!(quotient_and_self_check_work(usize::MAX, 0).is_err());
+}
+
+#[test]
+fn public_self_check_allowance_dominates_the_complete_bounded_verifier() {
+    use super::super::{
+        compact_hash_quotient::{
+            MAX_PROVER_LEDGER_NODES, MAX_PROVER_OUTPUT_TERMS, MAX_PROVER_SELECTOR_MASKS,
+            MAX_PROVER_SELECTOR_RUNS,
+        },
+        compact_smt_quotient::{FIXED_COLUMN_COUNT, FIXED_ROW_COUNT, RESIDUE_COUNT},
+        deep_geometry::{FRI_ARITIES, FRI_LENGTHS},
+    };
+    use crate::gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_HASH_ROWS};
+
+    // Independent, deliberately loose source-loop bound for verify_decoded:
+    // geometry validation, four periodic selector evaluations, sparse public
+    // setup/evaluation, one compiled hash/SMT AIR evaluation, q DEEP rows, all
+    // five FRI fibers and their q-by-q matching, and the complete terminal DFT.
+    // A unit below gets 16384 scalar field/index operations. A quartic inverse
+    // uses fewer than 12000 such operations after expanding every Fp4 product
+    // (19 base multiplies and 19 adds). A direct SMT slot has at most 256
+    // Fp4 operations, also below this margin. Nested variable extents are explicit.
+    // Include every bounded frame byte for decode/preflight/canonical checks.
+    // SHA3 permutations and transcript bytes retain their separate exact ledger.
+    let public_units = 128
+        + 4 * PHYSICAL_HASH_ROWS
+        + 2 * FIXED_ROW_COUNT * (FIXED_COLUMN_COUNT + 2)
+        + MAX_PROVER_LEDGER_NODES
+        + 2 * MAX_PROVER_OUTPUT_TERMS
+        + 2 * MAX_PROVER_SELECTOR_RUNS
+        + MAX_PROVER_SELECTOR_MASKS
+        + RESIDUE_COUNT
+        + 4 * COLUMN_COUNT
+        + 2 * CONSTRAINTS;
+    let query_units = QUERY_COUNT
+        * (2 * COMMITTED_COLUMN_COUNT
+            + 128
+            + FRI_ARITIES
+                .iter()
+                .map(|&arity| arity * arity + QUERY_COUNT + 128)
+                .sum::<usize>());
+    let terminal = FRI_LENGTHS[5];
+    let verifier_work_bound =
+        16384 * (public_units + query_units + terminal * terminal + deep_proof::MAX_FRAME_BYTES);
+    // This is only the direct SMT portion of the retained 4N numerator point
+    // allowance; public preparation, hash AIR, FFT and division are additional.
+    let retained_point_floor = 4 * TRACE_ROWS * RESIDUE_COUNT * 256;
+    assert!(verifier_work_bound < retained_point_floor);
+    for context in [None, Some(COMPLETE_CONTEXT)] {
+        let air = CompactTransferAir::new(&statement(), context).unwrap();
+        let plan = ProducerPlan::new(&air, limits()).unwrap();
+        let public_allowance = plan.quotient.work_units - plan.replay.work_units;
+        assert!(public_allowance >= retained_point_floor);
+        assert!(public_allowance > verifier_work_bound);
+        assert_eq!(
+            quotient_and_self_check_work(plan.quotient.work_units, plan.replay.work_units).unwrap(),
+            plan.quotient.work_units + public_allowance
+        );
+        let default = crate::backend::offline_compact::ProvingLimits::default();
+        assert_eq!(
+            default.max_segment_work_units,
+            usize::try_from(1_u64 << 42).unwrap()
+        );
+        assert!(plan.work_units <= default.max_segment_work_units);
+        // The previous duplicate alone explains the native preflight refusal.
+        assert!(plan.work_units + plan.replay.work_units > default.max_segment_work_units);
+        let mut rng = NoEntropy(0);
+        assert!(plan.build_from_borrowed_for_test(&[], &mut rng).is_err());
+        assert_eq!(rng.0, 0);
+    }
+}
+
+#[test]
 fn retained_device_pool_remains_charged_during_the_larger_cpu_quotient_phase() {
     let pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES;
     assert_eq!(
@@ -166,10 +250,10 @@ fn retained_device_pool_remains_charged_during_the_larger_cpu_quotient_phase() {
 fn frontier_envelope_and_replayed_root_equality_are_explicit() {
     let queries = maximal_queries();
     let plans = OpeningPlans::new(&queries).unwrap();
-    assert_eq!(plans.initial.work().siblings, 1088);
+    assert_eq!(plans.initial.work().siblings, 1283);
     assert_eq!(
         plans.rounds.each_ref().map(|p| p.work().siblings),
-        [832, 576, 384, 192, 64]
+        [975, 667, 436, 205, 51]
     );
     assert!(
         plans
@@ -177,14 +261,57 @@ fn frontier_envelope_and_replayed_root_equality_are_explicit() {
             .iter()
             .all(|positions| positions.len() == QUERY_COUNT)
     );
-    let first = Digest::new([1, 2, 3, 5, 7, 11]).unwrap();
-    let second = Digest::new([1, 2, 3, 5, 7, 13]).unwrap();
+    let first = Digest::from_bytes([11; 32]);
+    let second = Digest::from_bytes([13; 32]);
     same_root(first, first).unwrap();
     assert!(same_root(first, second).is_err());
     let context = Context::new(b"whole producer scheduling regression").unwrap();
     let mut transcript = Transcript::new(context);
     assert!(fields(&mut transcript, CONSTRAINTS).is_err());
     assert!(fields(&mut transcript, 1).is_err());
+}
+
+#[test]
+fn preflight_queries_are_distinct_and_maximal_under_every_linked_reduction() {
+    use std::collections::BTreeSet;
+
+    let queries = maximal_queries();
+    assert_eq!(queries.len(), QUERY_COUNT);
+    assert!(queries.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(queries.iter().all(|&index| index < LDE_ROWS));
+    let plans = OpeningPlans::new(&queries).unwrap();
+    for (leaves, plan) in super::super::deep_geometry::FRI_LENGTHS
+        .into_iter()
+        .zip(core::iter::once(&plans.initial).chain(plans.rounds.iter()))
+    {
+        let mut positions: BTreeSet<_> = queries.iter().map(|index| index % leaves).collect();
+        assert_eq!(positions.len(), QUERY_COUNT);
+        assert_eq!(
+            positions.iter().copied().collect::<Vec<_>>(),
+            plan.queried_indices()
+        );
+        let mut observed_siblings = 0;
+        let mut observed_parents = 0;
+        for _ in 0..leaves.ilog2() {
+            observed_siblings += positions
+                .iter()
+                .filter(|&&index| !positions.contains(&(index ^ 1)))
+                .count();
+            positions = positions.into_iter().map(|index| index / 2).collect();
+            observed_parents += positions.len();
+        }
+        // The independent binary-tree occupancy bound is attained at every
+        // linked depth; a merely unique but clustered set undercharges work.
+        let maximum_siblings = (0..leaves.ilog2())
+            .map(|depth| QUERY_COUNT.min(1usize << depth))
+            .sum::<usize>()
+            - QUERY_COUNT
+            + 1;
+        assert_eq!(observed_siblings, maximum_siblings);
+        assert_eq!(plan.work().siblings, maximum_siblings);
+        assert_eq!(plan.work().parent_hashes, observed_parents);
+        assert_eq!(positions.into_iter().collect::<Vec<_>>(), vec![0]);
+    }
 }
 
 #[test]
@@ -273,10 +400,34 @@ fn complete_statement() -> PublicStatement {
 }
 
 fn complete_masked_producer(execution: DigestExecutionV1) {
+    let (statement, air, proof, receipt) = build_complete_masked_proof(execution);
+    assert_complete_proof_controls(&statement, &air, &proof);
+    diagnostic_artifact::mark_controls_passed(&receipt).unwrap();
+}
+
+#[test]
+#[ignore = "authentic full q77 seeded proof generation and relation controls; golden pin review remains required"]
+fn generate_current_seeded_proof_for_review_with_all_relation_controls() {
+    let (statement, air, proof, receipt) = build_complete_masked_proof(DigestExecutionV1::Cpu);
+    assert_current_complete_proof_controls(&statement, &air, &proof);
+    eprintln!(
+        "q77 current relation controls passed; golden pins still require review; receipt={}",
+        receipt.display()
+    );
+}
+
+fn build_complete_masked_proof(
+    execution: DigestExecutionV1,
+) -> (
+    PublicStatement,
+    CompactTransferAir,
+    Vec<u8>,
+    std::path::PathBuf,
+) {
     use crate::backend::compact_protocol::FixedAir as _;
     use crate::gadgets::compact_smt_air::PhysicalSmtWitness;
     // Required-device failure must precede the diagnostic's private witness too.
-    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
+    super::super::deep_leaf_batch::preflight_execution(execution).unwrap();
     let statement = complete_statement();
     let siblings = complete_siblings();
     let air = CompactTransferAir::new(&statement, Some(COMPLETE_CONTEXT)).unwrap();
@@ -319,8 +470,7 @@ fn complete_masked_producer(execution: DigestExecutionV1) {
         charges,
     )
     .unwrap();
-    assert_complete_proof_controls(&statement, &air, &proof);
-    diagnostic_artifact::mark_controls_passed(&receipt).unwrap();
+    (statement, air, proof, receipt)
 }
 
 fn assert_complete_proof_controls(
@@ -328,17 +478,25 @@ fn assert_complete_proof_controls(
     air: &CompactTransferAir,
     proof: &[u8],
 ) {
-    assert!(proof.len() <= deep_proof::MAX_FRAME_BYTES);
+    assert_current_complete_proof_controls(statement, air, proof);
     assert_eq!(
         proof.len(),
         COMPLETE_BYTES,
-        "pre-cache complete seeded proof byte length"
+        "reviewed q77 complete seeded proof byte length"
     );
     assert_eq!(
         iroha_crypto::Hash::new(proof).to_string(),
         COMPLETE_HASH,
-        "pre-cache complete seeded proof bytes"
+        "reviewed q77 complete seeded proof bytes"
     );
+}
+
+fn assert_current_complete_proof_controls(
+    statement: &PublicStatement,
+    air: &CompactTransferAir,
+    proof: &[u8],
+) {
+    assert!(proof.len() <= deep_proof::MAX_FRAME_BYTES);
     assert_eq!(
         deep_engine::verify(air, proof, deep_proof::PROOF_BYTE_TARGET)
             .unwrap()
@@ -358,228 +516,8 @@ fn assert_complete_proof_controls(
     assert!(deep_engine::verify(air, &altered, deep_proof::PROOF_BYTE_TARGET).is_err());
 }
 
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-#[test]
-#[ignore = "bounded actual Metal leaf and CPU parent timing before a complete masked proof"]
-fn measured_required_metal_leaf_and_cpu_parent_costs() {
-    use std::time::Instant;
-
-    use crate::backend::deep_leaf_batch;
-
-    let _lane = crate::backend::acquire_gpu_lane();
-    let execution = DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Metal);
-    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
-    let air = CompactTransferAir::new(&statement(), Some(b"native producer diagnostic")).unwrap();
-    let binding = Context::for_relation(&air).unwrap();
-    let mut estimated_hash_seconds = 0.0;
-    for oracle in [
-        Oracle::Row,
-        Oracle::QuotientAndMask,
-        Oracle::Fri(0),
-        Oracle::Fri(1),
-        Oracle::Fri(2),
-        Oracle::Fri(3),
-        Oracle::Fri(4),
-    ] {
-        let (_, _, leaves, width) = oracle.shape().unwrap();
-        let count = leaves.min(deep_leaf_batch::CAPACITY);
-        let batches = 4096 / count;
-        let payload = (0..count * width / 8)
-            .flat_map(|value| (value as u64 + 7).to_le_bytes())
-            .collect::<Vec<_>>();
-        let indices = (0..count).collect::<Vec<_>>();
-        let mut output = SecretPolynomial::<[u64; 6]>::zeroed(indices.len()).unwrap();
-        // Warm this oracle's public prefix cache before measuring its fixed batch.
-        deep_leaf_batch::hash(
-            &binding,
-            oracle,
-            &indices,
-            &payload,
-            width,
-            &mut output,
-            execution,
-        )
-        .unwrap();
-        let started = Instant::now();
-        for _ in 0..batches {
-            deep_leaf_batch::hash(
-                &binding,
-                oracle,
-                &indices,
-                &payload,
-                width,
-                &mut output,
-                execution,
-            )
-            .unwrap();
-        }
-        let leaf_seconds = started.elapsed().as_secs_f64();
-        for index in [0, indices.len() - 1] {
-            assert_eq!(
-                output[index],
-                binding
-                    .hash_leaf(
-                        oracle,
-                        u32::try_from(index).unwrap(),
-                        &payload[index * width..(index + 1) * width]
-                    )
-                    .unwrap()
-                    .words()
-            );
-        }
-        let mut left = Digest::new([1, 2, 3, 5, 7, 11]).unwrap();
-        let right = Digest::new([13, 17, 19, 23, 29, 31]).unwrap();
-        left = binding.hash_parent(oracle, 1, 0, left, right).unwrap();
-        let started = Instant::now();
-        for index in 0..4096 {
-            left = binding
-                .hash_parent(
-                    oracle,
-                    1,
-                    u32::try_from(index % (leaves / 2)).unwrap(),
-                    left,
-                    right,
-                )
-                .unwrap();
-        }
-        std::hint::black_box(left);
-        let parent_seconds = started.elapsed().as_secs_f64();
-        let estimate = 2.0
-            * (leaf_seconds * exact_count_f64(leaves) / exact_count_f64(batches * count)
-                + parent_seconds * exact_count_f64(leaves - 1) / 4096.0);
-        estimated_hash_seconds += estimate;
-        eprintln!(
-            "oracle={oracle:?}; leaf_samples={}; leaf_seconds={leaf_seconds:.6}; parent_samples=4096; parent_seconds={parent_seconds:.6}; two_tree_hash_seconds_estimate={estimate:.3}",
-            batches * count
-        );
-    }
-    eprintln!(
-        "total_hash_seconds_estimate={estimated_hash_seconds:.3}; excludes transforms, AIR, coefficient work, terminal, verifier and allocation variance; no complete-proof measurement"
-    );
-}
-
-/// Exact `f64` value of one bounded diagnostic count; every count here fits `u32`.
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-fn exact_count_f64(count: usize) -> f64 {
-    f64::from(u32::try_from(count).expect("diagnostic count fits u32"))
-}
-
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-#[test]
-#[ignore = "bounded batch-size comparison of real Metal continuations"]
-fn measured_required_metal_batch_sizes_separate_preparation_and_dispatch() {
-    measure_required_metal_batch_sizes(&[32, 256, 1024], 4096);
-}
-
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-#[test]
-#[ignore = "bounded larger typed Metal dispatch measurement; production remains at its fixed capacity"]
-fn measured_required_metal_larger_typed_batches_without_changing_production_capacity() {
-    measure_required_metal_batch_sizes(&[4096, 8192], 8192);
-}
-
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-fn measure_required_metal_batch_sizes(counts: &[usize], samples: usize) {
-    use std::time::Instant;
-
-    use rayon::prelude::*;
-
-    use super::super::compact_v1::PreparedHashFrame;
-    use crate::digest384_batch::execute_last_fields_with_cpu;
-
-    let _lane = crate::backend::acquire_gpu_lane();
-    let execution = DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Metal);
-    crate::digest384_batch::preflight_last_fields_execution(execution).unwrap();
-    let air = CompactTransferAir::new(&statement(), Some(b"native producer diagnostic")).unwrap();
-    let binding = Context::for_relation(&air).unwrap();
-    let left = Digest::new([1, 2, 3, 5, 7, 11]).unwrap();
-    let right = Digest::new([13, 17, 19, 23, 29, 31]).unwrap();
-    for (oracle, parent) in [
-        (Oracle::Row, false),
-        (Oracle::QuotientAndMask, false),
-        (Oracle::Fri(0), false),
-        (Oracle::Row, true),
-    ] {
-        let (_, _, _, width) = oracle.shape().unwrap();
-        for &count in counts {
-            assert!(count > 0 && count <= 8192 && samples.is_multiple_of(count));
-            let payloads = (0..count * width / 8)
-                .flat_map(|value| (value as u64 + 7).to_le_bytes())
-                .collect::<Vec<_>>();
-            let mut preparation = 0.0;
-            let mut dispatch = 0.0;
-            let mut owner_cleanup = 0.0;
-            let mut charged = 0;
-            // One warm iteration, then the same sample count at each batch size.
-            for iteration in 0..=samples / count {
-                let started = Instant::now();
-                let frames = (0..count)
-                    .into_par_iter()
-                    .map(|index| {
-                        let ordinal = u32::try_from(index).unwrap();
-                        if parent {
-                            binding.prepare_parent(oracle, 1, ordinal, left, right)
-                        } else {
-                            binding.prepare_leaf(
-                                oracle,
-                                ordinal,
-                                &payloads[index * width..(index + 1) * width],
-                            )
-                        }
-                    })
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .unwrap();
-                let bytes = frames.iter().map(PreparedHashFrame::payload_len).sum();
-                // The larger diagnostic does not enter or change the production
-                // batch helper. Its exact actual frame bytes must independently
-                // fit the same typed executor limit before dispatch.
-                let jobs = if count <= super::super::deep_leaf_batch::CAPACITY {
-                    super::super::deep_leaf_batch::prepare_jobs(&frames).unwrap()
-                } else {
-                    frames
-                        .par_iter()
-                        .map(PreparedHashFrame::job)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .collect::<Result<Vec<_>>>()
-                        .unwrap()
-                };
-                let preparation_seconds = started.elapsed().as_secs_f64();
-                charged = crate::digest384_batch::last_fields_payload_charge(count, bytes).unwrap();
-                let started = Instant::now();
-                let output = zeroize::Zeroizing::new(
-                    execute_last_fields_with_cpu(
-                        count,
-                        bytes,
-                        execution,
-                        |_| panic!("required-Metal diagnostic cannot use CPU substitution"),
-                        || Ok(jobs),
-                    )
-                    .unwrap(),
-                );
-                let dispatch_seconds = started.elapsed().as_secs_f64();
-                assert_eq!(output.len(), count);
-                for index in [0, count - 1] {
-                    assert_eq!(output[index], frames[index].hash_cpu().unwrap());
-                }
-                let cleanup_started = Instant::now();
-                drop(output);
-                drop(frames);
-                let cleanup_seconds = cleanup_started.elapsed().as_secs_f64();
-                if iteration != 0 {
-                    preparation += preparation_seconds;
-                    dispatch += dispatch_seconds;
-                    owner_cleanup += cleanup_seconds;
-                }
-            }
-            eprintln!(
-                "oracle={oracle:?}; parent={parent}; batch={count}; samples={samples}; frame_and_job_preparation_seconds={preparation:.6}; executor_seconds={dispatch:.6}; returned_owner_cleanup_seconds={owner_cleanup:.6}; executor_payload_charge={charged}; executor includes host packing, GPU execution, readback and internal clearing, not isolated kernel time"
-            );
-        }
-    }
-}
-
-/// Default policies admit one exact plan whose every budget is also a lower bound.
+// TODO: Add actual owned Keccak SIMD/Metal/CUDA batch measurements and complete
+// proof parity. Retired Poseidon continuations cannot measure this profile.
 fn check_default_policy_plan(relation: &impl DeepRelation) {
     use crate::backend::{
         compact_protocol::FixedAir,
@@ -713,4 +651,22 @@ fn default_policies_preflight_quantity_relations_without_private_columns_or_entr
             }
         }
     }
+}
+
+#[test]
+fn keccak_work_ledger_counts_trees_queries_transcripts_and_fixed_cold_readiness() {
+    let binding = Context::new(b"complete Keccak ledger").unwrap();
+    let plans = OpeningPlans::new(&maximal_queries()).unwrap();
+    let permutations = keccak_permutation_charges(&binding, &plans).unwrap();
+    let (row_leaf, row_parent) = binding.tree_permutations(Oracle::Row).unwrap();
+    let row_only = LDE_ROWS * row_leaf + (LDE_ROWS - 1) * row_parent;
+    assert!(permutations > row_only);
+    assert!(
+        permutations * 8192 < (1usize << 42),
+        "Keccak alone must fit unchanged complete-work ceiling: {permutations}"
+    );
+    println!(
+        "deep_keccak_permutations={permutations}; deep_keccak_work_units={}",
+        permutations * 8192
+    );
 }

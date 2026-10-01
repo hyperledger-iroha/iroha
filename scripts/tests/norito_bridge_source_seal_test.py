@@ -135,6 +135,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("ci/check_connect_norito_bridge_header.sh", apple)
 
         android = self.inputs("android")
+        self.assertIn("gradle/mobile-sdk-external-android-build.settings.gradle.kts", seal.ANDROID_ROOT_INPUTS)
         self.assertNotIn("IrohaSwift/Package.resolved", android)
         self.assertNotIn("IrohaSwift/Sources/IrohaSwiftMobileTransports", android)
         self.assertNotIn("scripts/exec_with_file_lock.py", android)

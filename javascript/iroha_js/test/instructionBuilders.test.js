@@ -2426,6 +2426,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         error_types: [
           { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
         ],
+        error_messages: null,
         kotoba: [
           {
             msg_id: "contract.title",

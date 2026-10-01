@@ -1556,8 +1556,15 @@ pub(crate) fn build_runtime_package(
     locked: bool,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
-    build::build_runtime_package(config, manifest, package, contract, locked, archive_transport)
-        .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))
+    build::build_runtime_package(
+        config,
+        manifest,
+        package,
+        contract,
+        locked,
+        archive_transport,
+    )
+    .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))
 }
 #[derive(Clone)]
 struct WorkspaceResolutionOptionsV1<'a> {

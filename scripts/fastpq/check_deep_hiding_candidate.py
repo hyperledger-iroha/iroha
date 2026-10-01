@@ -2,14 +2,15 @@
 """Conditional DEEP hiding construction arithmetic; no prover or qualification.
 
 Primary construction: Haböck–Al Kindi, ePrint 2024/1037, sections 3 and 4.1.
-This file independently checks the finite opening map and the proposed extra
-composition-mask field. It does not change or endorse the current wire format.
+This file checks finite opening maps and the current q77 composition-mask field,
+and preserves a separately labeled q64 counterfactual. Neither screen endorses
+the protocol or supplies a soundness or zero-knowledge proof.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-import re
+from runpy import run_path
 
 
 P = 0xFFFFFFFF00000001
@@ -17,7 +18,7 @@ N = 65_536
 M = 8_388_608
 ROOT = 0x35C4528B4AA62EB8
 OFFSET = 0xFD0E69F9A98EE946
-QUERIES = 64
+QUERIES = 77
 WIDTH = 301
 FP4_BYTES = 32
 CAP = 524_288
@@ -112,23 +113,21 @@ def field(payload: int) -> int:
     return payload + max(1, (payload.bit_length() + 6) // 7)
 
 
-def candidate_screen(current_frame: int = 502_895) -> dict[str, int]:
-    """Exact masked-composition DTO accounting, not a qualified private proof."""
-    if current_frame != 502_895:
-        raise ValueError("current DEEP frame changed; review candidate codec accounting")
-    h = 2 * (4 + QUERIES)
-    hp = 1 + QUERIES
+def _mask_screen(queries: int, expected_frame: int, pre_mask_frame: int,
+                 digest_bytes: int) -> dict[str, int]:
+    """Exact conditional equations and nested codec charges for explicit inputs."""
+    h = 2 * (4 + queries)
+    hp = 1 + queries
     trace = N + h
     numerator = max(2 * trace - 1 + N - N // 512, trace + N - 1)
     quotient = numerator - N
     low, high = N + hp, max(quotient - N, hp)
     old_pair = field(4) + 2 * field(FP4_BYTES)
     proposed_triple = old_pair + field(FP4_BYTES)
-    added_bytes = field(8 + QUERIES * field(proposed_triple)) - field(8 + QUERIES * field(old_pair))
-    pre_mask_frame = 500_783
+    added_bytes = field(8 + queries * field(proposed_triple)) - field(8 + queries * field(old_pair))
     candidate_bytes = pre_mask_frame + added_bytes
-    if candidate_bytes != current_frame:
-        raise ValueError("implemented composition-mask frame disagrees with nested codec charges")
+    if candidate_bytes != expected_frame:
+        raise ValueError("modeled composition-mask frame disagrees with nested codec charges")
     return {
         "witness_mask_base_coefficients": h,
         "quotient_mask_fp4_coefficients": hp,
@@ -139,7 +138,7 @@ def candidate_screen(current_frame: int = 502_895) -> dict[str, int]:
         "randomized_high_degree_bound": high,
         "pre_mask_candidate_frame_bytes": pre_mask_frame,
         "extra_framed_composition_mask_bytes": added_bytes,
-        "implemented_candidate_frame_bytes": candidate_bytes,
+        "modeled_candidate_frame_bytes": candidate_bytes,
         "candidate_margin_bytes": CAP - candidate_bytes,
         "candidate_two_child_margin_before_carrier": 1_048_576 - 2 * candidate_bytes,
         "witness_mask_payload_bytes": WIDTH * h * 8,
@@ -147,18 +146,36 @@ def candidate_screen(current_frame: int = 502_895) -> dict[str, int]:
         "composition_mask_coefficient_payload_bytes": 2 * N * FP4_BYTES,
         "trace_coefficients_masks_and_one_stripe_payload_bytes": 2 * WIDTH * N * 8 + WIDTH * h * 8,
         "one_materialized_full_row_lde_payload_bytes": WIDTH * M * 8,
-        "one_materialized_binary_digest_tree_payload_bytes": (2 * M - 1) * 48,
+        "one_materialized_binary_digest_tree_payload_bytes": (2 * M - 1) * digest_bytes,
         "one_full_fp4_oracle_payload_bytes": M * FP4_BYTES,
     }
 
 
+def hypothetical_q64_full_fiber_screen() -> dict[str, int]:
+    """Preserved q64/full-fiber/48-byte-digest counterfactual, not current source."""
+    return _mask_screen(64, 502_895, 500_783, 48)
+
+
+def candidate_screen(current_frame: int = 500_084) -> dict[str, int]:
+    """Exact current q77 masked-composition accounting, not private-proof qualification."""
+    if current_frame != 500_084:
+        raise ValueError("current DEEP frame changed; review candidate codec accounting")
+    source_budget = run_path(str(Path(__file__).with_name("check_compact_source_budget.py")))
+    sources = source_budget["load_sources"]()
+    geometry = source_budget["current_geometry"](sources)
+    if (geometry["queries"], geometry["retained_columns"], geometry["trace_rows"], geometry["lde_rows"]) != (QUERIES, WIDTH, N, M):
+        raise ValueError("opening-map constants differ from current source geometry")
+    # The same DTO with only its composition-mask field removed is a byte
+    # counterfactual; there is no corresponding supported decoder.
+    pre_mask_frame = source_budget["deep_frame_bound"](sources, composition_mask=False)
+    return _mask_screen(QUERIES, current_frame, pre_mask_frame, geometry["digest_bytes"])
+
+
 def check_source_frame() -> None:
     """Reject silent drift from the implemented native codec's reviewed bound."""
-    source = Path(__file__).resolve().parents[2] / "crates/fastpq_prover/src/backend/deep_proof.rs"
-    matches = re.findall(r"MAX_FRAME_BYTES: usize = ([\d_]+);", source.read_text())
-    if len(matches) != 1:
-        raise ValueError("expected one implemented DEEP frame bound")
-    candidate_screen(int(matches[0].replace("_", "")))
+    source_budget = run_path(str(Path(__file__).with_name("check_compact_source_budget.py")))
+    result = source_budget["budget"](source_budget["load_sources"]())
+    candidate_screen(result["offline_deep"]["max_frame_bytes"])
 
 
 if __name__ == "__main__":

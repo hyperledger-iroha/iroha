@@ -41,7 +41,8 @@ class ReserveFinalitySymbolTests(unittest.TestCase):
         self.assertEqual(emitted, expected[0])
         self.assertEqual(len(emitted), len(set(emitted)))
 
-    def check(self, mode: str, missing: str | None = None) -> subprocess.CompletedProcess[str]:
+    def check(self, mode: str, missing: str | None = None,
+              extra: str | None = None) -> subprocess.CompletedProcess[str]:
         exported = symbols("KAGEMUSHA_C_SYMBOLS") + symbols("REQUIRED_PROTOCOL_C_SYMBOLS")
         if mode == "elf":
             exported += symbols("RESERVE_FINALITY_JNI_SYMBOLS")
@@ -49,6 +50,8 @@ class ReserveFinalitySymbolTests(unittest.TestCase):
         if missing is not None:
             self.assertIn(missing, exported)
             exported.remove(missing)
+        if extra is not None:
+            exported.append(extra)
         # The checked function is copied verbatim. Only nm output is synthetic.
         script = '''set -euo pipefail
 FAILURES=0
@@ -61,6 +64,29 @@ check_binary_symbols test-only-library test-only-inventory "$2"
 '''
         return subprocess.run(["bash", "-c", script, "symbol-unit-test", "\n".join(exported), mode],
                               capture_output=True, text=True, check=False)
+
+    def test_kagemusha_inventory_matches_production_c_header(self) -> None:
+        header = (ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h").read_text()
+        declared = re.findall(r"\b(connect_norito_kagemusha_[a-z0-9_]+)\s*\(", header)
+        expected = symbols("KAGEMUSHA_C_SYMBOLS")
+        self.assertEqual(len(expected), len(set(expected)))
+        self.assertEqual(set(expected), set(declared))
+        self.assertIn("connect_norito_kagemusha_core_coordinator_install_v1", expected)
+
+    def test_coordinator_install_is_required_on_both_platforms(self) -> None:
+        for mode in ("apple", "elf"):
+            with self.subTest(mode=mode):
+                missing = "connect_norito_kagemusha_core_coordinator_install_v1"
+                result = self.check(mode, missing=missing)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("is missing " + missing, result.stderr)
+
+    def test_unexpected_kagemusha_export_is_rejected_on_both_platforms(self) -> None:
+        for mode in ("apple", "elf"):
+            with self.subTest(mode=mode):
+                result = self.check(mode, extra="connect_norito_kagemusha_unapproved_v1")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("KAGEMUSHA export inventory is not exact", result.stderr)
 
     def test_complete_symbol_cohort_passes_for_both_platforms(self) -> None:
         for mode in ("apple", "elf"):

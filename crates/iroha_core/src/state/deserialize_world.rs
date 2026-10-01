@@ -7805,6 +7805,14 @@ fn decode_world_fields(
     let kagemusha_verifier_registry: Cell<
         iroha_data_model::kagemusha::KagemushaGovernedVerifierRegistryV1,
     > = take_required(&mut map, "kagemusha_verifier_registry")?;
+    kagemusha_verifier_registry
+        .view()
+        .get()
+        .validate()
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.kagemusha_verifier_registry".to_owned(),
+            message: format!("invalid current verifier authority: {error}"),
+        })?;
     let tx_sequences: Storage<AccountId, u64> = take_required(&mut map, "tx_sequences")?;
     let triggers_value = map
         .remove("triggers")
@@ -9516,6 +9524,30 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
         message: "unknown field is not permitted in a signed first-release snapshot".to_owned(),
     })
 }
+/// Decode and validate the World component without granting authenticated State
+/// history. This test-only helper returns a World, never an installed native tip.
+#[cfg(test)]
+pub(in crate::state) fn decode_world_component_for_testing(
+    world: &World,
+) -> Result<World, StateRestoreError> {
+    let encoded = json::to_json(world)?;
+    let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+    let operation_index_refusal = std::cell::RefCell::new(None);
+    let ivm = IVM::new(0);
+    parse_world(
+        &iroha_allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        ),
+        SnapshotJsonMap::parse(&encoded, "world")?,
+        &IvmSeed {
+            operation_index_budget: &operation_index_budget,
+            operation_index_refusal: &operation_index_refusal,
+            ivm: &ivm,
+            _marker: PhantomData,
+        },
+    )
+}
+
 /// Reuse the validated publication fixture for direct State commit controls.
 #[cfg(test)]
 pub(in crate::state) fn seeded_musubi_publication_world_for_testing() -> World {

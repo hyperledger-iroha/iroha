@@ -23,11 +23,11 @@ fn policy() -> ArtifactLimits {
             max_wire_bytes: 16 * 1024 * 1024,
             max_total_segment_bytes: 16 * 1024 * 1024,
             max_total_statement_bytes: 512 * 1024,
-            max_total_queries: 128,
+            max_total_queries: 2 * QUERY_COUNT,
             max_total_decode_allocation_charges: 128 * 1024 * 1024,
             segment: crate::VerifyLimits {
                 max_proof_bytes: 5 * 1024 * 1024,
-                max_queries: 64,
+                max_queries: QUERY_COUNT,
                 ..crate::VerifyLimits::default()
             },
         },
@@ -91,6 +91,7 @@ fn fixed_quantity_profile_is_nominal_distinct_and_codec_independent() {
     assert_ne!(expected, diagnostic_profile_id());
     assert_eq!(
         hex::encode(diagnostic_profile_id().0),
+        // Exact predecessor u64 identity remains useful as a negative fixture.
         "0f1fcc226630bbf6f89e84dc6a4841868e4835b8d4a5d6a9261f057194a70676"
     );
     for flags in [0, norito::core::header_flags::COMPACT_LEN] {
@@ -100,6 +101,13 @@ fn fixed_quantity_profile_is_nominal_distinct_and_codec_independent() {
     }
     eprintln!("quantity_artifact_profile={}", hex::encode(expected.0));
 }
+
+// Frozen input bytes for predecessor rejection only; no old hash/transcript code.
+const PREDECESSOR_IDENTITY: &[u8] = b"fastpq:compact:goldilocks-six-lane:h6:g-field-blocks:q375:c401:342cols:923slots:65536rows:8blowup:17folds:v1";
+const PREDECESSOR_TAPE_BYTES: [u32; 22] = [
+    48, 10_944, 29_568, 96, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+    3_216,
+];
 
 // Exact descriptor retained solely as a rejection fixture from the previous
 // quantity profile. Field order and both declared Norito identities are the
@@ -127,15 +135,9 @@ fn predecessor_quantity_profile() -> FastpqCompactProfileIdV1 {
         version: 1,
         catalog: fastpq_isi::FASTPQ_CATALOG_V1,
         protocol: fastpq_isi::FASTPQ_FINAL_V1.name,
-        compact_geometry_identity: compact_v1::IDENTITY.to_vec(),
+        compact_geometry_identity: PREDECESSOR_IDENTITY.to_vec(),
         lane_parameter_sha3_256: fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1,
-        tape_bytes: core::array::from_fn(|round| {
-            let ordinal = u8::try_from(round + 1).expect("predecessor round ordinal fits u8");
-            let bytes = compact_v1::Round::new(ordinal)
-                .expect("predecessor round")
-                .tape_bytes();
-            u32::try_from(bytes).expect("predecessor tape bytes fit u32")
-        }),
+        tape_bytes: PREDECESSOR_TAPE_BYTES,
         quantity_value_schema: "fastpq_prover::public_transfer::QuantityValueV1",
         quantity_context_schema: "fastpq_prover::compact_v1::QuantityTransferContextV1",
         value_hash_domain: b"fastpq:quantity:v1:smt:value|".to_vec(),
@@ -196,7 +198,7 @@ fn deep_quantity_descriptor_binds_actual_protocol_and_preserves_value_relations(
     assert_eq!(descriptor.version, 1);
     assert_eq!(descriptor.catalog, fastpq_isi::FASTPQ_CATALOG_V1);
     assert_eq!(descriptor.protocol_identity, deep_binding::IDENTITY);
-    assert_ne!(descriptor.protocol_identity, compact_v1::IDENTITY);
+    assert_ne!(descriptor.protocol_identity, PREDECESSOR_IDENTITY);
     assert_eq!(descriptor.trace_rows, 65_536);
     assert_eq!(descriptor.trace_root, 0xbe5b_4f4b_47ee_4647);
     assert_eq!(descriptor.lde_rows, 8_388_608);
@@ -213,10 +215,17 @@ fn deep_quantity_descriptor_binds_actual_protocol_and_preserves_value_relations(
         crate::GoldilocksFp4V1::frame_name()
     );
     assert_eq!(descriptor.extension_bytes, 32);
-    assert_eq!(descriptor.hash_digest_lanes, 6);
+    assert_eq!(descriptor.commitment_algorithm, "FIPS202:SHA3-256:suffix06");
+    assert_eq!(descriptor.commitment_bytes, 32);
     assert_eq!(
-        descriptor.lane_parameter_sha3_256,
-        fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1
+        descriptor.transcript_algorithm,
+        "FIPS202:SHAKE256:suffix1f:atomic-raw-tapes"
+    );
+    assert_eq!(descriptor.trace_mask_coefficients, 162);
+    assert_eq!(descriptor.quotient_mask_coefficients, 78);
+    assert_eq!(
+        descriptor.fiber_encoding,
+        "arity-tag:omit-smallest-known-incoming-coordinate"
     );
     assert_eq!(descriptor.fri_arities, [16, 16, 8, 8, 4]);
     assert_eq!(
@@ -224,15 +233,15 @@ fn deep_quantity_descriptor_binds_actual_protocol_and_preserves_value_relations(
         [8_388_608, 524_288, 32_768, 4_096, 512, 128]
     );
     assert_eq!(descriptor.fri_degrees, [131_072, 8_192, 512, 64, 8, 2]);
-    assert_eq!(descriptor.query_count, 64);
-    assert_eq!(descriptor.query_candidates, 74);
+    assert_eq!(descriptor.query_count, 77);
+    assert_eq!(descriptor.query_candidates, 87);
     assert_eq!(
         descriptor.tape_bytes,
-        [48, 29_568, 48, 48, 48, 48, 48, 48, 48, 624]
+        [32, 29_584, 80, 80, 80, 80, 80, 80, 80, 744]
     );
     assert_eq!(
         descriptor.proof_frame_schema,
-        "fastpq_prover::deep_compact::MaskedCompositionProofV1"
+        "fastpq_prover::deep_compact::Sha3MaskedCompositionProofV1"
     );
     assert_eq!(
         descriptor.proof_frame_hash,
@@ -279,7 +288,7 @@ fn every_deep_descriptor_field_changes_the_fixed_artifact_profile() {
     }
     change!(version, 2);
     change!(catalog, "different catalog");
-    change!(protocol_identity, compact_v1::IDENTITY.to_vec());
+    change!(protocol_identity, PREDECESSOR_IDENTITY.to_vec());
     change!(trace_rows, 32_768);
     change!(trace_root, fixed.trace_root ^ 1);
     change!(lde_rows, 524_288);
@@ -293,8 +302,12 @@ fn every_deep_descriptor_field_changes_the_fixed_artifact_profile() {
     change!(extension_nonresidue, 11);
     change!(extension_schema, "different extension".to_owned());
     change!(extension_bytes, 16);
-    change!(hash_digest_lanes, 4);
-    change!(lane_parameter_sha3_256, [0; 32]);
+    change!(commitment_algorithm, "different commitment primitive");
+    change!(commitment_bytes, 48);
+    change!(transcript_algorithm, "different transcript primitive");
+    change!(trace_mask_coefficients, 161);
+    change!(quotient_mask_coefficients, 77);
+    change!(fiber_encoding, "different fiber encoding");
     change!(query_count, 375);
     change!(query_candidates, 75);
     change!(proof_frame_schema, "different proof frame".to_owned());
@@ -557,4 +570,55 @@ fn public_quantity_construction_preserves_enclosing_decode_allocation_budget() {
     assert_eq!(materialized.transitions(), f.rows.as_slice());
     assert_eq!(materialized.public_inputs(), f.inputs);
     assert_eq!(materialized.ordering_hash(), restored.ordering_hash());
+}
+
+/// Public canonical descriptor receipt; publication to fixtures is a separate review.
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+struct ReviewedProfilePin {
+    descriptor_bytes: usize,
+    canonical_frame_hex: String,
+    profile_sha256: String,
+}
+
+#[test]
+#[ignore = "native canonical q77 descriptor output for review; does not publish or bless fixtures"]
+fn emit_canonical_q77_quantity_profile_for_review() {
+    let descriptor = DeepQuantityArtifactProfile::fixed();
+    let bytes = norito::encode_canonical(&descriptor).unwrap();
+    let observed = ReviewedProfilePin {
+        descriptor_bytes: bytes.len(),
+        canonical_frame_hex: hex::encode(&bytes),
+        profile_sha256: hex::encode(descriptor.profile_id().0),
+    };
+    assert_eq!(observed.profile_sha256, hex::encode(Sha256::digest(&bytes)));
+    assert_eq!(descriptor.profile_id(), quantity_diagnostic_profile_id());
+    println!(
+        "observed_q77_profile={}",
+        norito::json::to_json(&observed).unwrap()
+    );
+}
+
+#[test]
+#[ignore = "requires a separately reviewed authentic native q77 profile fixture"]
+fn reviewed_q77_quantity_profile_matches_exact_canonical_descriptor() {
+    // Published from source/binary-bound native output after independent review.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/fastpq/q77-quantity-profile.json");
+    let bytes = std::fs::read(path).expect("generate and review the native q77 profile first");
+    let pin: ReviewedProfilePin = norito::json::from_slice(&bytes).unwrap();
+    let descriptor = DeepQuantityArtifactProfile::fixed();
+    let canonical = norito::encode_canonical(&descriptor).unwrap();
+    assert_eq!(pin.descriptor_bytes, canonical.len());
+    assert_eq!(pin.canonical_frame_hex, hex::encode(&canonical));
+    assert_eq!(pin.profile_sha256, hex::encode(Sha256::digest(&canonical)));
+    assert_eq!(pin.profile_sha256, hex::encode(descriptor.profile_id().0));
+    for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(norito::encode_canonical(&descriptor).unwrap(), canonical);
+        assert_eq!(
+            hex::encode(quantity_diagnostic_profile_id().0),
+            pin.profile_sha256
+        );
+        assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+    }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -332,6 +333,48 @@ async function main() {
       if (!isoBuilder.stdout.includes(expected)) {
         throw new Error(`packed ISO builder recipe output is missing: ${expected}`);
       }
+    }
+
+    if (process.argv.includes("--native-wallet")) {
+      // Portable smoke above is unchanged. This additional installed-native lane
+      // uses the supported external binding directory and retains clean-source
+      // provenance; a dirty local-debug addon cannot be relabelled for packaging.
+      if (process.env.NODE_OPTIONS || process.env.IROHA_JS_NATIVE_DIR) {
+        throw new Error("installed wallet qualification requires an unoverridden native loader");
+      }
+      const originalNative = join(ROOT, "native", "iroha_js_host.node");
+      const originalManifest = join(ROOT, "native", "iroha_js_host.checksums.json");
+      const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+      const nativeHash = digest(originalNative);
+      const manifestHash = digest(originalManifest);
+      const manifest = JSON.parse(readFileSync(originalManifest, "utf8"));
+      const entry = manifest.entries?.[`${process.platform}-${process.arch}`];
+      if (entry?.source_tree_clean !== true || entry?.sha256 !== nativeHash) {
+        throw new Error("installed native wallet requires the normally rebuilt clean-source addon and exact checksum manifest");
+      }
+      const nativeDirectory = join(tempRoot, "authenticated-native");
+      mkdirSync(nativeDirectory, { mode: 0o700 });
+      copyFileSync(originalNative, join(nativeDirectory, "iroha_js_host.node"));
+      copyFileSync(originalManifest, join(nativeDirectory, "iroha_js_host.checksums.json"));
+      const consumer = join(consumerRoot, "wallet-consumer.mjs");
+      copyFileSync(join(ROOT, "test/fixtures/installedConfidentialWallet.mjs"), consumer);
+      copyFileSync(join(ROOT, "test/helpers/confidentialWalletNativeCases.js"), join(consumerRoot, "wallet-cases.mjs"));
+      const wallet = await run(process.execPath, [consumer, nativeHash, manifestHash], {
+        cwd: consumerRoot,
+        env: { ...process.env, IROHA_JS_NATIVE_DIR: nativeDirectory },
+      });
+      const receipt = JSON.parse(wallet.stdout.trim());
+      if (receipt.kind !== "installed-confidential-wallet" || receipt.passed !== 2 ||
+          receipt.failed !== 0 || receipt.skipped !== 0 ||
+          receipt.nativeSha256 !== nativeHash || receipt.loadedImageSha256 !== nativeHash ||
+          receipt.nativeManifestSha256 !== manifestHash ||
+          digest(originalNative) !== nativeHash || digest(originalManifest) !== manifestHash ||
+          digest(join(nativeDirectory, "iroha_js_host.node")) !== nativeHash ||
+          digest(join(nativeDirectory, "iroha_js_host.checksums.json")) !== manifestHash) {
+        throw new Error("installed native wallet qualification lost its exact artifact binding");
+      }
+      console.log(JSON.stringify({ ...receipt, tarballSha256: digest(tarball),
+        sourceGitRevision: entry.source_git_revision, sourceTreeSha256: entry.source_tree_sha256 }));
     }
 
     const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));

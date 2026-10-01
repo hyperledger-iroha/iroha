@@ -33,9 +33,9 @@ pub(super) const LDE_ROWS: usize = 8_388_608;
 /// Independently sampled complete Fp4 constraint coefficients.
 pub(super) const CONSTRAINTS: usize = 923;
 /// Exact number of distinct uniformly sampled initial positions.
-pub(super) const QUERY_COUNT: usize = 64;
+pub(super) const QUERY_COUNT: usize = fastpq_isi::compact_challenge::QUERY_COUNT;
 /// Canonical field candidates consumed from the fixed whole query tape.
-pub(super) const QUERY_CANDIDATES: usize = 74;
+pub(super) const QUERY_CANDIDATES: usize = fastpq_isi::compact_challenge::QUERY_CANDIDATES;
 /// Ordered reduction factors; their product is the execution subgroup order.
 pub(super) const FRI_ARITIES: [usize; 5] = [16, 16, 8, 8, 4];
 /// Input and successive output domain lengths, including the complete terminal.

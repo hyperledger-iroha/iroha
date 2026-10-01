@@ -779,10 +779,11 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
                             iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1 {
                                 segment_count: 1,
                                 segment_air_row_roots: vec![
-                                    iroha_data_model::privacy::GoldilocksDigest384V1::new(
-                                        [u64::from(batch_index) + 1; 6],
-                                    )
-                                    .unwrap(),
+                                    iroha_data_model::fastpq::FastpqCommitmentV1::from_bytes(
+                                        [u8::try_from(batch_index)
+                                            .expect("fixture batch index fits u8")
+                                            + 1; 32],
+                                    ),
                                 ],
                             },
                         ),

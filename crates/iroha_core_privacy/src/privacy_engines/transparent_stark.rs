@@ -12,12 +12,12 @@
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
 pub(crate) use super::privacy_outer_hash::PrivacyOuterDigestV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::privacy_outer_hash::PrivacyOuterLastFieldStreamErrorV1;
+#[cfg(test)]
+use super::privacy_outer_hash::PrivacyOuterLastFieldStreamV1;
 use super::privacy_outer_hash::{
     PrivacyOuterDomainPrefixV1, PrivacyOuterDomainV1, PrivacyOuterFrameV1,
-};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::privacy_outer_hash::{
-    PrivacyOuterLastFieldStreamErrorV1, PrivacyOuterLastFieldStreamV1,
 };
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
@@ -692,6 +692,70 @@ pub(crate) fn goldilocks_primitive_root_v1(
     }
     Ok(root)
 }
+/// Public work grain for CPU butterflies; no twiddle or witness array is allocated.
+const FFT_BUTTERFLIES_PER_TASK_V1: usize = 1 << 10;
+/// Small domains retain the serial path, including one-worker callers.
+const FFT_PARALLEL_MIN_VALUES_V1: usize = 1 << 14;
+
+/// Apply one contiguous butterfly window with its exact public starting power.
+fn goldilocks_fft_window_v1<T>(
+    left: &mut [T],
+    right: &mut [T],
+    mut twiddle: GoldilocksFieldV1,
+    step: GoldilocksFieldV1,
+    butterfly: &impl Fn(&mut T, &mut T, GoldilocksFieldV1),
+) {
+    for (even, odd) in left.iter_mut().zip(right) {
+        butterfly(even, odd, twiddle);
+        twiddle = twiddle.mul(step);
+    }
+}
+
+/// Schedule disjoint in-place butterflies using only public domain geometry.
+///
+/// Small stages share a task to amortize scheduling. Large stages divide both
+/// halves at matching public offsets, preserving parallelism even at the last
+/// stage. Every starting power is computed exactly in the base field. There is
+/// no parallel reduction, additional field buffer, or witness-dependent choice.
+fn goldilocks_fft_stage_v1<T: Send>(
+    values: &mut [T],
+    width: usize,
+    step: GoldilocksFieldV1,
+    butterfly: impl Fn(&mut T, &mut T, GoldilocksFieldV1) + Sync,
+) {
+    let serial_block = |block: &mut [T]| {
+        for chunk in block.chunks_exact_mut(width) {
+            let (left, right) = chunk.split_at_mut(width / 2);
+            goldilocks_fft_window_v1(left, right, GoldilocksFieldV1::ONE, step, &butterfly);
+        }
+    };
+    if values.len() < FFT_PARALLEL_MIN_VALUES_V1 || rayon::current_num_threads() == 1 {
+        serial_block(values);
+    } else if width <= 2 * FFT_BUTTERFLIES_PER_TASK_V1 {
+        // Both widths are powers of two, so no group straddles a task boundary.
+        values
+            .par_chunks_mut(2 * FFT_BUTTERFLIES_PER_TASK_V1)
+            .for_each(serial_block);
+    } else {
+        values.par_chunks_exact_mut(width).for_each(|chunk| {
+            let (left, right) = chunk.split_at_mut(width / 2);
+            left.par_chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1)
+                .zip(right.par_chunks_mut(FFT_BUTTERFLIES_PER_TASK_V1))
+                .enumerate()
+                .for_each(|(index, (left, right))| {
+                    let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
+                    goldilocks_fft_window_v1(
+                        left,
+                        right,
+                        step.pow(first as u128),
+                        step,
+                        &butterfly,
+                    );
+                });
+        });
+    }
+}
+
 /// In-place radix-two FFT.
 pub(crate) fn goldilocks_fft_v1(
     values: &mut [GoldilocksFieldV1],
@@ -724,17 +788,12 @@ pub(crate) fn goldilocks_fft_v1(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        for chunk in values.chunks_exact_mut(width) {
-            let mut twiddle = GoldilocksFieldV1::ONE;
-            let (left, right) = chunk.split_at_mut(width / 2);
-            for (even, odd) in left.iter_mut().zip(right.iter_mut()) {
-                let scaled_odd = (*odd).mul(twiddle);
-                let original_even = *even;
-                *even = original_even.add(scaled_odd);
-                *odd = original_even.sub(scaled_odd);
-                twiddle = twiddle.mul(step);
-            }
-        }
+        goldilocks_fft_stage_v1(values, width, step, |even, odd, twiddle| {
+            let scaled_odd = (*odd).mul(twiddle);
+            let original_even = *even;
+            *even = original_even.add(scaled_odd);
+            *odd = original_even.sub(scaled_odd);
+        });
         width <<= 1;
     }
     Ok(())
@@ -824,17 +883,12 @@ pub(crate) fn goldilocks_fp4_fft_v1(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        for chunk in values.chunks_exact_mut(width) {
-            let mut twiddle = GoldilocksFieldV1::ONE;
-            let (left, right) = chunk.split_at_mut(width / 2);
-            for (even, odd) in left.iter_mut().zip(right.iter_mut()) {
-                let scaled_odd = (*odd).mul_base(twiddle);
-                let original_even = *even;
-                *even = original_even.add(scaled_odd);
-                *odd = original_even.sub(scaled_odd);
-                twiddle = twiddle.mul(step);
-            }
-        }
+        goldilocks_fft_stage_v1(values, width, step, |even, odd, twiddle| {
+            let scaled_odd = (*odd).mul_base(twiddle);
+            let original_even = *even;
+            *even = original_even.add(scaled_odd);
+            *odd = original_even.sub(scaled_odd);
+        });
         width <<= 1;
     }
     Ok(())
@@ -1180,8 +1234,8 @@ pub(crate) fn privacy_outer_digest_frame_v1(
     .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)
 }
 
-/// Start a bounded digest stream whose final framed field is supplied incrementally.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+/// Scalar stream-framing oracle used only by byte-parity controls.
+#[cfg(test)]
 pub(crate) fn privacy_outer_last_field_stream_v1(
     context: TransparentStarkDigestContextV1,
     role: &[u8],
@@ -2763,6 +2817,81 @@ mod tests {
             Err(TransparentStarkErrorV1::RandomnessUnavailable)
         );
     }
+    #[test]
+    fn fft_cpu_scheduling_matches_direct_evaluation_and_every_worker_width() {
+        let pools = [1, 2, 4].map(|threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("bounded FFT test pool")
+        });
+        for log_size in [0, 1, 5, 10, 13, 14, 15, 18, 19] {
+            let size = 1_usize << log_size;
+            let root = goldilocks_primitive_root_v1(log_size).expect("exact root");
+            let base = (0..size)
+                .map(|index| GoldilocksFieldV1::reduce((index as u128 + 17).pow(4)))
+                .collect::<Vec<_>>();
+            let extension = base
+                .iter()
+                .enumerate()
+                .map(|(index, &value)| {
+                    fp4([
+                        value.0,
+                        GOLDILOCKS_MODULUS_V1 - 1 - index as u64,
+                        index as u64 * 13,
+                        index as u64 * 31 + 7,
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let expected = pools[0].install(|| {
+                let mut base = base.clone();
+                let mut extension = extension.clone();
+                goldilocks_fft_v1(&mut base, root).expect("serial base FFT");
+                goldilocks_fp4_fft_v1(&mut extension, root).expect("serial extension FFT");
+                (base, extension)
+            });
+            if log_size <= 5 {
+                for index in 0..size {
+                    let point = root.pow(index as u128);
+                    let base_horner = base
+                        .iter()
+                        .rev()
+                        .fold(GoldilocksFieldV1::ZERO, |a, &b| a.mul(point).add(b));
+                    let extension_horner = extension
+                        .iter()
+                        .rev()
+                        .fold(GoldilocksFp4V1::ZERO, |a, &b| a.mul_base(point).add(b));
+                    assert_eq!(expected.0[index], base_horner);
+                    assert_eq!(expected.1[index], extension_horner);
+                }
+            }
+            for pool in &pools {
+                pool.install(|| {
+                    let mut actual_base = base.clone();
+                    let mut actual_extension = extension.clone();
+                    let base_ptr = actual_base.as_ptr();
+                    let extension_ptr = actual_extension.as_ptr();
+                    let capacities = (actual_base.capacity(), actual_extension.capacity());
+                    goldilocks_fft_v1(&mut actual_base, root).expect("base FFT");
+                    goldilocks_fp4_fft_v1(&mut actual_extension, root).expect("extension FFT");
+                    assert_eq!(
+                        (&actual_base, &actual_extension),
+                        (&expected.0, &expected.1)
+                    );
+                    goldilocks_ifft_v1(&mut actual_base, root).expect("base IFFT");
+                    goldilocks_fp4_ifft_v1(&mut actual_extension, root).expect("extension IFFT");
+                    assert_eq!((&actual_base, &actual_extension), (&base, &extension));
+                    assert_eq!(actual_base.as_ptr(), base_ptr);
+                    assert_eq!(actual_extension.as_ptr(), extension_ptr);
+                    assert_eq!(
+                        (actual_base.capacity(), actual_extension.capacity()),
+                        capacities
+                    );
+                });
+            }
+        }
+    }
+
     #[test]
     fn fft_roundtrips_every_small_power_of_two_domain() {
         assert_eq!(

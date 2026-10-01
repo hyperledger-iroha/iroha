@@ -13,8 +13,9 @@ use iroha_core_zk::kagemusha_v1_state::{
 };
 use iroha_crypto::{Algorithm, HashOf, Signature, SignatureOf};
 use iroha_data_model::kagemusha::{
-    KagemushaDevicePublicKeyV1, KagemushaDeviceReadCredentialCommandV1, KagemushaHardwareCredentialV1,
-    KagemushaRetailEnrollmentOwnerV1, kagemusha_decode_device_success_response_v1,
+    KagemushaDevicePublicKeyV1, KagemushaDeviceReadCredentialCommandV1,
+    KagemushaHardwareCredentialV1, KagemushaRetailEnrollmentOwnerV1,
+    kagemusha_decode_device_success_response_v1,
 };
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -138,19 +139,38 @@ impl PendingEnrolledOpenV1 {
         deadline: NativeDeadlineV1,
     ) -> Result<Self> {
         deadline.check().map_err(|_| EnrolledOpenErrorV1::Expired)?;
-        let observer = NativeStartupQualificationOwnerV1::from_authenticated_core_owner(core, native_key)?;
-        let selected = core.current_recovery_selection().map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        let observer =
+            NativeStartupQualificationOwnerV1::from_authenticated_core_owner(core, native_key)?;
+        let selected = core
+            .current_recovery_selection()
+            .map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
         let source = authenticated_recovery_source(&selected)?;
         let enrollment = selected.enrollment_binding().clone();
         let epoch = selected.hardware_epoch();
         let binding = selected.device_policy_binding();
-        let release = core.authenticated_release().map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
-        let pending = Self::begin(observer, enrollment.clone(), source.clone(),
-            RequiredCredentialV1::Recovered { generation: epoch.generation, epoch_id: epoch.epoch_id,
-                key_reference: binding.device_key_reference }, release.release_id(),
-            release.hardware_policy_digest(), hardware_authorization_key_reference_v1(native_key), deadline)?;
-        let current = core.current_recovery_selection().map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
-        if authenticated_recovery_source(&current)? != source || current.enrollment_binding() != &enrollment {
+        let release = core
+            .authenticated_release()
+            .map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        let pending = Self::begin(
+            observer,
+            enrollment.clone(),
+            source.clone(),
+            RequiredCredentialV1::Recovered {
+                generation: epoch.generation,
+                epoch_id: epoch.epoch_id,
+                key_reference: binding.device_key_reference,
+            },
+            release.release_id(),
+            release.hardware_policy_digest(),
+            hardware_authorization_key_reference_v1(native_key),
+            deadline,
+        )?;
+        let current = core
+            .current_recovery_selection()
+            .map_err(|_| EnrolledOpenErrorV1::DeviceBinding)?;
+        if authenticated_recovery_source(&current)? != source
+            || current.enrollment_binding() != &enrollment
+        {
             return Err(EnrolledOpenErrorV1::DeviceBinding);
         }
         pending.require_unexpired()?;
@@ -283,7 +303,9 @@ impl PendingEnrolledOpenV1 {
         Ok(())
     }
 
-    pub(super) fn deadline(&self) -> NativeDeadlineV1 { self.deadline.clone() }
+    pub(super) fn deadline(&self) -> NativeDeadlineV1 {
+        self.deadline.clone()
+    }
 
     /// Consume the one-use account/device proof under the retained challenge and native clock.
     pub(super) fn complete(

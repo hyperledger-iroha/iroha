@@ -1002,6 +1002,8 @@ public sealed class ContractManifestTests
     {
         return $$$"""
         {
+          "network_id":"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+          "artifact_id":{"dataspace_id":0,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"},
           "manifest":{
             "seiyaku_name":"Ledger",
             "code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",

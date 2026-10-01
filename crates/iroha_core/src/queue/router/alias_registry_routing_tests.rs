@@ -89,6 +89,15 @@ fn fixture_with_expanded_catalog(include_bpng: bool) -> Fixture {
         BTreeSet::from([Permission::from(CanSetParameters)]),
     );
     sns::seed_default_namespace_policies(&mut world);
+    // Paid alias operations execute on the global registry under explicit
+    // immutable genesis metadata, even before a new dataspace is catalogued.
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ));
+        parameters.commit();
+    }
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.fee_asset_id = payment_asset.to_string();
     // Match the standard State test fixture's zero ordinary transaction fees. The independent

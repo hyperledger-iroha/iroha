@@ -146,3 +146,11 @@ fn distinct_suffixes_opaque_bits_and_redacted_bounded_states() {
     assert_eq!(Shake256V1::RETAINED_BYTES, Sha3_256V1::RETAINED_BYTES);
     assert_eq!(Shake256ReaderV1::RETAINED_BYTES, Sha3_256V1::RETAINED_BYTES);
 }
+
+#[test]
+fn opaque_digest_erases_all_bytes_for_private_merkle_owners() {
+    use zeroize::Zeroize as _;
+    let mut digest = super::Sha3Digest256V1::from_bytes([0xff; 32]);
+    digest.zeroize();
+    assert_eq!(digest.into_bytes(), [0; 32]);
+}

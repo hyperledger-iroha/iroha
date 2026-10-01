@@ -15,6 +15,8 @@ use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use proof_fixtures::confidential_attachment;
 use reqwest::Client as HttpClient;
 use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
+#[path = "proofs/fastpq_finalized_transcripts.rs"]
+mod fastpq_finalized_transcripts;
 #[path = "proofs/full_tree_wallet.rs"]
 mod full_tree_wallet;
 fn compute_proof_hash(backend: &str, bytes: &[u8]) -> [u8; 32] {

@@ -38,6 +38,8 @@
 pub(crate) mod digest384;
 #[path = "metal_exact_root.rs"]
 pub(crate) mod exact_root;
+#[path = "metal_keccak256.rs"]
+pub(crate) mod keccak256;
 #[path = "metal_ticket_lifetime.rs"]
 mod ticket_lifetime;
 use ticket_lifetime::{Completion, DrainBudget, DrainScope};
@@ -2956,6 +2958,7 @@ fn embedded_metal_library_source() -> String {
     const NTT: &str = include_str!("../metal/kernels/ntt_stage.metal");
     const EXACT_ROOT: &str = include_str!("../metal/kernels/exact_root.metal");
     const POSEIDON: &str = include_str!("../metal/kernels/poseidon.metal");
+    const KECCAK256: &str = include_str!("../metal/kernels/keccak256.metal");
     const DIGEST384: &str = include_str!("../metal/kernels/digest384.metal");
     const BN254: &str = include_str!("../metal/kernels/bn254.metal");
 
@@ -2966,6 +2969,7 @@ fn embedded_metal_library_source() -> String {
             + NTT.len()
             + EXACT_ROOT.len()
             + POSEIDON.len()
+            + KECCAK256.len()
             + DIGEST384.len()
             + BN254.len(),
     );
@@ -2977,6 +2981,7 @@ fn embedded_metal_library_source() -> String {
     append_embedded_translation_unit(&mut source, NTT);
     append_embedded_translation_unit(&mut source, EXACT_ROOT);
     append_embedded_translation_unit(&mut source, POSEIDON);
+    append_embedded_translation_unit(&mut source, KECCAK256);
     append_embedded_translation_unit(&mut source, DIGEST384);
     append_embedded_translation_unit(&mut source, BN254);
     source

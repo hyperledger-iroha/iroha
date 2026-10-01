@@ -1,6 +1,6 @@
 # ZK first-release completion goals
 
-Set: 2026-09-26. Execution resumed: 2026-09-30. Overall status: **Active**.
+Set: 2026-09-26. Execution resumed: 2026-09-30. Reviewed: 2026-10-01. Overall status: **Active**.
 
 This record owns the remediation requested after the current-source ZK critique.
 It supplements [first-release completion](first_release_completion_goals.md) and
@@ -47,8 +47,10 @@ review or partial test selection closes one of them.
 ## Current implementation and evidence
 
 The following implementation boundaries require qualification against the final
-unchanged candidate. Earlier source revisions and test totals do not qualify the
-current checkout.
+unchanged candidate. Native measurements below are the last completed epoch9
+validation. The coordinated successor includes reviewed source, fixture and
+packaging repairs; those changes require fresh normal builds and tests. Earlier
+source revisions and test totals do not qualify the current checkout.
 
 ### ZK01 — secret arithmetic
 
@@ -89,7 +91,12 @@ commitments and `initializer_descriptor_hash`. A trace is not a proof. The
 [replacement encryption](ram_lfe_encryption_replacement.md) and
 [scalar packing](ram_lfe_plaintext_packing.md) own remaining construction and
 resource obligations. Test-only planners and leaf circuits qualify no production
-relation.
+relation. Reviewed memory-owner/request tests and an unregistered effective-address
+bank are applied prerequisites. The epoch9 IVM quick selection passes 114 native
+controls; a separate ownership fixture fails compilation on the retired
+`Perm::empty()` API. Its successor repair requires native validation. These
+prerequisites do not complete memory authority, the transition relation or
+finalized State binding.
 
 ### ZK04 — FASTPQ
 
@@ -100,9 +107,19 @@ does not authorize remote spending. RequiredMetal checks readiness before privat
 work and never silently falls back.
 
 [FASTPQ readiness](fastpq_production_readiness.md) owns current relation and
-resource limits and links complete two-child and maximum-occupancy measurements.
-Independent hiding/soundness review, finalized-source network behavior, broader
-application shapes and hardware qualification remain open.
+resource limits. The integrated 77-query SHA3/SHAKE construction has authentic
+native profile, seeded and ordinary/AXT single-proof outputs. Epoch9 passes all
+four retained known-answer controls. The complete selected FASTPQ run records
+1,298 passes and ten fixture failures, with no skips; reviewed resource, context,
+and SHA3 fixture corrections preserve their substantive assertions and require
+native reruns. Current maximum ordinary/AXT proofs remain unrun; earlier maximum
+measurements cover the previous profile.
+
+Dedicated independent derivations provide conditional soundness and ideal-QROM
+hiding bounds for explicit query/attempt assumptions. They do not establish
+concrete Keccak security, device behavior, side channels or finalized authority;
+changed-source review admission remains required. Finalized-source four-validator
+behavior, broader application shapes and hardware qualification remain open.
 
 ### ZK05 — ZK-X509
 
@@ -113,23 +130,35 @@ ceiling. Geometry is 285 base / 280 auxiliary / 102 fixed columns, 1,681
 constraints and degree four. It binds 72 authenticated times, 73 comparisons
 and nonwrapping 38-bit differences. Private columns replay from clearing owners.
 
-The earlier optimized maximum proof fails `ConstraintOpening` during composition
-after 3,368.579 seconds. Peak RSS is 9,639,247,872 bytes, within 12 GiB; no proof
-is emitted. The September 30 repair cuts the SHA outer and carried word-product
-recurrences at physical padding boundaries with the existing fixed selectors.
-The resulting profile, updated component fixtures and all 49 maximum-source native
-registrations pass their boundary controls: 2,831 edges, including mutation and
-visitor checks. After the final helper cleanup, the repeated native boundary run
-passes in 87.722 seconds with 5,895,077,888 bytes peak RSS. This is a boundary
-test, not a complete proof. The complete maximum run reaches the final producer
-self-check and fails `ProverSelfCheckFailed` after 6,241.900 seconds, with
-10,295,918,592 bytes peak RSS. It emits no verified artifact; size compliance
-is unestablished and the unchanged 300-second target is unmet. Five bounded
-performance repairs and a test-only retained-public-candidate diagnostic are
-prepared for native validation. Seven bounded replay/performance changes and
-52 controls, including maximum fixed/OODS parity, await the next normal native
-run. Complete successful proving, independent
-verification and the unchanged runtime, memory and byte ceilings remain open.
+The last completed epoch9 normal optimized binary passes 147 focused native
+executions covering 146 distinct tests, with no failures or ignored tests. These
+include repaired padding/RFC channels, all 49 registration boundaries, bounded
+DEEP/commitment parity and supported Metal controls. Genuine replacement profile
+and component fixtures are integrated; superseded profiles still reject. Four
+additional source-contract tests execute separately: two pass and two fail on
+stale function/test-module boundaries. Their reviewed repairs preserve the
+substantive ordering and closed-path checks.
+
+The maximum structural credential produces a verified 9,420,938-byte proof.
+Producer self-check, public verification and wrong-genesis/tampered-proof controls
+pass. A separate native verifier process also accepts the retained bytes without
+regeneration. Peak RSS is 9,983,410,176 bytes, below 12 GiB. Proving takes
+2,405.926166 seconds against the unchanged 300-second target, so the maximum test
+fails and activation remains unavailable. The retained public proof SHA-256 is
+`8a58f948a3e57d29375fac0706012c891ae1f096f533042abb8039099276ab90`.
+Evidence lives under
+`dist/zk-remediation/2026-09-30/epoch9-core-privacy-fastpq-build4/privacy-native`,
+with separate replay under `x509-epoch9-independent-replay1`. Both runs preserve
+source and compiled-input guards. Concurrent load prevents a causal speedup
+claim relative to earlier candidates.
+
+The successor routes private quotient/native transforms through bounded exact-root
+acceleration and reuses original native batches during initial sample/commit.
+Successful entropy order, masks and proof framing are preserved by construction;
+failed calls consume a prefix and stop under sticky accelerator quarantine.
+Native parity, all original source/capacity controls and another complete proof
+must validate these changes within unchanged byte, RSS and time limits.
+Independent cryptographic, hardware and final-candidate qualification remain open.
 
 ### ZK07 — developer workflow
 
@@ -137,8 +166,24 @@ The Rust wallet owns clearing private inputs, canonical keys and circuit selecti
 with typed preflight/proving errors. Callers supply actual notes and paths without
 dummy inputs or transcript choices. JavaScript, Python, Swift, Kotlin/Java and C#
 use the shared native owner with bounded inputs and asynchronous job custody.
-Managed strings cannot promise erasure. Signed multi-platform artifacts and
-current integrated qualification remain open.
+Managed strings cannot promise erasure. Epoch9 normal Rust producers and the
+57 official Kotodama sample mappings pass current authentic generation/checks.
+The host bridge deadline repair compiles; Kotlin records 1,556 passes, Android
+host consumers 291 passes, and two native host suites 62 passes against ABI-25.
+Installed Python consumers pass five genuine maximum-tree wallet controls and
+4,370 broader tests plus 281 subtests, with no skips. C# records 6,005 passes and
+three typed multisig fixture failures; their reviewed repair requires rerunning
+current consumers. Additional held Kotlin full-tree controls have six native
+passes, but adoption still requires source-bound readmission.
+
+All five Apple static slices compile normally. Packaging fails because three
+maintained export inventories omit the existing coordinator install function;
+the reviewed inventory correction retains exact-symbol and resource gates.
+Swift host execution and package size admission remain pending. The successor
+also corrects JavaScript artifact-identity fixtures. Compiler closure changes
+require new authentic generation and consumer provenance. Physical devices and
+signed multi-platform artifacts remain open; earlier SDK passes do not qualify
+a changed candidate.
 
 RAM-FHE metadata requires the compiled initializer descriptor, exact seven-field
 profile, sole encrypted-envelope mode and bounded unsigned dimensions. Associated
@@ -154,6 +199,26 @@ pinned-source generation and authentic provenance.
 
 ### ZK08 — current source contracts
 
+Epoch9 normal Core/Kagami, CLI, schema and four-validator test compilation pass.
+The completed Core union records 1,146 native executions over 1,088 distinct
+names, all passing with no skips; this includes the eight optimized AXT controls.
+The separate IVM quick selection passes 114 controls. The complete execution
+relations remain unavailable.
+
+The normal workspace all-targets check fails with 34 rendered compiler diagnostic
+spans across Core, Torii, JavaScript codec, IVM, deploy and Mochi fixtures/imports.
+Reviewed corrections require a new normal check. Of 559 local compiler artifact
+records, the original run admitted 506 and lacked prior compiler metadata for 53.
+A separate recovery now authenticates exact historical compiler records for all
+53 against historical, pre-check and retained bytes; normal current-source
+readmission remains required and the failed workspace receipt is unchanged.
+
+Two genuine four-validator runs fail at daemon startup because the embedded MCP
+descriptor exceeds its unchanged 128-KiB byte cap. The reviewed correction
+compacts only JSON whitespace, preserves all 60 descriptor records and adds
+exact-boundary/rejection controls. Full four-validator Sumeragi, lanes, finalized
+FASTPQ source and wallet workflows remain unqualified until successful reruns.
+
 Preserve every substantive Halo2/note-STARK source assertion and X509 geometry
 check. Source assertions and byte accounting do not replace normal native,
 integrated workspace or four-validator network qualification.
@@ -162,14 +227,14 @@ integrated workspace or four-validator network qualification.
 
 1. Replace the insecure RAM-LFE encryption construction, retire diagnostic public
    surfaces, and complete its semantic relation and current SDK/consumer controls.
-2. Carry the passing maximum ordinary/AXT FASTPQ artifacts into finalized-source
-   network and hardware qualification without changing proof or resource limits.
-3. Pass the amended X509 focused suite on a normal optimized binary, then produce
-   and measure the complete maximum credential; resolve any real relation or
-   resource failure without dropping supported coverage or widening caps.
+2. Rerun corrected FASTPQ fixtures and native regressions, then produce
+   maximum ordinary/AXT proofs; qualify finalized-source network and hardware
+   behavior without changing proof or resource limits.
+3. Resolve the measured X509 proving-time failure with native parity and another
+   complete maximum proof under unchanged coverage, byte, memory and time limits.
 4. Complete IVM G3's native execution relation and finalized authority. Validate
    rejection of retired APIs and relation-confusion attempts in current consumers.
-5. Capture one integrated source after concurrent merges; rebuild SDK artifacts,
+5. Capture one integrated source after the reviewed repair cohort; rebuild SDK artifacts,
    run applicable workspace checks and current four-validator tests. Preserve
    `3f + 1` committees, exact `n - f` certificates and no idle empty blocks.
 6. Complete dedicated independent protocol/side-channel review and run the

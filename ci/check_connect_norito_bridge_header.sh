@@ -16,6 +16,9 @@ TESTNET_STARTUP_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_tes
 MODE="${1:-}"
 
 SELF_TESTS=(
+  --self-test-missing-domain-header-symbol
+  --self-test-missing-domain-rust-symbol
+  --self-test-bad-domain-length-width
   --self-test-missing-top-up-binding-header
   --self-test-missing-top-up-binding-rust
   --self-test-bad-top-up-binding-width
@@ -141,6 +144,7 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
     "connect_norito_kagemusha_contract_vector_v1",
     "connect_norito_kagemusha_core_coordinator_contract_v1",
+    "connect_norito_kagemusha_core_coordinator_install_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
@@ -506,7 +510,7 @@ require_signature_parity(
     | HIJIRI_EXPORTS
     | PRIVATE_SETTLEMENT_EXPORTS
     | rust_transaction_signers
-    | {"connect_norito_bridge_abi_version", "connect_norito_free"}
+    | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1"}
 )
 
 require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+25\b", header, "C bridge ABI version")
@@ -581,7 +585,9 @@ if umbrella.strip() != """// Umbrella header for NoritoBridge
 #ifndef NORITOBRIDGE_H
 #define NORITOBRIDGE_H
 
-#include \"connect_norito_bridge.h\"
+// The canonical declaration also exports the path-only trusted Rust coordinator
+// installer; this umbrella does not add a caller-selected backend interface.
+#include "connect_norito_bridge.h"
 
 #endif // NORITOBRIDGE_H""":
     raise SystemExit("[connect-norito-header] umbrella header drift")
@@ -731,6 +737,20 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-missing-domain-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_domain_id_validate_v1" "removed_domain_id_validate_v1"
+      ;;
+    --self-test-missing-domain-rust-symbol)
+      replace_once "${tmp_rust}" \
+        'pub unsafe extern "C" fn connect_norito_domain_id_validate_v1' \
+        'pub unsafe extern "C" fn removed_domain_id_validate_v1'
+      ;;
+    --self-test-bad-domain-length-width)
+      replace_once "${tmp_header}" \
+        'connect_norito_domain_id_validate_v1(const char* input, unsigned long input_len)' \
+        'connect_norito_domain_id_validate_v1(const char* input, uint32_t input_len)'
+      ;;
     --self-test-bad-parliament-page-rust-width)
       replace_once "${tmp}/parliament_timed_ovn_ffi.rs" \
         'pub const CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_PAGE_SUMMARY_BYTES_V1: usize = 41;' \

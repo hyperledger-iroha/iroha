@@ -14,6 +14,9 @@
 //! quotient. TODO: Qualify complete generated artifacts and independently review
 //! the transcript security reduction.
 
+#[cfg(test)]
+use super::polynomial_field::PolynomialField;
+
 use rand::TryCryptoRng;
 use rayon::prelude::*;
 
@@ -22,7 +25,6 @@ use super::{
     compact_public_columns::{COMMITTED_COLUMN_COUNT, SourceTraceColumns},
     deep_geometry::{COSET_OFFSET, LDE_ROOT, LDE_ROWS, QUERY_COUNT, TRACE_ROWS},
     field_pow, mul_mod,
-    polynomial_field::PolynomialField,
     secret_polynomial::SecretPolynomial,
     sub_mod,
 };
@@ -32,10 +34,12 @@ use crate::{
     field::GoldilocksFp4V1 as F,
 };
 
-/// Worst-case base opening closure: two shifts of 64 queries and two Fp4 points.
-pub(super) const TRACE_MASK_COEFFICIENTS: usize = 2 * (QUERY_COUNT + F::COEFFICIENTS);
+/// Worst-case base opening closure: two shifts of 77 queries and two Fp4 points.
+pub(super) const TRACE_MASK_COEFFICIENTS: usize =
+    fastpq_isi::compact_challenge::TRACE_MASK_COEFFICIENTS;
 /// Fp4 quotient blinding evaluated at the queries and the first OOD point.
-pub(super) const QUOTIENT_MASK_COEFFICIENTS: usize = QUERY_COUNT + 1;
+pub(super) const QUOTIENT_MASK_COEFFICIENTS: usize =
+    fastpq_isi::compact_challenge::QUOTIENT_MASK_COEFFICIENTS;
 
 /// Explicit local payload/work policy; not consensus parameters or a proof field.
 #[allow(
@@ -526,7 +530,8 @@ impl MaskedTraceReplay {
         Ok(())
     }
 
-    /// At most 128 rows, preserving duplicates/order and replaying each stripe once.
+    /// At most twice the fixed query count, preserving duplicates and order.
+    /// Every selected stripe is replayed once, including leaf-level siblings.
     #[cfg(test)]
     pub(super) fn selected_rows(&mut self, indices: &[usize]) -> Result<SelectedMaskedRows> {
         if indices.len() > self.plan.max_selected

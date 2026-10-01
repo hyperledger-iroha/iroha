@@ -27,6 +27,15 @@ pub trait NoritoSchema {
     /// Canonical nominal identity, including ordered type, const and erased lifetime slots.
     fn nominal_name() -> String;
 
+    /// Borrow the exact declared nominal identity when it is a literal.
+    ///
+    /// This must equal `nominal_name()` byte for byte. Generic compositions and
+    /// erased lifetime slots remain explicit and return `None` unless their
+    /// complete declared identity is independently available as one literal.
+    fn static_nominal_name() -> Option<&'static str> {
+        None
+    }
+
     /// The single identity advertised by a frame containing this root type.
     fn frame_name() -> String {
         Self::nominal_name()
@@ -36,6 +45,16 @@ pub trait NoritoSchema {
     fn static_frame_name() -> Option<&'static str> {
         None
     }
+}
+
+/// Resolve a declared nominal identity without copying an available literal.
+///
+/// This is nominal identity, never a root-frame projection. Dynamic generic
+/// compositions retain their existing owned construction and its allocation
+/// obligations; a borrowed result provides no admission for any other scratch.
+#[must_use]
+pub fn nominal_name<T: NoritoSchema + ?Sized>() -> Cow<'static, str> {
+    T::static_nominal_name().map_or_else(|| Cow::Owned(T::nominal_name()), Cow::Borrowed)
 }
 
 /// Compute the fixed domain-separated digest of a declared root-frame identity.
@@ -65,6 +84,7 @@ macro_rules! nominal {
     ($($ty:ty => $name:literal),+ $(,)?) => {$(
         impl NoritoSchema for $ty {
             fn nominal_name() -> String { $name.to_owned() }
+            fn static_nominal_name() -> Option<&'static str> { Some($name) }
         }
     )+};
 }
@@ -133,6 +153,7 @@ macro_rules! string_projection {
     ($($ty:ty => $name:literal),+ $(,)?) => {$(
         impl NoritoSchema for $ty {
             fn nominal_name() -> String { $name.to_owned() }
+            fn static_nominal_name() -> Option<&'static str> { Some($name) }
             fn frame_name() -> String { String::nominal_name() }
         }
     )+};

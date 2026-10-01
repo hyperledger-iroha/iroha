@@ -149,6 +149,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
+        "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
         *APPROVED_KAGEMUSHA_C_EXPORTS,
         "connect_norito_validation_fee_hijiri_quote_request_v1",
@@ -201,6 +202,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_confidential_note_commitment_derive_v3",
         "connect_norito_confidential_merkle_path_derive_v3",
         "connect_norito_bridge_abi_version",
+        "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
         # Durable journal-backed testnet admission has no Windows C declaration
         # or Rust export. Keep the cross-platform C# inventory exact per host.

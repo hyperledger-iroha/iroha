@@ -102,12 +102,12 @@ mod compact_quantity_producer;
 #[cfg(test)]
 #[path = "backend/compact_quantity_tests.rs"]
 mod compact_quantity_tests;
+#[path = "backend/compact_sha3.rs"]
+mod compact_sha3;
 #[path = "backend/compact_smt_quotient.rs"]
 mod compact_smt_quotient;
 #[path = "backend/compact_transfer_air.rs"]
 mod compact_transfer_air;
-#[path = "backend/compact_v1.rs"]
-mod compact_v1;
 #[path = "backend/compact_value_domain.rs"]
 mod compact_value_domain;
 #[path = "backend/deep_binding.rs"]
@@ -120,6 +120,9 @@ mod deep_coefficient_replay;
 mod deep_composition;
 #[path = "backend/deep_engine.rs"]
 mod deep_engine;
+#[cfg(test)]
+#[path = "backend/deep_fixture.rs"]
+mod deep_fixture;
 #[path = "backend/deep_geometry.rs"]
 mod deep_geometry;
 #[path = "backend/deep_leaf_batch.rs"]

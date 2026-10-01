@@ -16,7 +16,7 @@ use crate::{
     },
     state::{
         ExecutionOutputSealMetadata, GovernanceLockCustody, GovernanceLockRecord,
-        GovernanceLocksForReferendum, State, TransactionsBlockError, World,
+        GovernanceLocksForReferendum, State, TransactionsBlockError,
     },
 };
 use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
@@ -62,8 +62,12 @@ fn fixture_with_effects(
     pipeline_transfer: bool,
     fee_and_protocol: bool,
 ) -> (State, SignedBlock, TriggerId, TriggerId) {
+    // Producer inputs need committed root authority before native routing.
+    // The explicit component genesis fixture keeps missing metadata fail-closed.
     let mut state = State::new_for_testing(
-        World::default(),
+        crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );

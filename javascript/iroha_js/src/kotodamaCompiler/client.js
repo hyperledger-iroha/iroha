@@ -1,9 +1,42 @@
+const propertyDescriptor = Object.getOwnPropertyDescriptor.bind(Object);
+const hasOwn = Object.hasOwn.bind(Object);
+const applyIntrinsic = Reflect.apply.bind(Reflect);
+const TEXT_KOTODAMA_COMPILER = "Kotodama compiler ";
+const TEXT_MUST_BE = "must be ";
+const TEXT_KOTODAMA_SOURCE = "Kotodama source ";
+const TEXT_EXCEEDS_THE = "exceeds the ";
+const TEXT_RESPONSE = "response ";
+const TEXT_STANDARDS_COMPLIANT = "standards-compliant ";
+const TEXT_BODY_LENGTH_DOES_NOT_MATCH_ITS_CONTENT_LENGTH_HEADER = "body length does not match its Content-Length header";
+const TEXT_MUST_NOT_CONTAIN = "must not contain ";
+const TEXT_DOES_NOT_EXPOSE = "does not expose ";
+const TEXT_MUST_CONTAIN_VALID_UNICODE_SCALAR_VALUES = "must contain valid Unicode scalar values";
+const TEXT_RETURNED_AN_INVALID = "returned an invalid ";
+const TEXT_SOURCENAME = "sourceName ";
+const TEXT_STRING = "string";
+const TEXT_PACKAGES = "packages";
+const TEXT_BASEURL = "baseUrl ";
+const TEXT_SOURCES = "sources";
+const TEXT_IMPORTS = "imports";
+const TEXT_APPLICATION = "application";
+const TEXT_SOURCENAME_SHARED = "sourceName";
+const TEXT_DUPLICATE = "duplicate ";
+const TEXT_IDENTITY = "identity";
+const TEXT_SERVICE = "service ";
+const TEXT_YIELDED = "yielded ";
+const TEXT_FETCHIMPL = "fetchImpl";
+const TEXT_A_NON_EMPTY = "a non-empty ";
+const TEXT_REQUIRES = "requires ";
+const TEXT_SOURCE_PATH = "source path ";
+const TEXT_BOOLEAN = "boolean";
+const TEXT_THE_SOURCE_SET_ROOT = "the source-set root";
+function rejectError(ErrorType, ...args) { throw new ErrorType(...args); }
 import { normalizeCompilerResult } from "./normalize.js";
 
 const DEFAULT_COMPILE_PATH = "/v1/kotodama/compile";
 const DEFAULT_COMPILER_TIMEOUT_MS = 30_000;
 const MAX_COMPILER_TIMEOUT_MS = 120_000;
-const COMPILER_REQUEST_OPTION_NAMES = new Set(["sourceName", "sources", "imports", "packages", "zk"]);
+const COMPILER_REQUEST_OPTION_NAMES = new Set([(TEXT_SOURCENAME_SHARED), (TEXT_SOURCES), (TEXT_IMPORTS), (TEXT_PACKAGES), "zk"]);
 const COMPILER_CALL_OPTION_NAMES = new Set([
   ...COMPILER_REQUEST_OPTION_NAMES,
   "signal",
@@ -11,10 +44,10 @@ const COMPILER_CALL_OPTION_NAMES = new Set([
 ]);
 const COMPILER_OPTION_NAMES = new Set([
   "compilerUrl",
-  "fetchImpl",
+  (TEXT_FETCHIMPL),
   ...COMPILER_CALL_OPTION_NAMES,
 ]);
-const COMPILER_CLIENT_OPTION_NAMES = new Set(["fetchImpl"]);
+const COMPILER_CLIENT_OPTION_NAMES = new Set([(TEXT_FETCHIMPL)]);
 const MAX_COMPILER_SOURCE_BYTES = 1024 * 1024;
 const MAX_COMPILER_SOURCE_NAME_BYTES = 4096;
 const MAX_COMPILER_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -25,32 +58,32 @@ const DefaultFetch = globalThis.fetch;
 const AbortControllerIntrinsic = globalThis.AbortController;
 const abortControllerAbort = AbortControllerIntrinsic?.prototype?.abort ?? null;
 const abortControllerSignalGetter = AbortControllerIntrinsic
-  ? (Object.getOwnPropertyDescriptor(AbortControllerIntrinsic.prototype, "signal")
+  ? (propertyDescriptor(AbortControllerIntrinsic.prototype, "signal")
       ?.get ?? null)
   : null;
 const abortSignalAbortedGetter = globalThis.AbortSignal
-  ? (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get ?? null)
+  ? (propertyDescriptor(AbortSignal.prototype, "aborted")?.get ?? null)
   : null;
 const abortSignalReasonGetter = globalThis.AbortSignal
-  ? (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ?? null)
+  ? (propertyDescriptor(AbortSignal.prototype, "reason")?.get ?? null)
   : null;
 const eventTargetAddEventListener = globalThis.EventTarget?.prototype?.addEventListener ?? null;
 const eventTargetRemoveEventListener =
   globalThis.EventTarget?.prototype?.removeEventListener ?? null;
 const responseOkGetter = globalThis.Response
-  ? (Object.getOwnPropertyDescriptor(Response.prototype, "ok")?.get ?? null)
+  ? (propertyDescriptor(Response.prototype, "ok")?.get ?? null)
   : null;
 const responseStatusGetter = globalThis.Response
-  ? (Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get ?? null)
+  ? (propertyDescriptor(Response.prototype, "status")?.get ?? null)
   : null;
 const responseRedirectedGetter = globalThis.Response
-  ? (Object.getOwnPropertyDescriptor(Response.prototype, "redirected")?.get ?? null)
+  ? (propertyDescriptor(Response.prototype, "redirected")?.get ?? null)
   : null;
 const responseHeadersGetter = globalThis.Response
-  ? (Object.getOwnPropertyDescriptor(Response.prototype, "headers")?.get ?? null)
+  ? (propertyDescriptor(Response.prototype, "headers")?.get ?? null)
   : null;
 const responseBodyGetter = globalThis.Response
-  ? (Object.getOwnPropertyDescriptor(Response.prototype, "body")?.get ?? null)
+  ? (propertyDescriptor(Response.prototype, "body")?.get ?? null)
   : null;
 const headersGet = globalThis.Headers?.prototype?.get ?? null;
 const readableStreamGetReader = globalThis.ReadableStream?.prototype?.getReader ?? null;
@@ -59,24 +92,24 @@ const readerCancel = globalThis.ReadableStreamDefaultReader?.prototype?.cancel ?
 const readerReleaseLock =
   globalThis.ReadableStreamDefaultReader?.prototype?.releaseLock ?? null;
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
-const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+const typedArrayBufferGetter = propertyDescriptor(
   typedArrayPrototype,
   "buffer",
 )?.get;
-const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(
+const typedArrayByteOffsetGetter = propertyDescriptor(
   typedArrayPrototype,
   "byteOffset",
 )?.get;
-const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+const typedArrayByteLengthGetter = propertyDescriptor(
   typedArrayPrototype,
   "byteLength",
 )?.get;
-const typedArrayTagGetter = Object.getOwnPropertyDescriptor(
+const typedArrayTagGetter = propertyDescriptor(
   typedArrayPrototype,
   Symbol.toStringTag,
 )?.get;
 const sharedArrayBufferByteLengthGetter = globalThis.SharedArrayBuffer
-  ? (Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, "byteLength")?.get ??
+  ? (propertyDescriptor(SharedArrayBuffer.prototype, "byteLength")?.get ??
     null)
   : null;
 const Uint8ArrayIntrinsic = Uint8Array;
@@ -115,18 +148,17 @@ function isLoopbackHostname(hostname) {
 }
 
 export function validateCompilerSource(source) {
-  if (typeof source !== "string") {
-    throw new TypeError("Kotodama source must be a string");
+  if (typeof source !== (TEXT_STRING)) {
+    rejectError(TypeError, (TEXT_KOTODAMA_SOURCE + TEXT_MUST_BE + "a " + TEXT_STRING));
   }
   if (!validateUnicodeScalarString(source)) {
-    throw new TypeError("Kotodama source must contain valid Unicode scalar values");
+    rejectError(TypeError, (TEXT_KOTODAMA_SOURCE + TEXT_MUST_CONTAIN_VALID_UNICODE_SCALAR_VALUES));
   }
-  const sourceBytes = Reflect.apply(textEncoderEncode, new TextEncoderIntrinsic(), [
+  const sourceBytes = applyIntrinsic(textEncoderEncode, new TextEncoderIntrinsic(), [
     source,
   ]).length;
   if (sourceBytes > MAX_COMPILER_SOURCE_BYTES) {
-    throw new RangeError(
-      `Kotodama source exceeds the ${MAX_COMPILER_SOURCE_BYTES}-byte V1 limit`,
+    rejectError(RangeError, `${TEXT_KOTODAMA_SOURCE}${TEXT_EXCEEDS_THE}${MAX_COMPILER_SOURCE_BYTES}-byte V1 limit`,
     );
   }
 }
@@ -136,28 +168,27 @@ function canonicalizeCompilerOptions(options, allowedNames) {
     return Object.create(null);
   }
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("Kotodama compiler options must be an object");
+    rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "options " + TEXT_MUST_BE + "an object"));
   }
   const prototype = Object.getPrototypeOf(options);
   if (prototype !== Object.prototype && prototype !== null) {
-    throw new TypeError("Kotodama compiler options must be a plain data object");
+    rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "options " + TEXT_MUST_BE + "a plain data object"));
   }
   const canonical = Object.create(null);
   for (const name of Reflect.ownKeys(options)) {
-    if (typeof name !== "string") {
-      throw new TypeError("Kotodama compiler options must not contain symbol fields");
+    if (typeof name !== (TEXT_STRING)) {
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "options " + TEXT_MUST_NOT_CONTAIN + "symbol fields"));
     }
     if (!allowedNames.has(name)) {
-      throw new TypeError(`unknown Kotodama compiler option '${name}'`);
+      rejectError(TypeError, `unknown ${TEXT_KOTODAMA_COMPILER}option '${name}'`);
     }
-    const descriptor = Object.getOwnPropertyDescriptor(options, name);
+    const descriptor = propertyDescriptor(options, name);
     if (
       descriptor === undefined ||
       !descriptor.enumerable ||
       !("value" in descriptor)
     ) {
-      throw new TypeError(
-        `Kotodama compiler option '${name}' must be an enumerable data property`,
+      rejectError(TypeError, `${TEXT_KOTODAMA_COMPILER}option '${name}' ${TEXT_MUST_BE}an enumerable data property`,
       );
     }
     canonical[name] = descriptor.value;
@@ -166,44 +197,43 @@ function canonicalizeCompilerOptions(options, allowedNames) {
 }
 
 function validateCompilerRequestFields(options) {
-  if (Object.hasOwn(options, "sourceName")) {
-    if (typeof options.sourceName !== "string" || options.sourceName.length === 0) {
-      throw new TypeError("sourceName must be a non-empty string");
+  if (hasOwn(options, (TEXT_SOURCENAME_SHARED))) {
+    if (typeof options.sourceName !== (TEXT_STRING) || options.sourceName.length === 0) {
+      rejectError(TypeError, (TEXT_SOURCENAME + TEXT_MUST_BE + TEXT_A_NON_EMPTY + TEXT_STRING));
     }
     if (!validateUnicodeScalarString(options.sourceName)) {
-      throw new TypeError("sourceName must contain valid Unicode scalar values");
+      rejectError(TypeError, (TEXT_SOURCENAME + TEXT_MUST_CONTAIN_VALID_UNICODE_SCALAR_VALUES));
     }
     const hasControlCharacter = Array.from(options.sourceName, (character) =>
       character.codePointAt(0),
     ).some((codePoint) => codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f));
     if (hasControlCharacter) {
-      throw new TypeError("sourceName must not contain control characters");
+      rejectError(TypeError, (TEXT_SOURCENAME + TEXT_MUST_NOT_CONTAIN + "control characters"));
     }
-    const sourceNameBytes = Reflect.apply(
+    const sourceNameBytes = applyIntrinsic(
       textEncoderEncode,
       new TextEncoderIntrinsic(),
       [options.sourceName],
     ).length;
     if (sourceNameBytes > MAX_COMPILER_SOURCE_NAME_BYTES) {
-      throw new RangeError(
-        `sourceName exceeds the ${MAX_COMPILER_SOURCE_NAME_BYTES}-byte limit`,
+      rejectError(RangeError, `${TEXT_SOURCENAME}${TEXT_EXCEEDS_THE}${MAX_COMPILER_SOURCE_NAME_BYTES}-byte limit`,
       );
     }
   }
-  if (Object.hasOwn(options, "zk") && typeof options.zk !== "boolean") {
-    throw new TypeError("zk must be a boolean");
+  if (hasOwn(options, "zk") && typeof options.zk !== (TEXT_BOOLEAN)) {
+    rejectError(TypeError, ("zk " + TEXT_MUST_BE + "a " + TEXT_BOOLEAN));
   }
-  if (["sources", "imports", "packages"].some((key) => Object.hasOwn(options, key))) {
-    if (options.sourceName === undefined) throw new TypeError("sourceName is required when sources are supplied");
+  if ([(TEXT_SOURCES), (TEXT_IMPORTS), (TEXT_PACKAGES)].some((key) => hasOwn(options, key))) {
+    if (options.sourceName === undefined) rejectError(TypeError, (TEXT_SOURCENAME + "is required when " + TEXT_SOURCES + " are supplied"));
     const names = new Set([canonicalSourcePath(options.sourceName)]);
-    if (Object.hasOwn(options, "sources")) options.sources = canonicalSourceFiles(options.sources, names);
-    if (Object.hasOwn(options, "imports")) options.imports = canonicalSourceImports(options.imports);
-    if (Object.hasOwn(options, "packages")) {
+    if (hasOwn(options, (TEXT_SOURCES))) options.sources = canonicalSourceFiles(options.sources, names);
+    if (hasOwn(options, (TEXT_IMPORTS))) options.imports = canonicalSourceImports(options.imports);
+    if (hasOwn(options, (TEXT_PACKAGES))) {
       const identities = new Set();
-      options.packages = canonicalDataArray(options.packages, "packages").map((value) => {
-        const pkg = canonicalizeCompilerOptions(value, new Set(["identity", "modules", "sources", "exports", "imports"]));
-        validateGraphIdentifier(pkg.identity, "package identity");
-        if (identities.has(pkg.identity)) throw new TypeError("duplicate package identity");
+      options.packages = canonicalDataArray(options.packages, (TEXT_PACKAGES)).map((value) => {
+        const pkg = canonicalizeCompilerOptions(value, new Set([(TEXT_IDENTITY), "modules", (TEXT_SOURCES), "exports", (TEXT_IMPORTS)]));
+        validateGraphIdentifier(pkg.identity, ("package " + TEXT_IDENTITY));
+        if (identities.has(pkg.identity)) rejectError(TypeError, (TEXT_DUPLICATE + "package " + TEXT_IDENTITY));
         identities.add(pkg.identity);
         const paths = new Set();
         const modules = canonicalSourceFiles(pkg.modules, paths);
@@ -212,44 +242,44 @@ function validateCompilerRequestFields(options) {
         const exported = new Set();
         for (const name of exports) {
           validateGraphIdentifier(name, "package export");
-          if (exported.has(name)) throw new TypeError("duplicate package export");
+          if (exported.has(name)) rejectError(TypeError, (TEXT_DUPLICATE + "package export"));
           exported.add(name);
         }
         return { identity: pkg.identity, modules, sources, exports, imports: canonicalSourceImports(pkg.imports ?? []) };
       });
     }
     const count = 1 + (options.sources?.length ?? 0) + (options.packages ?? []).reduce((total, pkg) => total + pkg.modules.length + pkg.sources.length, 0);
-    if (count > 512) throw new RangeError("a Kotodama source set permits at most 512 files including its root");
+    if (count > 512) rejectError(RangeError, ("a " + TEXT_KOTODAMA_SOURCE + "set permits at most 512 files including its root"));
   }
   return options;
 }
 
 function canonicalDataArray(value, label) {
-  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
-  if (value.length > 512) throw new RangeError(`${label} exceeds the 512-item limit`);
+  if (!Array.isArray(value)) rejectError(TypeError, `${label} ${TEXT_MUST_BE}an array`);
+  if (value.length > 512) rejectError(RangeError, `${label} ${TEXT_EXCEEDS_THE}512-item limit`);
   const result = [];
   for (let index = 0; index < value.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (!descriptor || !Object.hasOwn(descriptor, "value")) throw new TypeError(`${label} must contain inert data entries`);
+    const descriptor = propertyDescriptor(value, String(index));
+    if (!descriptor || !hasOwn(descriptor, "value")) rejectError(TypeError, `${label} must contain inert data entries`);
     result.push(descriptor.value);
   }
   return result;
 }
 
 function validateGraphIdentifier(value, label) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 4096 || !validateUnicodeScalarString(value) || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
-    throw new TypeError(`${label} must be a bounded nonempty string`);
+  if (typeof value !== (TEXT_STRING) || value.length === 0 || value.length > 4096 || !validateUnicodeScalarString(value) || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+    rejectError(TypeError, `${label} ${TEXT_MUST_BE}a bounded nonempty ${TEXT_STRING}`);
   }
 }
 
 function canonicalSourceFiles(files, names) {
-  return canonicalDataArray(files, "sources").map((source) => {
-    const file = canonicalizeCompilerOptions(source, new Set(["sourceName", "source"]));
-    if (file.sourceName === undefined) throw new TypeError("each source file requires sourceName");
+  return canonicalDataArray(files, (TEXT_SOURCES)).map((source) => {
+    const file = canonicalizeCompilerOptions(source, new Set([(TEXT_SOURCENAME_SHARED), "source"]));
+    if (file.sourceName === undefined) rejectError(TypeError, ("each source file " + TEXT_REQUIRES + TEXT_SOURCENAME_SHARED));
     validateCompilerRequestFields({ sourceName: file.sourceName });
     validateCompilerSource(file.source);
     const name = canonicalSourcePath(file.sourceName);
-    if (names.has(name)) throw new TypeError(`duplicate Kotodama source path '${name}'`);
+    if (names.has(name)) rejectError(TypeError, `${TEXT_DUPLICATE}${TEXT_KOTODAMA_SOURCE}path '${name}'`);
     names.add(name);
     return { sourceName: name, source: file.source };
   });
@@ -257,11 +287,11 @@ function canonicalSourceFiles(files, names) {
 
 function canonicalSourceImports(imports) {
   const aliases = new Set();
-  return canonicalDataArray(imports, "imports").map((value) => {
+  return canonicalDataArray(imports, (TEXT_IMPORTS)).map((value) => {
     const binding = canonicalizeCompilerOptions(value, new Set(["alias", "package"]));
     validateGraphIdentifier(binding.alias, "import alias");
     validateGraphIdentifier(binding.package, "import package");
-    if (aliases.has(binding.alias)) throw new TypeError("duplicate import alias");
+    if (aliases.has(binding.alias)) rejectError(TypeError, (TEXT_DUPLICATE + "import alias"));
     aliases.add(binding.alias);
     return { alias: binding.alias, package: binding.package };
   });
@@ -269,20 +299,20 @@ function canonicalSourceImports(imports) {
 
 function canonicalSourcePath(name) {
   if (/^(?:[\\/]|[A-Za-z]:)/u.test(name) || name.includes(":")) {
-    throw new TypeError("source paths must be relative to the source-set root");
+    rejectError(TypeError, ("source paths " + TEXT_MUST_BE + "relative to " + TEXT_THE_SOURCE_SET_ROOT));
   }
   const parts = [];
   for (const part of name.replaceAll("\\", "/").split("/")) {
     if (part === "" || part === ".") continue;
     if (part === "..") {
-      if (parts.length === 0) throw new TypeError("source path escapes the source-set root");
+      if (parts.length === 0) rejectError(TypeError, (TEXT_SOURCE_PATH + "escapes " + TEXT_THE_SOURCE_SET_ROOT));
       parts.pop();
     } else {
-      if (/^\.+$/u.test(part)) throw new TypeError("source path contains a nonportable component");
+      if (/^\.+$/u.test(part)) rejectError(TypeError, (TEXT_SOURCE_PATH + "contains a nonportable component"));
       parts.push(part);
     }
   }
-  if (parts.length === 0) throw new TypeError("source path must name a file");
+  if (parts.length === 0) rejectError(TypeError, (TEXT_SOURCE_PATH + "must name a file"));
   return parts.join("/");
 }
 
@@ -294,27 +324,26 @@ function validateCompilerRequestOptions(options) {
 
 function validateAbortSignal(signal) {
   if (abortSignalAbortedGetter === null) {
-    throw new TypeError("Kotodama compiler options.signal requires AbortSignal support");
+    rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "options.signal " + TEXT_REQUIRES + "AbortSignal support"));
   }
   try {
-    Reflect.apply(abortSignalAbortedGetter, signal, []);
+    applyIntrinsic(abortSignalAbortedGetter, signal, []);
   } catch {
-    throw new TypeError("Kotodama compiler options.signal must be an AbortSignal");
+    rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "options.signal " + TEXT_MUST_BE + "an AbortSignal"));
   }
 }
 
 function validateCompilerTransportFields(options) {
-  if (Object.hasOwn(options, "signal")) {
+  if (hasOwn(options, "signal")) {
     validateAbortSignal(options.signal);
   }
-  if (Object.hasOwn(options, "timeoutMs")) {
+  if (hasOwn(options, "timeoutMs")) {
     if (
       !Number.isInteger(options.timeoutMs) ||
       options.timeoutMs <= 0 ||
       options.timeoutMs > MAX_COMPILER_TIMEOUT_MS
     ) {
-      throw new RangeError(
-        `timeoutMs must be an integer from 1 through ${MAX_COMPILER_TIMEOUT_MS}`,
+      rejectError(RangeError, `timeoutMs ${TEXT_MUST_BE}an integer from 1 through ${MAX_COMPILER_TIMEOUT_MS}`,
       );
     }
   }
@@ -336,13 +365,13 @@ export function validateCompilerOptions(options) {
     ),
   );
   if (
-    Object.hasOwn(options, "compilerUrl") &&
-    (typeof options.compilerUrl !== "string" || options.compilerUrl.length === 0)
+    hasOwn(options, "compilerUrl") &&
+    (typeof options.compilerUrl !== (TEXT_STRING) || options.compilerUrl.length === 0)
   ) {
-    throw new TypeError("compilerUrl must be a non-empty string");
+    rejectError(TypeError, ("compilerUrl " + TEXT_MUST_BE + TEXT_A_NON_EMPTY + TEXT_STRING));
   }
-  if (Object.hasOwn(options, "fetchImpl") && typeof options.fetchImpl !== "function") {
-    throw new TypeError("fetchImpl must be a function");
+  if (hasOwn(options, (TEXT_FETCHIMPL)) && typeof options.fetchImpl !== "function") {
+    rejectError(TypeError, (TEXT_FETCHIMPL + " " + TEXT_MUST_BE + "a function"));
   }
   return options;
 }
@@ -355,15 +384,15 @@ export function buildCompilerRequest(source, options = {}) {
   if (options.sourceName !== undefined) {
     request.sourceName = options.sourceName;
   }
-  if (["sources", "imports", "packages"].some((key) => options[key] !== undefined)) {
+  if ([(TEXT_SOURCES), (TEXT_IMPORTS), (TEXT_PACKAGES)].some((key) => options[key] !== undefined)) {
     const files = [...(options.sources ?? []), ...(options.packages ?? []).flatMap((pkg) => [...pkg.modules, ...pkg.sources])];
     const bytes = [source, ...files.map((file) => file.source)].reduce(
-      (total, text) => total + Reflect.apply(textEncoderEncode, new TextEncoderIntrinsic(), [text]).length,
+      (total, text) => total + applyIntrinsic(textEncoderEncode, new TextEncoderIntrinsic(), [text]).length,
       0,
     );
-    if (bytes > 16 * 1024 * 1024) throw new RangeError("Kotodama source set exceeds the 16777216-byte limit");
+    if (bytes > 16 * 1024 * 1024) rejectError(RangeError, (TEXT_KOTODAMA_SOURCE + "set " + TEXT_EXCEEDS_THE + "16777216-byte limit"));
     request.sourceName = canonicalSourcePath(request.sourceName);
-    for (const key of ["sources", "imports", "packages"]) {
+    for (const key of [(TEXT_SOURCES), (TEXT_IMPORTS), (TEXT_PACKAGES)]) {
       if (options[key] !== undefined) request[key] = options[key];
     }
   }
@@ -374,7 +403,7 @@ export function buildCompilerRequest(source, options = {}) {
 export function selectCompilerRequestOptions(options) {
   const selected = {};
   for (const name of COMPILER_REQUEST_OPTION_NAMES) {
-    if (Object.hasOwn(options, name)) {
+    if (hasOwn(options, name)) {
       selected[name] = options[name];
     }
   }
@@ -385,7 +414,7 @@ export function selectCompilerRequestOptions(options) {
 export function selectCompilerCallOptions(options) {
   const selected = {};
   for (const name of COMPILER_CALL_OPTION_NAMES) {
-    if (Object.hasOwn(options, name)) {
+    if (hasOwn(options, name)) {
       selected[name] = options[name];
     }
   }
@@ -393,14 +422,14 @@ export function selectCompilerCallOptions(options) {
 }
 
 function signalIsAborted(signal) {
-  return Reflect.apply(abortSignalAbortedGetter, signal, []);
+  return applyIntrinsic(abortSignalAbortedGetter, signal, []);
 }
 
 function signalAbortReason(signal) {
   if (abortSignalReasonGetter !== null) {
-    return Reflect.apply(abortSignalReasonGetter, signal, []);
+    return applyIntrinsic(abortSignalReasonGetter, signal, []);
   }
-  const error = new Error("Kotodama compiler request was aborted");
+  const error = new Error((TEXT_KOTODAMA_COMPILER + "request was aborted"));
   error.name = "AbortError";
   return error;
 }
@@ -413,11 +442,11 @@ function createCompilerOperation(signal, timeoutMs) {
     eventTargetAddEventListener === null ||
     eventTargetRemoveEventListener === null
   ) {
-    throw new Error("Kotodama compiler service requires AbortController support");
+    throw new Error((TEXT_KOTODAMA_COMPILER + TEXT_SERVICE + TEXT_REQUIRES + "AbortController support"));
   }
 
   const controller = new AbortControllerIntrinsic();
-  const transportSignal = Reflect.apply(abortControllerSignalGetter, controller, []);
+  const transportSignal = applyIntrinsic(abortControllerSignalGetter, controller, []);
   let cancelled = false;
   let cancellationReason;
   let rejectCancellation;
@@ -436,7 +465,7 @@ function createCompilerOperation(signal, timeoutMs) {
     // transport listeners, which may synchronously reject with another value.
     rejectCancellation(reason);
     try {
-      Reflect.apply(abortControllerAbort, controller, [reason]);
+      applyIntrinsic(abortControllerAbort, controller, [reason]);
     } catch {
       // The local rejection remains authoritative if transport abort fails.
     }
@@ -448,7 +477,7 @@ function createCompilerOperation(signal, timeoutMs) {
     if (signalIsAborted(signal)) {
       onCallerAbort();
     } else {
-      Reflect.apply(eventTargetAddEventListener, signal, [
+      applyIntrinsic(eventTargetAddEventListener, signal, [
         "abort",
         onCallerAbort,
         { once: true },
@@ -461,10 +490,10 @@ function createCompilerOperation(signal, timeoutMs) {
 
   let timerId;
   if (!cancelled) {
-    timerId = Reflect.apply(setTimeoutIntrinsic, globalThis, [
+    timerId = applyIntrinsic(setTimeoutIntrinsic, globalThis, [
       () => {
         const error = new Error(
-          `Kotodama compiler request timed out after ${timeoutMs}ms`,
+          `${TEXT_KOTODAMA_COMPILER}request timed out after ${timeoutMs}ms`,
         );
         error.name = "TimeoutError";
         cancel(error);
@@ -498,12 +527,12 @@ function createCompilerOperation(signal, timeoutMs) {
     },
     cleanup() {
       if (timerId !== undefined) {
-        Reflect.apply(clearTimeoutIntrinsic, globalThis, [timerId]);
+        applyIntrinsic(clearTimeoutIntrinsic, globalThis, [timerId]);
         timerId = undefined;
       }
       if (callerListenerInstalled) {
         try {
-          Reflect.apply(eventTargetRemoveEventListener, signal, [
+          applyIntrinsic(eventTargetRemoveEventListener, signal, [
             "abort",
             onCallerAbort,
           ]);
@@ -526,26 +555,26 @@ function responseMetadata(response) {
     responseHeadersGetter === null ||
     responseBodyGetter === null
   ) {
-    throw new TypeError("Kotodama compiler fetch returned an invalid Response");
+    rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "fetch " + TEXT_RETURNED_AN_INVALID + "Response"));
   }
   try {
-    const ok = Reflect.apply(responseOkGetter, response, []);
-    const status = Reflect.apply(responseStatusGetter, response, []);
-    const redirected = Reflect.apply(responseRedirectedGetter, response, []);
-    const headers = Reflect.apply(responseHeadersGetter, response, []);
-    const body = Reflect.apply(responseBodyGetter, response, []);
+    const ok = applyIntrinsic(responseOkGetter, response, []);
+    const status = applyIntrinsic(responseStatusGetter, response, []);
+    const redirected = applyIntrinsic(responseRedirectedGetter, response, []);
+    const headers = applyIntrinsic(responseHeadersGetter, response, []);
+    const body = applyIntrinsic(responseBodyGetter, response, []);
     if (
-      typeof ok !== "boolean" ||
+      typeof ok !== (TEXT_BOOLEAN) ||
       !Number.isInteger(status) ||
       status < 100 ||
       status > 599 ||
-      typeof redirected !== "boolean"
+      typeof redirected !== (TEXT_BOOLEAN)
     ) {
-      throw new TypeError("invalid Response metadata");
+      rejectError(TypeError, "invalid Response metadata");
     }
     return { ok, status, redirected, headers, body };
   } catch (error) {
-    throw new TypeError("Kotodama compiler fetch returned an invalid Response", {
+    rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "fetch " + TEXT_RETURNED_AN_INVALID + "Response"), {
       cause: error,
     });
   }
@@ -553,12 +582,12 @@ function responseMetadata(response) {
 
 function headerValue(headers, name, label) {
   if (headersGet === null) {
-    throw new TypeError(`${label} does not expose standards-compliant headers`);
+    rejectError(TypeError, `${label} ${TEXT_DOES_NOT_EXPOSE}${TEXT_STANDARDS_COMPLIANT}headers`);
   }
   try {
-    return Reflect.apply(headersGet, headers, [name]);
+    return applyIntrinsic(headersGet, headers, [name]);
   } catch (error) {
-    throw new TypeError(`${label} does not expose standards-compliant headers`, {
+    rejectError(TypeError, `${label} ${TEXT_DOES_NOT_EXPOSE}${TEXT_STANDARDS_COMPLIANT}headers`, {
       cause: error,
     });
   }
@@ -581,9 +610,8 @@ function contentLength(headers, label) {
 
 function validateIdentityContentEncoding(headers, label) {
   const encoding = headerValue(headers, "content-encoding", label);
-  if (encoding !== null && encoding !== undefined && encoding.toLowerCase() !== "identity") {
-    throw new TypeError(
-      `${label} Content-Encoding must be absent or exactly identity`,
+  if (encoding !== null && encoding !== undefined && encoding.toLowerCase() !== (TEXT_IDENTITY)) {
+    rejectError(TypeError, `${label} Content-Encoding ${TEXT_MUST_BE}absent or exactly ${TEXT_IDENTITY}`,
     );
   }
 }
@@ -591,7 +619,7 @@ function validateIdentityContentEncoding(headers, label) {
 function cancelReaderBestEffort(reader, reason) {
   if (readerCancel === null) return;
   try {
-    const cancellation = Reflect.apply(readerCancel, reader, [reason]);
+    const cancellation = applyIntrinsic(readerCancel, reader, [reason]);
     Promise.resolve(cancellation).catch(() => {});
   } catch {
     // Cancellation is cleanup and must not replace the authoritative error.
@@ -601,7 +629,7 @@ function cancelReaderBestEffort(reader, reason) {
 function releaseReaderBestEffort(reader) {
   if (readerReleaseLock === null) return;
   try {
-    Reflect.apply(readerReleaseLock, reader, []);
+    applyIntrinsic(readerReleaseLock, reader, []);
   } catch {
     // Lock release is cleanup and must not replace the authoritative result.
   }
@@ -609,9 +637,9 @@ function releaseReaderBestEffort(reader) {
 
 function cancelResponseBestEffort(response, reason) {
   try {
-    const body = Reflect.apply(responseBodyGetter, response, []);
+    const body = applyIntrinsic(responseBodyGetter, response, []);
     if (body === null || readableStreamGetReader === null) return;
-    const reader = Reflect.apply(readableStreamGetReader, body, []);
+    const reader = applyIntrinsic(readableStreamGetReader, body, []);
     cancelReaderBestEffort(reader, reason);
     releaseReaderBestEffort(reader);
   } catch {
@@ -624,39 +652,39 @@ function snapshotByteChunk(value, label, remainingBytes, limit) {
   let byteOffset;
   let byteLength;
   try {
-    if (Reflect.apply(typedArrayTagGetter, value, []) !== "Uint8Array") {
-      throw new TypeError("not Uint8Array");
+    if (applyIntrinsic(typedArrayTagGetter, value, []) !== "Uint8Array") {
+      rejectError(TypeError, "not Uint8Array");
     }
-    buffer = Reflect.apply(typedArrayBufferGetter, value, []);
-    byteOffset = Reflect.apply(typedArrayByteOffsetGetter, value, []);
-    byteLength = Reflect.apply(typedArrayByteLengthGetter, value, []);
+    buffer = applyIntrinsic(typedArrayBufferGetter, value, []);
+    byteOffset = applyIntrinsic(typedArrayByteOffsetGetter, value, []);
+    byteLength = applyIntrinsic(typedArrayByteLengthGetter, value, []);
   } catch {
-    throw new TypeError(`${label} yielded a non-byte response chunk`);
+    rejectError(TypeError, `${label} ${TEXT_YIELDED}a non-byte ${TEXT_RESPONSE}chunk`);
   }
   if (sharedArrayBufferByteLengthGetter !== null) {
     let isShared = false;
     try {
-      Reflect.apply(sharedArrayBufferByteLengthGetter, buffer, []);
+      applyIntrinsic(sharedArrayBufferByteLengthGetter, buffer, []);
       isShared = true;
     } catch {
       // Normal ArrayBuffers fail the SharedArrayBuffer brand check.
     }
     if (isShared) {
-      throw new TypeError(`${label} yielded a SharedArrayBuffer-backed chunk`);
+      rejectError(TypeError, `${label} ${TEXT_YIELDED}a SharedArrayBuffer-backed chunk`);
     }
   }
   if (byteLength === 0) {
-    throw new TypeError(`${label} yielded an empty non-progress response chunk`);
+    rejectError(TypeError, `${label} ${TEXT_YIELDED}an empty non-progress ${TEXT_RESPONSE}chunk`);
   }
   if (byteLength > remainingBytes) {
-    throw new RangeError(`${label} exceeds the ${limit}-byte response limit`);
+    rejectError(RangeError, `${label} ${TEXT_EXCEEDS_THE}${limit}-byte ${TEXT_RESPONSE}limit`);
   }
   const snapshot = new Uint8ArrayIntrinsic(byteLength);
   try {
     const view = new Uint8ArrayIntrinsic(buffer, byteOffset, byteLength);
-    Reflect.apply(uint8ArraySet, snapshot, [view]);
+    applyIntrinsic(uint8ArraySet, snapshot, [view]);
   } catch (error) {
-    throw new TypeError(`${label} yielded an unstable response chunk`, {
+    rejectError(TypeError, `${label} ${TEXT_YIELDED}an unstable ${TEXT_RESPONSE}chunk`, {
       cause: error,
     });
   }
@@ -666,26 +694,24 @@ function snapshotByteChunk(value, label, remainingBytes, limit) {
 async function readBoundedResponseBytes(metadata, limit, label, operation) {
   const declaredLength = contentLength(metadata.headers, label);
   if (declaredLength !== null && declaredLength > limit) {
-    throw new RangeError(`${label} exceeds the ${limit}-byte response limit`);
+    rejectError(RangeError, `${label} ${TEXT_EXCEEDS_THE}${limit}-byte ${TEXT_RESPONSE}limit`);
   }
   if (metadata.body === null) {
     if (declaredLength !== null && declaredLength !== 0) {
-      throw new TypeError(
-        `${label} body length does not match its Content-Length header`,
+      rejectError(TypeError, `${label} ${TEXT_BODY_LENGTH_DOES_NOT_MATCH_ITS_CONTENT_LENGTH_HEADER}`,
       );
     }
     return new Uint8ArrayIntrinsic();
   }
   if (readableStreamGetReader === null || readerRead === null) {
-    throw new TypeError(`${label} does not expose a standards-compliant readable body`);
+    rejectError(TypeError, `${label} ${TEXT_DOES_NOT_EXPOSE}a ${TEXT_STANDARDS_COMPLIANT}readable body`);
   }
 
   let reader;
   try {
-    reader = Reflect.apply(readableStreamGetReader, metadata.body, []);
+    reader = applyIntrinsic(readableStreamGetReader, metadata.body, []);
   } catch (error) {
-    throw new TypeError(
-      `${label} does not expose a standards-compliant readable body`,
+    rejectError(TypeError, `${label} ${TEXT_DOES_NOT_EXPOSE}a ${TEXT_STANDARDS_COMPLIANT}readable body`,
       { cause: error },
     );
   }
@@ -695,25 +721,25 @@ async function readBoundedResponseBytes(metadata, limit, label, operation) {
     for (;;) {
       operation.throwIfCancelled();
       const read = Promise.resolve().then(() =>
-        Reflect.apply(readerRead, reader, []),
+        applyIntrinsic(readerRead, reader, []),
       );
       const { done, value } = await operation.race(read);
-      if (typeof done !== "boolean") {
-        throw new TypeError(`${label} returned an invalid stream read result`);
+      if (typeof done !== (TEXT_BOOLEAN)) {
+        rejectError(TypeError, `${label} ${TEXT_RETURNED_AN_INVALID}stream read result`);
       }
       if (done) {
         if (value !== undefined) {
-          throw new TypeError(`${label} returned data after the stream ended`);
+          rejectError(TypeError, `${label} returned data after the stream ended`);
         }
         break;
       }
       if (chunks.length >= MAX_COMPILER_RESPONSE_CHUNKS) {
-        throw new RangeError(`${label} yielded too many fragmented response chunks`);
+        rejectError(RangeError, `${label} ${TEXT_YIELDED}too many fragmented ${TEXT_RESPONSE}chunks`);
       }
       const chunk = snapshotByteChunk(value, label, limit - total, limit);
       total += chunk.length;
       if (total > limit) {
-        throw new RangeError(`${label} exceeds the ${limit}-byte response limit`);
+        rejectError(RangeError, `${label} ${TEXT_EXCEEDS_THE}${limit}-byte ${TEXT_RESPONSE}limit`);
       }
       chunks.push(chunk);
     }
@@ -725,14 +751,13 @@ async function readBoundedResponseBytes(metadata, limit, label, operation) {
   }
   operation.throwIfCancelled();
   if (declaredLength !== null && total !== declaredLength) {
-    throw new TypeError(
-      `${label} body length does not match its Content-Length header`,
+    rejectError(TypeError, `${label} ${TEXT_BODY_LENGTH_DOES_NOT_MATCH_ITS_CONTENT_LENGTH_HEADER}`,
     );
   }
   const bytes = new Uint8ArrayIntrinsic(total);
   let offset = 0;
   for (const chunk of chunks) {
-    Reflect.apply(uint8ArraySet, bytes, [chunk, offset]);
+    applyIntrinsic(uint8ArraySet, bytes, [chunk, offset]);
     offset += chunk.length;
   }
   return bytes;
@@ -741,13 +766,13 @@ async function readBoundedResponseBytes(metadata, limit, label, operation) {
 async function readBoundedResponseText(metadata, limit, label, operation) {
   const bytes = await readBoundedResponseBytes(metadata, limit, label, operation);
   try {
-    return Reflect.apply(
+    return applyIntrinsic(
       textDecoderDecode,
       new TextDecoderIntrinsic("utf-8", { fatal: true }),
       [bytes],
     );
   } catch {
-    throw new TypeError(`${label} is not valid UTF-8`);
+    rejectError(TypeError, `${label} is not valid UTF-8`);
   }
 }
 
@@ -755,14 +780,14 @@ async function readCompilerResult(metadata, operation) {
   const text = await readBoundedResponseText(
     metadata,
     MAX_COMPILER_RESPONSE_BYTES,
-    "Kotodama compiler response",
+    (TEXT_KOTODAMA_COMPILER + "response"),
     operation,
   );
   let result;
   try {
     result = JSON.parse(text);
   } catch {
-    throw new TypeError("Kotodama compiler service returned malformed JSON");
+    rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_SERVICE + "returned malformed JSON"));
   }
   return normalizeCompilerResult(result);
 }
@@ -774,35 +799,34 @@ export class KotodamaCompilerClient {
   #fetchImpl;
 
   constructor(baseUrl, options = {}) {
-    if (typeof baseUrl !== "string" || baseUrl.length === 0) {
-      throw new TypeError("Kotodama compiler baseUrl must be a non-empty string");
+    if (typeof baseUrl !== (TEXT_STRING) || baseUrl.length === 0) {
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_BASEURL + TEXT_MUST_BE + TEXT_A_NON_EMPTY + TEXT_STRING));
     }
     options = canonicalizeCompilerOptions(options, COMPILER_CLIENT_OPTION_NAMES);
-    const fetchImpl = Object.hasOwn(options, "fetchImpl")
+    const fetchImpl = hasOwn(options, (TEXT_FETCHIMPL))
       ? options.fetchImpl
       : DefaultFetch;
     let parsed;
     try {
       parsed = new URL(baseUrl);
     } catch {
-      throw new TypeError("Kotodama compiler baseUrl must be an absolute URL");
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_BASEURL + TEXT_MUST_BE + "an absolute URL"));
     }
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-      throw new TypeError("Kotodama compiler baseUrl must use HTTP or HTTPS");
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_BASEURL + "must use HTTP or HTTPS"));
     }
     if (parsed.protocol === "http:" && !isLoopbackHostname(parsed.hostname)) {
-      throw new TypeError(
-        "Kotodama compiler baseUrl must use HTTPS except for loopback development services",
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_BASEURL + "must use HTTPS except for loopback development services"),
       );
     }
     if (parsed.username !== "" || parsed.password !== "") {
-      throw new TypeError("Kotodama compiler baseUrl must not contain credentials");
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_BASEURL + TEXT_MUST_NOT_CONTAIN + "credentials"));
     }
     if (parsed.search !== "" || parsed.hash !== "") {
-      throw new TypeError("Kotodama compiler baseUrl must not contain a query or fragment");
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_BASEURL + TEXT_MUST_NOT_CONTAIN + "a query or fragment"));
     }
     if (typeof fetchImpl !== "function") {
-      throw new TypeError("Kotodama compiler client requires fetch");
+      rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + "client " + TEXT_REQUIRES + "fetch"));
     }
     // Keep the validated transport policy in private slots. Public properties
     // can be added by callers for compatibility, but cannot redirect a later
@@ -823,13 +847,13 @@ export class KotodamaCompilerClient {
     try {
       operation.throwIfCancelled();
       const fetchPromise = Promise.resolve().then(() =>
-        Reflect.apply(this.#fetchImpl, undefined, [
+        applyIntrinsic(this.#fetchImpl, undefined, [
           `${this.#baseUrl}${DEFAULT_COMPILE_PATH}`,
           {
             method: "POST",
             headers: {
-              accept: "application/json",
-              "content-type": "application/json",
+              accept: (TEXT_APPLICATION + "/json"),
+              "content-type": (TEXT_APPLICATION + "/json"),
             },
             cache: "no-store",
             credentials: "omit",
@@ -859,38 +883,36 @@ export class KotodamaCompilerClient {
       try {
         validateIdentityContentEncoding(
           metadata.headers,
-          "Kotodama compiler response",
+          (TEXT_KOTODAMA_COMPILER + "response"),
         );
       } catch (error) {
         cancelResponseBestEffort(response, error);
         throw error;
       }
       if (metadata.redirected) {
-        cancelResponseBestEffort(response, "redirected compiler response rejected");
-        throw new TypeError("Kotodama compiler service redirects are forbidden");
+        cancelResponseBestEffort(response, ("redirected compiler " + TEXT_RESPONSE + "rejected"));
+        rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_SERVICE + "redirects are forbidden"));
       }
       if (!metadata.ok) {
         const detail = await readBoundedResponseText(
           metadata,
           MAX_COMPILER_ERROR_BYTES,
-          "Kotodama compiler error response",
+          (TEXT_KOTODAMA_COMPILER + "error response"),
           operation,
         );
         const suffix = detail.length === 0 ? "" : `: ${detail}`;
         throw new Error(
-          `Kotodama compiler service failed (${metadata.status})${suffix}`,
+          `${TEXT_KOTODAMA_COMPILER}${TEXT_SERVICE}failed (${metadata.status})${suffix}`,
         );
       }
       if (metadata.status !== 200) {
         cancelResponseBestEffort(response, "unexpected compiler success status");
-        throw new TypeError(
-          `Kotodama compiler service returned unexpected success status ${metadata.status}`,
+        rejectError(TypeError, `${TEXT_KOTODAMA_COMPILER}${TEXT_SERVICE}returned unexpected success status ${metadata.status}`,
         );
       }
-      if (headerValue(metadata.headers, "content-type", "Kotodama compiler response") !== "application/json") {
-        cancelResponseBestEffort(response, "invalid compiler response media type");
-        throw new TypeError(
-          "Kotodama compiler response Content-Type must be exactly application/json",
+      if (headerValue(metadata.headers, "content-type", (TEXT_KOTODAMA_COMPILER + "response")) !== (TEXT_APPLICATION + "/json")) {
+        cancelResponseBestEffort(response, ("invalid compiler " + TEXT_RESPONSE + "media type"));
+        rejectError(TypeError, (TEXT_KOTODAMA_COMPILER + TEXT_RESPONSE + "Content-Type " + TEXT_MUST_BE + "exactly " + TEXT_APPLICATION + "/json"),
         );
       }
       const result = await readCompilerResult(metadata, operation);

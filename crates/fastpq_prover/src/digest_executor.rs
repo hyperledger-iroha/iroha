@@ -11,7 +11,8 @@ pub const MAX_DIGEST384_BATCH_FRAMES_V1: usize = 65_536;
 /// This bounds canonical word staging, not total live host/device allocation.
 pub const MAX_DIGEST384_BATCH_WORDS_V1: usize = 4_194_304;
 
-/// Local computation policy for canonical six-lane hashing; never a consensus parameter.
+/// Local computation policy for canonical hashing; never a consensus parameter.
+/// Each algorithm owner performs its own readiness check and dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DigestExecutionV1 {
     /// Compute canonical hashes on the CPU.

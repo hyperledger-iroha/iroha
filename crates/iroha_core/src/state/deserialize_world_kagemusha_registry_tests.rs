@@ -241,6 +241,50 @@ fn malformed_current_and_actual_predecessor_registry_are_rejected() {
 }
 
 #[test]
+fn semantically_invalid_current_and_predecessor_authority_are_rejected() {
+    let valid = active_registry();
+    let mut bad_threshold = valid.clone();
+    bad_threshold.authority_policy.as_mut().unwrap().threshold = 0;
+    let mut bad_pointer = valid.clone();
+    bad_pointer.active_release_id = Some([0x75; 32]);
+    let mut bad_digest = valid.clone();
+    bad_digest.releases[0].authority_policy_digest = [0x76; 32];
+    let mut bad_status = valid.clone();
+    bad_status.releases[0].status = u8::MAX;
+    let mut duplicate_release = valid.clone();
+    duplicate_release.releases.push(valid.releases[0].clone());
+    for invalid in [
+        bad_threshold,
+        bad_pointer,
+        bad_digest,
+        bad_status,
+        duplicate_release,
+    ] {
+        assert!(invalid.validate().is_err());
+        let world = World::default();
+        set_registry(&world, valid.clone());
+        set_registry(&world, invalid);
+        let current = restore(&world).err().expect("invalid current authority");
+        assert!(
+            current
+                .to_string()
+                .contains("invalid current verifier authority"),
+            "{current}"
+        );
+        set_registry(&world, valid.clone());
+        let predecessor = restore(&world)
+            .err()
+            .expect("invalid actual predecessor authority");
+        assert!(
+            predecessor
+                .to_string()
+                .contains("invalid predecessor verifier authority"),
+            "{predecessor}"
+        );
+    }
+}
+
+#[test]
 fn replayed_governed_release_remains_reject_all_until_local_authentication() {
     let world = World::default();
     let mut governed = KagemushaGovernedVerifierRegistryV1::default();

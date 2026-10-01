@@ -12,7 +12,7 @@ SCREEN = run_path(
 )
 
 
-def test_current_fixed_row_frame_matches_source_bound() -> None:
+def test_hypothetical_q375_fixed_row_frame_keeps_exact_counterexample() -> None:
     """The diagnostic must not regress to the retired variable-row formula."""
     current = SCREEN["hypothetical_frame"](375, 342, 524_288, 4, (2,) * 17)
     assert current["frame_bytes"] == 4_017_376
@@ -56,7 +56,7 @@ def test_arity_only_screen_exceeds_the_segment_cap_for_an_exact_query_set() -> N
 
 
 def test_all_fold_boundaries_confirm_the_two_arity_floors() -> None:
-    """Enumerate all 65,536 partitions, including the arity-16 source limit."""
+    """Enumerate all 65,536 partitions, including a separately bounded arity-16 screen."""
     positions = SCREEN["spread_queries"]
     exhaustive = SCREEN["exhaustive_strided_merkle_fri_bytes"]
     optimum = SCREEN["min_strided_merkle_fri_bytes"]
@@ -69,7 +69,7 @@ def test_all_fold_boundaries_confirm_the_two_arity_floors() -> None:
     assert implemented[0] - SCREEN["CAP"] == 34_256
 
 
-def test_best_implemented_schedule_charges_exact_round_components() -> None:
+def test_best_arity16_hypothetical_schedule_charges_exact_round_components() -> None:
     """All 558,544 bytes precede roots, framing, AIR rows and other fields."""
     positions = SCREEN["spread_queries"]
     round_bytes = SCREEN["strided_fri_round_bytes"]
@@ -121,7 +121,7 @@ def test_base_field_hiding_screen_refuses_drifted_frame_or_caps(
 ) -> None:
     """Source size and production-limit changes need an explicit review."""
     screen = SCREEN["base_field_hiding_degree_screen"]
-    with pytest.raises(ValueError, match="DEEP DTO frame changed"):
+    with pytest.raises(ValueError, match="hypothetical q64 reference frame changed"):
         screen(502_896)
     with monkeypatch.context() as patch:
         patch.setitem(screen.__globals__, "CAP", 524_289)
@@ -131,3 +131,32 @@ def test_base_field_hiding_screen_refuses_drifted_frame_or_caps(
         patch.setitem(screen.__globals__, "AXT_INNER_CAP", 1_048_577)
         with pytest.raises(ValueError, match="margins changed"):
             screen(502_895)
+
+
+def test_current_q77_source_bound_is_separate_from_hypothetical_models() -> None:
+    """Neither q375 nor q64 screens may be labeled as current native geometry."""
+    current = SCREEN["current_source"]
+    assert current["current_geometry"]["queries"] == 77
+    assert current["current_geometry"]["digest_bytes"] == 32
+    assert current["offline_deep"] == {"max_frame_bytes": 500_084, "headroom": 24_204}
+    assert current["production_qualified"] is False
+    with pytest.raises(ValueError, match="hypothetical q64 reference frame changed"):
+        SCREEN["base_field_hiding_degree_screen"](500_084)
+
+
+def test_current_q77_linked_queries_attain_every_counted_frontier() -> None:
+    """One linked query set simultaneously attains the current byte envelope."""
+    parity_order = sorted(range(128), key=lambda value: (bin(value).count("1") % 2 == 0, value))
+    positions = {(value | value << 7 | value << 14 | value << 21) & (8_388_608 - 1)
+                 for value in parity_order[:77]}
+    assert len(positions) == 77
+    exact = SCREEN["exact_frontier"]
+    upper = SCREEN["frontier"]
+    domains = (8_388_608, 524_288, 32_768, 4_096, 512, 128)
+    observed = []
+    for leaves in domains:
+        opened = {index % leaves for index in positions}
+        assert len(opened) == 77
+        assert exact(leaves, opened) == upper(leaves, 77)
+        observed.append(exact(leaves, opened))
+    assert observed == [1283, 975, 667, 436, 205, 51]

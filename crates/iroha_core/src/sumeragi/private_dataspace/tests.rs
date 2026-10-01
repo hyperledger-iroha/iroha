@@ -78,7 +78,7 @@ fn state(
 fn registration(state: &State) -> (NativeFinalityFixture, RegisterPrivateDataspace) {
     let dataspace_id = crate::sns::dataspace_id_for_sns_alias("acme").unwrap();
     let scope = SumeragiRootScope::Dataspace {
-        parent_network_id: *state.network_id(),
+        parent_network_id: state.network_id,
         dataspace_id,
     };
     let child = NativeFinalityFixture::start_with_scope("acme-private", scope);
@@ -162,7 +162,7 @@ fn parent_registration_requires_committed_global_scope_active_owner_and_admissio
     for scope in [
         None,
         Some(SumeragiRootScope::Dataspace {
-            parent_network_id: *parent.network_id(),
+            parent_network_id: parent.network_id,
             dataspace_id: DataSpaceId::new(9),
         }),
     ] {

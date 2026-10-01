@@ -189,7 +189,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
                 iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1 {
                     segment_count: 1,
                     segment_air_row_roots: vec![
-                        iroha_data_model::privacy::GoldilocksDigest384V1::new([0x41; 6]).unwrap(),
+                        iroha_data_model::fastpq::FastpqCommitmentV1::from_bytes([0x41; 32]),
                     ],
                 },
             ),

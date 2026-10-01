@@ -470,12 +470,25 @@ fn applied_wait_result_has_one_exact_v1_key_set() {
     assert!(!object.contains_key("submit"));
 }
 #[test]
-fn extract_code_hash_argument_requires_canonical_path_field() {
+fn contract_artifact_route_requires_canonical_path_fields() {
+    let hash = hex::encode(iroha_crypto::Hash::new(b"canonical artifact route").as_ref());
     let args = norito::json!({
-        "path": { "code_hash": "cafebabe" }
+        "path": { "dataspace_id": "0", "code_hash": (hash.clone()) }
     });
-    let hash = extract_code_hash_argument(args.as_object().expect("object")).expect("hash");
-    assert_eq!(hash, "cafebabe");
+    let route =
+        contract_artifact_route(args.as_object().expect("object"), false).expect("artifact route");
+    assert_eq!(route, format!("/v1/contracts/artifacts/0/{hash}"));
+    assert_eq!(
+        contract_artifact_route(args.as_object().unwrap(), true).unwrap(),
+        format!("/v1/contracts/artifacts/0/{hash}/bytes")
+    );
+    for malformed in [
+        norito::json!({"path": {"code_hash": (hash.clone())}}),
+        norito::json!({"path": {"dataspace_id": "0"}}),
+        norito::json!({"path": {"dataspace_id": "0", "code_hash": "cafebabe"}}),
+    ] {
+        assert!(contract_artifact_route(malformed.as_object().unwrap(), false).is_err());
+    }
 }
 #[test]
 fn extract_contract_address_argument_requires_canonical_path_field() {
@@ -512,14 +525,12 @@ fn extract_block_identifier_argument_requires_canonical_path_field() {
 #[test]
 fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
     let cases: [(Value, fn(&Map) -> Result<String, String>); 11] = [
-        (
-            norito::json!({ "code_hash": "cafebabe" }),
-            extract_code_hash_argument,
-        ),
-        (
-            norito::json!({ "hash": "cafebabe" }),
-            extract_code_hash_argument,
-        ),
+        (norito::json!({ "code_hash": "cafebabe" }), |args| {
+            contract_artifact_route(args, false)
+        }),
+        (norito::json!({ "hash": "cafebabe" }), |args| {
+            contract_artifact_route(args, false)
+        }),
         (
             norito::json!({ "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw" }),
             extract_contract_address_argument,

@@ -412,9 +412,9 @@ fn mean_maximum_profile_fits_unchanged_caps_and_degree_four() {
     for tail_gas in [0, 1, 2] {
         let (segment, records) = maximum_segment(tail_gas);
         assert_rows(&segment, &segment.witness_rows(&records).unwrap());
-        assert_eq!(segment.base_width_v1(), 1_351);
-        assert_eq!(segment.profile_constraint_count_v1(), 2_940);
-        assert_eq!(segment.profile_fixed_width_v1(), 7);
+        assert_eq!(segment.base_width_v1(), 1_356);
+        assert_eq!(segment.profile_constraint_count_v1(), 3_369);
+        assert_eq!(segment.profile_fixed_width_v1(), 10);
         let protocol = segment.protocol_v1();
         protocol.validate().unwrap();
         assert_eq!(protocol.maximum_constraint_degree, 4);
@@ -432,8 +432,8 @@ fn mean_maximum_profile_fits_unchanged_caps_and_degree_four() {
         )
         .unwrap();
         let bound = maximum_encoded_proof_with_deep_bytes_v1(protocol.parameters, &layout).unwrap();
-        assert_eq!(bound, 4_141_952);
-        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 52_352);
+        assert_eq!(bound, 4_153_152);
+        assert_eq!(protocol.parameters.maximum_proof_bytes - bound, 41_152);
         assert_eq!(
             measured_maximum_affine_degree_v1(
                 [0xb1 + tail_gas as u8; 32],
@@ -453,7 +453,7 @@ fn native_stark_proves_maximum_mean_and_binds_registers_gas_cycles_pc_outcome_co
         let (segment, records) = maximum_segment(tail_gas);
         let columns = segment.columns(&records).unwrap();
         let proof = prove_proof_managed_note_stark_v1(&segment, &columns).unwrap();
-        assert!(proof.len() <= 4_141_952);
+        assert!(proof.len() <= 4_153_152);
         verify_proof_managed_note_stark_v1(&segment, &proof).unwrap();
         for field in 0..4 {
             let mut after = segment.after;

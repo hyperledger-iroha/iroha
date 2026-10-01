@@ -89,8 +89,8 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // This identifies the sole compiled AIR and geometry; activation additionally requires
 // the proof cap and the complete soundness and resource certificates.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x19, 0xaa, 0x35, 0x92, 0x7e, 0xbc, 0x6e, 0x0f, 0xf8, 0x00, 0xa0, 0xc8, 0x0b, 0x6b, 0x31, 0x5c,
-    0x26, 0x15, 0x35, 0x0f, 0x35, 0xc8, 0x2a, 0xfd, 0xb9, 0xea, 0xe6, 0x09, 0xd4, 0xc9, 0xca, 0x9c,
+    0x03, 0x12, 0xa2, 0x2a, 0xad, 0x46, 0x56, 0x1f, 0x42, 0xf2, 0x88, 0x31, 0xba, 0xff, 0x28, 0x0a,
+    0x07, 0x2f, 0x34, 0x89, 0x92, 0x84, 0xe3, 0x54, 0x93, 0x8c, 0x09, 0xa8, 0x2e, 0x7a, 0xdc, 0xdf,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -383,6 +383,13 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
 ///
 /// There is no independently accepted subproof path and no host-side
 /// reference-relation substitute for the final self-check.
+///
+/// Successful construction consumes the canonical entropy sequence. Construction
+/// is fail-fast after preflight: an error may consume only a prefix of that
+/// sequence, and the injected RNG is neither rolled back nor advanced to a fixed
+/// failure position. An uncertain accelerator completion returns no proof and
+/// stops further source construction and entropy use under the existing process
+/// quarantine. Callers must not depend on identical RNG state across failures.
 #[allow(clippy::too_many_arguments)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[doc(hidden)]
@@ -395,6 +402,9 @@ pub fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     encoded_witness: &[u8],
     rng: &mut R,
 ) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
+    if fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1() {
+        return Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain.into());
+    }
     // Every witness-dependent preflight deliberately precedes the first
     // entropy read.
     #[cfg(test)]
@@ -753,7 +763,16 @@ mod tests {
             "cyclic-physical-padding-recurrence=1-segment-last-padding:padding-base-and-aux=zero:";
         assert_eq!(current.matches(word_boundary).count(), 1);
         assert_eq!(current.matches(bus_boundary).count(), 1);
+        // Historical SHA-padding profiles also used the retired compact-CA
+        // descriptor. Preserve their exact original digests and rejection tests.
+        superseded[14] =
+            hex::decode("9a34a72f020551e65442c24b58ee075f6c485e36e0df7c579b246b19d0195b9a")
+                .unwrap();
         for (descriptor, expected_digest) in [
+            (
+                current.clone(),
+                "19aa35927ebc6e0ff800a0c80b6b315c2615350f35c82afdb9eae609d4c9ca9c",
+            ),
             (
                 current.replace(word_boundary, ""),
                 "9d2d34512de90d13a0f68d352bbcc887ba9ac2f2a89e5deb845ff5c4c64d45ff",
@@ -872,15 +891,22 @@ mod tests {
     #[test]
     fn credential_prover_has_one_preflighted_joint_root_path_and_no_subproof_escape() {
         let source = include_str!("engine.rs");
-        let prover_start = source
-            .find("pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng")
+        // Search only production text: an obsolete signature must not match
+        // this test's own search literal and inspect the assertions themselves.
+        let production_source = &source[..source
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("test module")];
+        let prover_start = production_source
+            .find("pub fn prove_zk_x509_credential_proof_v1_with_rng")
             .expect("sole credential prover");
-        let prover_end = source[prover_start..]
+        let prover_end = production_source[prover_start..]
             .find("fn compiled_profile_fields_v1")
             .map(|offset| prover_start + offset)
             .expect("sole credential prover end");
-        let prover = &source[prover_start..prover_end];
-        let production_source = &source[..source.find("#[cfg(test)]").expect("test module")];
+        let prover = &production_source[prover_start..prover_end];
+        let quarantine = prover
+            .find("goldilocks_transform_completion_uncertain_v1()")
+            .expect("quarantine before construction or entropy");
         let profile_gate = prover
             .find("construct_zk_x509_compiled_profile_v1()")
             .expect("pinned profile validation");
@@ -911,6 +937,7 @@ mod tests {
         let self_check = prover
             .find("verify_zk_x509_credential_subproofs_v1(")
             .expect("independent final self-check");
+        assert!(quarantine < profile_gate);
         assert!(
             profile_gate < preparation
                 && preparation < assembly

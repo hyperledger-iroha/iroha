@@ -446,3 +446,20 @@ def test_retired_abi24_privacy_export_marker_is_rejected() -> None:
         assert "stale privacy/bridge ABI marker" in str(error)
     else:
         raise AssertionError("retired ABI-24 privacy export marker was accepted")
+
+
+def test_native_domain_admission_is_required_for_both_c_deliverables() -> None:
+    missing = "connect_norito_domain_id_validate_v1"
+    for sdk in ("c-jni", "csharp"):
+        assert MODULE.REQUIRED_SYMBOLS[sdk].count(missing) == 1
+        library = types.SimpleNamespace(**{
+            symbol: object() for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
+            if symbol != missing
+        })
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-only-library"), MODULE.REQUIRED_SYMBOLS[sdk])
+            except MODULE.ArtifactContractError as error:
+                assert str(error) == "native C ABI artifact is missing required symbols: " + missing
+            else:
+                raise AssertionError("native probe accepted missing canonical domain admission")

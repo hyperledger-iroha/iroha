@@ -383,7 +383,7 @@ fn schema_fingerprint(schema: Schema) -> Result<Hash, String> {
         } => (0_u8, nominal_name(), layout),
         Schema::Semantic {
             identity, layout, ..
-        } => (1_u8, identity.to_owned(), layout),
+        } => (1_u8, std::borrow::Cow::Borrowed(identity), layout),
         Schema::Required { identity, .. } => {
             return Err(format!(
                 "World state accumulator cannot commit unresolved schema {identity}"

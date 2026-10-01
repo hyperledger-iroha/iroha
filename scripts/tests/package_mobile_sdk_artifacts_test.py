@@ -370,6 +370,26 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         )
         self.assertFalse(self.output.exists())
 
+    def test_local_integration_provenance_is_rejected_after_external_copy(self) -> None:
+        client = self.artifacts / "gradle-build/iroha_kotlin_sdk/client-android"
+        provenance = client / "generated/nativeProvenance/default/iroha/native-build-provenance-v1.json"
+        document = json.loads(provenance.read_text())
+        document["artifact_scope"] = "local-integration"
+        document["source_tree_dirty"] = False
+        payload = (json.dumps(document) + "\n").encode()
+        provenance.write_bytes(payload)
+        aar = client / "outputs/aar/client-android-release.aar"
+        with zipfile.ZipFile(aar) as archive:
+            contents = {name: archive.read(name) for name in archive.namelist()}
+        contents["assets/iroha/native-build-provenance-v1.json"] = payload
+        with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_STORED) as archive:
+            for name, value in contents.items():
+                archive.writestr(name, value)
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("diagnostic Android artifact scope", result.stderr)
+        self.assertFalse(self.output.exists())
+
     def test_success_publishes_only_to_absent_destination(self) -> None:
         result = self._package()
         self.assertEqual(result.returncode, 0, result.stderr)
