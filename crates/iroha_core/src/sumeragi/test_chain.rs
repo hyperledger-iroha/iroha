@@ -18,13 +18,17 @@ mod lane_authority;
 pub use lane_authority::TestLaneStoreAuthorities;
 #[path = "test_chain/availability.rs"]
 mod availability;
+#[cfg(test)]
 mod genesis_policy;
 mod local_certificate;
+#[cfg(test)]
 pub(crate) use genesis_policy::{signed_genesis_fixture_for_state, staged_genesis_policies};
 
 use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
 use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
+#[cfg(test)]
+use iroha_data_model::parameter::system::ConsensusMode;
 use iroha_data_model::{
     IntoKeyValue, NetworkId, Registrable,
     account::{Account, AccountId},
@@ -34,7 +38,7 @@ use iroha_data_model::{
     isi::{InstructionBox, Log},
     parameter::{
         Parameter,
-        system::{ConsensusMode, SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
@@ -1821,6 +1825,7 @@ pub(super) fn prepare_configured_genesis(
 }
 
 /// Build a signed genesis with an explicit NPoS policy for authority-reader tests.
+#[cfg(test)]
 pub(crate) fn signed_genesis_fixture(
     chain_id: &ChainId,
     genesis_key: &KeyPair,

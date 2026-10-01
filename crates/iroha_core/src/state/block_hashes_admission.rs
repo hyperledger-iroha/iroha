@@ -72,12 +72,15 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
     }
 }
 
-/// Local World storage acquisition or mutation failure; never a verdict on consensus data.
+/// Local State storage or protocol decoder refusal; never a verdict on consensus data.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateStorageAdmissionError {
     /// Original finite-credit refusal from an admitted World index.
     #[error(transparent)]
     World(#[from] mv::storage::AdmittedStorageError),
+    /// The original decoder scope or allocator refused while executing an AMX instruction.
+    #[error("local AMX decoder resource refusal: {0}")]
+    AmxDecode(norito::core::DecodeResourceError),
 }
 
 impl StateStorageAdmissionError {
@@ -85,6 +88,7 @@ impl StateStorageAdmissionError {
     pub fn release_wait(&self) -> Option<&iroha_allocation::release::ReleaseWait> {
         match self {
             Self::World(error) => error.release_wait(),
+            Self::AmxDecode(_) => None,
         }
     }
 }

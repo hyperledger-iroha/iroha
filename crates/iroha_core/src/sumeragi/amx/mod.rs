@@ -30,6 +30,9 @@
 //! dataspace. Escrow reports host failures separately from protocol rejection: a refused
 //! prepare records no vote, and a refused apply/release keeps the original unsettled entry
 //! and global-height cursor for retry. Native participant graph funding remains open.
+//! Inherited decoder limits remain typed local refusals through anchors, records and certified
+//! proofs. An executing instruction retains that refusal outside its canonical result, including
+//! when contract code catches the inner error; a refused attempt cannot publish World effects.
 //! The node does not host a dataspace instance with its own state yet (lane
 //! instances share `G`'s state, `specs/sumeragi_lanes.md` §0). TODO(S6): hosting one needs
 //! (1) a per-dataspace World with an `AmxParticipantStateV1` cell anchored at `G`'s genesis
@@ -54,7 +57,6 @@ use iroha_data_model::{
     sumeragi_amx::{AmxDecisionV1, AmxError, AmxForeignInstanceV1, AmxRecordV1, AmxRelayOutcome},
     sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES,
 };
-use iroha_executor_data_model::permission::parameter::CanSetParameters;
 use mv::storage::StorageReadOnly;
 
 use crate::{
@@ -62,7 +64,15 @@ use crate::{
     state::{StateBlock, StateTransaction, WorldReadOnly},
 };
 
-fn amx_error(error: AmxError) -> Error {
+/// Retain decoder refusal outside every deterministic instruction/result carrier.
+fn amx_error(error: AmxError, transaction: &mut StateTransaction<'_, '_>) -> Error {
+    if let AmxError::Resource(resource) = &error
+        && !cfg!(all(test, sumeragi_core_mutation = "HC19"))
+    {
+        transaction.arm_local_storage_refusal(crate::state::StateStorageAdmissionError::AmxDecode(
+            *resource,
+        ));
+    }
     Error::InvariantViolation(format!("AMX: {error}").into())
 }
 
@@ -71,20 +81,20 @@ fn write(record: &AmxRecordV1) -> Result<(), AmxError> {
     crate::exec_witness::record_write_amx_record(record)
 }
 
-/// Whether `authority` holds `permission` directly or through a role.
-fn has_permission(
-    world: &impl WorldReadOnly,
-    authority: &AccountId,
-    permission: &Permission,
-) -> bool {
+/// Borrow the exact canonical `CanSetParameters` grant, directly or through a role.
+/// Constructing a token would allocate JSON under the caller's inherited decoder limit.
+fn has_permission(world: &impl WorldReadOnly, authority: &AccountId) -> bool {
+    let matches = |permission: &Permission| {
+        permission.name() == "CanSetParameters" && permission.payload().get().as_str() == "null"
+    };
     world
         .account_permissions_iter(authority)
-        .is_ok_and(|permissions| permissions.into_iter().any(|held| held == permission))
+        .is_ok_and(|permissions| permissions.into_iter().any(matches))
         || world.account_roles_iter(authority).any(|role| {
             world
                 .roles()
                 .get(role)
-                .is_some_and(|role| role.permissions.contains(permission))
+                .is_some_and(|role| role.permissions().any(matches))
         })
 }
 
@@ -94,6 +104,7 @@ fn decode_anchor(bytes: &[u8]) -> Result<ValidatorEpochContextV1, AmxError> {
     if bytes.is_empty() || bytes.len() > MAX_RESULT_PREIMAGE_BYTES {
         return Err(AmxError::Anchor("the anchor exceeds its bound".into()));
     }
+    let outer_scope = norito::core::decode_limits_active();
     let canonical = norito::canonical_decode_limits(bytes.len());
     norito::decode_canonical_with_limits(
         bytes,
@@ -105,7 +116,14 @@ fn decode_anchor(bytes: &[u8]) -> Result<ValidatorEpochContextV1, AmxError> {
             32,
         ),
     )
-    .map_err(|error| AmxError::Anchor(error.to_string()))
+    .map_err(|error| {
+        if (outer_scope || matches!(error, norito::Error::AllocationFailed { .. }))
+            && let Some(resource) = error.decode_resource_error()
+        {
+            return AmxError::Resource(resource);
+        }
+        AmxError::Anchor(error.to_string())
+    })
 }
 
 impl Execute for RegisterAmxDataspaceV1 {
@@ -114,22 +132,24 @@ impl Execute for RegisterAmxDataspaceV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let permission: Permission = CanSetParameters.into();
         if !state_transaction._curr_block.is_genesis()
-            && !has_permission(&state_transaction.world, authority, &permission)
+            && !has_permission(&state_transaction.world, authority)
         {
-            return Err(amx_error(AmxError::State(
-                "registering an AMX dataspace needs genesis or CanSetParameters",
-            )));
+            return Err(amx_error(
+                AmxError::State("registering an AMX dataspace needs genesis or CanSetParameters"),
+                state_transaction,
+            ));
         }
-        let anchor = decode_anchor(&self.anchor).map_err(amx_error)?;
-        let tracker = AmxForeignInstanceV1::new(self.instance, anchor).map_err(amx_error)?;
+        let anchor =
+            decode_anchor(&self.anchor).map_err(|error| amx_error(error, state_transaction))?;
+        let tracker = AmxForeignInstanceV1::new(self.instance, anchor)
+            .map_err(|error| amx_error(error, state_transaction))?;
         state_transaction
             .world
             .sumeragi_amx
             .get_mut()
             .register_dataspace(self.dataspace, tracker)
-            .map_err(amx_error)
+            .map_err(|error| amx_error(error, state_transaction))
     }
 }
 
@@ -145,8 +165,8 @@ impl Execute for BeginAmxV1 {
             .sumeragi_amx
             .get_mut()
             .begin(height, &self.transaction)
-            .map_err(amx_error)?;
-        write(&record).map_err(amx_error)
+            .map_err(|error| amx_error(error, state_transaction))?;
+        write(&record).map_err(|error| amx_error(error, state_transaction))
     }
 }
 
@@ -171,9 +191,10 @@ impl Execute for RelayAmxPreparedV1 {
             .sumeragi_amx
             .get_mut()
             .relay_prepared(height, &self.proof)
-            .map_err(amx_error)?;
+            .map_err(|error| amx_error(error, state_transaction))?;
         if let AmxRelayOutcome::Decided(decision) = outcome {
-            write(&AmxRecordV1::Decision(decision)).map_err(amx_error)?;
+            write(&AmxRecordV1::Decision(decision))
+                .map_err(|error| amx_error(error, state_transaction))?;
         }
         Ok(())
     }
@@ -191,7 +212,7 @@ impl Execute for RelayAmxHandoffV1 {
             .get_mut()
             .relay_handoff(self.dataspace, &self.proof)
             .map(|_| ())
-            .map_err(amx_error)
+            .map_err(|error| amx_error(error, state_transaction))
     }
 }
 

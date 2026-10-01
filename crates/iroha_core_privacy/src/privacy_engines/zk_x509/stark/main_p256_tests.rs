@@ -209,16 +209,14 @@ fn p256_terminal_registration_scrub_is_recursive_and_idempotent() {
     );
 }
 #[test]
-fn main_p256_log8_verifier_covers_five_buses_and_exact_eight_terminal_bindings() {
+fn main_p256_log8_verifier_covers_five_buses_with_exact_local_air_parity() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let fixed =
         P256MainVerifierFixedSourceV1::new_v1().expect("shared verifier-fixed P-256 source");
-    let claims = p256_main_terminal_claims_fixture_v1();
     let mut source = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
         p256_main_provider_post_base_fixture_v1(),
-        &claims,
     )
     .expect("closed log8 verifier source");
     assert!(core::ptr::eq(source.fixed, &fixed));
@@ -245,22 +243,45 @@ fn main_p256_log8_verifier_covers_five_buses_and_exact_eight_terminal_bindings()
             .expect("scalar opened residues");
         assert_eq!(
             residues.len(),
-            P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1 + 2 * P256_SCALAR_BIT_BUS_LANES_V1
+            P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1
         );
         let fixed_opening = source.fixed_openings[signature]
             .get(&query_index)
             .expect("verifier-generated fixed opening");
-        let expected = evaluate_p256_scalar_source_terminal_openings_v1(
-            p256_scalar_bit_bus_stark_last_active_selector_v1(fixed_opening),
-            source.terminals[signature].buses.arithmetic_scalar,
-            source.terminals[signature].buses.window_scalar,
-            p256_scalar_bit_bus_opened_terminals_v1(&aux),
-        );
-        assert_eq!(
-            &residues[P256_SCALAR_BIT_BUS_STARK_CONSTRAINT_COUNT_V1..],
-            expected.as_slice(),
-            "signature {signature} must expose exactly the fixed-selector terminal bindings"
-        );
+        let expected = super::super::p256_scalar_bit_bus::evaluate_p256_scalar_bit_bus_stark_residues_over_field_v1(
+            &base, &base, &aux, &aux, fixed_opening, source.challenges,
+        ).expect("independent local scalar AIR");
+        assert_eq!(residues, expected, "signature {signature} local AIR parity");
+        // The eight source products are private joined-link obligations. Each
+        // actual scalar endpoint still participates in the local recurrence.
+        for column in super::super::p256_scalar_bit_bus::p256_scalar_bit_bus_terminal_columns_v1()
+            .into_iter()
+            .flatten()
+        {
+            let mut changed = aux;
+            changed[column] = F::ONE;
+            let changed_opening = RegisteredOpenedRowsV1 {
+                base_current: &base,
+                base_next: &base,
+                aux_current: &changed,
+                aux_next: &aux,
+            };
+            let actual = p256_scalar_opened_residues_v1(
+                registration,
+                changed_opening,
+                fixed_opening,
+                source.challenges,
+            )
+            .expect("mutated private scalar opening");
+            let independent = super::super::p256_scalar_bit_bus::evaluate_p256_scalar_bit_bus_stark_residues_over_field_v1(
+                &base, &base, &changed, &aux, fixed_opening, source.challenges,
+            ).expect("independent mutated scalar AIR");
+            assert_eq!(actual, independent);
+            assert_ne!(
+                actual, expected,
+                "signature {signature}, private endpoint {column}"
+            );
+        }
         assert_eq!(source.fixed_openings[signature].len(), 2);
     }
     assert_eq!(
@@ -277,12 +298,10 @@ fn main_p256_log8_closed_provider_routes_only_the_concrete_verifier() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let fixed =
         P256MainVerifierFixedSourceV1::new_v1().expect("shared verifier-fixed P-256 source");
-    let claims = p256_main_terminal_claims_fixture_v1();
     let mut scalar = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
         p256_main_provider_post_base_fixture_v1(),
-        &claims,
     )
     .expect("closed log8 verifier source");
     let registration = scalar.registrations[2].main;
@@ -335,7 +354,6 @@ fn main_p256_log8_verifier_rejects_adversarial_inputs_before_sampling() {
         &layout,
         &fixed,
         p256_main_provider_post_base_fixture_v1(),
-        &claims,
     )
     .expect("closed log8 verifier source");
     let registration = source.registrations[0].main;
@@ -432,14 +450,8 @@ fn main_p256_log8_verifier_rejects_adversarial_inputs_before_sampling() {
         .scalar_bus_arithmetic[0]
         .add(F::ONE);
     assert!(
-        MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
-            &layout,
-            &fixed,
-            p256_main_provider_post_base_fixture_v1(),
-            &inconsistent,
-        )
-        .is_err(),
-        "inconsistent proof terminals must reject at construction"
+        main_p256_terminal_registrations_v1(&inconsistent).is_err(),
+        "inconsistent private products must reject at their private owner boundary"
     );
 }
 #[test]
@@ -447,12 +459,10 @@ fn main_p256_log8_verifier_fixed_cache_is_bounded_per_signature() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let fixed =
         P256MainVerifierFixedSourceV1::new_v1().expect("shared verifier-fixed P-256 source");
-    let claims = p256_main_terminal_claims_fixture_v1();
     let mut source = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
         p256_main_provider_post_base_fixture_v1(),
-        &claims,
     )
     .expect("closed log8 verifier source");
     let first = source.registrations[0];
@@ -514,13 +524,10 @@ fn main_p256_log8_shared_central_source_matches_prover_and_verifier() {
         .expect("borrowed bound scalar view");
     let prover = MainP256ScalarProverConstraintSourceV1::for_main_v1(&layout, &bound)
         .expect("bound scalar prover source");
-    let claims = bound
-        .terminal_claims_v1()
-        .expect("central five-signature terminal claims");
     let fixed =
         P256MainVerifierFixedSourceV1::new_v1().expect("shared verifier-fixed P-256 source");
     let mut verifier =
-        MainP256ScalarVerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, &claims)
+        MainP256ScalarVerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
             .expect("witness-free scalar verifier");
     let mut streamed_fixed = 0_usize;
     prover
@@ -957,10 +964,9 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("verifier-owned P-256 fixed source");
     let post_base = p256_main_provider_post_base_fixture_v1();
-    let claims = p256_main_terminal_claims_fixture_v1();
     {
         let mut routed =
-            MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, claims)
+            MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
                 .expect("routed log-five verifier source");
         let registration = routed.bindings[0].main;
         let query_index = 5;
@@ -988,7 +994,7 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
         );
     }
     let mut source =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, claims)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
             .expect("canonical log-five verifier source");
     let bindings = source.bindings.clone();
     for (registration_index, binding) in bindings.iter().copied().enumerate() {
@@ -1024,7 +1030,7 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
         }
     }
     let mut rejected =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, claims)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
             .expect("fresh log-five verifier source");
     let canonical = rejected.bindings[0].main;
     let mut forged_slice = canonical;
@@ -1098,7 +1104,7 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
     );
     assert_eq!(rejected.cached_openings_v1(0), Some(0));
     let mut bounded =
-        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, claims)
+        MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
             .expect("fresh bounded log-five verifier source");
     let stride = 1_usize << (layout.common_lde_log2 - 5);
     for query in 0..(VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1 / 2) {
@@ -1126,8 +1132,87 @@ fn main_p256_log5_verifier_fixed_sampling_is_exact_bounded_and_transactional() {
         Some(VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
     );
 }
+/// Mutate a private endpoint's real auxiliary column at the fixed last row.
+/// This isolates the local recurrence; joined equality has its separate tests.
+fn assert_p256_private_endpoint_local_recurrence_v1(
+    registration: RegisteredSegmentLayoutV1,
+    identity: P256MainRegistrationV1,
+    fixed_source: &P256MainVerifierFixedSourceV1,
+    challenges: P256AggregateChallengesV1,
+    family: super::super::p256_aggregate_adapter::P256PrivateLinkFamilyV1,
+) {
+    let fixed = fixed_source
+        .fixed_row_v1(identity, registration.segment.trace_size() - 1)
+        .expect("verifier-owned final native row");
+    let base = vec![F::ZERO; registration.segment.base_width];
+    let aux = vec![F::ZERO; registration.segment.aux_width];
+    let opening = RegisteredOpenedRowsV1 {
+        base_current: &base,
+        base_next: &base,
+        aux_current: &aux,
+        aux_next: &aux,
+    };
+    let baseline = p256_opened_residues_v1(registration, opening, &fixed, challenges)
+        .expect("canonical-shaped local opening");
+    assert_eq!(baseline.len(), registration.segment.constraint_count);
+    let columns =
+        super::super::p256_aggregate_adapter::p256_private_link_columns_v1(identity, family)
+            .expect("fixed private endpoint columns");
+    for column in columns {
+        let mut changed = aux.clone();
+        changed[column] = F::ONE;
+        // Change both constant copies so the test isolates final-row binding,
+        // rather than relying on the adjacent-row constancy constraint alone.
+        let altered = RegisteredOpenedRowsV1 {
+            base_current: &base,
+            base_next: &base,
+            aux_current: &changed,
+            aux_next: &changed,
+        };
+        let residues = p256_opened_residues_v1(registration, altered, &fixed, challenges)
+            .expect("canonical mutated private opening");
+        assert_eq!(residues.len(), baseline.len());
+        assert!(
+            baseline
+                .iter()
+                .zip(&residues)
+                .any(|(before, after)| *before == F::ZERO && *after != F::ZERO),
+            "private endpoint {identity:?}/{family:?}/{column} escaped its local final-row relation"
+        );
+        changed[column] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+        assert!(
+            p256_opened_residues_v1(
+                registration,
+                RegisteredOpenedRowsV1 {
+                    base_current: &base,
+                    base_next: &base,
+                    aux_current: &changed,
+                    aux_next: &aux,
+                },
+                &fixed,
+                challenges
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        p256_opened_residues_v1(
+            registration,
+            RegisteredOpenedRowsV1 {
+                base_current: &base,
+                base_next: &base,
+                aux_current: &aux[..aux.len() - 1],
+                aux_next: &aux,
+            },
+            &fixed,
+            challenges
+        )
+        .is_err()
+    );
+}
+
 #[test]
-fn main_p256_log5_terminal_selectors_reject_coordinated_chain_forgeries() {
+fn main_p256_log5_private_chain_forgeries_require_local_recurrences() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("verifier-owned P-256 fixed source");
     let post_base = p256_main_provider_post_base_fixture_v1();
@@ -1145,40 +1230,16 @@ fn main_p256_log5_terminal_selectors_reject_coordinated_chain_forgeries() {
         }
         main_p256_terminal_registrations_v1(&forged_claims)
             .expect("coordinated host-side chain remains equal");
-        let mut canonical = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
-            &layout,
+        let verifier =
+            MainP256Log5VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+                .expect("private log-five verifier source");
+        let binding = verifier.bindings[registration_index];
+        assert_p256_private_endpoint_local_recurrence_v1(
+            binding.main,
+            binding.p256,
             &fixed,
-            post_base,
-            canonical_claims,
-        )
-        .expect("canonical log-five verifier");
-        let mut forged = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
-            &layout,
-            &fixed,
-            post_base,
-            forged_claims,
-        )
-        .expect("coherently forged host claims");
-        let registration = canonical.bindings[registration_index].main;
-        let canonical_residues =
-            evaluate_main_p256_log5_zero_opening_v1(&mut canonical, registration, 0)
-                .expect("canonical terminal residues");
-        let forged_residues = evaluate_main_p256_log5_zero_opening_v1(&mut forged, registration, 0)
-            .expect("forged terminal residues");
-        assert_eq!(
-            canonical_residues.len(),
-            registration.segment.constraint_count
-        );
-        assert!(
-            canonical_residues[canonical_residues.len() - P256_CROSS_TRACE_LANES_V1..]
-                .iter()
-                .all(|residue| *residue == F::ZERO)
-        );
-        assert!(
-            forged_residues[forged_residues.len() - P256_CROSS_TRACE_LANES_V1..]
-                .iter()
-                .any(|residue| *residue != F::ZERO),
-            "registration {registration_index} coordinated terminal forgery escaped its fixed selector",
+            verifier.challenges,
+            super::super::p256_aggregate_adapter::P256PrivateLinkFamilyV1::ChainTerminal,
         );
     }
 }
@@ -1288,12 +1349,10 @@ fn main_p256_log16_registration_order_ranges_and_stride_are_exact() {
                 .is_err()
         );
     }
-    let claims = p256_main_terminal_claims_fixture_v1();
     let source = MainP256Log16VerifierConstraintSourceV1::for_main_v1(
         &layout,
         &fixed,
         p256_main_provider_post_base_fixture_v1(),
-        &claims,
     )
     .expect("canonical log-sixteen verifier");
     assert_eq!(
@@ -1455,13 +1514,10 @@ fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
                         Err(ZkX509StarkErrorV1::ProfileMismatch)
                     ));
                     assert_eq!(streamed, 1);
-                    let claims = bound
-                        .terminal_claims_v1()
-                        .expect("central five-signature terminal claims");
                     let fixed = P256MainVerifierFixedSourceV1::new_v1()
                         .expect("independent witness-free fixed source");
                     let mut verifier = MainP256Log16VerifierConstraintSourceV1::for_main_v1(
-                        &layout, &fixed, post_base, &claims,
+                        &layout, &fixed, post_base,
                     )
                     .expect("witness-free log-sixteen verifier source");
                     let root = goldilocks_primitive_root_v1(layout.common_lde_log2)
@@ -1567,9 +1623,8 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("verifier-owned P-256 fixed source");
     let post_base = p256_main_provider_post_base_fixture_v1();
-    let claims = p256_main_terminal_claims_fixture_v1();
     let mut rejected =
-        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, &claims)
+        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
             .expect("fresh log-sixteen verifier");
     let canonical = rejected.bindings[0].main;
     let query_index = 7;
@@ -1712,7 +1767,7 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
             .all(|(index, cache)| matches!(index, 0 | 7) || cache.is_empty())
     );
     let mut transactional =
-        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, &claims)
+        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
             .expect("fresh transactional log-sixteen verifier");
     transactional.bindings[0].main.segment.fixed_width += 1;
     assert!(
@@ -1722,7 +1777,7 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
     );
     assert_eq!(transactional.cached_openings_v1(0), Some(0));
     let mut bounded =
-        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base, &claims)
+        MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
             .expect("fresh bounded log-sixteen verifier");
     let width = bounded.bindings[0].main.segment.fixed_width;
     for index in 0..VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1 {
@@ -1744,113 +1799,43 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
     assert!(bounded.fixed_openings[1].is_empty());
 }
 #[test]
-fn main_p256_log16_terminal_selectors_reject_coordinated_forgeries() {
+fn main_p256_log16_private_forgeries_require_window_and_sink_recurrences() {
+    use super::super::p256_aggregate_adapter::P256PrivateLinkFamilyV1 as Family;
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("verifier-owned P-256 fixed source");
     let post_base = p256_main_provider_post_base_fixture_v1();
-    let mut canonical_claims = p256_main_terminal_claims_fixture_v1();
-    canonical_claims.certificate_or_crl[0].buses.window_scalar =
-        [F::ZERO; P256_SCALAR_BIT_BUS_LANES_V1];
-    canonical_claims.certificate_or_crl[0]
-        .buses
-        .scalar_bus_window = [F::ZERO; P256_SCALAR_BIT_BUS_LANES_V1];
-    let mut verifier = MainP256Log16VerifierConstraintSourceV1::for_main_v1(
-        &layout,
-        &fixed,
-        post_base,
-        &canonical_claims,
-    )
-    .expect("canonical log-sixteen verifier");
-    let bindings = verifier.bindings.clone();
-    let challenges = verifier.challenges;
-    let window = bindings[0];
-    let window_residues = evaluate_main_p256_log16_zero_opening_v1(&mut verifier, window.main, 0)
-        .expect("canonical window terminal residues");
-    let window_fixed = verifier.fixed_openings[0][&0].clone();
-    let window_base = vec![F::ZERO; window.main.segment.base_width];
-    let window_aux = vec![F::ZERO; window.main.segment.aux_width];
-    let window_opening = RegisteredOpenedRowsV1 {
-        base_current: &window_base,
-        base_next: &window_base,
-        aux_current: &window_aux,
-        aux_next: &window_aux,
-    };
-    let window_tail = P256_CROSS_TRACE_LANES_V1 + P256_SCALAR_BIT_BUS_LANES_V1;
-    assert!(
-        window_residues[window_residues.len() - window_tail..]
-            .iter()
-            .all(|residue| *residue == F::ZERO)
-    );
-    let mut forged_cross = canonical_claims;
-    forged_cross.certificate_or_crl[0].cross_sources[1].terminal[0] = F::ONE;
-    forged_cross.certificate_or_crl[0].cross_sources[2].start[0] = F::ONE;
-    let forged_cross_terminal = main_p256_terminal_registration_v1(&forged_cross, 0)
-        .expect("coordinated host-side window chain");
-    let forged_cross_residues = p256_opened_residues_v1(
-        window.main,
-        window_opening,
-        &window_fixed,
-        challenges,
-        &forged_cross_terminal,
-    )
-    .expect("forged window-cross residues");
-    assert!(
-        forged_cross_residues[forged_cross_residues.len() - window_tail
-            ..forged_cross_residues.len() - P256_SCALAR_BIT_BUS_LANES_V1]
-            .iter()
-            .any(|residue| *residue != F::ZERO)
-    );
-    let mut forged_scalar = canonical_claims;
-    forged_scalar.certificate_or_crl[0].buses.window_scalar[0] = F::ONE;
-    forged_scalar.certificate_or_crl[0].buses.scalar_bus_window[0] = F::ONE;
-    let forged_scalar_terminal = main_p256_terminal_registration_v1(&forged_scalar, 0)
-        .expect("coordinated host-side scalar bus");
-    let forged_scalar_residues = p256_opened_residues_v1(
-        window.main,
-        window_opening,
-        &window_fixed,
-        challenges,
-        &forged_scalar_terminal,
-    )
-    .expect("forged window-scalar residues");
-    assert!(
-        forged_scalar_residues[forged_scalar_residues.len() - P256_SCALAR_BIT_BUS_LANES_V1..]
-            .iter()
-            .any(|residue| *residue != F::ZERO)
-    );
-    let sink = bindings[P256_SIGNATURE_COUNT_V1];
-    let sink_residues = evaluate_main_p256_log16_zero_opening_v1(&mut verifier, sink.main, 1)
-        .expect("canonical sink terminal residues");
-    let sink_fixed = verifier.fixed_openings[P256_SIGNATURE_COUNT_V1][&1].clone();
-    let sink_base = vec![F::ZERO; sink.main.segment.base_width];
-    let sink_aux = vec![F::ZERO; sink.main.segment.aux_width];
-    let sink_opening = RegisteredOpenedRowsV1 {
-        base_current: &sink_base,
-        base_next: &sink_base,
-        aux_current: &sink_aux,
-        aux_next: &sink_aux,
-    };
-    assert!(
-        sink_residues[sink_residues.len() - P256_CROSS_TRACE_LANES_V1..]
-            .iter()
-            .all(|residue| *residue == F::ZERO)
-    );
-    let mut forged_sink = canonical_claims;
+    let canonical = p256_main_terminal_claims_fixture_v1();
+    let verifier = MainP256Log16VerifierConstraintSourceV1::for_main_v1(&layout, &fixed, post_base)
+        .expect("canonical log-sixteen verifier");
+    for family in [Family::ChainTerminal, Family::WindowScalar] {
+        let mut forged = canonical;
+        if family == Family::ChainTerminal {
+            forged.certificate_or_crl[0].cross_sources[1].terminal[0] = F::ONE;
+            forged.certificate_or_crl[0].cross_sources[2].start[0] = F::ONE;
+        } else {
+            forged.certificate_or_crl[0].buses.window_scalar[0] = F::ONE;
+            forged.certificate_or_crl[0].buses.scalar_bus_window[0] = F::ONE;
+        }
+        main_p256_terminal_registration_v1(&forged, 0).expect("coordinated private window owner");
+        let binding = verifier.bindings[0];
+        assert_p256_private_endpoint_local_recurrence_v1(
+            binding.main,
+            binding.p256,
+            &fixed,
+            verifier.challenges,
+            family,
+        );
+    }
+    let mut forged_sink = canonical;
     forged_sink.certificate_or_crl[0].cross_sources[3].terminal[0] = F::ONE;
     forged_sink.certificate_or_crl[0].sink[0] = F::ONE;
-    let forged_sink_terminal = main_p256_terminal_registration_v1(&forged_sink, 0)
-        .expect("coordinated host-side sink chain");
-    let forged_sink_residues = p256_opened_residues_v1(
+    main_p256_terminal_registration_v1(&forged_sink, 0).expect("coordinated private sink owner");
+    let sink = verifier.bindings[P256_SIGNATURE_COUNT_V1];
+    assert_p256_private_endpoint_local_recurrence_v1(
         sink.main,
-        sink_opening,
-        &sink_fixed,
-        challenges,
-        &forged_sink_terminal,
-    )
-    .expect("forged sink residues");
-    assert!(
-        forged_sink_residues[forged_sink_residues.len() - P256_CROSS_TRACE_LANES_V1..]
-            .iter()
-            .any(|residue| *residue != F::ZERO)
+        sink.p256,
+        &fixed,
+        verifier.challenges,
+        Family::ChainTerminal,
     );
 }

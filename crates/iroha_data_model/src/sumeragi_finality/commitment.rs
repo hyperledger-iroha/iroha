@@ -358,6 +358,9 @@ impl ExecutionResultCommitment {
         // 31 seats, alongside the tighter per-sequence, field and nesting caps. The 64 KiB
         // frame ceiling bounds both budgets; stricter original caller limits stay in force.
         // Decode accounting alone grants no production pool owner.
+        // Intrinsic schema/protocol ceilings remain terminal without an inherited caller
+        // scope. A local allocator failure is always operational, even at the outer boundary.
+        let outer_scope = norito::core::decode_limits_active();
         let canonical = norito::canonical_decode_limits(preimage.len());
         let decoded: Self = norito::decode_canonical_with_limits(
             preimage,
@@ -369,7 +372,14 @@ impl ExecutionResultCommitment {
                 32,
             ),
         )
-        .map_err(|error| CommitmentError::Encoding(error.to_string()))?;
+        .map_err(|error| {
+            if (outer_scope || matches!(error, norito::Error::AllocationFailed { .. }))
+                && let Some(resource) = error.decode_resource_error()
+            {
+                return CommitmentError::Resource(resource);
+            }
+            CommitmentError::Encoding(error.to_string())
+        })?;
         decoded.validate()?;
         Ok(decoded)
     }
@@ -383,8 +393,8 @@ impl ExecutionResultCommitment {
     }
 }
 
-/// Why `R` could not be computed. Every variant is a deterministic function of the executed
-/// block and its witness (a local bug, never the proposer's fault alone).
+/// Why `R` could not be computed or its canonical preimage could not be decoded.
+/// Local decoder resource refusals are distinct from deterministic invalid input.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum CommitmentError {
     /// The executed block carries no execution result.
@@ -417,6 +427,9 @@ pub enum CommitmentError {
     /// A Norito encoding or decoding failure.
     #[error("encoding: {0}")]
     Encoding(String),
+    /// The caller's original decoder scope or local allocator refused without a verdict.
+    #[error("local result decoder resource refusal: {0}")]
+    Resource(norito::core::DecodeResourceError),
 }
 
 #[cfg(test)]

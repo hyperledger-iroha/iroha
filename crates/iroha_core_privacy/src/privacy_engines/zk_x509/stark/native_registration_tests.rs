@@ -1036,8 +1036,8 @@ fn p256_role_registrations_are_exact_minimal_and_bucketed_by_native_log() {
         }
     );
     assert_eq!(
-        P256_VALUE_EXECUTION_REGISTERED_CONSTRAINT_COUNT_V1, 222,
-        "value execution binds value, arithmetic-copy, and writer terminals"
+        P256_VALUE_EXECUTION_REGISTERED_CONSTRAINT_COUNT_V1, 210,
+        "local value execution retains value, arithmetic-copy, and writer recurrences; private joins are separate"
     );
     assert!(
         wallet
@@ -1269,7 +1269,7 @@ fn p256_terminal_registration_and_transcript_reject_all_role_mutations() {
     });
 }
 #[test]
-fn value_execution_writer_terminal_is_now_bound_under_coordinated_forgery() {
+fn value_execution_writer_private_terminal_requires_local_recurrence_under_coordinated_forgery() {
     let role = P256EcdsaRoleV1::WalletOwnership;
     let terminals = zero_p256_terminal_fixture(role);
     terminals
@@ -1288,71 +1288,15 @@ fn value_execution_writer_terminal_is_now_bound_under_coordinated_forgery() {
             p256_instance_v1(P256_SIGNATURE_COUNT_V1 - 1, 0).expect("wallet instance"),
         )
         .expect("value-execution registration");
-    let base_current = [F::ZERO; P256_VALUE_BUS_STARK_BASE_WIDTH_V1];
-    let base_next = [F::ZERO; P256_VALUE_BUS_STARK_BASE_WIDTH_V1];
-    let aux_current = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1];
-    let aux_next = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1];
-    let opening = RegisteredOpenedRowsV1 {
-        base_current: &base_current,
-        base_next: &base_next,
-        aux_current: &aux_current,
-        aux_next: &aux_next,
-    };
-    let mut fixed = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1];
-    let last_selector_column = (0..fixed.len())
-        .find(|column| {
-            fixed[*column] = F::ONE;
-            let selected = p256_value_execution_last_selector_v1(&fixed) == F::ONE;
-            fixed[*column] = F::ZERO;
-            selected
-        })
-        .expect("verifier-derived value-execution last selector");
-    fixed[last_selector_column] = F::ONE;
-    let canonical = p256_opened_residues_v1(
+    let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("verifier-owned fixed topology");
+    let identity =
+        p256_main_registration_from_main_layout_v1(registration).expect("exact writer owner");
+    assert_p256_private_endpoint_local_recurrence_v1(
         registration,
-        opening,
+        identity,
         &fixed,
         p256_aggregate_challenges_fixture(),
-        &terminals,
-    )
-    .expect("canonical value-execution residues");
-    let forged_residues = p256_opened_residues_v1(
-        registration,
-        opening,
-        &fixed,
-        p256_aggregate_challenges_fixture(),
-        &forged,
-    )
-    .expect("forged value-execution residues");
-    assert_eq!(
-        canonical.len(),
-        P256_VALUE_EXECUTION_REGISTERED_CONSTRAINT_COUNT_V1
-    );
-    assert!(
-        canonical[P256_VALUE_EXECUTION_AGGREGATE_CONSTRAINT_COUNT_V1..]
-            .iter()
-            .all(|residue| *residue == F::ZERO)
-    );
-    let writer_terminal = &forged_residues[forged_residues.len() - P256_CROSS_TRACE_LANES_V1..];
-    assert_ne!(writer_terminal[0], F::ZERO);
-    assert!(
-        writer_terminal[1..]
-            .iter()
-            .all(|residue| *residue == F::ZERO)
-    );
-    fixed[last_selector_column] = F::ZERO;
-    let nongated = p256_opened_residues_v1(
-        registration,
-        opening,
-        &fixed,
-        p256_aggregate_challenges_fixture(),
-        &forged,
-    )
-    .expect("nonterminal value-execution residues");
-    assert!(
-        nongated[P256_VALUE_EXECUTION_AGGREGATE_CONSTRAINT_COUNT_V1..]
-            .iter()
-            .all(|residue| *residue == F::ZERO)
+        super::super::p256_aggregate_adapter::P256PrivateLinkFamilyV1::ChainTerminal,
     );
 }
 #[test]

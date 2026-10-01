@@ -199,3 +199,122 @@ fn body_only_read_releases_original_qc_witness_before_returning_ready() {
     drop(restoration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
+    use iroha_data_model::sumeragi_finality::{CommitmentError, MAX_RESULT_PREIMAGE_BYTES};
+
+    let _epoch = crossbeam_epoch::pin();
+    let mut chain = CertifiedTestChain::npos_boundary_fixture();
+    chain.commit_with(Some(10_000), Vec::new(), Signers::LastThree);
+    let parent = chain.committed(9);
+    let ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
+        panic!("real parent authenticates the selected authority");
+    };
+    let crypto = Arc::new(BlsCrypto::new());
+    crypto
+        .admit_committee(scheduled.epoch.committee.iter().map(|member| {
+            (
+                member.validator.public_key(),
+                member.proof_of_possession.as_slice(),
+            )
+        }))
+        .unwrap();
+    let schedule = Arc::new(FixedSchedule {
+        instance: chain.instance(),
+        config: scheduled.height_config().unwrap(),
+    });
+    let verifier = Arc::new(NativePastaVerifier::new(
+        chain.instance(),
+        chain.network_id(),
+    ));
+    let block = chain
+        .kura()
+        .get_block(std::num::NonZeroUsize::new(10).unwrap())
+        .unwrap();
+    let budget = AllocationBudget::new(1 << 27);
+    let decoded = CertificateRead::new(block.clone(), budget.clone())
+        .complete(&budget)
+        .unwrap_or_else(|_| panic!("original certified source"));
+    let source = certified_source(
+        &*schedule,
+        &*crypto,
+        &*verifier,
+        10,
+        &decoded.header,
+        &decoded.commit_qc,
+    )
+    .unwrap();
+    let bitmap = decoded.commit_qc.signers.as_bytes().as_ptr();
+    let shares = decoded.commit_qc.attestations.as_ptr();
+    let witness = decoded
+        .commit_qc
+        .attestation_witness
+        .as_ref()
+        .unwrap()
+        .as_slice()
+        .as_ptr();
+    let read = CommittedRead {
+        height: 10,
+        budget: budget.clone(),
+        crypto: crypto.clone(),
+        schedule: schedule.clone(),
+        verifier: verifier.clone(),
+        phase: Phase::Projecting(body_read::StoredBodyRead::from_decoded(
+            source.clone(),
+            decoded,
+            budget.clone(),
+            crypto.clone(),
+        )),
+    };
+    let store = KuraBlockStore::new(
+        chain.kura().clone(),
+        crypto,
+        1,
+        Staging::new(),
+        budget.clone(),
+        schedule,
+        verifier,
+    );
+    *store.read.lock() = Some(read);
+    let retained = budget.reserved_bytes();
+    // A request for another height must first preserve the original refused read.
+    for height in [10, 9] {
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(96, MAX_RESULT_PREIMAGE_BYTES, usize::MAX, 0, 32),
+            || store.committed_body(height),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(matches!(
+            error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<CommitmentError>()),
+            Some(CommitmentError::Resource(_))
+        ));
+        assert_eq!(
+            store
+                .read
+                .lock()
+                .as_ref()
+                .expect("retain original read slot")
+                .height(),
+            10
+        );
+        assert_eq!(budget.reserved_bytes(), retained);
+    }
+    let (body, qc) = store.committed_body(10).unwrap().unwrap();
+    assert_eq!(body.source(), &source);
+    assert_eq!(qc.signers.as_bytes().as_ptr(), bitmap);
+    assert_eq!(qc.attestations.as_ptr(), shares);
+    let original = qc.attestation_witness.as_ref().unwrap();
+    assert_eq!(original.as_slice().as_ptr(), witness);
+    assert_eq!(
+        original.as_slice(),
+        block.commit_certificate().unwrap().result_preimage()
+    );
+    assert!(original.admitted_to(&budget));
+    assert!(store.read.lock().is_none());
+    drop((body, qc, store));
+    assert_eq!(budget.reserved_bytes(), 0);
+}

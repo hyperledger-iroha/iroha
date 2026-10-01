@@ -266,6 +266,8 @@ impl KagemushaAppEnrollmentPossessionChallengeV1 {
 pub fn kagemusha_ordinary_android_app_key_alias_v1(
     original: &super::KagemushaOrdinaryAppEnrollmentChallengeV1,
 ) -> Result<String, String> {
+    use core::fmt::Write as _;
+
     if original.platform_class != KagemushaHardwarePlatformClassV1::AndroidKeyMint {
         return Err("ordinary Android alias platform differs".into());
     }
@@ -274,7 +276,6 @@ pub fn kagemusha_ordinary_android_app_key_alias_v1(
     hash.update(original.canonical_signing_bytes()?);
     let digest: [u8; 32] = hash.finalize().into();
     let mut alias = String::from("kagemusha-ordinary-app-v1-");
-    use core::fmt::Write as _;
     for byte in digest {
         write!(&mut alias, "{byte:02x}").map_err(|_| "ordinary alias encoding failed")?;
     }

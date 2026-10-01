@@ -18,6 +18,8 @@ pub enum TryReadError {
     StateVmInitialization(#[source] ivm::VMError),
     /// Local State execution resources were unavailable during snapshot restore
     StateExecutionDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
+    /// Local original-pool admission of restored lane signer/sample custody failed: {0}
+    StateNativeLaneCustody(#[source] iroha_data_model::sumeragi_lanes::LaneStateAdmissionError),
     /// Local original-pool admission of the restored native schedule failed: {0}
     StateNativeSchedule(#[source] crate::sumeragi::schedule::ScheduleError),
     /// Signed snapshot payload is not the single canonical first-release JSON encoding
@@ -156,6 +158,9 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
             crate::state::deserialize::StateRestoreError::ExecutionDeferred(error) => {
                 Self::StateExecutionDeferred(error)
             }
+            crate::state::deserialize::StateRestoreError::NativeLaneCustody(error) => {
+                Self::StateNativeLaneCustody(error)
+            }
             crate::state::deserialize::StateRestoreError::NativeSchedule(error) => {
                 Self::StateNativeSchedule(error)
             }
@@ -265,3 +270,9 @@ mod native_schedule_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod native_lane_custody_tests;
+
+#[cfg(test)]
+mod native_lane_sample_tests;

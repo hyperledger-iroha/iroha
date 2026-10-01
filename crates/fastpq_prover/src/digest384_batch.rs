@@ -4,29 +4,36 @@
 //! accelerator only resumes a fresh final field; CPU execution remains an
 //! explicit policy choice; required-device failures are returned to the caller.
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
 #[cfg(any(test, feature = "fastpq-gpu"))]
 use fastpq_isi::GoldilocksDigest384V1;
 #[cfg(test)]
 use rayon::prelude::*;
 
+use crate::DigestExecutionV1;
 #[cfg(test)]
 use crate::backend::GpuBackend;
+#[cfg(any(test, feature = "fastpq-gpu"))]
 use crate::digest_executor::{MAX_DIGEST384_BATCH_FRAMES_V1, MAX_DIGEST384_BATCH_WORDS_V1};
 #[cfg(feature = "fastpq-gpu")]
 use crate::digest384_gpu::{
     Digest384GpuBackendV1, Digest384GpuErrorV1, Digest384ReadinessV1, backend_readiness_v1,
 };
-use crate::{DigestExecutionV1, gpu::GpuError};
+#[cfg(any(test, feature = "fastpq-gpu"))]
+use crate::gpu::GpuError;
 
 /// Maximum final byte payload admitted to one continuation dispatch.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
 /// Bound shared backing buffers, retained/oversized pool pages, returned digests
 /// and fixed readiness payload. Count the full pool even on CPU for stable admission.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
 /// The same bound applies to CPU policy; it does not include driver/allocator overhead.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub fn last_fields_payload_charge(
     job_count: usize,
     total_final_field_bytes: usize,
@@ -34,6 +41,7 @@ pub fn last_fields_payload_charge(
     last_fields_charge(job_count, total_final_field_bytes).map_err(native_error)
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 fn last_fields_charge(job_count: usize, bytes: usize) -> Result<usize, GpuError> {
     if job_count > MAX_DIGEST384_BATCH_FRAMES_V1 || bytes > MAX_LAST_FIELD_BYTES {
         return Err(GpuError::InvalidInput(
@@ -102,6 +110,7 @@ fn validate_jobs(jobs: &[Digest384LastFieldJob<'_>]) -> Result<usize, GpuError> 
     Ok(bytes)
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 fn native_error(error: impl core::fmt::Display) -> crate::Error {
     crate::Error::NativeDigestExecution {
         details: error.to_string(),
@@ -227,12 +236,14 @@ pub fn execute_last_fields(
 }
 
 /// A fresh canonical typed prefix and its exact final byte field.
+#[cfg(any(test, feature = "fastpq-gpu"))]
 #[derive(Clone)]
 pub struct Digest384LastFieldJob<'a> {
     prefix: GoldilocksDigest384LastFieldStreamV1,
     final_field: &'a [u8],
 }
 
+#[cfg(any(test, feature = "fastpq-gpu"))]
 impl core::fmt::Debug for Digest384LastFieldJob<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Digest384LastFieldJob")

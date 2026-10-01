@@ -218,6 +218,7 @@ fn sumeragi_amx_registration_needs_genesis_or_permission() {
     malformed.anchor = vec![1, 2, 3];
     let mut genesis = state.block(header(1));
     assert!(execute(&mut genesis, malformed).is_err());
+    assert!(genesis.require_storage_admission().is_ok());
     execute(&mut genesis, ds1.register()).unwrap();
     assert!(execute(&mut genesis, ds1.register()).is_err());
 }
@@ -323,5 +324,186 @@ fn sumeragi_amx_write_proofs_match_the_executor_write_root() {
         let (path, value) = AmxWriteProofV1::from_writes(pairs(), &key).unwrap();
         assert_eq!(value, record.witness_value().unwrap());
         assert_eq!(path.root(&key, &value).unwrap(), root);
+    }
+}
+
+fn refused_decode_limits() -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        96,
+        iroha_data_model::sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES,
+        usize::MAX,
+        0,
+        32,
+    )
+}
+
+#[test]
+fn amx_anchor_decode_refusal_cannot_publish_even_when_instruction_error_is_caught() {
+    use crate::state::{StateStorageAdmissionError, storage_transactions::TransactionsBlockError};
+    use iroha_data_model::sumeragi_amx::AmxError;
+    let dataspace = Dataspace::new(DS1);
+    let instruction = dataspace.register();
+    let original = instruction.anchor.clone();
+    let expected = norito::with_decode_limits_scope(refused_decode_limits(), || {
+        super::decode_anchor(&original)
+    })
+    .unwrap_err();
+    let AmxError::Resource(resource) = expected else {
+        panic!("anchor decoder lost original local category: {expected:?}")
+    };
+    let local = StateStorageAdmissionError::AmxDecode(resource);
+    assert!(local.release_wait().is_none());
+    let state = blank_state();
+    let mut block = state.block(header(1));
+    let before = block.world.sumeragi_amx.get().clone();
+    let mut transaction = block.transaction();
+    let error = norito::with_decode_limits_scope(refused_decode_limits(), || {
+        instruction.execute(&authority(7), &mut transaction)
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("resource refusal"));
+    assert_eq!(transaction.require_storage_admission(), Err(local.clone()));
+    // Catching the inner instruction error cannot grant a successful apply or publication.
+    transaction.apply();
+    assert_eq!(block.require_storage_admission(), Err(local.clone()));
+    assert_eq!(block.world.sumeragi_amx.get(), &before);
+    assert!(
+        matches!(block.commit_world_overlay_for_testing(), Err(TransactionsBlockError::LocalStateStorage(error)) if error == local)
+    );
+    let mut retry = state.block(header(1));
+    let again = dataspace.register();
+    assert_eq!(again.anchor, original);
+    execute(&mut retry, again).unwrap();
+    assert!(retry.require_storage_admission().is_ok());
+    assert_eq!(retry.world.sumeragi_amx.get().dataspaces.len(), 1);
+}
+
+#[test]
+fn amx_relay_decode_refusal_keeps_original_undecided_record_and_retries_proof() {
+    use crate::state::{StateStorageAdmissionError, storage_transactions::TransactionsBlockError};
+    let mut first = Dataspace::new(DS1);
+    let second = Dataspace::new(DS2);
+    let tx = transaction(9, 71);
+    let proof = first.prove(&yes(&tx, DS1));
+    let original = proof.clone();
+    let mut seeded = SumeragiAmxState::default();
+    for dataspace in [&first, &second] {
+        seeded
+            .register_dataspace(
+                dataspace.id,
+                AmxForeignInstanceV1::new(
+                    dataspace.instance(),
+                    genesis_epoch(dataspace.chain.genesis()).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    seeded.begin(1, &tx).unwrap();
+    let state = blank_state();
+    let mut block = state.block(header(2));
+    *block.world.sumeragi_amx.get_mut() = seeded.clone();
+    let mut transaction = block.transaction();
+    norito::with_decode_limits_scope(refused_decode_limits(), || {
+        RelayAmxPreparedV1 { proof }.execute(&authority(7), &mut transaction)
+    })
+    .unwrap_err();
+    let error = transaction.require_storage_admission().unwrap_err();
+    assert!(matches!(error, StateStorageAdmissionError::AmxDecode(_)));
+    drop(transaction);
+    assert_eq!(block.world.sumeragi_amx.get(), &seeded);
+    assert!(
+        matches!(block.commit_world_overlay_for_testing(), Err(TransactionsBlockError::LocalStateStorage(local)) if local == error)
+    );
+    let mut retry = state.block(header(2));
+    *retry.world.sumeragi_amx.get_mut() = seeded;
+    execute(&mut retry, RelayAmxPreparedV1 { proof: original }).unwrap();
+    assert!(retry.require_storage_admission().is_ok());
+    let record = retry
+        .world
+        .sumeragi_amx
+        .get()
+        .transaction(&tx.id().unwrap())
+        .unwrap();
+    assert!(record.decided.is_none());
+    assert_eq!(record.yes.len(), 1);
+}
+
+#[test]
+fn amx_registration_borrows_exact_direct_and_role_grants_under_decode_refusal() {
+    use crate::{kura::Kura, query::store::LiveQueryStore, role::RoleIdWithOwner, state::World};
+    use iroha_data_model::{
+        Registrable,
+        account::Account,
+        permission::Permission,
+        role::{Role, RoleId},
+    };
+    use iroha_executor_data_model::permission::parameter::CanSetParameters;
+    use iroha_primitives::json::Json;
+
+    let actor = authority(7);
+    let dataspace = Dataspace::new(DS1);
+    let required = Permission::from(CanSetParameters);
+    assert_eq!(required.name(), "CanSetParameters");
+    assert_eq!(required.payload().get().as_str(), "null");
+    for through_role in [false, true] {
+        for (name, payload, expected) in [
+            (required.name(), "null", true),
+            (required.name(), "\"null\"", false),
+            (required.name(), "{}", false),
+            (required.name(), "false", false),
+            ("CanSetParametersSubstituted", "null", false),
+        ] {
+            let grant = Permission::new(
+                name.to_owned(),
+                Json::from_raw_json(payload.to_owned()).unwrap(),
+            );
+            assert_eq!(grant == required, expected);
+            let mut world = World::with([], [Account::new(actor.clone()).build(&actor)], []);
+            if through_role {
+                let id: RoleId = "amx_parameters".parse().unwrap();
+                let role = Role::new(id.clone(), actor.clone())
+                    .add_permission(grant)
+                    .build(&actor);
+                world.roles.insert(id.clone(), role);
+                world
+                    .account_roles
+                    .insert(RoleIdWithOwner::new(actor.clone(), id), ());
+            } else {
+                world
+                    .account_permissions
+                    .insert(actor.clone(), [grant].into_iter().collect());
+            }
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut block = state.block(header(2));
+            let instruction = dataspace.register();
+            let mut transaction = block.transaction();
+            let (present, usage) =
+                norito::core::with_decode_limits_measured(refused_decode_limits(), || {
+                    super::has_permission(&transaction.world, &actor)
+                });
+            assert_eq!(present, expected, "role={through_role} {name}({payload})");
+            assert_eq!(usage.total_allocated_bytes(), 0);
+            let error = norito::with_decode_limits_scope(refused_decode_limits(), || {
+                instruction.execute(&actor, &mut transaction)
+            })
+            .unwrap_err();
+            assert_eq!(transaction.require_storage_admission().is_err(), expected);
+            if !expected {
+                assert!(error.to_string().contains("CanSetParameters"));
+            }
+            assert!(transaction.world.sumeragi_amx.get().dataspaces.is_empty());
+            drop(transaction);
+            drop(block);
+            if expected {
+                let mut retry = state.block(header(2));
+                execute(&mut retry, dataspace.register()).unwrap();
+                assert_eq!(retry.world.sumeragi_amx.get().dataspaces.len(), 1);
+            }
+        }
     }
 }

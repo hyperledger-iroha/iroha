@@ -6,7 +6,7 @@
 //! products.
 //!
 //! Writer source factors are attached to the committed value-bus execution rows. Repeated uses have
-//! the exact first-release multiplicities `{1, 64, 65, 129}` and are exponentiated with a fixed
+//! the exact first-release multiplicities `{1, 2, 64, 65, 129}` and are exponentiated with a fixed
 //! eight-square addition chain, keeping the maximum constraint degree at three. The binder sink
 //! consumes its committed writer/external copies directly. Window, reduction, and low-s source
 //! products use the generic six-slot product evaluator below and must be appended to their
@@ -34,6 +34,7 @@
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_external_binding_air::{
     P256ExternalBindingFixedAccessV1, P256ExternalBindingRowV1, P256ExternalBindingTraceV1,
+    p256_input_selection_byte_v1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_value_bus::{
@@ -43,10 +44,12 @@ use super::p256_value_bus::{
 use super::{
     p256_ecdsa_air::P256EcdsaRoleV1,
     p256_external_binding_air::{
-        P256_EXTERNAL_BINDINGS_PER_ROW_V1, P256ExternalBindingCrossExternalSourceV1,
+        P256_EXTERNAL_BINDINGS_PER_ROW_V1, P256_INPUT_SELECTION_ROW_START_V1,
+        P256_INPUT_SELECTION_SELECTOR_ROW_V1, P256ExternalBindingCrossExternalSourceV1,
         P256ExternalBindingCrossSourceV1, P256ExternalBindingErrorV1,
         compile_zk_x509_p256_external_cross_sources_v1, p256_external_binding_active_equalities_v1,
         p256_external_binding_dynamic_sources_v1, p256_external_binding_rows_v1,
+        p256_selected_input_writer_id_v1,
     },
     p256_value_bus::{
         P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1, P256_VALUE_BUS_LIMBS_V1,
@@ -149,12 +152,12 @@ pub(crate) const P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1: usize =
 const P256_CROSS_TRACE_VALUE_CELLS_V1: usize = (P256_CROSS_TRACE_INITIAL_VALUES_V1
     + P256_CROSS_TRACE_ARITHMETIC_OPERATIONS_V1)
     * P256_VALUE_BUS_LIMBS_V1;
-const P256_CROSS_TRACE_CERTIFICATE_WRITER_SOURCE_CELLS_V1: usize = 14_208;
-const P256_CROSS_TRACE_WALLET_WRITER_SOURCE_CELLS_V1: usize = 14_224;
+const P256_CROSS_TRACE_CERTIFICATE_WRITER_SOURCE_CELLS_V1: usize = 14_240;
+const P256_CROSS_TRACE_WALLET_WRITER_SOURCE_CELLS_V1: usize = 14_240;
 #[cfg(test)]
-const P256_CROSS_TRACE_CERTIFICATE_EVENTS_V1: usize = 216_304;
+const P256_CROSS_TRACE_CERTIFICATE_EVENTS_V1: usize = 216_384;
 #[cfg(test)]
-const P256_CROSS_TRACE_WALLET_EVENTS_V1: usize = 216_336;
+const P256_CROSS_TRACE_WALLET_EVENTS_V1: usize = 216_416;
 const P256_CROSS_TRACE_MAX_WRITER_MULTIPLICITY_V1: u16 = 129;
 const _: () = assert!(P256_CROSS_TRACE_VALUE_BUS_ACTIVE_ROWS_V1 == 949_312);
 const _: () = assert!(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 == 2);
@@ -183,6 +186,8 @@ pub(crate) enum P256CrossTraceEndpointV1 {
     Writer,
     /// Window, reduction, result-x, or low-s source cell.
     External,
+    /// Unreduced digest input limb from the actual digest-reduction WORD column.
+    DigestInput,
     /// Arithmetic `c`-bit endpoint reserved for scalar-bit source binding.
     #[cfg(test)]
     ScalarArithmetic,
@@ -195,6 +200,7 @@ impl P256CrossTraceEndpointV1 {
         match self {
             Self::Writer => F(1),
             Self::External => F(2),
+            Self::DigestInput => F(5),
             #[cfg(test)]
             Self::ScalarArithmetic => F(3),
             #[cfg(test)]
@@ -523,7 +529,7 @@ fn validate_regular_fixed_v1(
                     || (event.active == F::ZERO
                         && (event.endpoint != F::ZERO || event.address != F::ZERO))
                     || (event.active == F::ONE
-                        && !matches!(event.endpoint, F(1) | F(2) | F(3) | F(4)))
+                        && !matches!(event.endpoint, F(1) | F(2) | F(3) | F(4) | F(5)))
             })
         {
             return Err(P256CrossTraceBusErrorV1::Topology);
@@ -562,7 +568,7 @@ impl P256CrossTraceSinkFixedV1 {
     pub(crate) fn compile_v1(role: P256EcdsaRoleV1) -> Result<Self, P256CrossTraceBusErrorV1> {
         let logical = compile_zk_x509_p256_external_cross_sources_v1(role)?;
         if logical.len() != p256_external_binding_rows_v1(role)
-            || logical.len() > P256_CROSS_TRACE_SINK_TRACE_SIZE_V1
+            || logical.len() >= P256_INPUT_SELECTION_ROW_START_V1
         {
             return Err(P256CrossTraceBusErrorV1::Topology);
         }
@@ -628,6 +634,26 @@ impl P256CrossTraceSinkFixedV1 {
                     constant[slot] = F::ONE;
                     constant_value[slot] = value;
                 }
+            }
+        }
+        // Every old equality event is retained. The separate byte region reuses
+        // event zero only where all three legacy writer/external pairs are zero.
+        if (P256_INPUT_SELECTION_ROW_START_V1..P256_INPUT_SELECTION_SELECTOR_ROW_V1).contains(&row)
+        {
+            let byte = row - P256_INPUT_SELECTION_ROW_START_V1;
+            if byte.is_multiple_of(2) {
+                let limb = 15 - (byte % 32) / 2;
+                let tag = match p256_selected_input_writer_id_v1(byte / 32)? {
+                    Some(id) => P256CrossTraceTagV1 {
+                        endpoint: P256CrossTraceEndpointV1::Writer,
+                        address: writer_address_v1(id.0, limb as u8)?,
+                    },
+                    None => P256CrossTraceTagV1 {
+                        endpoint: P256CrossTraceEndpointV1::DigestInput,
+                        address: limb as u32,
+                    },
+                };
+                events[0] = P256CrossTraceEventFixedV1::active(tag);
             }
         }
         Ok(P256CrossTraceSinkFixedRowV1 {
@@ -715,13 +741,12 @@ fn compute_sink_terminal_v1(
     challenges: P256CrossTraceChallengesV1,
 ) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256CrossTraceBusErrorV1> {
     let mut running = [F::ONE; P256_CROSS_TRACE_LANES_V1];
-    for row in 0..fixed.logical_rows_v1() {
+    for row in (0..fixed.logical_rows_v1())
+        .chain(P256_INPUT_SELECTION_ROW_START_V1..P256_INPUT_SELECTION_SELECTOR_ROW_V1)
+    {
         let fixed_row = fixed.row_v1(row)?;
-        let binding_row = binding
-            .rows
-            .get(row)
-            .ok_or(P256CrossTraceBusErrorV1::Topology)?;
-        if evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(fixed_row, binding_row)
+        let binding_row = sink_binding_row_v1(binding, row);
+        if evaluate_zk_x509_p256_cross_trace_sink_local_constraints_v1(fixed_row, &binding_row)
             .into_iter()
             .any(|residue| residue != F::ZERO)
         {
@@ -729,7 +754,7 @@ fn compute_sink_terminal_v1(
         }
         let aux_row = build_regular_row_v1(
             fixed_row.product,
-            sink_source_values_v1(binding_row),
+            sink_stream_source_values_v1(binding, row)?,
             running,
             challenges,
         );
@@ -760,10 +785,9 @@ impl<'a> P256CrossTraceSinkStreamV1<'a> {
             return Ok(None);
         }
         let fixed = self.fixed.row_v1(self.next_row)?;
-        let binding = sink_binding_row_v1(self.binding, self.next_row);
         let mut row = build_regular_row_v1(
             fixed.product,
-            sink_source_values_v1(&binding),
+            sink_stream_source_values_v1(self.binding, self.next_row)?,
             self.running,
             self.challenges,
         );
@@ -856,6 +880,27 @@ fn sink_source_values_v1(
         }
     })
 }
+/// Native replay of the same affine source used at F/Fp4 openings. Inactive
+/// neighboring-byte values are zero; no witness-selected event or address exists.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn sink_stream_source_values_v1(
+    binding: &P256ExternalBindingTraceV1,
+    row: usize,
+) -> Result<[F; P256_CROSS_TRACE_EVENT_SLOTS_V1], P256CrossTraceBusErrorV1> {
+    let mut sources = sink_source_values_v1(&sink_binding_row_v1(binding, row));
+    for (position, weight) in [(row, 256_u64), (row + 1, 1_u64)] {
+        if (P256_INPUT_SELECTION_ROW_START_V1..P256_INPUT_SELECTION_SELECTOR_ROW_V1)
+            .contains(&position)
+        {
+            let value = p256_input_selection_byte_v1(
+                &binding.input_selection.selected,
+                position - P256_INPUT_SELECTION_ROW_START_V1,
+            )?;
+            sources[0] = sources[0].add(F(weight * u64::from(value)));
+        }
+    }
+    Ok(sources)
+}
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn sink_binding_row_v1(
     binding: &P256ExternalBindingTraceV1,
@@ -895,8 +940,8 @@ fn validate_binding_fixed_schedule_v1(
 pub(crate) struct P256CrossTraceWriterFixedRowV1<A = F> {
     /// Two writer factors, each independently identity-padded.
     pub(crate) events: [P256CrossTraceEventFixedV1<A>; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
-    /// Multiplicity one selector.
-    pub(crate) multiplicity_one: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    /// Small multiplicity code: zero, one, or two on native rows; polynomial at OOD points.
+    pub(crate) multiplicity_small: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Multiplicity 64 selector.
     pub(crate) multiplicity_64: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Multiplicity 65 selector.
@@ -1007,6 +1052,22 @@ impl P256CrossTraceWriterSourceFixedV1 {
                 .checked_add(1)
                 .ok_or(P256CrossTraceBusErrorV1::Resource)?;
         }
+        for word in 0..4 {
+            let id = p256_selected_input_writer_id_v1(word)?
+                .ok_or(P256CrossTraceBusErrorV1::Topology)?;
+            for limb in 0..P256_VALUE_BUS_LIMBS_V1 {
+                let address = writer_address_v1(id.0, limb as u8)? as usize;
+                let multiplicity = multiplicities
+                    .get_mut(address)
+                    .ok_or(P256CrossTraceBusErrorV1::Topology)?;
+                *multiplicity = multiplicity
+                    .checked_add(1)
+                    .ok_or(P256CrossTraceBusErrorV1::Multiplicity)?;
+                uses = uses
+                    .checked_add(1)
+                    .ok_or(P256CrossTraceBusErrorV1::Resource)?;
+            }
+        }
         let active = multiplicities
             .iter()
             .filter(|multiplicity| **multiplicity != 0)
@@ -1017,11 +1078,11 @@ impl P256CrossTraceWriterSourceFixedV1 {
             }
             P256EcdsaRoleV1::WalletOwnership => P256_CROSS_TRACE_WALLET_WRITER_SOURCE_CELLS_V1,
         };
-        if uses != p256_external_binding_active_equalities_v1(role)
+        if uses != p256_external_binding_active_equalities_v1(role) + 4 * P256_VALUE_BUS_LIMBS_V1
             || active != expected_active
             || multiplicities
                 .iter()
-                .any(|multiplicity| !matches!(*multiplicity, 0 | 1 | 64 | 65 | 129))
+                .any(|multiplicity| !matches!(*multiplicity, 0 | 1 | 2 | 64 | 65 | 129))
             || multiplicities.iter().copied().max()
                 != Some(P256_CROSS_TRACE_MAX_WRITER_MULTIPLICITY_V1)
         {
@@ -1056,7 +1117,7 @@ impl P256CrossTraceWriterSourceFixedV1 {
                     .multiplicities
                     .get(usize::try_from(address).map_err(|_| P256CrossTraceBusErrorV1::Resource)?)
                     .ok_or(P256CrossTraceBusErrorV1::Topology)?;
-                if !matches!(multiplicity, 0 | 1 | 64 | 65 | 129) {
+                if !matches!(multiplicity, 0 | 1 | 2 | 64 | 65 | 129) {
                     return Err(P256CrossTraceBusErrorV1::Multiplicity);
                 }
                 if multiplicity == 0 {
@@ -1078,7 +1139,7 @@ impl P256CrossTraceWriterSourceFixedV1 {
         }
         Ok(P256CrossTraceWriterFixedRowV1 {
             events,
-            multiplicity_one: multiplicities.map(|multiplicity| F(u64::from(multiplicity == 1))),
+            multiplicity_small: multiplicities.map(|m| F(u64::from(if m <= 2 { m } else { 0 }))),
             multiplicity_64: multiplicities.map(|multiplicity| F(u64::from(multiplicity == 64))),
             multiplicity_65: multiplicities.map(|multiplicity| F(u64::from(multiplicity == 65))),
             multiplicity_129: multiplicities.map(|multiplicity| F(u64::from(multiplicity == 129))),
@@ -1256,7 +1317,19 @@ pub(crate) fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1<
             }
             let expected_selected = A::ONE
                 .sub(fixed.events[slot].active)
-                .add(fixed.multiplicity_one[slot].mul(current.powers[slot][lane][0]))
+                // This cubic expression is bound to a separate committed selected_power.
+                // The running recurrence below multiplies that cell, never this expression.
+                .add(
+                    fixed.multiplicity_small[slot]
+                        .mul(A::ONE.add(A::ONE).sub(fixed.multiplicity_small[slot]))
+                        .mul(current.powers[slot][lane][0]),
+                )
+                .add(
+                    fixed.multiplicity_small[slot]
+                        .mul(fixed.multiplicity_small[slot].sub(A::ONE))
+                        .mul_base(F(0x7fff_ffff_8000_0001))
+                        .mul(current.powers[slot][lane][1]),
+                )
                 .add(fixed.multiplicity_64[slot].mul(current.powers[slot][lane][6]))
                 .add(
                     fixed.multiplicity_65[slot]
@@ -1320,7 +1393,7 @@ fn build_writer_row_v1(
         // Keep unusual fixed tuples on the direct path rather than assuming that
         // an inactive flag alone proves the remaining selectors are canonical.
         if fixed.events[slot] == P256CrossTraceEventFixedV1::inactive()
-            && fixed.multiplicity_one[slot] == F::ZERO
+            && fixed.multiplicity_small[slot] == F::ZERO
             && fixed.multiplicity_64[slot] == F::ZERO
             && fixed.multiplicity_65[slot] == F::ZERO
             && fixed.multiplicity_129[slot] == F::ZERO
@@ -1339,7 +1412,19 @@ fn build_writer_row_v1(
             }
             selected_power[slot][lane] = F::ONE
                 .sub(fixed.events[slot].active)
-                .add(fixed.multiplicity_one[slot].mul(powers[slot][lane][0]))
+                // This cubic expression is bound to a separate committed selected_power.
+                // The running recurrence below multiplies that cell, never this expression.
+                .add(
+                    fixed.multiplicity_small[slot]
+                        .mul(F::ONE.add(F::ONE).sub(fixed.multiplicity_small[slot]))
+                        .mul(powers[slot][lane][0]),
+                )
+                .add(
+                    fixed.multiplicity_small[slot]
+                        .mul(fixed.multiplicity_small[slot].sub(F::ONE))
+                        .mul_base(F(0x7fff_ffff_8000_0001))
+                        .mul(powers[slot][lane][1]),
+                )
                 .add(fixed.multiplicity_64[slot].mul(powers[slot][lane][6]))
                 .add(
                     fixed.multiplicity_65[slot]
@@ -1597,6 +1682,28 @@ mod tests {
                 F((u64::from(address).wrapping_mul(73).wrapping_add(19)) & u64::from(u16::MAX))
             });
         }
+        let selected_word = |id: u32| {
+            let mut bytes = [0_u8; 32];
+            for limb in 0..16 {
+                let address = writer_address_v1(id, limb as u8).unwrap();
+                let value = writer_values
+                    .get(&address)
+                    .copied()
+                    .unwrap_or(F(
+                        (u64::from(address).wrapping_mul(73).wrapping_add(19)) & 65535
+                    ));
+                bytes[30 - 2 * limb..32 - 2 * limb]
+                    .copy_from_slice(&(value.0 as u16).to_be_bytes());
+            }
+            bytes
+        };
+        let selected = P256EcdsaWitnessV1 {
+            public_key_x_be: selected_word(47),
+            public_key_y_be: selected_word(48),
+            r_be: selected_word(52),
+            s_be: selected_word(53),
+            digest_be: core::array::from_fn(|i| (i * 7 + 3) as u8),
+        };
         let rows = sources
             .into_iter()
             .map(|sources| {
@@ -1628,20 +1735,8 @@ mod tests {
             byte_io: byte_io_manifest_v1(),
             input_selection: P256OptionalCertificateSelectionV1 {
                 active: F::ONE,
-                real: P256EcdsaWitnessV1 {
-                    public_key_x_be: [0; 32],
-                    public_key_y_be: [0; 32],
-                    r_be: [0; 32],
-                    s_be: [0; 32],
-                    digest_be: [0; 32],
-                },
-                selected: P256EcdsaWitnessV1 {
-                    public_key_x_be: [0; 32],
-                    public_key_y_be: [0; 32],
-                    r_be: [0; 32],
-                    s_be: [0; 32],
-                    digest_be: [0; 32],
-                },
+                real: selected,
+                selected,
             },
             inverse_auxiliaries: P256InverseAuxiliaryManifestV1 {
                 r_inverse: P256ValueIdV1(54),
@@ -1683,6 +1778,29 @@ mod tests {
                 }
             }
         }
+        let mut digest = Vec::new();
+        for word in 0..5 {
+            for limb in 0..16 {
+                let byte = word * 32 + 30 - 2 * limb;
+                let value = F(256
+                    * u64::from(
+                        p256_input_selection_byte_v1(&binding.input_selection.selected, byte)
+                            .unwrap(),
+                    )
+                    + u64::from(
+                        p256_input_selection_byte_v1(&binding.input_selection.selected, byte + 1)
+                            .unwrap(),
+                    ));
+                if let Some(id) = p256_selected_input_writer_id_v1(word).unwrap() {
+                    let address = writer_address_v1(id.0, limb as u8).unwrap();
+                    let entry = writers.entry(address).or_insert((value, 0));
+                    assert_eq!(entry.0, value);
+                    entry.1 += 1;
+                } else {
+                    digest.push((limb as u32, value));
+                }
+            }
+        }
         let mut terminal = [F::ONE; P256_CROSS_TRACE_LANES_V1];
         for (lane, terminal) in terminal.iter_mut().enumerate() {
             for (address, (value, multiplicity)) in &writers {
@@ -1698,6 +1816,16 @@ mod tests {
                     *terminal = terminal.mul(factor);
                 }
             }
+            for &(address, value) in &digest {
+                *terminal = terminal.mul(compress_event_v1(
+                    P256CrossTraceEventFixedV1::active(P256CrossTraceTagV1 {
+                        endpoint: P256CrossTraceEndpointV1::DigestInput,
+                        address,
+                    }),
+                    value,
+                    challenges.lanes[lane],
+                ));
+            }
             for (address, value) in &externals {
                 *terminal = terminal.mul(compress_event_v1(
                     P256CrossTraceEventFixedV1::active(P256CrossTraceTagV1 {
@@ -1710,7 +1838,9 @@ mod tests {
             }
         }
         assert_eq!(
-            writers.values().map(|(_, count)| *count).sum::<usize>() + externals.len(),
+            writers.values().map(|(_, count)| *count).sum::<usize>()
+                + externals.len()
+                + digest.len(),
             p256_cross_trace_events_v1(binding.role)
         );
         terminal
@@ -1724,9 +1854,11 @@ mod tests {
             compile_zk_x509_p256_cross_trace_sink_fixed_v1(binding.role).expect("sink schedule");
         let mut terminal = [F::ONE; P256_CROSS_TRACE_LANES_V1];
         let mut events = 0_usize;
-        for row in 0..schedule.logical_rows_v1() {
+        for row in (0..schedule.logical_rows_v1())
+            .chain(P256_INPUT_SELECTION_ROW_START_V1..P256_INPUT_SELECTION_SELECTOR_ROW_V1)
+        {
             let fixed = schedule.row_v1(row).expect("fixed row");
-            let values = sink_source_values_v1(&binding.rows[row]);
+            let values = sink_stream_source_values_v1(binding, row).unwrap();
             for (slot, value) in values.into_iter().enumerate() {
                 if fixed.product.events[slot].active == F::ZERO {
                     continue;
@@ -1877,7 +2009,7 @@ mod tests {
         Vec<[F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1]>,
         Vec<P256CrossTraceWriterAuxRowV1>,
     ) {
-        let multiplicities = [1_u16, 64, 65, 129, 0, 1, 64, 0];
+        let multiplicities = [1_u16, 64, 65, 129, 0, 2, 64, 0];
         let rows = multiplicities.len() / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         let fixed = (0..rows)
             .map(|row| {
@@ -1896,8 +2028,8 @@ mod tests {
                             })
                         }
                     }),
-                    multiplicity_one: multiplicity
-                        .map(|multiplicity| F(u64::from(multiplicity == 1))),
+                    multiplicity_small: multiplicity
+                        .map(|m| F(u64::from(if m <= 2 { m } else { 0 }))),
                     multiplicity_64: multiplicity
                         .map(|multiplicity| F(u64::from(multiplicity == 64))),
                     multiplicity_65: multiplicity
@@ -2022,31 +2154,32 @@ mod tests {
             assert_eq!(
                 writers.active_source_cells_v1(),
                 match role {
-                    P256EcdsaRoleV1::CertificateOrCrl => 14_208,
-                    P256EcdsaRoleV1::WalletOwnership => 14_224,
+                    P256EcdsaRoleV1::CertificateOrCrl => 14_240,
+                    P256EcdsaRoleV1::WalletOwnership => 14_240,
                 }
             );
             assert_eq!(
                 writers.total_uses_v1(),
-                p256_external_binding_active_equalities_v1(role)
+                p256_external_binding_active_equalities_v1(role) + 64
             );
             assert!(
                 writers
                     .multiplicities
                     .iter()
-                    .all(|multiplicity| matches!(*multiplicity, 0 | 1 | 64 | 65 | 129))
+                    .all(|multiplicity| matches!(*multiplicity, 0 | 1 | 2 | 64 | 65 | 129))
             );
             assert_eq!(writers.multiplicities[0], 129);
             assert_eq!(writers.multiplicities[P256_VALUE_BUS_LIMBS_V1], 65);
-            assert_eq!(writers.multiplicities[47 * P256_VALUE_BUS_LIMBS_V1], 64);
+            assert_eq!(writers.multiplicities[47 * P256_VALUE_BUS_LIMBS_V1], 65);
             assert_eq!(
                 writers.multiplicities[53 * P256_VALUE_BUS_LIMBS_V1],
-                usize::from(role == P256EcdsaRoleV1::WalletOwnership) as u16
+                1 + usize::from(role == P256EcdsaRoleV1::WalletOwnership) as u16
             );
             assert_eq!(
                 p256_cross_trace_events_v1(role),
                 p256_external_binding_active_equalities_v1(role)
                     + p256_external_binding_dynamic_sources_v1(role)
+                    + 80
             );
         }
         assert_eq!(P256_CROSS_TRACE_WINDOW_ACTIVE_ROWS_V1, 65_536);
@@ -2100,9 +2233,8 @@ mod tests {
                 assert_eq!(row.event_values, [F::ZERO; P256_CROSS_TRACE_EVENT_SLOTS_V1]);
                 for (lane, products) in row.products.iter().enumerate() {
                     assert!(
-                        products
-                            .iter()
-                            .all(|product| *product == fixture.sink_terminal[lane])
+                        products.iter().all(|product| *product
+                            == last.products[lane][P256_CROSS_TRACE_EVENT_SLOTS_V1])
                     );
                 }
             }
@@ -2238,7 +2370,7 @@ mod tests {
     fn writer_addition_chain_constrains_every_cell_and_exact_multiplicity() {
         let (fixed, source, aux) = small_writer_fixture_v1();
         assert!(!writer_has_nonzero_v1(&fixed, &source, &aux));
-        let multiplicities = [1_usize, 64, 65, 129, 0, 1, 64, 0];
+        let multiplicities = [1_usize, 64, 65, 129, 0, 2, 64, 0];
         for row in 0..aux.len() {
             for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
                 let logical = row * P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 + slot;
@@ -2305,11 +2437,46 @@ mod tests {
         let mut exact =
             P256CrossTraceWriterSourceFixedV1::compile_v1(P256EcdsaRoleV1::WalletOwnership)
                 .expect("exact schedule");
-        exact.multiplicities[0] = 2;
+        exact.multiplicities[0] = 3;
         assert_eq!(
             exact.row_v1(3 * P256_VALUE_BUS_LIMBS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1),
             Err(P256CrossTraceBusErrorV1::Multiplicity)
         );
+    }
+    #[test]
+    fn writer_multiplicity_domain_accepts_two_and_rejects_unsupported_values() {
+        let row = 3 * P256_VALUE_BUS_LIMBS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        let mut fixed =
+            P256CrossTraceWriterSourceFixedV1::compile_v1(P256EcdsaRoleV1::WalletOwnership)
+                .unwrap();
+        assert_eq!(fixed.row_v1(row).unwrap().multiplicity_129[0], F::ONE);
+        for value in [0_u16, 1, 2, 64, 65, 129] {
+            fixed.multiplicities[0] = value;
+            let actual = fixed.row_v1(row).unwrap();
+            assert_eq!(actual.events[0].active, F(u64::from(value != 0)));
+            assert_eq!(actual.events[0].endpoint, F(u64::from(value != 0)));
+            assert_eq!(actual.events[0].address, F::ZERO);
+            assert_eq!(
+                actual.multiplicity_small[0],
+                F(u64::from(if value <= 2 { value } else { 0 }))
+            );
+            assert_eq!(actual.multiplicity_64[0], F(u64::from(value == 64)));
+            assert_eq!(actual.multiplicity_65[0], F(u64::from(value == 65)));
+            assert_eq!(actual.multiplicity_129[0], F(u64::from(value == 129)));
+        }
+        for value in [3_u16, 63, 66, 128, 130, u16::MAX] {
+            fixed.multiplicities[0] = value;
+            assert_eq!(
+                fixed.row_v1(row),
+                Err(P256CrossTraceBusErrorV1::Multiplicity)
+            );
+        }
+        // Small multiplicity two is admissible, but substituting it for an
+        // authenticated 65-use row still invalidates the unchanged witness.
+        let (mut fixed, source, aux) = small_writer_fixture_v1();
+        fixed[1].multiplicity_65[0] = F::ZERO;
+        fixed[1].multiplicity_small[0] = F(2);
+        assert!(writer_has_nonzero_v1(&fixed, &source, &aux));
     }
     #[test]
     fn sink_rejects_local_fixed_padding_and_coordinated_copy_attacks() {

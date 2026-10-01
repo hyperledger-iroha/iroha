@@ -152,5 +152,159 @@ impl StateBlock<'_> {
     }
 }
 
+/// Conditional local publication unit; never installed by production capture.
+///
+/// It keeps the witness, complete leaves and retained execution context together
+/// until all checks pass. Construction has no `StateBlock` mutation and failure
+/// drops the unexposed owned values. This is not source finality, an execution
+/// admission token or durable archive custody.
+/// TODO: connect the complete-effect source relation and authenticated accounting
+/// before any production caller may use this transfer-only qualification owner.
+#[derive(Debug)]
+pub(crate) struct OwnedFastpqD7WitnessPublication {
+    prepared: PreparedOwnedFastpqD7Capture,
+    witness: iroha_data_model::block::consensus::ExecWitness,
+}
+
+impl PreparedOwnedFastpqD7Capture {
+    /// Bind a complete prepared archive to an owned ordinary witness atomically.
+    ///
+    /// All existing writes must already have canonical strict key ordering.
+    /// A preexisting reserved-family write is rejected, never removed/replaced.
+    /// The bounded manifest is the only new write; reads and transcript storage
+    /// are moved unchanged. The caller still needs the real output-owner binding.
+    pub(crate) fn bind_witness(
+        self,
+        block: &StateBlock<'_>,
+        mut witness: iroha_data_model::block::consensus::ExecWitness,
+    ) -> Result<OwnedFastpqD7WitnessPublication, String> {
+        use iroha_data_model::{
+            block::consensus::ExecKv,
+            execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1 as KEY,
+        };
+        self.context.verify_current(block)?;
+        self.context
+            .inventory
+            .verify_ordinary_witness_bundles(&witness.fastpq_transcripts)?;
+        if !witness.fastpq_batches.is_empty()
+            || witness
+                .writes
+                .windows(2)
+                .any(|pair| pair[0].key >= pair[1].key)
+            || witness
+                .writes
+                .iter()
+                .any(|write| write.key.first() == KEY.first())
+        {
+            return Err("FASTPQ D7 publication requires canonical ordinary writes without a reserved-family owner".into());
+        }
+        let value = self.context.canonical_manifest_bytes()?;
+        // The only variable allocation here is one write-vector slot. The value
+        // has the existing fixed 2048-byte bound; production journal charging is
+        // a separate remaining integration requirement, never inferred here.
+        witness
+            .writes
+            .try_reserve(1)
+            .map_err(|_| "FASTPQ D7 publication write allocation failed".to_owned())?;
+        let index = witness
+            .writes
+            .binary_search_by(|write| write.key.as_slice().cmp(KEY))
+            .expect_err("reserved-family precheck excludes the exact key");
+        witness.writes.insert(
+            index,
+            ExecKv {
+                key: KEY.to_vec(),
+                value,
+            },
+        );
+        let publication = OwnedFastpqD7WitnessPublication {
+            prepared: self,
+            witness,
+        };
+        publication.verify_current(block)?;
+        Ok(publication)
+    }
+}
+
+impl OwnedFastpqD7CaptureContext {
+    fn canonical_manifest_bytes(&self) -> Result<Vec<u8>, String> {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::core::to_bytes_bounded(
+            &self.manifest,
+            iroha_data_model::fastpq::FASTPQ_SOURCE_STATEMENT_MANIFEST_MAX_BYTES_V1,
+        )
+        .map_err(|_| "FASTPQ D7 canonical manifest encoding failed".to_owned())
+    }
+}
+
+impl OwnedFastpqD7WitnessPublication {
+    /// Recheck the exact retained local source, leaf manifest and D7 value.
+    ///
+    /// This is intentionally independent of ordinary-write-root finality and
+    /// does not authenticate arbitrary unrelated writes in a supplied witness.
+    pub(crate) fn verify_current(&self, block: &StateBlock<'_>) -> Result<(), String> {
+        use iroha_data_model::{
+            execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1 as KEY,
+            fastpq::build_fastpq_ordinary_source_statement_manifest_v1,
+        };
+        let context = &self.prepared.context;
+        context.verify_current(block)?;
+        context
+            .inventory
+            .verify_ordinary_witness_bundles(&self.witness.fastpq_transcripts)?;
+        let manifest = build_fastpq_ordinary_source_statement_manifest_v1(
+            context.inventory.source(),
+            context.inventory.entries(),
+            &self.prepared.leaves,
+            context.limits.max_executed_entries,
+            context.limits.max_executed_entries,
+        );
+        if manifest.as_ref() != Some(&context.manifest)
+            || !self.witness.fastpq_batches.is_empty()
+            || self
+                .witness
+                .writes
+                .windows(2)
+                .any(|pair| pair[0].key >= pair[1].key)
+        {
+            return Err("FASTPQ D7 publication archive or ordinary witness changed".into());
+        }
+        let mut reserved = self
+            .witness
+            .writes
+            .iter()
+            .filter(|write| write.key.first() == KEY.first());
+        let Some(write) = reserved.next() else {
+            return Err("FASTPQ D7 publication write is absent".into());
+        };
+        if reserved.next().is_some()
+            || write.key.as_slice() != KEY
+            || write.value != context.canonical_manifest_bytes()?
+        {
+            return Err("FASTPQ D7 publication reserved write changed".into());
+        }
+        Ok(())
+    }
+
+    /// Release the original allocations together only after a final context check.
+    /// Future capture/extraction/commit wiring must retain and recheck their owner;
+    /// this move alone does not grant a caller production publication authority.
+    pub(crate) fn into_parts_verified(
+        self,
+        block: &StateBlock<'_>,
+    ) -> Result<
+        (
+            iroha_data_model::block::consensus::ExecWitness,
+            Vec<FastpqOrdinarySourceStatementLeafV1>,
+            OwnedFastpqD7CaptureContext,
+        ),
+        String,
+    > {
+        self.verify_current(block)?;
+        Ok((self.witness, self.prepared.leaves, self.prepared.context))
+    }
+}
+
 #[cfg(test)]
 mod tests;

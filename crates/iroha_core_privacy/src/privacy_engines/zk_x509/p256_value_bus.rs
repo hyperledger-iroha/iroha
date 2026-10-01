@@ -3322,6 +3322,12 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_over_field_v1<A: Polynomial
     }
     Ok(residues)
 }
+/// Canonical auxiliary columns carrying the value product after all row factors.
+pub(crate) fn p256_value_bus_terminal_columns_v1() -> [usize; P256_VALUE_BUS_LANES_V1] {
+    core::array::from_fn(|lane| {
+        stark_aux_product_offset_v1(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1) + lane
+    })
+}
 /// Project the terminal product from one verifier-fixed native-row opening.
 pub(crate) fn p256_value_bus_stark_opened_terminal_v1<A: PolynomialAirFieldV1>(
     aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1],

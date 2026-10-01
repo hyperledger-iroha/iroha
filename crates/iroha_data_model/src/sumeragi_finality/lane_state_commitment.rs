@@ -285,7 +285,9 @@ mod tests {
                 time_ms: 1000,
                 transactions: 0,
                 lanes: count + 1,
-            }],
+            }]
+            .try_into()
+            .unwrap(),
             last_transition: 0,
             incarnations: u64::from(count),
         }
@@ -303,12 +305,14 @@ mod tests {
             );
             for field in 0..4 {
                 let mut changed = value.clone();
+                let mut samples = changed.samples.to_vec();
                 match field {
                     0 => changed.incarnations += 1,
                     1 => changed.last_transition = 1,
-                    2 => changed.samples[0].transactions += 1,
-                    _ => changed.samples[0].time_ms += 1,
+                    2 => samples[0].transactions += 1,
+                    _ => samples[0].time_ms += 1,
                 }
+                changed.samples = samples.try_into().unwrap();
                 assert_ne!(
                     exact,
                     SumeragiLaneStateCommitment::from_state(network(), 4, &changed).unwrap()
@@ -437,14 +441,16 @@ mod tests {
             }
             for field in 0..6 {
                 let mut changed = original.clone();
+                let mut samples = changed.samples.to_vec();
                 match field {
-                    0 => changed.samples[0].height += 1,
-                    1 => changed.samples[0].time_ms += 1,
-                    2 => changed.samples[0].transactions += 1,
-                    3 => changed.samples[0].lanes += 1,
+                    0 => samples[0].height += 1,
+                    1 => samples[0].time_ms += 1,
+                    2 => samples[0].transactions += 1,
+                    3 => samples[0].lanes += 1,
                     4 => changed.last_transition += 1,
                     _ => changed.incarnations += 1,
                 }
+                changed.samples = samples.try_into().unwrap();
                 let frame = norito::encode_canonical(&changed).unwrap();
                 assert!(
                     !commitment
@@ -473,10 +479,14 @@ mod tests {
         );
         assert!(SumeragiLaneStateCommitment::from_state(network(), 0, &empty).is_err());
         let mut future = state(0);
-        future.samples[0].height = 2;
+        let mut samples = future.samples.to_vec();
+        samples[0].height = 2;
+        future.samples = samples.try_into().unwrap();
         assert!(SumeragiLaneStateCommitment::from_state(network(), 1, &future).is_err());
         let mut duplicate = state(0);
-        duplicate.samples.push(duplicate.samples[0]);
+        let mut samples = duplicate.samples.to_vec();
+        samples.push(samples[0]);
+        duplicate.samples = samples.try_into().unwrap();
         assert!(SumeragiLaneStateCommitment::from_state(network(), 1, &duplicate).is_err());
     }
 }

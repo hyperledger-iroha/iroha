@@ -134,9 +134,10 @@ pub fn global_threshold_beacon_roster_hash_v1(roster: &[PeerId]) -> [u8; 32] {
 ///
 /// The iterator must preserve its order and contents when cloned for serialization.
 #[must_use]
-pub fn global_threshold_beacon_roster_hash_iter_v1<'a>(
-    roster: impl ExactSizeIterator<Item = &'a PeerId> + Clone,
-) -> [u8; 32] {
+pub fn global_threshold_beacon_roster_hash_iter_v1<'a, I>(roster: I) -> [u8; 32]
+where
+    I: ExactSizeIterator<Item = &'a PeerId> + Clone,
+{
     *iroha_crypto::HashOf::new(&validation::RosterIter(roster)).as_ref()
 }
 

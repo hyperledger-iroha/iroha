@@ -128,9 +128,13 @@ fn strict_outer_allocation_limit_refuses_same_result_and_scope_exit_allows_retry
     let wrapped = norito::with_decode_limits_scope(protocol_limits(0), || {
         ExecutionResultCommitment::decode(&bytes)
     });
-    // TODO: The production result/finality wrappers currently erase codec resource types.
-    // Record their refusal without claiming typed operational propagation through them.
-    assert_eq!(wrapped, Err(CommitmentError::Encoding(error.to_string())));
+    // Preserve the exact local category through the production result wrapper.
+    assert_eq!(
+        wrapped,
+        Err(CommitmentError::Resource(
+            error.decode_resource_error().unwrap()
+        ))
+    );
     assert_eq!(bytes, original);
     assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
 }
@@ -155,7 +159,9 @@ fn original_caller_decode_counter_is_not_replaced_after_nested_refusal() {
         ));
         assert_eq!(
             ExecutionResultCommitment::decode(&bytes),
-            Err(CommitmentError::Encoding(error.to_string()))
+            Err(CommitmentError::Resource(
+                error.decode_resource_error().unwrap()
+            ))
         );
         // Failed nested scopes must neither reset nor refund the caller's consumed counter.
         assert!(matches!(
@@ -181,6 +187,11 @@ fn strict_outer_element_limit_refuses_without_replacing_original_counter() {
     );
     let refusal =
         norito::with_decode_limits_scope(outer, || ExecutionResultCommitment::decode(&bytes));
-    assert!(matches!(refusal, Err(CommitmentError::Encoding(_))));
+    assert!(matches!(
+        refusal,
+        Err(CommitmentError::Resource(
+            norito::core::DecodeResourceError::TotalElementsExceeded { .. }
+        ))
+    ));
     assert_eq!(ExecutionResultCommitment::decode(&bytes).unwrap(), value);
 }

@@ -95,7 +95,7 @@ pub struct KagemushaOrdinaryRetailEnrollmentChallengeV1 {
     pub expires_at_ms: u64,
 }
 
-/// Wallet signing payload; the account signer signs its actual typed HashOf projection.
+/// Wallet signing payload; the account signer signs its actual typed `HashOf` projection.
 #[derive(
     Debug,
     Clone,
@@ -386,7 +386,7 @@ impl KagemushaOrdinaryRetailEnrollmentChallengeV1 {
             challenge: self.clone(),
         })
     }
-    /// Actual HashOf bytes for an external wallet Ed25519 signer; do not hash them again.
+    /// Actual `HashOf` bytes for an external wallet Ed25519 signer; do not hash them again.
     /// # Errors
     /// Rejects invalid challenge shape or bounds.
     pub fn account_signing_message(&self) -> Result<[u8; 32], String> {
@@ -437,6 +437,10 @@ impl KagemushaOrdinaryRetailEnrollmentPossessionProofV1 {
     /// The caller must independently enforce native one-use ownership, current approval and CAS.
     /// # Errors
     /// Rejects any signature, original attestation/PoP, scope/counter/financial binding or time mismatch.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each independently authenticated original, counter floor and trusted time is required at this verification boundary"
+    )]
     pub fn authenticate(
         &self,
         expected_challenge: &KagemushaOrdinaryRetailEnrollmentChallengeV1,
@@ -894,6 +898,9 @@ mod tests {
             let signing_body =
                 &signing[super::super::KAGEMUSHA_ORDINARY_APP_CREDENTIAL_DOMAIN_V1.len() + 8..];
             for (index, positions) in layout.fixed_digest_bytes.iter().enumerate() {
+                let range = &layout.subject_fields[index + 3];
+                assert_eq!(range.len(), 32, "declared digest fields contain raw bytes");
+                assert_eq!(positions.as_slice(), range.clone().collect::<Vec<_>>());
                 let expected = &signing_body[4 + index * 32..4 + (index + 1) * 32];
                 for (position, byte) in positions.iter().zip(expected) {
                     assert_eq!(preimage[*position], *byte);
@@ -933,6 +940,9 @@ mod tests {
                     pi.verified_at_ms.to_le_bytes().to_vec(),
                     pi.refresh_before_ms.to_le_bytes().to_vec(),
                 ];
+                for range in &layout.play_integrity_fields.as_ref().unwrap()[..3] {
+                    assert_eq!(range.len(), 32, "declared Integrity digests are raw bytes");
+                }
                 for (positions, raw) in layout
                     .play_integrity_bytes
                     .as_ref()

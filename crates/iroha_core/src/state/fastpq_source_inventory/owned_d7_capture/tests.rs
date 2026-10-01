@@ -659,3 +659,232 @@ fn full_domain_quantity_preparation_uses_the_strict_source_producer() {
     assert!(context.verify_current(&block).is_ok());
     assert_unpublished(&block);
 }
+
+fn publication_witness(archive: &TranscriptMap) -> ExecWitness {
+    let mut witness = empty_witness();
+    witness.fastpq_transcripts = archive
+        .iter()
+        .map(
+            |(entry_hash, transcripts)| iroha_data_model::fastpq::TransferTranscriptBundle {
+                entry_hash: *entry_hash,
+                transcripts: transcripts.clone(),
+            },
+        )
+        .collect();
+    witness
+}
+
+#[test]
+fn conditional_publication_moves_exact_archive_and_releases_only_after_recheck() {
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
+    let state = state();
+    let mut block = state.block(header());
+    cache_canonical_test_transaction_set(&mut block, &[]);
+    let source = Hash::new(b"D7 atomic local publication owner");
+    let archive = seal_source(&mut block, source);
+    let prepared = block
+        .prepare_owned_fastpq_d7_capture(&archive, limits())
+        .unwrap();
+    let leaves_pointer = prepared.leaves.as_ptr();
+    let expected_manifest = *prepared.context.manifest();
+    let mut witness = publication_witness(&archive);
+    witness.writes = vec![
+        iroha_data_model::block::consensus::ExecKv {
+            key: vec![1],
+            value: vec![9],
+        },
+        iroha_data_model::block::consensus::ExecKv {
+            key: vec![255],
+            value: vec![8],
+        },
+    ];
+    let original_bundles = witness.fastpq_transcripts.clone();
+    let publication = prepared.bind_witness(&block, witness).unwrap();
+    assert!(publication.verify_current(&block).is_ok());
+    assert_unpublished(&block);
+    let (witness, leaves, context) = publication.into_parts_verified(&block).unwrap();
+    assert_eq!(leaves.as_ptr(), leaves_pointer);
+    assert_eq!(context.manifest(), &expected_manifest);
+    assert_eq!(witness.fastpq_transcripts, original_bundles);
+    assert_eq!(witness.writes.len(), 3);
+    assert_eq!(witness.writes[0].value, vec![9]);
+    assert_eq!(witness.writes[2].value, vec![8]);
+    assert_eq!(
+        witness.writes[1].key,
+        FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1
+    );
+    assert_eq!(
+        witness.writes[1].value,
+        norito::encode_canonical(&expected_manifest).unwrap()
+    );
+    assert_unpublished(&block);
+}
+
+#[test]
+fn conditional_publication_refuses_existing_family_duplicate_or_unsorted_writes() {
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
+    let state = state();
+    let mut block = state.block(header());
+    cache_canonical_test_transaction_set(&mut block, &[]);
+    let archive = seal_source(&mut block, Hash::new(b"D7 existing write refusal"));
+    for keys in [
+        vec![vec![0xD7]],
+        vec![vec![0xD7, 0]],
+        vec![vec![2], vec![2]],
+        vec![vec![3], vec![2]],
+    ] {
+        let prepared = block
+            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .unwrap();
+        let mut witness = publication_witness(&archive);
+        witness.writes = keys
+            .into_iter()
+            .map(|key| iroha_data_model::block::consensus::ExecKv {
+                key,
+                value: vec![0],
+            })
+            .collect();
+        assert!(prepared.bind_witness(&block, witness).is_err());
+        assert_unpublished(&block);
+    }
+}
+
+#[test]
+fn conditional_publication_rejects_each_changed_d7_archive_and_transcript_owner() {
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
+    let state = state();
+    let mut block = state.block(header());
+    cache_canonical_test_transaction_set(&mut block, &[]);
+    let archive = seal_source(&mut block, Hash::new(b"D7 retained value mutations"));
+    for mutation in 0..7 {
+        let prepared = block
+            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .unwrap();
+        let mut publication = prepared
+            .bind_witness(&block, publication_witness(&archive))
+            .unwrap();
+        match mutation {
+            0 => publication.witness.writes.clear(),
+            1 => publication.witness.writes[0].value[0] ^= 1,
+            2 => publication.witness.writes[0].key.push(0),
+            3 => publication
+                .witness
+                .writes
+                .push(publication.witness.writes[0].clone()),
+            4 => publication.prepared.leaves[0].entry_hash = Hash::new(b"foreign archive"),
+            5 => publication.witness.fastpq_transcripts.clear(),
+            6 => {
+                publication.witness.fastpq_transcripts[0].transcripts[0].authority_digest =
+                    Hash::new(b"foreign authority")
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            publication.verify_current(&block).is_err(),
+            "mutation {mutation}"
+        );
+        assert!(
+            publication.into_parts_verified(&block).is_err(),
+            "mutation {mutation}"
+        );
+        assert_unpublished(&block);
+    }
+}
+
+#[test]
+fn conditional_publication_refuses_context_change_at_last_extraction_boundary() {
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
+    let state = state();
+    let mut block = state.block(header());
+    cache_canonical_test_transaction_set(&mut block, &[]);
+    let archive = seal_source(&mut block, Hash::new(b"D7 last context check"));
+    let prepared = block
+        .prepare_owned_fastpq_d7_capture(&archive, limits())
+        .unwrap();
+    let publication = prepared
+        .bind_witness(&block, publication_witness(&archive))
+        .unwrap();
+    block._curr_block.creation_time_ms += 1;
+    assert!(publication.into_parts_verified(&block).is_err());
+    assert_unpublished(&block);
+}
+
+#[test]
+fn conditional_publication_preserves_empty_and_nontransfer_source_entries() {
+    let _guard = exec_witness::exec_witness_guard();
+    let state = state();
+    for nontransfer in [false, true] {
+        exec_witness::start_block();
+        let mut block = state.block(header());
+        cache_canonical_test_transaction_set(&mut block, &[]);
+        let time = nontransfer.then(|| Hash::new(b"D7 empty publication time owner"));
+        let times = time.into_iter().collect::<Vec<_>>();
+        for hash in &times {
+            block.admit_fastpq_source_for_testing(*hash);
+        }
+        block
+            .finalize_fastpq_source_inventory(&[], &[], &times)
+            .unwrap();
+        let archive = block.drain_transfer_transcripts_with_pending(None);
+        let prepared = block
+            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .unwrap();
+        let publication = prepared
+            .bind_witness(&block, publication_witness(&archive))
+            .unwrap();
+        let (witness, leaves, context) = publication.into_parts_verified(&block).unwrap();
+        assert_eq!(
+            context.manifest().executed_entry_count,
+            u32::from(nontransfer)
+        );
+        assert_eq!(context.manifest().statement_count, 0);
+        assert!(leaves.is_empty());
+        assert_eq!(witness.writes.len(), 1);
+        assert_eq!(
+            context.inventory().entries().len(),
+            usize::from(nontransfer)
+        );
+        assert_unpublished(&block);
+    }
+}
+
+#[test]
+fn conditional_publication_never_accepts_prebuilt_batches_or_incomplete_bundles() {
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
+    let state = state();
+    let mut block = state.block(header());
+    cache_canonical_test_transaction_set(&mut block, &[]);
+    let archive = seal_source(&mut block, Hash::new(b"D7 ordinary input owner"));
+    for prebuilt in [false, true] {
+        let prepared = block
+            .prepare_owned_fastpq_d7_capture(&archive, limits())
+            .unwrap();
+        let mut witness = publication_witness(&archive);
+        if prebuilt {
+            witness
+                .fastpq_batches
+                .push(iroha_data_model::fastpq::FastpqTransitionBatch {
+                    parameter: "unowned prebuilt batch".to_owned(),
+                    public_inputs: iroha_data_model::fastpq::FastpqPublicInputs {
+                        dsid: [0; 16],
+                        slot: 0,
+                        old_root: [0; 32],
+                        new_root: [0; 32],
+                        perm_root: [0; 32],
+                        tx_set_hash: [0; 32],
+                    },
+                    transitions: Vec::new(),
+                    metadata: BTreeMap::new(),
+                });
+        } else {
+            witness.fastpq_transcripts.clear();
+        }
+        assert!(prepared.bind_witness(&block, witness).is_err());
+        assert_unpublished(&block);
+    }
+}

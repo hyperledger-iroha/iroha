@@ -498,7 +498,7 @@ impl ExecutionOutputReservation<'_> {
             .checked_add(self.terminal_bytes)
             .and_then(|sum| sum.checked_add(self.owner.remaining_terminal_bytes));
         if self.terminal_bytes > self.owner.limits.max_output_bytes
-            || !total.is_some_and(|sum| sum <= self.owner.limits.max_total_output_bytes)
+            || total.is_none_or(|sum| sum > self.owner.limits.max_total_output_bytes)
         {
             return Err("actual rejection fee receipt has no funded terminal".into());
         }

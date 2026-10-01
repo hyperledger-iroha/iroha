@@ -11,7 +11,9 @@ use crate::{
 };
 
 mod signers;
-pub use signers::{SumeragiLaneCustodySigners, SumeragiLaneSignerCustody};
+pub use signers::{
+    CustodySignersAdmissionError, SumeragiLaneCustodySigners, SumeragiLaneSignerCustody,
+};
 
 /// Largest native-core committee representation; authenticated execution separately checks
 /// lane authority geometry. This bound does not grant committee admission.

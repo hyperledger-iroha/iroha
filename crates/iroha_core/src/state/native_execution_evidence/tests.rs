@@ -250,15 +250,16 @@ fn certified_result_rejects_changed_actual_lane_history_and_counter() {
         match field {
             0 => value.lanes.incarnations += 1,
             1 => value.lanes.last_transition = 2,
-            _ => value
-                .lanes
-                .samples
-                .push(iroha_data_model::sumeragi_lanes::SumeragiLaneSample {
+            _ => {
+                let mut samples = value.lanes.samples.to_vec();
+                samples.push(iroha_data_model::sumeragi_lanes::SumeragiLaneSample {
                     height: 2,
                     time_ms: 2000,
                     transactions: 1,
                     lanes: 1,
-                }),
+                });
+                value.lanes.samples = samples.try_into().unwrap();
+            }
         }
         // The actual source must differ. Clearing an empty list would be no tamper.
         assert_ne!(

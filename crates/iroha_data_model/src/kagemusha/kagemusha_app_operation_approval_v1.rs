@@ -232,7 +232,7 @@ impl KagemushaAppOperationApprovalChallengeV1 {
         hash.finalize().into()
     }
 
-    /// Return the exact bytes consumed by Android SHA256withECDSA.
+    /// Return the exact bytes consumed by Android `SHA256withECDSA`.
     ///
     /// `DOMAIN || LE64(275) || LE16(version) || purpose(01/02) || eight raw32 fields
     /// || LE64(issued) || LE64(expires)`. The subject digest binds the full
@@ -302,7 +302,7 @@ impl KagemushaAppOperationApprovalChallengeV1 {
     }
 }
 
-/// Original ordinary-app platform approval. These bytes do not carry a StateGuard.
+/// Original ordinary-app platform approval. These bytes do not carry a `StateGuard`.
 #[derive(
     Debug,
     Clone,
@@ -345,7 +345,7 @@ pub struct KagemushaAppOperationApprovalV1 {
 )]
 #[norito_schema(name = "iroha_data_model::kagemusha::KagemushaAppOperationApprovalEvidenceV1")]
 pub enum KagemushaAppOperationApprovalEvidenceV1 {
-    /// Original SHA256withECDSA DER from the enrolled Android key.
+    /// Original `SHA256withECDSA` DER from the enrolled Android key.
     AndroidKeystore {
         /// Unmodified canonical DER, not a software-normalized replacement original.
         signature_der: Vec<u8>,

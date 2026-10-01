@@ -115,6 +115,14 @@ peer and exact retained escrow asset. It never resolves a later registration by 
 Missing positive custody makes that original signer forensic-only. Elastic lanes pin global
 validator custody; fixed lanes pin the canonical staking owner selected for their physical
 dataspace at creation. A fixed committee alone grants no authority over a reused global key.
+Sparse signer bindings use immutable shared storage: production pinning admits the exact
+backing and control from the original State execution pool before allocation. Cell/World
+overlay copies retain that owner without copying the signer table. Decoded bindings remain
+untrusted until resource admission; admission itself grants no history or monetary authority.
+Fresh State construction and snapshot current/undo handoffs admit both generations before
+replacement. Refusal preserves the borrowed source and refunds partial copies; snapshot
+retry rereads its unchanged canonical field. The outer whole-State constructor still consumes
+its input on failure and does not return a partially built State.
 
 The row uses global creation and retirement heights; native lane heights are not global
 occurrence heights. Live incarnations retain their original registration and pending-unbond
@@ -175,8 +183,16 @@ past that deadline can be pruned. Unknown or reclaimed custody rows cannot reope
 The canonical 124-record and 16 MiB proof caps impose deterministic backpressure without eviction;
 this bound does not establish sufficient offence availability for every native committee.
 
+Autoscale sample clones retain their original immutable backing. State construction and snapshot
+admission charge exact sample backing and its shared control to the original State pool; both
+current and predecessor generations must succeed before replacing either. A sample update
+precharges only its actual retained suffix and appended row, with the existing positive-u32
+window policy unchanged. Refusal leaves the original samples intact. Snapshot retry retains raw
+source bytes and redecodes; it does not retain partial decoder progress. Outer lane/custody
+vectors and Cell controls remain separate owners.
+
 **Open H3 boundary:** complete decoded-proof and prefix/result graphs, header/QC metadata,
-RS16/BLS scratch and caches, sparse custody backing, output model graphs and World clones still
+RS16/BLS scratch and caches, outer lane/custody vectors and Cell controls, output model graphs and other World copies still
 require complete original-pool allocation ownership. Existing-State restoration retains its
 reader across local refusal, but the outer whole-State deserializer still does not retain a
 partially initialized State; authenticated accelerated startup restoration remains H4 work.

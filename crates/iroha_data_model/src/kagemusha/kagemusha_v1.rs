@@ -988,7 +988,7 @@ pub enum KagemushaHardwarePlatformClassV1 {
     OtherQualified,
     /// Ordinary iPhone app using governed App Attest enrollment and assertions.
     AppleAppAttest,
-    /// Ordinary Android app using a policy-admitted attested TEE or StrongBox approval key.
+    /// Ordinary Android app using a policy-admitted attested TEE or `StrongBox` approval key.
     AndroidKeyMint,
 }
 

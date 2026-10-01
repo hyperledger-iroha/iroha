@@ -20,6 +20,7 @@ pub(crate) mod air;
 pub(crate) mod allocation_payload;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod codec;
+mod composition_masking;
 pub(crate) mod credential_pre_aux;
 #[doc(hidden)]
 pub mod credential_stark;

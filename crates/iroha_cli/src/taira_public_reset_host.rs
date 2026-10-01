@@ -9273,7 +9273,11 @@ fn validate_historical_prior_state_marker(
         return Err(eyre!("historical predecessor state marker is invalid"));
     }
     super::validate_lower_hex("historical state inventory", &marker.inventory_sha256, 64)?;
-    super::validate_lower_hex("historical state authorization nonce", &marker.authorization_nonce, 32)?;
+    super::validate_lower_hex(
+        "historical state authorization nonce",
+        &marker.authorization_nonce,
+        32,
+    )?;
     super::validate_lower_hex("historical state revision", &marker.revision, 40)?;
     Ok(())
 }
@@ -21496,8 +21500,7 @@ mod tests {
         let later = plan
             .iter()
             .position(|key| {
-                key.host_slug == "taira-validator-2"
-                    && key.action == HostAction::Install.label()
+                key.host_slug == "taira-validator-2" && key.action == HostAction::Install.label()
             })
             .expect("second validator install");
         let mut progress = initial_host_progress(&admitted);
@@ -21593,12 +21596,21 @@ mod tests {
         assert!(check(&marker, &validator, metadata.dev() ^ 1, metadata.ino()).is_err());
         assert!(check(&marker, &validator, metadata.dev(), metadata.ino() + 1).is_err());
         for field in [
-            "current_nonce", "current_inventory", "schema", "kind", "host", "inventory",
-            "nonce", "revision", "time",
+            "current_nonce",
+            "current_inventory",
+            "schema",
+            "kind",
+            "host",
+            "inventory",
+            "nonce",
+            "revision",
+            "time",
         ] {
             let mut wrong = marker.clone();
             match field {
-                "current_nonce" => wrong.authorization_nonce = admitted.inventory.authorization_nonce.clone(),
+                "current_nonce" => {
+                    wrong.authorization_nonce = admitted.inventory.authorization_nonce.clone()
+                }
                 "current_inventory" => wrong.inventory_sha256 = admitted.inventory_sha256.clone(),
                 "schema" => wrong.schema = "unknown".into(),
                 "kind" => wrong.kind = "release".into(),

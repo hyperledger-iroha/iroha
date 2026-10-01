@@ -350,7 +350,7 @@ final class KagemushaOrdinaryAppIdentityFrameV1Tests:XCTestCase {
     let path=URL(fileURLWithPath:#filePath).deletingLastPathComponent()
       .appendingPathComponent("Fixtures/kagemusha_ordinary_enrollment_native_vectors_v1.json")
     let raw=try Data(contentsOf:path)
-    XCTAssertEqual(Data(SHA256.hash(data:raw)),try hex("23e39d05c50a1e32c95ccd5bed97724205e325d01b9d014b3a37a747ab9d9d67"))
+    XCTAssertEqual(Data(SHA256.hash(data:raw)),try hex("d398cbdbdb79d5216f202457404d32381d867caf208aeb360c9b8157a56b5e7a"))
     let json=try XCTUnwrap(JSONSerialization.jsonObject(with:raw) as? [String:Any])
     XCTAssertEqual(json["codec_only"] as? Bool,true)
     for key in ["native_authority","hardware_qualified","monetary_authority"] { XCTAssertEqual(json[key] as? Bool,false) }

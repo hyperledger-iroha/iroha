@@ -1079,6 +1079,8 @@ mod tests {
         let enrolled = Arc::new(f.verify(600).unwrap());
         let completed = held.complete_enrollment(enrolled.clone()).unwrap();
         assert_eq!(*completed.financial_secret().unwrap(), secret);
+        let state_nonce = completed.bootstrap_state_nonce_commitment().unwrap();
+        assert_ne!(state_nonce, [0; 32]);
         let certificate_original = enrolled.certificate().canonical_bytes().unwrap();
         let wal_path = root
             .join(format!(
@@ -1107,6 +1109,10 @@ mod tests {
             .complete_enrollment_or_retain(enrolled.clone())
             .unwrap_or_else(|(_, error)| panic!("same enrollment retry refused: {error:?}"));
         assert_eq!(*completed.financial_secret().unwrap(), secret);
+        assert_eq!(
+            completed.bootstrap_state_nonce_commitment().unwrap(),
+            state_nonce
+        );
         assert!(Arc::ptr_eq(completed.enrollment(), &enrolled));
         assert_eq!(
             completed
@@ -1170,6 +1176,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(*completed.financial_secret().unwrap(), secret);
+        assert_eq!(
+            completed.bootstrap_state_nonce_commitment().unwrap(),
+            state_nonce
+        );
         drop(completed);
         let foreign = Arc::new(Fixture::new(false).verify(300).unwrap());
         assert!(

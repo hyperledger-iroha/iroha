@@ -29,8 +29,10 @@ use iroha_config::{
         },
     },
 };
+#[cfg(test)]
+use iroha_crypto::Algorithm;
 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::KeyPair;
 use iroha_crypto::{Hash, HashOf};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
@@ -71,11 +73,13 @@ use norito::{
     json::Value as JsonValue,
 };
 use parking_lot::{Condvar, Mutex};
+#[cfg(test)]
+use std::num::NonZeroU64;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
-    num::{NonZeroU64, NonZeroUsize},
+    num::NonZeroUsize,
     ops::Bound,
     path::{Path, PathBuf},
     sync::{
@@ -251,9 +255,7 @@ mod physical_resource_initialization_tests;
 
 use crate::publication_lock::{PublicationGuard, PublicationMutex};
 mod publication_lease;
-pub(crate) use publication_lease::{
-    KuraPublicationCleanup, KuraPublicationLease, KuraPublicationPreparationError,
-};
+pub(crate) use publication_lease::{KuraPublicationLease, KuraPublicationPreparationError};
 
 /// The interface of Kura subsystem.
 ///

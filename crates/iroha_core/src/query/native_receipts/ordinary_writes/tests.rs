@@ -459,7 +459,9 @@ fn nonempty_lane_graph_is_borrowed_from_the_original_charged_frame() {
             time_ms: 1_000,
             transactions: 4,
             lanes: 2,
-        }],
+        }]
+        .try_into()
+        .unwrap(),
         last_transition: 1,
         incarnations: 1,
     };

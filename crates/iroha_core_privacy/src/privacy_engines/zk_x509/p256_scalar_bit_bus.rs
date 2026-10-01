@@ -1402,6 +1402,15 @@ fn stark_scalar_bit_factor_v1<A: PolynomialAirFieldV1>(
         .add(terms[4].mul(value));
     Ok(A::ONE.add(active.mul(compressed.sub(A::ONE))))
 }
+/// Canonical auxiliary terminal columns, in arithmetic then window order.
+pub(crate) fn p256_scalar_bit_bus_terminal_columns_v1() -> [[usize; P256_SCALAR_BIT_BUS_LANES_V1]; 2]
+{
+    let final_state = (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1) * P256_SCALAR_BIT_BUS_LANES_V1;
+    [
+        core::array::from_fn(|lane| STARK_ARITHMETIC_PRODUCTS + final_state + lane),
+        core::array::from_fn(|lane| STARK_WINDOW_PRODUCTS + final_state + lane),
+    ]
+}
 /// Arithmetic and window product terminals in one opened packed-bus auxiliary row.
 ///
 /// The aggregate verifier opens this projection at the verifier-fixed final logical row; no

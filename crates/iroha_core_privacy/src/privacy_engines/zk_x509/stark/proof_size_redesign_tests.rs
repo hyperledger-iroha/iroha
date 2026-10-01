@@ -64,7 +64,7 @@ fn paired_fri_and_complete_relation_wire_bounds_are_source_derived() {
     let framing = super::super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize
         + super::super::profile::ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1 as usize
         + super::super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1;
-    assert_eq!(framing, 13_354);
+    assert_eq!(framing, 7_582);
     assert_eq!(
         implemented_total + framing,
         super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
@@ -72,8 +72,8 @@ fn paired_fri_and_complete_relation_wire_bounds_are_source_derived() {
     assert_eq!(complete_oods_bytes(&main), 7_908_768);
     assert_eq!(complete_oods_bytes(&ca), 1_498_816);
     let candidate = complete_oods_bytes(&main) + complete_oods_bytes(&ca) + framing;
-    assert_eq!(candidate, 9_420_938);
-    assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1 as usize - candidate, 16_246);
+    assert_eq!(candidate, 9_415_166);
+    assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1 as usize - candidate, 22_018);
     assert_eq!(super::super::profile::validate_profile_v1(), Ok(()));
     // Fitting bytes is not independent crypto/resource qualification.
     assert!(!super::super::profile::zk_x509_activation_readiness_v1().is_complete());
@@ -108,7 +108,7 @@ fn sha_polynomial_selector_degree_fits_the_unchanged_profile() {
     }
     assert_eq!(
         super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-        9_420_938
+        9_415_166
     );
     assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1, 9_437_184);
 }
@@ -173,5 +173,30 @@ fn joined_main_plan_retains_every_registered_column_and_native_group_slice() {
     assert_eq!(
         aggregate::maximum_encoded_proof_with_deep_bytes_v1(main.parameters_v1(), &shared).unwrap(),
         7_908_768
+    );
+}
+
+#[test]
+fn private_terminal_frame_removal_is_exact_without_changing_proof_limits() {
+    // Eight DER scalars, eight addressed RFC records, and the complete
+    // addressed five-signature P-256 frame leave the public envelope.
+    let removed_der = 8 * 8;
+    let removed_rfc = 8 * (2 + 2 + 2 + 2 + 8);
+    let removed_p256 = 12 + 348 * (2 + 2 + 2 + 2 + 8);
+    assert_eq!(8 + 8 + 348, 364);
+    assert_eq!(80 + 304, 384);
+    assert_eq!(removed_der + removed_rfc + removed_p256, 5_772);
+    assert_eq!(
+        11_952 - removed_der - removed_rfc - removed_p256,
+        super::super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize
+    );
+    assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1, 9_437_184);
+    assert_eq!(COMPOSITION_DEGREE_CHUNKS, 6);
+    assert_eq!(
+        AggregateProofLayoutV1::for_full_profile_v1()
+            .unwrap()
+            .parameters_v1()
+            .query_count,
+        136
     );
 }

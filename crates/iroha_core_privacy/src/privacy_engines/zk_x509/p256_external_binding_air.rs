@@ -9,8 +9,10 @@
 //! verifier-owned constants, 393 input owners, 14,828 arithmetic result IDs, window table IDs, and
 //! inverse relations are regenerated here. Constants are derived from protocol constants and the
 //! fixed generator table, never from proof-supplied metadata. Typed public-key, signature, and
-//! digest endpoints are resolved by the MAIN byte-I/O registration exposed through
+//! digest endpoints name the remaining external byte-source obligation exposed through
 //! [`P256UnresolvedByteIoManifestV1`].
+//! TODO: join the real input tuple to the certificate/RFC/SHA/IO byte owners in the
+//! verifier relation; selected-to-arithmetic binding alone does not discharge that obligation.
 //!
 //! The aggregate zk-X509 STARK commits every source trace before evaluating
 //! these equalities; this AIR has no standalone activation path.
@@ -86,6 +88,47 @@ const P256_EXTERNAL_CERTIFICATE_ROWS_V1: usize =
 const P256_EXTERNAL_WALLET_ROWS_V1: usize =
     P256_EXTERNAL_WALLET_BINDINGS_V1.div_ceil(P256_EXTERNAL_BINDINGS_PER_ROW_V1);
 const P256_EXTERNAL_ARITHMETIC_OPERATIONS_V1: usize = P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1 + 18;
+/// Bytes in the canonical `(Qx,Qy,r,s,digest)` tuple.
+pub(crate) const P256_INPUT_SELECTION_BYTES_V1: usize = 5 * 32;
+/// Verifier-fixed byte region, disjoint from all existing external equality rows.
+pub(crate) const P256_INPUT_SELECTION_ROW_START_V1: usize = 40_960;
+/// One row after the byte region: the private activity selector is constrained here.
+pub(crate) const P256_INPUT_SELECTION_SELECTOR_ROW_V1: usize =
+    P256_INPUT_SELECTION_ROW_START_V1 + P256_INPUT_SELECTION_BYTES_V1;
+const _: () = assert!(P256_EXTERNAL_WALLET_ROWS_V1 < P256_INPUT_SELECTION_ROW_START_V1);
+const _: () = assert!(P256_INPUT_SELECTION_SELECTOR_ROW_V1 < 1 << 16);
+
+/// Compiler-owned value writer for each selected coordinate; digest uses the reduction WORD.
+pub(crate) fn p256_selected_input_writer_id_v1(
+    word: usize,
+) -> Result<Option<P256ValueIdV1>, P256ExternalBindingErrorV1> {
+    match word {
+        0 => Ok(Some(P256ValueIdV1(PUBLIC_KEY_X_ID_V1))),
+        1 => Ok(Some(P256ValueIdV1(PUBLIC_KEY_Y_ID_V1))),
+        2 => Ok(Some(P256ValueIdV1(SIGNATURE_R_ID_V1))),
+        3 => Ok(Some(P256ValueIdV1(SIGNATURE_S_ID_V1))),
+        4 => Ok(None),
+        _ => Err(P256ExternalBindingErrorV1::Topology),
+    }
+}
+
+/// Canonical big-endian byte coordinate used by both native providers and fixed preprocessing.
+pub(crate) fn p256_input_selection_byte_v1(
+    witness: &P256EcdsaWitnessV1,
+    byte: usize,
+) -> Result<u8, P256ExternalBindingErrorV1> {
+    let word = byte / 32;
+    let offset = byte % 32;
+    match word {
+        0 => Ok(witness.public_key_x_be[offset]),
+        1 => Ok(witness.public_key_y_be[offset]),
+        2 => Ok(witness.r_be[offset]),
+        3 => Ok(witness.s_be[offset]),
+        4 => Ok(witness.digest_be[offset]),
+        _ => Err(P256ExternalBindingErrorV1::Topology),
+    }
+}
+
 const VARIABLE_TABLE_OPERATION_START_V1: usize = 15;
 const COMPLETE_ADD_OPERATIONS_V1: usize = 43;
 const COMPLETE_ADD_OUTPUT_OFFSETS_V1: [usize; 3] = [36, 39, 42];
@@ -101,7 +144,6 @@ const GENERATOR_CONSTANTS_END_V1: usize = 47;
 const PUBLIC_KEY_X_ID_V1: u32 = 47;
 const PUBLIC_KEY_Y_ID_V1: u32 = 48;
 const PUBLIC_KEY_Z_ID_V1: u32 = 49;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 const SIGNATURE_R_ID_V1: u32 = 52;
 const SIGNATURE_S_ID_V1: u32 = 53;
 #[cfg(any(test, feature = "privacy-release-evidence"))]

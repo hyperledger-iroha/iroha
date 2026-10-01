@@ -44,24 +44,26 @@ use iroha_data_model::block::consensus::ValidatorIndex;
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, rekey::AccountAlias},
-    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionAlias, AssetDefinitionId},
     block::*,
     confidential::ConfidentialFeatureDigest,
-    consensus::{ConsensusKeyRole, NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{ConsensusKeyRole, NposConsensusEffects},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
     events::prelude::*,
     nexus::{
-        AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig,
+        AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog,
         LaneSettlementBufferPolicy, ProofBlob,
     },
     transaction::{SignedTransaction, TransactionEntrypoint, error::TransactionLimitError},
 };
 #[cfg(test)]
 use iroha_data_model::{
+    asset::AssetId,
     isi::InstructionBox,
+    nexus::LaneConfig,
     transaction::{Executable, error::TransactionRejectionReason, signed::TransactionResultInner},
 };
 #[cfg(feature = "bls")]
@@ -75,6 +77,7 @@ use iroha_primitives::numeric::Quantity;
 #[cfg(test)]
 use iroha_primitives::small::SmallVec;
 use mv::storage::StorageReadOnly;
+#[cfg(test)]
 use norito::codec::Encode;
 #[cfg(feature = "bls")]
 use norito::json::Value as JsonValue;
@@ -399,14 +402,14 @@ impl SettlementBufferSnapshot {
 use crate::{
     kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
     pipeline::{overlay::TxOverlay, smallset::sort_dedup_u32_in_place},
+    state::StateBlock,
     tx::is_quarantine_transaction,
 };
 use crate::{
     prelude::*,
-    queue::{resolve_routing_decision, routing_plan_from_execution_context},
+    queue::routing_plan_from_execution_context,
     state::{
-        State, StateBlock, StatelessValidationContext, WorldReadOnly,
-        compute_confidential_feature_digest,
+        State, StatelessValidationContext, WorldReadOnly, compute_confidential_feature_digest,
     },
     sumeragi::network_topology::Topology,
     tx::{AcceptTransactionFail, SignatureRejectionCode, SignatureVerificationFail},
@@ -4741,10 +4744,9 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, (tx, prepared)) in Self::collect_external_signed_transactions(&block)
+                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
                     .into_iter()
                     .zip(prepared_txs.iter())
-                    .enumerate()
                 {
                     let expires_at_ms = tx
                         .time_to_live()

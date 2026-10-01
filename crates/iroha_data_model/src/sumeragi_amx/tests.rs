@@ -1482,3 +1482,172 @@ fn sumeragi_amx_participant_follows_global_handoffs() {
     );
     state.prepare(&mut ledger, &tx, &begin).unwrap();
 }
+
+fn refused_amx_decode_limits() -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        96,
+        crate::sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES,
+        usize::MAX,
+        0,
+        32,
+    )
+}
+
+#[test]
+fn amx_record_decode_refusal_is_not_a_deterministic_record_error() {
+    let record = prepared([0x71; 32], DS1, AmxVoteV1::Yes([0x72; 32]));
+    let key = record.witness_key();
+    let bytes = record.witness_value().unwrap();
+    let original = bytes.clone();
+    let error = norito::with_decode_limits_scope(refused_amx_decode_limits(), || {
+        AmxRecordV1::from_witness(&key, &bytes)
+    })
+    .unwrap_err();
+    assert!(
+        !matches!(error, AmxError::Encoding(_)),
+        "local decoder refusal became a deterministic record error: {error:?}"
+    );
+    assert_eq!(bytes, original);
+    assert_eq!(AmxRecordV1::from_witness(&key, &bytes).unwrap(), record);
+}
+
+#[test]
+fn amx_foreign_certificate_decode_refusal_is_not_a_proof_verdict() {
+    let context = fixture(4);
+    let tracker = AmxForeignInstanceV1::new(instance(DS1), context.clone()).unwrap();
+    let block = certify(instance(DS1), &context, 2, &[], None, 3);
+    let original = block.clone();
+    let expected = tracker.verify_block(&block).unwrap();
+    let error = norito::with_decode_limits_scope(refused_amx_decode_limits(), || {
+        tracker.verify_block(&block)
+    })
+    .unwrap_err();
+    assert!(
+        !matches!(error, AmxError::Proof(_)),
+        "local decoder refusal became a deterministic proof verdict: {error:?}"
+    );
+    assert_eq!(block, original);
+    assert_eq!(tracker.verify_block(&block).unwrap(), expected);
+}
+
+#[test]
+fn amx_record_proof_decode_refusal_is_not_a_proof_verdict() {
+    let context = fixture(4);
+    let record = prepared([0x73; 32], DS1, AmxVoteV1::Yes([0x74; 32]));
+    let writes = vec![write_of(&record)];
+    let block = certify(instance(DS1), &context, 2, &writes, None, 3);
+    let original = block.clone();
+    let complete = block_writes(&context, 2, &writes);
+    let denied_record = record.clone();
+    let error = norito::with_decode_limits_scope(refused_amx_decode_limits(), || {
+        AmxRecordProofV1::from_writes(
+            block,
+            complete
+                .iter()
+                .map(|(key, value)| (key.as_slice(), value.as_slice())),
+            denied_record,
+        )
+    })
+    .unwrap_err();
+    assert!(
+        !matches!(error, AmxError::Proof(_)),
+        "local result decode refusal became a deterministic proof verdict: {error:?}"
+    );
+    let retry = AmxRecordProofV1::from_writes(
+        original.clone(),
+        complete
+            .iter()
+            .map(|(key, value)| (key.as_slice(), value.as_slice())),
+        record.clone(),
+    )
+    .unwrap();
+    assert_eq!(retry.block, original);
+    assert_eq!(retry.record, record);
+}
+
+#[test]
+fn amx_participant_decode_refusal_preserves_original_escrow_and_cursor() {
+    for outcome in [AmxOutcomeV1::Commit, AmxOutcomeV1::Abort] {
+        let tx = transfer(10, 41, [7, 8]);
+        let begin = global_proof(2, &AmxRecordV1::Begin(tx.begin().unwrap()));
+        let decision = global_proof(9, &decision(&tx, outcome));
+        let mut state = participant();
+        let original = state.clone();
+        let mut escrow = RefusingEscrow {
+            ledger: Ledger::with(&[(1, 20)]),
+            refused: None,
+            calls: Vec::new(),
+        };
+        let original_ledger = escrow.ledger.clone();
+        let error = norito::with_decode_limits_scope(refused_amx_decode_limits(), || {
+            state.prepare(&mut escrow, &tx, &begin)
+        })
+        .unwrap_err();
+        assert!(matches!(error, AmxParticipantError::Resource(_)));
+        assert_eq!(state, original);
+        assert_eq!(escrow.ledger, original_ledger);
+        assert!(escrow.calls.is_empty());
+        state.prepare(&mut escrow, &tx, &begin).unwrap();
+        let prepared = state.clone();
+        let held = escrow.ledger.clone();
+        let calls = escrow.calls.clone();
+        let error = norito::with_decode_limits_scope(refused_amx_decode_limits(), || {
+            state.settle(&mut escrow, &decision)
+        })
+        .unwrap_err();
+        assert!(matches!(error, AmxParticipantError::Resource(_)));
+        assert_eq!(state, prepared);
+        assert_eq!(escrow.ledger, held);
+        assert_eq!(escrow.calls, calls);
+        assert_eq!(
+            state.settle(&mut escrow, &decision).unwrap(),
+            match outcome {
+                AmxOutcomeV1::Commit => AmxSettleOutcome::Applied,
+                AmxOutcomeV1::Abort => AmxSettleOutcome::Released,
+            }
+        );
+    }
+}
+
+#[test]
+fn amx_codec_classification_preserves_resource_category_and_malformed_input() {
+    let error = norito::Error::AllocationFailed { bytes: 57 };
+    let expected =
+        AmxError::Resource(norito::core::DecodeResourceError::AllocationFailed { bytes: 57 });
+    assert_eq!(
+        super::proof_codec_error(&error, "core header", false),
+        expected
+    );
+    assert_eq!(
+        super::commitment_error(&crate::sumeragi_finality::CommitmentError::Resource(
+            error.decode_resource_error().unwrap()
+        )),
+        expected
+    );
+    assert!(matches!(
+        super::proof_codec_error(&norito::Error::InvalidMagic, "core header", true),
+        AmxError::Proof(_)
+    ));
+    let protocol: AmxParticipantError<core::convert::Infallible> =
+        AmxError::State("malformed").into();
+    assert!(matches!(
+        protocol,
+        AmxParticipantError::Protocol(AmxError::State("malformed"))
+    ));
+}
+
+#[test]
+fn amx_intrinsic_codec_limit_without_caller_scope_remains_a_proof_error() {
+    let error = norito::Error::SequenceLengthExceeded {
+        length: 97,
+        limit: 96,
+    };
+    assert!(matches!(
+        super::proof_codec_error(&error, "core header", false),
+        AmxError::Proof(_)
+    ));
+    assert_eq!(
+        super::proof_codec_error(&error, "core header", true),
+        AmxError::Resource(error.decode_resource_error().unwrap())
+    );
+}

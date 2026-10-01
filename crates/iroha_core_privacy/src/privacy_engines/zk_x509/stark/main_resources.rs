@@ -464,11 +464,14 @@ impl MainProverBufferPlanV1 {
         if deep_replay > replay_batch || maximum_native + MASK_DEGREE + 1 > 2 * maximum_native {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
         }
-        let composition = product(&[
-            SECURITY_LANES,
-            COMPOSITION_DEGREE_CHUNKS,
-            sum(&[rows, degree_cap])?,
-            extension,
+        let composition = sum(&[
+            product(&[
+                SECURITY_LANES,
+                COMPOSITION_DEGREE_CHUNKS,
+                sum(&[rows, degree_cap])?,
+                extension,
+            ])?,
+            super::super::super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
         ])?;
         let mut quotient_stage = 0;
         for registration in &layout.registered_segments {

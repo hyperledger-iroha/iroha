@@ -6,7 +6,7 @@ use super::super::guard_bundle::assign_bytes;
 use super::*;
 use crate::pasta_sha256::PastaSha256ConfigV1;
 use halo2_base::{
-    ContextCell,
+    ContextCell, ContextTag,
     gates::circuit::{BaseCircuitParams, BaseConfig},
 };
 use halo2_proofs::{
@@ -179,10 +179,28 @@ struct Shape<F> {
     selectors: Vec<Vec<bool>>,
     copies: Vec<(ContextCell, ContextCell)>,
     constants: Vec<(F, ContextCell)>,
+    lookup_cells: Vec<(usize, ContextTag, ContextCell)>,
+    instances: Vec<Vec<ContextCell>>,
 }
 fn shape<F: KagemushaPoseidonFieldV1>(c: &StreamCircuit<F>) -> Shape<F> {
+    let mut lookup_cells = Vec::new();
+    for (phase, manager) in c.builder.lookup_manager().iter().enumerate() {
+        let rows = manager.cells_to_lookup.lock().unwrap();
+        for (tag, cells) in rows.iter() {
+            for row in cells {
+                lookup_cells.push((phase, *tag, row[0].cell.unwrap()));
+            }
+        }
+    }
     let copies = c.builder.core().copy_manager.lock().unwrap();
     Shape {
+        lookup_cells,
+        instances: c
+            .builder
+            .assigned_instances
+            .iter()
+            .map(|column| column.iter().map(|value| value.cell.unwrap()).collect())
+            .collect(),
         columns: c.builder.config_params.num_advice_per_phase.clone(),
         lookups: c.builder.config_params.num_lookup_advice_per_phase.clone(),
         fixed: c.builder.config_params.num_fixed,

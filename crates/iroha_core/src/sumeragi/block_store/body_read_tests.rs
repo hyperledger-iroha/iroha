@@ -178,3 +178,82 @@ fn canonical_but_invalid_author_signature_never_becomes_available_custody() {
         .expect("actual signature rejection");
     assert!(!error.is_local_refusal());
 }
+
+#[test]
+fn stored_result_decode_refusal_retains_original_decoded_owners_and_retries() {
+    use iroha_data_model::sumeragi_finality::{CommitmentError, MAX_RESULT_PREIMAGE_BYTES};
+
+    let (block, source, crypto) = fixture();
+    let budget = AllocationBudget::new(1 << 25);
+    let decoded = CertificateRead::new(block.clone(), budget.clone())
+        .complete(&budget)
+        .unwrap_or_else(|_| panic!("original decoded certificate"));
+    let table = decoded.availability.as_slice().as_ptr();
+    let bitmap = decoded.commit_qc.signers.as_bytes().as_ptr();
+    let mut read =
+        StoredBodyRead::from_decoded(source.clone(), decoded, budget.clone(), crypto.clone());
+    let retained = budget.reserved_bytes();
+    for _ in 0..2 {
+        let outcome = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(96, MAX_RESULT_PREIMAGE_BYTES, usize::MAX, 0, 32),
+            || read.poll(&budget),
+        );
+        let Err(BodyReadError::Io(error)) = outcome else {
+            panic!("result decode must refuse locally before projection");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(matches!(
+            error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<CommitmentError>()),
+            Some(CommitmentError::Resource(_))
+        ));
+        let Stage::Decoded(decoded) = &read.stage else {
+            panic!("retain the same original decoded source");
+        };
+        assert!(Arc::ptr_eq(&decoded.source, &block));
+        assert_eq!(decoded.availability.as_slice().as_ptr(), table);
+        assert_eq!(decoded.commit_qc.signers.as_bytes().as_ptr(), bitmap);
+        assert_eq!(read.source(), &source);
+        assert_eq!(budget.reserved_bytes(), retained);
+    }
+    let BodyReadPoll::Ready(restoration) = read.poll(&budget).unwrap() else {
+        panic!("retry the original input after local decode funding is available");
+    };
+    let body = restoration
+        .complete(&budget, &*crypto)
+        .unwrap_or_else(|_| panic!("the genuine signed body still verifies"));
+    assert_eq!(body.availability().as_slice().as_ptr(), table);
+    assert_eq!(body.source(), &source);
+    assert!(body.admitted_to(&budget));
+    drop((body, read));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn malformed_result_preimage_remains_terminal_storage_corruption() {
+    use iroha_data_model::sumeragi_finality::CommitmentError;
+
+    let (block, _, _) = fixture();
+    let original = block.commit_certificate().unwrap();
+    let mut preimage = original.result_preimage().to_vec();
+    preimage[0] ^= 0xff;
+    let certificate = CommitCertificate::from_untrusted_parts(
+        original.consensus_header().to_vec(),
+        original.commit_qc().to_vec(),
+        preimage,
+        original.availability().to_vec(),
+    );
+    let changed = block
+        .as_ref()
+        .clone()
+        .with_commit_certificate(Some(certificate));
+    let error = super::super::execution::validate(&changed).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(matches!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<CommitmentError>()),
+        Some(CommitmentError::Encoding(_))
+    ));
+}

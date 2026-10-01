@@ -276,7 +276,7 @@ impl<'state> StateBlock<'state> {
         let world_cut_capture = this.world_cut_capture.as_ref();
         let StateBlockFields {
             local_storage_refusal: _,
-            read_releases,
+            read_releases: _,
             // Keep the linear finality/output and native-source owners alive
             // through publication of every original journal below.
             execution_output_plan: _publication_owner,

@@ -69,7 +69,7 @@ pub const MAX_AMX_DATASPACES: usize = 256;
 /// Length of an AMX record's witness key: tag, kind and transaction id.
 pub const AMX_RECORD_WITNESS_KEY_BYTES: usize = 34;
 
-/// Why an AMX value, proof or state transition is rejected.
+/// An invalid AMX input/transition or a local decoder resource refusal.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AmxError {
     /// The transaction `X` is malformed.
@@ -98,6 +98,27 @@ pub enum AmxError {
     /// A Norito encoding or decoding failure.
     #[error("AMX encoding: {0}")]
     Encoding(String),
+    /// The original decoder scope or allocator refused; no protocol verdict was produced.
+    #[error("local AMX decoder resource refusal: {0}")]
+    Resource(norito::core::DecodeResourceError),
+}
+
+fn proof_codec_error(error: &norito::Error, part: &str, outer_scope: bool) -> AmxError {
+    if (outer_scope || matches!(error, norito::Error::AllocationFailed { .. }))
+        && let Some(resource) = error.decode_resource_error()
+    {
+        return AmxError::Resource(resource);
+    }
+    AmxError::Proof(format!("{part}: {error}"))
+}
+
+fn commitment_error(error: &crate::sumeragi_finality::CommitmentError) -> AmxError {
+    match error {
+        crate::sumeragi_finality::CommitmentError::Resource(resource) => {
+            AmxError::Resource(*resource)
+        }
+        other => AmxError::Proof(format!("result preimage: {other}")),
+    }
 }
 
 fn encoding(error: impl std::fmt::Display) -> AmxError {
@@ -505,7 +526,15 @@ impl AmxRecordV1 {
     /// # Errors
     /// The value is not one canonical, valid record of the key's kind and transaction.
     pub fn from_witness(key: &[u8], value: &[u8]) -> Result<Self, AmxError> {
-        let record: Self = norito::decode_canonical(value).map_err(encoding)?;
+        let outer_scope = norito::core::decode_limits_active();
+        let record: Self = norito::decode_canonical(value).map_err(|error| {
+            if (outer_scope || matches!(error, norito::Error::AllocationFailed { .. }))
+                && let Some(resource) = error.decode_resource_error()
+            {
+                return AmxError::Resource(resource);
+            }
+            encoding(&error)
+        })?;
         record.validate()?;
         if record.witness_key().as_slice() != key {
             return Err(AmxError::Record("witness key differs from the record"));
