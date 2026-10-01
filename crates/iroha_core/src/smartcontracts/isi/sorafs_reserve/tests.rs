@@ -247,10 +247,15 @@ fn reserve_component_funding_refuses_an_unretained_original_invocation() {
             .clone()
             .execute(&governance, &mut transaction)
             .expect_err("assigning a hash cannot invent its finite source owner");
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            reason,
+        )) = &error
+        else {
+            panic!("unexpected source refusal: {error:?}");
+        };
         assert!(
-            error
-                .to_string()
-                .contains("FASTPQ source has no retained producer invocation")
+            reason.contains("FASTPQ source has no retained producer invocation"),
+            "source refusal: {error:?}"
         );
         assert_eq!(
             read_provider(transaction.world(), PROVIDER_ID).expect("read refused provider"),

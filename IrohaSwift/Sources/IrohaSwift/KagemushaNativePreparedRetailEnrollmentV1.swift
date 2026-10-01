@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A native-retained FI ceremony. No public archive initializer creates this holder.
@@ -111,7 +112,31 @@ public final class KagemushaNativePreparedRetailEnrollmentV1: @unchecked Sendabl
       guard recovered.state == .certificateRetained, recovered.certificateOriginal == offered else { throw Self.invalid() }
       confirmation = accepted.map { Data($0) }
       try recheck()
-      return KagemushaNativeRetailEnrollmentConfirmationV1(enrollmentID: accepted[0], pendingScope: accepted[1])
+      return KagemushaNativeRetailEnrollmentConfirmationV1(enrollmentID: accepted[0],
+        pendingScope: accepted[1], credentialDigest: original[4])
+    }
+  }
+
+  /// Prepare the same native zero-state Bootstrap after FI has retained its certificate.
+  /// The selector cannot construct S, W, a captured approval or monetary authority.
+  public func prepareBootstrapAppApproval() throws -> KagemushaNativePreparedBootstrapAppApprovalV1 {
+    return try guarded {
+      _ = try recheckForBootstrap()
+      guard let certificate else { throw Self.invalid() }
+      let operationID = Data(SHA256.hash(data:
+        Data("iroha:kagemusha:v1:ordinary-bootstrap-operation-id\0".utf8) + certificate))
+      return try KagemushaNativePreparedBootstrapAppApprovalV1.prepare(bridge: bridge,
+        retail: self, operationID: operationID)
+    }
+  }
+
+  func recheckForBootstrap() throws -> (enrollmentID: Data, credentialDigest: Data,
+    app: KagemushaAppPlatformPreparedProjectionV1) {
+    try guarded {
+      try recheck()
+      guard let confirmation, confirmation.count == 2, certificate != nil,
+        try readRecovery().state == .certificateRetained else { throw Self.invalid() }
+      return (Data(confirmation[0]), Data(original[4]), try possession.recheck())
     }
   }
 
@@ -189,7 +214,9 @@ public struct KagemushaNativeRetailEnrollmentRecoveryV1: Sendable {
 public struct KagemushaNativeRetailEnrollmentConfirmationV1: Sendable {
   public let enrollmentID: Data
   public let pendingScope: Data
-  fileprivate init(enrollmentID: Data, pendingScope: Data) {
+  public let credentialDigest: Data
+  fileprivate init(enrollmentID: Data, pendingScope: Data, credentialDigest: Data) {
     self.enrollmentID = Data(enrollmentID); self.pendingScope = Data(pendingScope)
+    self.credentialDigest = Data(credentialDigest)
   }
 }

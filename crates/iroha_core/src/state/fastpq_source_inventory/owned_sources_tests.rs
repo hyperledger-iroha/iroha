@@ -30,7 +30,6 @@ use iroha_data_model::{
             ExecutionOutputV1, PipelineEventPositionV1, PipelineInvocationV1, TimeInvocationV1,
         },
     },
-    domain::Domain,
     events::{
         pipeline::{BlockEventFilter, BlockStatus},
         time::{ExecutionTime, TimeEventFilter},
@@ -184,9 +183,8 @@ fn fixture_with_effects(
         Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut tx)
             .unwrap();
-        Register::domain(Domain::new(domain))
-            .execute(&ALICE_ID, &mut tx)
-            .unwrap();
+        // This global definition has no owning domain or alias. Its canonical
+        // identity does not require a domain-name lease or domain registration.
         Register::asset_definition(AssetDefinition::numeric(
             asset.clone(),
             "Owned inventory",

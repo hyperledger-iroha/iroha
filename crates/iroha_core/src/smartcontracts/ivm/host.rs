@@ -18036,7 +18036,7 @@ seiyaku OpaqueInstructionSubmission {
             // This fixture exercises semantic rejection before child proof decoding.
             vec![0]
         } else {
-            fastpq_prover::prove_axt_bound_batch(&batch, &binding).expect("canonical AXT proof")
+            crate::unit_test_support::prove_axt_bound_batch_when_available(&batch, &binding)
         };
         let envelope = axt::AxtProofEnvelope {
             dsid,
@@ -19147,6 +19147,13 @@ seiyaku Callee {
     }
     #[test]
     fn repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime() {
+        // Other tests deliberately change the process-wide retention limits.
+        // The exact child runs every original warmth, reset and gas assertion.
+        if crate::unit_test_support::run_in_isolated_harness(
+            "smartcontracts::ivm::host::tests::repeated_nested_calls_reuse_prepared_artifact_and_warmed_runtime",
+        ) {
+            return;
+        }
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -19667,11 +19674,28 @@ seiyaku HeldCallee {
 "#,
             1,
         );
-        state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
-            .commit_empty_block_for_testing()
-            .expect("commit the execution-height bootstrap block");
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        // `contract_test_state` has already applied its original signed genesis.
+        // A fabricated height-one carrier cannot replace that authenticated tip.
+        assert_eq!(state.committed_height(), 1);
+        let original_parent = state
+            .view()
+            .latest_block_hash()
+            .expect("original signed host genesis");
+        assert!(
+            crate::sumeragi::lanes::routing::committed_root_scope(state.view().world()).is_some()
+        );
+        let creation_time_ms = state
+            .latest_block_creation_time_ms_fast()
+            .expect("original signed genesis timestamp")
+            .checked_add(1)
+            .expect("next component timestamp");
+        let mut block = state.block(BlockHeader::new(
+            nonzero!(2_u64),
+            Some(original_parent),
+            None,
+            creation_time_ms,
+            0,
+        ));
         {
             let mut tx = block.transaction();
             let binding = tx

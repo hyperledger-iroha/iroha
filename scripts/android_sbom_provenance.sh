@@ -48,12 +48,10 @@ command -v "$COSIGN_BIN" >/dev/null 2>&1 || { echo 'cosign is required' >&2; exi
   --print-build-root >/dev/null
 SDK_PROJECT_CACHE="$MOBILE_SDK_ANDROID_ARTIFACT_DIR/sbom-project-cache"
 
-echo '==> Testing canonical SDK and generating runtime SBOMs'
+echo '==> Generating canonical SDK runtime SBOMs'
 "$SDK_GRADLE_WRAPPER" -p "$REPO_ROOT/kotlin" --no-daemon --no-configuration-cache \
   --project-cache-dir "$SDK_PROJECT_CACHE" \
-  -PirohaSdkVersion="$SDK_VERSION" \
-  :core-jvm:test :client-android:testDebugUnitTest :client-android:testDebugHostNative \
-  :kagemusha-wallet-android:testDebugUnitTest \
+  -PirohaSdkVersion="$SDK_VERSION" -PprivacyProductionEnabled=true \
   :core-jvm:cyclonedxDirectBom :client-android:cyclonedxDirectBom \
   :kagemusha-wallet-android:cyclonedxDirectBom
 

@@ -4,8 +4,8 @@
 use super::super::{PrivateJournal, PrivateJournalFormat};
 use super::journal::continuous_clock::Reading;
 use super::{
-    Custody, KagemushaOrdinaryIdentityErrorV1, KagemushaPreparedOrdinaryAppEnrollmentV1, Rejected,
-    Result,
+    Custody, KagemushaOrdinaryGovernedPolicyOriginalsV1, KagemushaOrdinaryIdentityErrorV1,
+    KagemushaPreparedOrdinaryAppEnrollmentV1, Rejected, Result,
 };
 use iroha_data_model::kagemusha::*;
 use rand_core_06::{OsRng, RngCore as _};
@@ -24,11 +24,8 @@ const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
 /// No C/JNI field, account cache or offered preparation can construct this selection.
 pub struct KagemushaOrdinaryPreparationSelectedOriginalsV1 {
     owner: KagemushaRetailEnrollmentOwnerV1,
-    release: Arc<KagemushaAuthenticatedReleaseV1>,
+    governed: KagemushaOrdinaryGovernedPolicyOriginalsV1,
     issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
-    trust: KagemushaOrdinaryAppTrustPolicyV1,
-    authority: KagemushaAppAttestationAuthorityPolicyV1,
-    profile_id: [u8; 32],
     core_authorization_key_reference: [u8; 32],
     trusted_reference_ms: u64,
     reference_clock: Reading,
@@ -50,14 +47,44 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
         original_core_public_key: &KagemushaDevicePublicKeyV1,
         trusted_native_reference_ms: u64,
     ) -> Result<Self> {
+        let trust_original = norito::encode_canonical(&trust).map_err(|_| Rejected)?;
+        let authority_original = authority
+            .canonical_digest_preimage_v1()
+            .map_err(|_| Rejected)?;
+        let governed = KagemushaOrdinaryGovernedPolicyOriginalsV1::authenticate(
+            release,
+            profile_id,
+            &trust_original,
+            &authority_original.bytes,
+        )?;
+        Self::from_governed_originals(
+            owner,
+            governed,
+            issuer,
+            original_core_public_key,
+            trusted_native_reference_ms,
+        )
+    }
+
+    /// Join retained release-authenticated policy originals to independent native custody.
+    ///
+    /// Policy admission supplies neither account/runtime ownership, issuer authority, a native
+    /// Core key nor trusted time. The Rust provisioner must supply each original separately.
+    /// No application ABI accepts these inputs or constructs a selected owner.
+    /// # Errors
+    /// Rejects another scope, key role, issuer/runtime or trusted interval.
+    pub fn from_governed_originals(
+        owner: KagemushaRetailEnrollmentOwnerV1,
+        governed: KagemushaOrdinaryGovernedPolicyOriginalsV1,
+        issuer: KagemushaRetailEnrollmentIssuerPolicyV1,
+        original_core_public_key: &KagemushaDevicePublicKeyV1,
+        trusted_native_reference_ms: u64,
+    ) -> Result<Self> {
         original_core_public_key.validate().map_err(|_| Rejected)?;
         let this = Self {
             owner,
-            release,
+            governed,
             issuer,
-            trust,
-            authority,
-            profile_id,
             core_authorization_key_reference: kagemusha_core_authorization_key_reference_v1(
                 original_core_public_key,
             ),
@@ -91,7 +118,8 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
     pub fn integrity_policy_digest(&self) -> Result<Option<[u8; 32]>> {
         self.trusted_time_ms()?;
         Ok(self
-            .trust
+            .governed
+            .trust()
             .play_integrity_policy
             .as_ref()
             .map(|p| p.policy_digest))
@@ -102,20 +130,16 @@ impl KagemushaOrdinaryPreparationSelectedOriginalsV1 {
     }
     fn recheck_at_trusted_time(&self, now: u64) -> Result<()> {
         self.issuer.validate().map_err(|_| Rejected)?;
+        self.governed.recheck()?;
         let enabled = self
-            .release
-            .enabled_profile(self.profile_id)
+            .governed
+            .release()
+            .enabled_profile(self.governed.profile_id())
             .ok_or(Rejected)?;
-        self.trust
-            .validate_for_profile(&enabled.hardware_profile, &self.authority)
-            .map_err(|_| Rejected)?;
-        if self.release.purpose() != KagemushaReleasePurposeV1::Production
-            || self.owner.runtime != self.issuer.runtime
-            || self.owner.runtime.network_id != self.release.network_id()
+        if self.owner.runtime != self.issuer.runtime
+            || self.owner.runtime.network_id != self.governed.release().network_id()
             || self.owner.lane_id == [0; 32]
             || self.owner.enrollment_id().map_err(|_| Rejected)? == [0; 32]
-            || !enabled.hardware_profile.platform_class.is_ordinary_app()
-            || self.authority.platform_class != enabled.hardware_profile.platform_class
             || now == 0
             || now < self.issuer.valid_from_ms
             || now >= self.issuer.expires_at_ms
@@ -266,8 +290,8 @@ impl KagemushaOrdinaryPreparationReservationV1 {
                 .canonical_i105()
                 .map_err(|_| Rejected)?,
             client_nonce,
-            release_id: selected.release.release_id(),
-            hardware_profile_id: selected.profile_id,
+            release_id: selected.governed.release().release_id(),
+            hardware_profile_id: selected.governed.profile_id(),
             lane_id: selected.owner.lane_id,
             financial_authority_commitment: commitment,
         };
@@ -277,8 +301,9 @@ impl KagemushaOrdinaryPreparationReservationV1 {
             .min(selected.issuer.expires_at_ms)
             .min(
                 selected
-                    .release
-                    .enabled_profile(selected.profile_id)
+                    .governed
+                    .release()
+                    .enabled_profile(selected.governed.profile_id())
                     .ok_or(Rejected)?
                     .hardware_profile
                     .expires_at_ms,
@@ -294,9 +319,14 @@ impl KagemushaOrdinaryPreparationReservationV1 {
                 &selected.issuer,
             )
             .map_err(|_| Rejected)?,
-            trust_policy_digest: selected.trust.canonical_digest().map_err(|_| Rejected)?,
+            trust_policy_digest: selected
+                .governed
+                .trust()
+                .canonical_digest()
+                .map_err(|_| Rejected)?,
             app_authority_policy_digest: selected
-                .authority
+                .governed
+                .authority()
                 .canonical_digest()
                 .map_err(|_| Rejected)?,
             core_authorization_key_reference: selected.core_authorization_key_reference,
@@ -402,16 +432,22 @@ impl KagemushaOrdinaryPreparationReservationV1 {
                     .account_id
                     .canonical_i105()
                     .map_err(|_| Rejected)?
-            || *release_id != selected.release.release_id()
-            || *profile_id != selected.profile_id
+            || *release_id != selected.governed.release().release_id()
+            || *profile_id != selected.governed.profile_id()
             || *lane_id != selected.owner.lane_id
             || *issuer_policy_digest
                 != kagemusha_ordinary_retail_issuer_policy_digest_v1(&selected.issuer)
                     .map_err(|_| Rejected)?
-            || *trust_policy_digest != selected.trust.canonical_digest().map_err(|_| Rejected)?
+            || *trust_policy_digest
+                != selected
+                    .governed
+                    .trust()
+                    .canonical_digest()
+                    .map_err(|_| Rejected)?
             || *app_authority_policy_digest
                 != selected
-                    .authority
+                    .governed
+                    .authority()
                     .canonical_digest()
                     .map_err(|_| Rejected)?
             || *core_authorization_key_reference != selected.core_authorization_key_reference
@@ -585,11 +621,11 @@ impl KagemushaOrdinaryPreparationReservationV1 {
         KagemushaPreparedOrdinaryAppEnrollmentV1::authenticate_pre_key(
             p.clone(),
             self.selected.owner.clone(),
-            self.selected.release.clone(),
-            self.selected.trust.clone(),
-            self.selected.authority.clone(),
+            self.selected.governed.release().clone(),
+            self.selected.governed.trust().clone(),
+            self.selected.governed.authority().clone(),
             self.selected.issuer.clone(),
-            self.selected.profile_id,
+            self.selected.governed.profile_id(),
             self.carrier.client_nonce,
             self.carrier.financial_authority_commitment,
             self.hardware_epoch,
@@ -927,6 +963,106 @@ mod tests {
             .unwrap(),
         )
     }
+    fn governed(f: &Fixture) -> KagemushaOrdinaryGovernedPolicyOriginalsV1 {
+        KagemushaOrdinaryGovernedPolicyOriginalsV1::authenticate(
+            f.release.clone(),
+            f.selection.preparation.challenge.hardware_profile_id,
+            &norito::encode_canonical(&f.trust).unwrap(),
+            &f.app_authority
+                .canonical_digest_preimage_v1()
+                .unwrap()
+                .bytes,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn selected_retains_checked_originals_and_independent_key_identity() {
+        let f = Fixture::android_with_integrity();
+        let old_input_path = selected(&f, 300);
+        let key = core_key();
+        let new_input_path =
+            KagemushaOrdinaryPreparationSelectedOriginalsV1::from_governed_originals(
+                f.selection.owner.clone(),
+                governed(&f),
+                f.issuer_policy.clone(),
+                &key,
+                300,
+            )
+            .unwrap();
+        assert_eq!(
+            new_input_path.enrollment_id().unwrap(),
+            old_input_path.enrollment_id().unwrap()
+        );
+        assert_eq!(
+            new_input_path.integrity_policy_digest().unwrap(),
+            old_input_path.integrity_policy_digest().unwrap()
+        );
+        assert_eq!(
+            new_input_path.core_authorization_key_reference().unwrap(),
+            kagemusha_core_authorization_key_reference_v1(&key)
+        );
+        assert_eq!(
+            new_input_path.governed.original_trust_policy_bytes(),
+            norito::encode_canonical(&f.trust).unwrap()
+        );
+        assert_eq!(
+            new_input_path.governed.original_app_authority_bytes(),
+            f.app_authority
+                .canonical_digest_preimage_v1()
+                .unwrap()
+                .bytes
+        );
+    }
+
+    #[test]
+    fn governed_policy_admission_cannot_supply_runtime_lane_or_trusted_time() {
+        let f = Fixture::new(true);
+        for changed in 0..5 {
+            let mut owner = f.selection.owner.clone();
+            let mut issuer = f.issuer_policy.clone();
+            let mut now = 300;
+            match changed {
+                0 => owner.runtime.scale += 1,
+                1 => issuer.runtime.scale += 1,
+                2 => owner.lane_id = [0; 32],
+                3 => now = 0,
+                _ => now = issuer.expires_at_ms,
+            }
+            assert!(
+                KagemushaOrdinaryPreparationSelectedOriginalsV1::from_governed_originals(
+                    owner,
+                    governed(&f),
+                    issuer,
+                    &core_key(),
+                    now,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn typed_selected_inputs_use_the_same_release_bound_policy_admission() {
+        let f = Fixture::new(true);
+        let mut trust = f.trust.clone();
+        trust.maximum_credential_lifetime_ms -= 1;
+        trust.validate().unwrap();
+        assert!(
+            KagemushaOrdinaryPreparationSelectedOriginalsV1::from_selected_originals(
+                f.selection.owner.clone(),
+                f.release.clone(),
+                f.issuer_policy.clone(),
+                trust,
+                f.app_authority.clone(),
+                f.selection.preparation.challenge.hardware_profile_id,
+                &core_key(),
+                300,
+            )
+            .is_err()
+        );
+    }
+
     fn bind(mut f: Fixture, carrier: &KagemushaOrdinaryPreparationCarrierV1) -> Fixture {
         let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
         let wallet = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);

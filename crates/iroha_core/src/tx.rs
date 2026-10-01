@@ -5421,6 +5421,45 @@ pub mod tests {
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         (World::with([domain], [account], []), authority_id, key_pair)
     }
+    fn original_component_successor_header(state: &State) -> BlockHeader {
+        let view = state.view();
+        let parent = view
+            .latest_block()
+            .expect("original applied signed genesis or successor");
+        BlockHeader::new(
+            NonZeroU64::new(u64::try_from(view.height()).expect("height fits") + 1)
+                .expect("actual successor height"),
+            Some(parent.hash()),
+            None,
+            u64::try_from(parent.header().creation_time().as_millis()).expect("time fits") + 1,
+            0,
+        )
+    }
+    #[test]
+    fn transaction_component_fixture_retains_signed_genesis_and_exact_successor() {
+        let (world, _, _) = world_with_authority("wonderland");
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        assert!(
+            crate::sumeragi::lanes::routing::committed_root_scope(state.view().world()).is_none()
+        );
+        let chain = crate::block::tests::component_chain(state);
+        let header = original_component_successor_header(chain.state());
+        assert_eq!(chain.state().committed_height(), 1);
+        assert_eq!(header.height().get(), 2);
+        assert_eq!(header.prev_block_hash(), Some(chain.genesis().hash()));
+        assert_eq!(
+            header.creation_time(),
+            chain.genesis().header().creation_time() + Duration::from_millis(1)
+        );
+        assert!(
+            crate::sumeragi::lanes::routing::committed_root_scope(chain.state().view().world())
+                .is_some()
+        );
+    }
     fn configure_active_same_dataspace_lanes(state: &State, lane_count: NonZeroU32) {
         let lanes = (1..lane_count.get())
             .map(|index| LaneConfig {
@@ -6424,27 +6463,18 @@ pub mod tests {
             [signer1_account, signer2_account, validator_account],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut setup_block = state.block(setup_header);
-        let mut setup_tx = setup_block.transaction();
-        crate::executor::Executor::Initial
-            .execute_instruction(
-                &mut setup_tx,
-                &signer1_id,
-                InstructionBox::from(MultisigRegister::with_account(
-                    AccountId::new(checked_random_tx_keypair().public_key().clone()),
-                    home_domain.clone(),
-                    spec,
-                )),
-            )
-            .expect("register canonical multisig account");
-        setup_tx.apply();
-        setup_block
-            .commit_world_overlay_for_testing()
-            .expect("commit multisig setup");
+        let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+        config.chain_id = chain;
+        config
+            .genesis_instructions
+            .push(InstructionBox::from(MultisigRegister::with_account(
+                AccountId::new(checked_random_tx_keypair().public_key().clone()),
+                home_domain.clone(),
+                spec,
+            )));
+        let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("register canonical multisig through the original signed genesis source");
+        let state = chain.state();
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -6467,7 +6497,7 @@ pub mod tests {
         let policy_manifests = Arc::clone(&registry);
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             signer1_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6482,14 +6512,14 @@ pub mod tests {
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
-            &test_network_id(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+        let header = original_component_successor_header(state);
         let mut block = state.block(header);
         block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
@@ -6521,6 +6551,8 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let chain = crate::block::tests::component_chain(state);
+        let state = chain.state();
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -6543,7 +6575,7 @@ pub mod tests {
         let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
         let policy_manifests = Arc::clone(&registry);
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6554,14 +6586,14 @@ pub mod tests {
         let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
         let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
-            &test_network_id(),
+            &chain.network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = original_component_successor_header(state);
         let mut block = state.block(header);
         block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
@@ -11086,6 +11118,21 @@ pub mod tests {
             ));
         let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
             .expect("apply signed genesis with sequence enforcement");
+        assert!(
+            chain
+                .state()
+                .view()
+                .world()
+                .parameters()
+                .transaction()
+                .require_sequence,
+            "the original signed genesis must retain the requested sequence policy"
+        );
+        assert_eq!(
+            chain.state().view().world().tx_sequences.get(&authority_id),
+            Some(&5),
+            "original signed genesis must retain the independently seeded previous sequence"
+        );
         let mut metadata = Metadata::default();
         metadata.insert(
             iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
@@ -11167,6 +11214,21 @@ pub mod tests {
             ));
         let mut chain = crate::sumeragi::test_chain::CertifiedTestChain::start(config)
             .expect("apply signed genesis with sequence enforcement");
+        assert!(
+            chain
+                .state()
+                .view()
+                .world()
+                .parameters()
+                .transaction()
+                .require_sequence,
+            "the original signed genesis must retain the requested sequence policy"
+        );
+        assert_eq!(
+            chain.state().view().world().tx_sequences.get(&authority_id),
+            Some(&5),
+            "original signed genesis must retain the independently seeded previous sequence"
+        );
         let mut metadata = Metadata::default();
         metadata.insert(
             iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
@@ -11281,7 +11343,9 @@ pub mod tests {
         pipeline.ivm_max_cycles_upper_bound =
             std::num::NonZeroU64::new(4_000).expect("test ceiling is non-zero");
         state.set_pipeline(pipeline);
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let chain = crate::block::tests::component_chain(state);
+        let state = chain.state();
+        let header = original_component_successor_header(state);
         let mut block = state.block(header);
         // The retired custom parameter cannot lower the configured ceiling.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
@@ -11294,7 +11358,7 @@ pub mod tests {
         // Build program with max_cycles = 2000, below the bound
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
         let tx = TransactionBuilder::new(
-            test_network_id(),
+            chain.network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -11434,7 +11498,15 @@ pub mod tests {
                 ("dave", 10),
                 ("eve", 10),
             ]);
-            let (events, _committed_block) = block.apply();
+            let (events, committed_block) = block.apply();
+            let results = committed_block
+                .as_ref()
+                .output_results()
+                .collect::<Vec<_>>();
+            assert!(
+                results.iter().all(|result| result.is_ok()),
+                "each independent depth-three branch must complete under its original configured bound: {results:?}"
+            );
             assert_events(&events, "data_trigger/each_branch_is_assigned_depth");
             block.assert_balances([
                 ("alice", 10),
@@ -11917,6 +11989,8 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let chain = crate::block::tests::component_chain(state);
+        let state = chain.state();
         let mut protected_namespaces = BTreeSet::new();
         protected_namespaces.insert(Name::from_str("apps").expect("protected namespace"));
         let rules = GovernanceRules {
@@ -11941,9 +12015,7 @@ pub mod tests {
         );
         let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
+            &chain.network_id(),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11954,13 +12026,13 @@ pub mod tests {
             (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
             Json::new(contract_address.to_string()),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = original_component_successor_header(state);
         let mut block = state.block(header);
         block.lane_manifests = Arc::clone(&policy_manifests);
         macro_rules! validate_instruction {
             ($instruction:expr, $metadata:expr) => {{
                 let tx = TransactionBuilder::new(
-                    test_network_id(),
+                    chain.network_id(),
                     authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -12032,7 +12104,7 @@ pub mod tests {
         );
         assert!(
             accepted_upload.is_ok(),
-            "governance metadata should admit upload: {accepted_upload:?}"
+            "explicit code-management permission with required governance context should admit upload: {accepted_upload:?}"
         );
         assert_eq!(
             block
@@ -12078,7 +12150,7 @@ pub mod tests {
         );
         assert!(
             accepted_finalize.is_ok(),
-            "governance metadata should admit finalization: {accepted_finalize:?}"
+            "explicit code-management permission with required governance context should admit finalization: {accepted_finalize:?}"
         );
         assert_eq!(
             block
@@ -12107,7 +12179,7 @@ pub mod tests {
                 chunk_count: 1,
                 chunk: vec![0xCA],
             },
-            governance_metadata
+            governance_metadata.clone()
         );
         assert!(
             accepted_cancel_stage.is_ok(),
@@ -12128,6 +12200,37 @@ pub mod tests {
                 .world
                 .contract_code_upload_progress(&authority, &cancelled_artifact_id),
             None
+        );
+        // The same required metadata is context, never a code-management capability.
+        block.world.account_permissions.remove(authority.clone());
+        let missing_management_permission = validate_instruction!(
+            UploadSmartContractCodeChunk {
+                artifact_id: cancelled_artifact_id,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0xCA],
+            },
+            governance_metadata
+        );
+        assert!(matches!(
+            missing_management_permission,
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)))
+                if message.contains("CanManageSmartContractCode")
+        ));
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &cancelled_artifact_id),
+            None
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code()
+                .get(&artifact_id)
+                .map(Vec::as_slice),
+            Some(code.as_slice())
         );
     }
     #[test]
@@ -12423,6 +12526,9 @@ pub mod tests {
                 )
                 .expect("install the authenticated elastic lane");
         }
+        let chain = crate::block::tests::component_chain(state);
+        let state = chain.state();
+        let next_header = original_component_successor_header(state);
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -12462,7 +12568,7 @@ pub mod tests {
                 Json::new(attempt),
             );
             let tx = TransactionBuilder::new(
-                test_network_id(),
+                chain.network_id(),
                 authority.clone(),
                 fee_payment_with_gas_limit(TEST_GAS_LIMIT),
             )
@@ -12474,7 +12580,8 @@ pub mod tests {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             let (catalog_only, live_plan) = {
                 let view = state.view();
-                let ledger_time_ms = 0;
+                let ledger_time_ms =
+                    u64::try_from(next_header.creation_time().as_millis()).expect("time fits");
                 let catalog_only = crate::queue::evaluate_policy_with_catalog_and_world_at(
                     &view.nexus.routing_policy,
                     &view.nexus.lane_catalog,
@@ -12490,7 +12597,7 @@ pub mod tests {
                         &accepted,
                         view.world(),
                         ledger_time_ms,
-                        1,
+                        next_header.height().get(),
                     )
                     .expect("live autoscale route resolves");
                 (catalog_only, live_plan)
@@ -12504,7 +12611,7 @@ pub mod tests {
         }
         let tx = selected.expect("fixture should find a tx routed to elastic lane");
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = next_header;
         let mut block = state.block(header);
         block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
@@ -12951,6 +13058,8 @@ pub mod tests {
             LiveQueryStore::start_test(),
             chain,
         );
+        let chain = crate::block::tests::component_chain(state);
+        let state = chain.state();
         let signed = TransactionBuilder::new(
             *state.network_id_ref(),
             authority,
@@ -12959,7 +13068,7 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "unlimited block gas".to_owned())])
         .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = original_component_successor_header(state);
         let mut block = state.block(header);
         block.gas_limit_per_block = 0;
         let mut cache = IvmCache::new();
@@ -13005,13 +13114,14 @@ pub mod tests {
     }
 
     fn marked_test_transaction(
+        network_id: iroha_data_model::NetworkId,
         authority: AccountId,
         keypair: &KeyPair,
         semantic_hash: &str,
         instructions: impl IntoIterator<Item = InstructionBox>,
     ) -> SignedTransaction {
         TransactionBuilder::new(
-            test_network_id(),
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -13061,28 +13171,30 @@ pub mod tests {
         let (other, other_keypair) = gen_account_in("other-faucet");
         let (recipient, _) = gen_account_in("faucet-recipient");
         let (domain, definition_id, definition) = faucet_test_asset_definition(&faucet);
-        let world = World::with_assets(
-            [domain],
-            [
-                Account::new(faucet.clone()).build(&faucet),
-                Account::new(other.clone()).build(&other),
-                Account::new(recipient.clone()).build(&recipient),
-            ],
-            [definition],
-            [
-                Asset::new(AssetId::new(definition_id.clone(), faucet.clone()), 10_u32),
-                Asset::new(AssetId::new(definition_id.clone(), other.clone()), 10_u32),
-            ],
-            [],
-        );
-        let state = State::new_with_chain(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            chain,
-        );
+        let original_chain = || {
+            let world = World::with_assets(
+                [domain.clone()],
+                [
+                    Account::new(faucet.clone()).build(&faucet),
+                    Account::new(other.clone()).build(&other),
+                    Account::new(recipient.clone()).build(&recipient),
+                ],
+                [definition.clone()],
+                [
+                    Asset::new(AssetId::new(definition_id.clone(), faucet.clone()), 10_u32),
+                    Asset::new(AssetId::new(definition_id.clone(), other.clone()), 10_u32),
+                ],
+                [],
+            );
+            let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+            config.chain_id = chain.clone();
+            crate::sumeragi::test_chain::CertifiedTestChain::start(config)
+                .expect("same original signed faucet genesis")
+        };
+        let mut chain = original_chain();
         let semantic_hash = "ab".repeat(Hash::LENGTH);
         let first = marked_test_transaction(
+            chain.network_id(),
             faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
@@ -13093,23 +13205,28 @@ pub mod tests {
             .expect("marker present")
             .0;
         let first_hash = first.hash();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let first_result = execute_component_transaction_for_testing(
-            &mut block,
-            AcceptedTransaction::new_unchecked(Cow::Owned(first)),
-            &mut ivm_cache,
-            None,
-        );
+        chain.commit(vec![first]);
+        let committed = chain.committed(2);
+        let first_result = committed
+            .block()
+            .network_output_at(0)
+            .expect("actual certified original faucet output")
+            .1
+            .result
+            .0
+            .clone();
         first_result.expect("first authority-scoped claim succeeds");
         assert!(
-            block.world.smart_contract_state.get(&marker_path).is_some(),
+            chain
+                .state()
+                .view()
+                .world()
+                .smart_contract_state
+                .get(&marker_path)
+                .is_some(),
             "successful execution persists its claim marker"
         );
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit first faucet marker block");
+        let state = chain.state();
         assert!(
             state
                 .view()
@@ -13119,23 +13236,29 @@ pub mod tests {
                 .is_some(),
             "claim marker must survive the transaction overlay commit"
         );
-        let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
-        let restarted = crate::state::deserialize::KuraSeed {
-            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-            execution_budget: iroha_allocation::AllocationBudget::new(
-                iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
-            ),
-            lane_manifests: state.lane_manifests.read().clone(),
-            kura: Kura::blank_kura_for_testing(),
-            query_handle: LiveQueryStore::start_test(),
-            #[cfg(feature = "telemetry")]
-            telemetry: crate::telemetry::StateTelemetry::default(),
-        }
-        .into_state_from_json(snapshot)
-        .expect("restore marker-bearing state");
-        // Runtime fee policy is process configuration, not persisted World state.
-        // Restore that exact fixture policy without replacing authenticated lane geometry.
-        restarted.nexus.write().fees = state.nexus.read().fees.clone();
+        let snapshot =
+            norito::json::to_value(state.as_ref()).expect("serialize marker-bearing state");
+        assert!(matches!(
+            crate::state::deserialize::KuraSeed {
+                operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
+                execution_budget: iroha_allocation::AllocationBudget::new(
+                    iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+                ),
+                lane_manifests: state.lane_manifests.read().clone(),
+                kura: Kura::blank_kura_for_testing(),
+                query_handle: LiveQueryStore::start_test(),
+                #[cfg(feature = "telemetry")]
+                telemetry: crate::telemetry::StateTelemetry::default(),
+            }
+            .into_state_from_json(snapshot),
+            Err(crate::state::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        ));
+        let mut replay = original_chain();
+        assert_eq!(replay.network_id(), chain.network_id());
+        replay
+            .replay_from(&chain)
+            .expect("restore only the original certified faucet prefix");
+        let restarted = replay.state();
         assert!(
             restarted
                 .view()
@@ -13143,12 +13266,14 @@ pub mod tests {
                 .smart_contract_state
                 .get(&marker_path)
                 .is_some(),
-            "claim marker must survive snapshot restore"
+            "claim marker must survive original native replay"
         );
-        let replay_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+        let replay_header = original_component_successor_header(restarted);
+        let mut ivm_cache = IvmCache::new();
         let mut replay_block = restarted.block(replay_header);
 
         let duplicate = marked_test_transaction(
+            chain.network_id(),
             faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
@@ -13172,6 +13297,7 @@ pub mod tests {
         );
 
         let other_tx = marked_test_transaction(
+            chain.network_id(),
             other.clone(),
             &other_keypair,
             &semantic_hash,
@@ -13216,8 +13342,11 @@ pub mod tests {
             LiveQueryStore::start_test(),
             chain,
         );
+        let chain = crate::block::tests::component_chain(state);
+        let state = chain.state();
         let semantic_hash = "cd".repeat(Hash::LENGTH);
         let failing = marked_test_transaction(
+            chain.network_id(),
             faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
@@ -13232,7 +13361,7 @@ pub mod tests {
             .expect("valid marker")
             .expect("marker present")
             .0;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = original_component_successor_header(state);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let failure = execute_component_transaction_for_testing(
@@ -13248,6 +13377,7 @@ pub mod tests {
         );
 
         let retry = marked_test_transaction(
+            chain.network_id(),
             faucet.clone(),
             &faucet_keypair,
             &semantic_hash,
@@ -13275,14 +13405,20 @@ pub mod tests {
         let registration =
             || InstructionBox::from(Register::account(Account::new(destination.clone())));
 
-        let without_registration =
-            marked_test_transaction(authority.clone(), &keypair, &semantic_hash, [transfer()]);
+        let without_registration = marked_test_transaction(
+            test_network_id(),
+            authority.clone(),
+            &keypair,
+            &semantic_hash,
+            [transfer()],
+        );
         assert!(
             faucet_claim_consumption_marker(&without_registration)
                 .expect("one direct faucet transfer is valid")
                 .is_some()
         );
         let with_registration = marked_test_transaction(
+            test_network_id(),
             authority.clone(),
             &keypair,
             &semantic_hash,
@@ -13385,8 +13521,13 @@ pub mod tests {
             ),
         ];
         for (case, instructions) in cases {
-            let tx =
-                marked_test_transaction(authority.clone(), &keypair, &semantic_hash, instructions);
+            let tx = marked_test_transaction(
+                test_network_id(),
+                authority.clone(),
+                &keypair,
+                &semantic_hash,
+                instructions,
+            );
             assert!(
                 matches!(
                     faucet_claim_consumption_marker(&tx),

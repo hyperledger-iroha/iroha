@@ -1,7 +1,10 @@
 //! Actual owner capture, rollback and explicit refusal of incomplete quantity coverage.
 
 use super::*;
-use crate::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute};
+use crate::{
+    execution_attempt::ExecutionAttemptError, kura::Kura, query::store::LiveQueryStore,
+    smartcontracts::Execute,
+};
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition},
@@ -168,11 +171,76 @@ fn source_with_fee(
     let hash =
         Hash::from(TransactionEntrypoint::External(transaction.clone()).execution_call_hash());
     let mut builder = BlockBuilder::new(quantity_successor_header(state));
+    builder.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            iroha_data_model::block::ExternalExecutionContext::new(
+                transaction.hash_as_entrypoint(),
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ),
+        ]),
+    ));
     builder.push_transaction(transaction);
     (
         builder.build_with_signature(0, ALICE_KEYPAIR.private_key()),
         hash,
     )
+}
+
+#[test]
+fn quantity_carrier_missing_context_refuses_without_balance_or_capture_mutation() {
+    on_stack(|| {
+        let (state, alice, bob) = fixture();
+        let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+        let (original, _) = source(
+            &state,
+            vec![Transfer::asset_quantity(alice.clone(), 1_u32, BOB_ID.clone()).into()],
+        );
+        let signed = original.external_transactions().next().unwrap().clone();
+        let mut missing = BlockBuilder::new(quantity_successor_header(&state));
+        missing.push_transaction(signed.clone());
+        let missing = missing.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        assert_eq!(missing.external_transactions().next(), Some(&signed));
+        assert!(missing.execution_context().is_none());
+        assert_ne!(original.hash(), missing.hash());
+        let (mut block, recording) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &missing,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
+            .expect("original constructor retains the carrier's physical policy capture");
+        block.reserve_ordinary_execution_outputs(&missing).unwrap();
+        let error = block
+            .execute_ordinary_output_plan(&missing, None)
+            .expect_err("signed Network body cannot invent its missing physical context");
+        assert!(
+            matches!(error, ExecutionAttemptError::Rejected(ref reason)
+                if reason == "Network source has an invalid execution context"),
+            "{error:?}",
+        );
+        assert!(block.fastpq_quantity_candidate.entries.is_empty());
+        assert!(block.retained_execution_outputs_for_test().is_err());
+        assert_eq!(
+            block.world.assets.get(&alice).unwrap().as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert!(block.world.assets.get(&bob).is_none());
+        drop(block);
+        drop(recording);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before,
+        );
+        let view = state.view();
+        assert_eq!(view.height(), 1);
+        assert_eq!(view.kura().blocks_count(), 1);
+        assert_eq!(
+            view.world.assets.get(&alice).unwrap().as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert!(view.world.assets.get(&bob).is_none());
+    });
 }
 
 #[test]
@@ -462,6 +530,7 @@ fn distinct_signed_entries_retain_exact_independent_counters() {
         ];
         let mut builder = BlockBuilder::new(quantity_successor_header(&state));
         let mut hashes = Vec::new();
+        let mut contexts = Vec::new();
         for body in bodies {
             let mut transaction = TransactionBuilder::new(
                 state.network_id,
@@ -477,8 +546,16 @@ fn distinct_signed_entries_retain_exact_independent_counters() {
             hashes.push(Hash::from(
                 TransactionEntrypoint::External(transaction.clone()).execution_call_hash(),
             ));
+            contexts.push(iroha_data_model::block::ExternalExecutionContext::new(
+                transaction.hash_as_entrypoint(),
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ));
             builder.push_transaction(transaction);
         }
+        builder.set_execution_context(Some(
+            iroha_data_model::block::BlockExecutionContextBundle::new(contexts),
+        ));
         let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
         let (mut block, _recording) = state
             .block_with_recorded_pristine_carrier_stage(

@@ -307,6 +307,35 @@ impl KagemushaAuthenticatedOrdinaryCurrentPublicationV1 {
             .map_err(storage)
     }
 
+    /// Project the retained bootstrap originals from the real published owner. This only
+    /// acknowledges its historic capture and current custody; it creates no fresh W or money.
+    pub(in crate::kagemusha_v1_state::authenticated_core_owner) fn retained_bootstrap_platform_originals(
+        &self,
+    ) -> Result<
+        (
+            iroha_data_model::kagemusha::KagemushaAppOperationApprovalChallengeV1,
+            Vec<u8>,
+            Option<u32>,
+        ),
+        KagemushaStateErrorV1,
+    > {
+        self.recheck()?;
+        let now = self.financial.trusted_time_ms().map_err(material)?;
+        let retained = self
+            .approvals
+            .approved_at_original_capture_time(self.record.approval_captured_at_ms, now)?;
+        if retained.original() != self.record.approval_original {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let result = (
+            *retained.challenge(),
+            retained.original().to_vec(),
+            retained.app_attest_counter(),
+        );
+        self.recheck()?;
+        Ok(result)
+    }
+
     /// Pure initial-state projection after the retained actual owner rechecks.
     /// It does not expose a mutable machine or create an outgoing/mint/terminal authorization.
     pub fn initial_state(&self) -> Result<&KagemushaStateV1, KagemushaStateErrorV1> {

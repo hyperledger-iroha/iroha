@@ -76,6 +76,39 @@ object KagemushaCoreCoordinatorFrameV1 {
         return encode(retained, MAXIMUM_RESPONSE_BYTES)
     }
 
+    /** Encode the dedicated phase8 Bootstrap selector or its original ticket phases2–7. */
+    @JvmStatic
+    fun encodeOrdinaryBootstrapApprovalRequest(fields: List<ByteArray>): ByteArray {
+        encodedSize(fields, MAXIMUM_REQUEST_BYTES)
+        val retained = fields.map(ByteArray::copyOf)
+        KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapRequest(retained)
+        return encode(retained, MAXIMUM_REQUEST_BYTES)
+    }
+
+    /** Decode only the dedicated Bootstrap request grammar; data grants no Native authority. */
+    @JvmStatic
+    fun decodeOrdinaryBootstrapApprovalRequest(requestFrame: ByteArray): List<ByteArray> =
+        decode(requestFrame, MAXIMUM_REQUEST_BYTES).also(KagemushaAppOwnedHardwareFrameV1::requireOrdinaryBootstrapRequest)
+
+    /** Separate Bootstrap-only C19 correlation. This API creates no Native owner or money permission. */
+    @JvmStatic
+    fun encodeOrdinaryBootstrapApprovalResponse(requestFrame: ByteArray, fields: List<ByteArray>): ByteArray {
+        val request = decodeOrdinaryBootstrapApprovalRequest(requestFrame)
+        encodedSize(fields, MAXIMUM_RESPONSE_BYTES)
+        val retained = fields.map(ByteArray::copyOf)
+        KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapResponse(request, retained)
+        return encode(retained, MAXIMUM_RESPONSE_BYTES)
+    }
+
+    /** Decode only the original Bootstrap owner response, preserving the generic monetary S gate. */
+    @JvmStatic
+    fun decodeOrdinaryBootstrapApprovalResponse(requestFrame: ByteArray, responseFrame: ByteArray): List<ByteArray> {
+        val request = decodeOrdinaryBootstrapApprovalRequest(requestFrame)
+        return decode(responseFrame, MAXIMUM_RESPONSE_BYTES).also {
+            KagemushaAppOwnedHardwareFrameV1.requireOrdinaryBootstrapResponse(request, it)
+        }
+    }
+
     /** Canonical little-endian native discriminant, suitable for method request fields. */
     @JvmStatic
     fun u32(value: Int): ByteArray = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()

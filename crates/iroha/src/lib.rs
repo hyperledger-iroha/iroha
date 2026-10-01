@@ -12,6 +12,7 @@ mod error;
 pub mod http;
 mod http_default;
 pub mod nexus_app;
+pub mod participant_enrollment_request;
 pub mod privacy_issuance;
 pub mod query;
 pub mod secrecy;

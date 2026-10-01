@@ -34,6 +34,8 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1 private constructor(private val 
     /** Detached original certificate data from the retained Native completed ceremony. */
     fun originalRetailCertificate(): ByteArray = state.certificate()
     fun cancel() = state.cancel()
+    internal fun completedOriginalBindingFor(bridge: KagemushaCoreCoordinatorBridgeV1): KagemushaNativeCompletedRetailBindingV1 =
+        state.completedBinding(bridge)
 
     internal companion object {
         fun fromNative(bridge: KagemushaCoreCoordinatorBridgeV1, attempt: ByteArray, fields: List<ByteArray>,
@@ -41,6 +43,16 @@ class KagemushaNativeOrdinaryRetailEnrollmentV1 private constructor(private val 
             KagemushaNativeOrdinaryRetailEnrollmentV1(NativeRetailEnrollmentStateV1(
                 bridge, attempt, fields, pendingScope, credentialDigest, guard))
     }
+}
+
+/** Private same-coordinator FI completion; detached originals alone cannot recreate it. */
+internal class KagemushaNativeCompletedRetailBindingV1 internal constructor(credential: ByteArray, certificate: ByteArray,
+    private val requireOriginal: () -> Unit) {
+    private val digest = credential.copyOf()
+    private val originalCertificate = certificate.copyOf()
+    fun credentialDigest(): ByteArray { requireOriginal(); return digest.copyOf() }
+    fun originalCertificate(): ByteArray { requireOriginal(); return originalCertificate.copyOf() }
+    fun recheck() = requireOriginal()
 }
 
 private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoordinatorBridgeV1,
@@ -57,6 +69,14 @@ private class NativeRetailEnrollmentStateV1(private val bridge: KagemushaCoreCoo
     private var unusable = false
 
     init { same(original[3], scope); same(original[4], credential); current() }
+
+    @Synchronized fun completedBinding(other: KagemushaCoreCoordinatorBridgeV1): KagemushaNativeCompletedRetailBindingV1 {
+        check(bridge === other) { "Bootstrap requires the same Native FI coordinator" }
+        val retained = certificate()
+        return KagemushaNativeCompletedRetailBindingV1(credential, retained) {
+            same(certificate(), retained)
+        }
+    }
 
     @Synchronized fun signingBytes(): ByteArray {
         current(); return message.copyOf().also { current() }

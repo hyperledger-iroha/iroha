@@ -4871,10 +4871,15 @@ mod tests {
             let error = SubmitSorafsOrderbookOrder::new(encode(&candidate), policy_digest)
                 .execute(&authority, &mut stx)
                 .expect_err("unretained component input cannot fund bid custody");
+            let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                reason,
+            )) = &error
+            else {
+                panic!("unexpected source refusal: {error:?}");
+            };
             assert!(
-                error
-                    .to_string()
-                    .contains("protocol source has no authenticated mandatory owner")
+                reason.contains("protocol source has no authenticated mandatory owner"),
+                "source refusal: {error:?}"
             );
             assert_eq!(asset_balance(&stx, &authority), initial_balance);
             assert!(

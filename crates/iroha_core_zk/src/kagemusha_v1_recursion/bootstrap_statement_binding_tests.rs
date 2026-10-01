@@ -290,7 +290,19 @@ fn queued_bootstrap<F: KagemushaPoseidonFieldV1>(c: &BindingCircuit<F>) -> Vec<u
 fn assert_model_message<F: KagemushaPoseidonFieldV1>(c: &BindingCircuit<F>, s: &KagemushaStateV1) {
     let frame = norito::encode_canonical(&statement(s)).expect("authoritative model frame");
     let crc = u64::from_le_bytes(frame[31..39].try_into().unwrap());
-    assert_eq!(crc, norito::crc64_fallback(&frame[40..]));
+    let payload_len = usize::try_from(u64::from_le_bytes(frame[23..31].try_into().unwrap()))
+        .expect("model payload length");
+    let payload_start = frame
+        .len()
+        .checked_sub(payload_len)
+        .expect("complete model payload");
+    assert!(payload_start >= norito::core::Header::SIZE);
+    assert!(
+        frame[norito::core::Header::SIZE..payload_start]
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    assert_eq!(crc, norito::crc64_fallback(&frame[payload_start..]));
     let mut expected = (DOMAIN.len() as u64).to_be_bytes().to_vec();
     expected.extend_from_slice(DOMAIN);
     expected.extend_from_slice(&(frame.len() as u64).to_be_bytes());

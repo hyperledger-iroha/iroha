@@ -134,6 +134,10 @@ ARTIFACT_ROLES = (
     "mint_hash_claim_vk_eq",
     "mint_hash_claim_pk_ep",
     "mint_hash_claim_vk_ep",
+    "ordinary_app_guard_pk_eq",
+    "ordinary_app_guard_vk_eq",
+    "ordinary_app_guard_pk_ep",
+    "ordinary_app_guard_vk_ep",
 )
 
 RELATIONS = (
@@ -154,10 +158,12 @@ HELPERS = (
     "guard_bundle",
     "mint_hash_shard",
     "mint_hash_claim",
+    "ordinary_app_guard",
 )
 
 INTERNAL_PROOF_HELPERS = frozenset(
-    {"platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim"}
+    {"platform_credential", "guard_bundle", "mint_hash_shard", "mint_hash_claim",
+     "ordinary_app_guard"}
 )
 
 ACCEPTANCE_CASES = (

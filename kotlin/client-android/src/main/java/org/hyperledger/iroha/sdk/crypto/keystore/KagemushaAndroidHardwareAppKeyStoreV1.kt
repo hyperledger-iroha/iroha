@@ -17,6 +17,7 @@ import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryAppIdent
 import org.hyperledger.iroha.sdk.offline.KagemushaNativeCollectedAppIdentityOriginalV1
 import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedAppApprovalV1
 import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedAppEnrollmentPossessionV1
+import org.hyperledger.iroha.sdk.offline.KagemushaNativePreparedOrdinaryBootstrapApprovalV1
 import org.hyperledger.iroha.sdk.offline.KagemushaOrdinaryIdentityOriginalTransportV1
 import org.hyperledger.iroha.sdk.offline.KagemushaNativeRawAppIdentityAdmissionV1
 import java.security.MessageDigest
@@ -119,6 +120,13 @@ class KagemushaAndroidHardwareAppKeyStoreV1(context: Context) {
         prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, guard ->
             signNativeOriginal(alias, generationChallenge, point, keyId, message, policy,
                 KagemushaAndroidAppSignaturePurposeV1.OPERATION_APPROVAL, guard)
+        }.copyOf()
+
+    /** Capture the exact Bootstrap W only through its separate same-FI Native holder. */
+    fun approveOrdinaryBootstrap(prepared: KagemushaNativePreparedOrdinaryBootstrapApprovalV1): ByteArray =
+        prepared.performPlatformSigning { alias, generationChallenge, point, keyId, message, policy, guard ->
+            signNativeOriginal(alias, generationChallenge, point, keyId, message, policy,
+                KagemushaAndroidAppSignaturePurposeV1.ORDINARY_BOOTSTRAP_APPROVAL, guard)
         }.copyOf()
 
     /** Prove possession over the separate native-owned E without creating a monetary qualification. */

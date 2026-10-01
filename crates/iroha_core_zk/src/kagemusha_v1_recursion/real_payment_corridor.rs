@@ -3469,3 +3469,39 @@ pub(super) fn run_guarded_real_mint_authority_proof_v1() {
         .join()
         .expect("real funding proof thread");
 }
+
+/// Reuse the maintained exclusive process lock and explicitly sized proof stack.
+/// Memory/CPU fences are imposed by the existing external qualification runner.
+#[cfg(test)]
+pub(in crate::kagemusha_v1_recursion) fn run_ordinary_zero_bootstrap_qualification_worker(
+    job: fn(),
+) {
+    let _exclusive = exclusive_real_proof_test_lock();
+    std::thread::Builder::new()
+        .name("kagemusha-ordinary-zero-state".to_owned())
+        .stack_size(REAL_PROOF_TEST_STACK_BYTES)
+        .spawn(job)
+        .expect("start maintained sized proof worker")
+        .join()
+        .expect("ordinary zero-State proof worker");
+}
+
+/// Produce genuine mathematical SHA keys without a signed release or Native admission.
+/// The existing certificate fixture has actual signatures, and is used only to seed
+/// the exact SHA artifact generation/proving body, never this zero wallet's balance.
+#[cfg(test)]
+pub(in crate::kagemusha_v1_recursion) fn ordinary_zero_bootstrap_hash_keys_for_testing(
+    release_id: [u8; 32],
+    vk_digest: [u8; 32],
+    manifest: [u8; 32],
+) -> (
+    KagemushaLoadedEqMintHashArtifactsV1,
+    KagemushaLoadedEpMintHashArtifactsV1,
+) {
+    let material = mint_recipient_material(release_id, vk_digest, manifest, 1);
+    generate_mint_hash_suite(
+        &material,
+        &canonical_kagemusha_eq_parameters_v1(),
+        &canonical_kagemusha_ep_parameters_v1(),
+    )
+}

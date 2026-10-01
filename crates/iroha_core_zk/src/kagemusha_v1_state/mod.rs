@@ -61,10 +61,11 @@ mod ordinary_app_identity;
 #[cfg(unix)]
 pub use ordinary_app_identity::{
     KagemushaOrdinaryAppEnrollmentAttemptV1, KagemushaOrdinaryAppPossessionAttemptV1,
-    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryIdentityErrorV1,
-    KagemushaOrdinaryPreparationCarrierV1, KagemushaOrdinaryPreparationReservationV1,
-    KagemushaOrdinaryPreparationSelectedOriginalsV1, KagemushaOrdinaryRetailEnrollmentAttemptV1,
-    KagemushaPendingAppIdentityV1, KagemushaPreparedOrdinaryAppEnrollmentV1,
+    KagemushaOrdinaryEnrolledFinancialOwnerV1, KagemushaOrdinaryGovernedPolicyOriginalsV1,
+    KagemushaOrdinaryIdentityErrorV1, KagemushaOrdinaryPreparationCarrierV1,
+    KagemushaOrdinaryPreparationReservationV1, KagemushaOrdinaryPreparationSelectedOriginalsV1,
+    KagemushaOrdinaryRetailEnrollmentAttemptV1, KagemushaPendingAppIdentityV1,
+    KagemushaPreparedOrdinaryAppEnrollmentV1,
 };
 mod candidate_lifecycle;
 mod commitments;

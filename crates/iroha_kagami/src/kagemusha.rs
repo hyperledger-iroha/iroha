@@ -39,7 +39,7 @@ use std::{
 use std::{fs, fs::OpenOptions};
 use zeroize::Zeroizing;
 
-const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 50;
+const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 54;
 const _: [(); KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1] = [(); KagemushaArtifactRoleV1::ALL.len()];
 const EXPERIMENTAL_ARTIFACT_INVENTORY_JSON_MAX_BYTES_V1: usize = 64 * 1024;
 const AUTHORITY_REVIEW_PROJECTION_MAX_BYTES_V1: usize = 128 * 1024 * 1024;
@@ -1165,7 +1165,7 @@ fn validate_exact_release_inventory_v1(
             .zip(KagemushaArtifactRoleV1::ALL)
             .any(|(binding, expected)| binding.role != expected)
     {
-        bail!("KAGEMUSHA V1 release requires the exact ordered 50-role artifact inventory");
+        bail!("KAGEMUSHA V1 release requires the exact ordered 54-role artifact inventory");
     }
     for (index, binding) in artifacts.iter().enumerate() {
         if binding.sha256 == [0; 32]
@@ -2465,6 +2465,9 @@ mod tests {
     fn exact_inventory_rejects_omission_reorder_and_duplicate_hash() {
         let inventory = artifact_inventory();
         validate_exact_release_inventory_v1(&inventory).expect("accept ordered inventory");
+
+        let without_ordinary_guard = inventory[..50].to_vec();
+        assert!(validate_exact_release_inventory_v1(&without_ordinary_guard).is_err());
 
         let mut missing = inventory.clone();
         missing.pop();

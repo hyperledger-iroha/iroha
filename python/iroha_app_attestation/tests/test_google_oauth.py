@@ -1,6 +1,9 @@
 """Actual synthetic RSA signing and mocked fixed Google OAuth transport.
 
-No installed credential, Google endpoint or genuine verdict is used.
+No installed credential, Google endpoint or genuine verdict is used. An explicit
+fixture replaces Root admission only for these primitive tests; actual public
+code FDs, bytes and image selections are still observed. This does not qualify
+the unapproved development Python/OpenSSL runtime or any Native issuer.
 """
 import base64
 import hashlib
@@ -15,7 +18,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from iroha_app_attestation.attestation import AttestationRejected
+from iroha_app_attestation import openssl_private_rsa as crypto
+from iroha_app_attestation.attestation import AttestationRejected, require
 from iroha_app_attestation.google_oauth import (
     GoogleServiceAccountTokenProvider, MAX_TOKEN_RESPONSE_BYTES, OAUTH_SCOPE,
     POLICY_SCHEMA, TOKEN_URI, select_google_decoder,
@@ -57,6 +61,26 @@ class Response:
         return self.body[:bound]
 
 
+class SyntheticCodeOriginal:
+    """Test-only public-code FD fixture; intentionally provides no Root admission."""
+    _digest = crypto._HeldRootCodeOriginal._digest
+
+    def __init__(self,path):
+        self.path=path
+        self.fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+        self.original=crypto._identity(os.fstat(self.fd))
+        self.digest=self._digest()
+
+    def recheck(self):
+        require(self.fd>=0 and not os.get_inheritable(self.fd)
+                and crypto._identity(os.fstat(self.fd))==self.original
+                and crypto._identity(self.path.lstat())==self.original
+                and self._digest()==self.digest,'synthetic TLS code original changed')
+
+    def close(self):
+        if self.fd>=0:os.close(self.fd);self.fd=-1
+
+
 class GoogleOAuthTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -67,6 +91,11 @@ class GoogleOAuthTests(unittest.TestCase):
         cls.pem = result.stdout.decode('ascii')
 
     def setUp(self):
+        # Production has no bypass. Only this synthetic primitive suite replaces
+        # Root ownership admission, never policy/credential/image verification.
+        self.code_fixture=patch.object(crypto,'_HeldRootCodeOriginal',SyntheticCodeOriginal)
+        self.code_fixture.start()
+        self.addCleanup(self.code_fixture.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.path = Path(self.temporary.name) / 'synthetic-only.json'
         self.now = 1_800_000_000_000
@@ -183,6 +212,50 @@ class GoogleOAuthTests(unittest.TestCase):
             self.assertEqual(build.return_value.open.call_count, 3)
         provider.close()
         with self.assertRaises(AttestationRejected): provider()
+
+    def test_actual_dependency_image_substitutions_fail_closed(self):
+        # Actual code/image data with the explicit test-only Root fixture above.
+        # These private holders are observations, never Native capabilities.
+        held=crypto.acquire_crypto_originals()
+        original_crypto,original_tls=held.crypto_path,held.tls_path
+        try:
+            held.recheck()
+            held.crypto_path=original_tls
+            with self.assertRaisesRegex(AttestationRejected,'dependency selection changed'):held.recheck()
+            held.crypto_path=original_crypto;held.tls_path=original_crypto
+            with self.assertRaisesRegex(AttestationRejected,'dependency selection changed'):held.recheck()
+            held.tls_path=original_tls
+            real_function=held.library.BIO_new_mem_buf
+            held.library.BIO_new_mem_buf=held.library.SSL_CTX_new
+            with self.assertRaisesRegex(AttestationRejected,'dependency selection changed'):held.recheck()
+            held.library.BIO_new_mem_buf=real_function
+            held.recheck()
+        finally:held.close()
+
+    def test_changed_held_code_blocks_before_cached_token_or_credential_read(self):
+        provider=self.provider()
+        with patch('iroha_app_attestation.google_oauth.urllib.request.build_opener') as build:
+            build.return_value.open.return_value=Response();provider()
+            provider._crypto_code.originals[0].digest=b'\xff'*32
+            with patch.object(provider,'_read') as read, self.assertRaisesRegex(
+                    AttestationRejected,'synthetic TLS code original changed'):
+                provider()
+            read.assert_not_called()
+            self.assertEqual(build.return_value.open.call_count,1)
+
+    def test_changed_code_during_exchange_cannot_publish_a_token(self):
+        provider=self.provider()
+        response=Response()
+        original_read=response.read
+        def change_code(bound):
+            provider._crypto_code.originals[0].digest=b'\xff'*32
+            return original_read(bound)
+        response.read=change_code
+        with patch('iroha_app_attestation.google_oauth.urllib.request.build_opener') as build:
+            build.return_value.open.return_value=response
+            with self.assertRaisesRegex(AttestationRejected,'synthetic TLS code original changed'):
+                provider()
+            self.assertIsNone(provider._access)
 
     def test_changed_held_credential_blocks_even_cached_token(self):
         provider = self.provider()

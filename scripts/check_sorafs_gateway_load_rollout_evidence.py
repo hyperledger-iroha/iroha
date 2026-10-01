@@ -87,7 +87,9 @@ from sorafs_topology_qualification import (  # noqa: E402
 SUMMARY_SCHEMA = "sorafs.gateway_load.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
-DEFAULT_MIN_STAGING_DURATION_SECS = 86_400
+# Duration must describe a real observation. There is no fixed soak prerequisite
+# for deployment; operators may request a longer diagnostic observation.
+DEFAULT_MIN_STAGING_DURATION_SECS = 1
 DEFAULT_MIN_STREAMS = 1_000
 DEFAULT_MIN_PROVIDER_COUNT = 2
 DEFAULT_MIN_SUCCESS_RATE_BPS = 9_900

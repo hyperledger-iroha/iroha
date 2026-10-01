@@ -58,23 +58,35 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-Taira runs the signed e35c10ba release with fresh validator keys and signed genesis.
-All four validators return readiness HTTP 200, have three peers, and converged
-at height 3 after an ordinary signed transaction resolved to StateApplied.
-The public endpoint at `https://taira.sora.org` has verified TLS, and the
-same-revision basic doctor reports healthy public routes and curated MCP tools.
+Taira's four validators run the a2a98f02 daemon build with fresh keys and signed
+genesis. The genesis beacon ceremony resolved to StateApplied at height 5.
+All four completed sequential C2 restarts with their keys and ledger retained.
+Latest direct checks verified each active process, current selector and C2
+binary, with height 8, three peers and readiness HTTP 200. Public TLS,
+readiness and status are healthy at a2a98f02, height 8, three peers, twenty-one
+approved transactions, zero rejected transactions and an empty queue. The
+same-revision native basic doctor passed all fifteen checks with no failures.
 The previous live ledger and twenty obsolete validator releases were deleted.
 
-Current source fixes deployment recovery and initializes fresh safety records
-before first startup. Deployment preparation, transfer and the routine updater
-accept an authenticated build-only candidate without a full regression gate.
-On-chain governance owns deployment policy; no fixed 24-hour fault test is a
-deployment prerequisite for testnet or production.
+Current source initializes fresh safety records before first startup and retires
+completed execution after successful replay before strict native archive
+attachment. Deployment preparation, transfer and the routine updater accept an
+authenticated build-only candidate without a full regression gate. On-chain
+governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
+for testnet or production. Release qualification remains open.
 
-Beacon custody activation, physical DPN, paid `dpn`/`admin@dpn` and clean-client
-completion remain open. Validators run in a Linux guest on MacStadium in Dublin;
-use the approved deployment tooling. Retained incident records describe the
+Fresh-account funding applied at height 6; ordinary paid public pings applied
+at heights 7 and 8, with exactly one C2 ping submission. Native read-only
+funding resume now returns Applied with exact committed-transaction readback
+at height 6. The live endpoint objective is achieved; broader native release
+qualification and original public-reset coordinator completion remain separate.
+Mac outbound-port exhaustion was recovered, with the ephemeral-port setting
+and scoped SYN guard persisted. The temporary artifact server was stopped.
+Physical DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
+Validators run in a Linux guest on MacStadium in Dublin; use the approved
+deployment tooling. Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
+
 
 BPNG retained-history qualification, validator catch-up, additive catalog
 activation and API22/FE17 application commissioning remain open. Basic acceptance
@@ -86,7 +98,18 @@ require the explicitly approved OVH target.
 Recorded fixed-source checks cover workspace all-targets, Core/Kagami,
 Torii/bridge, CLI/daemon and both network-test targets. Separate owner-extraction
 checks cover normal native/JS/Python frontends and dependency/codec guards.
-These results qualify their recorded source. The combined candidate still needs
+These results qualify their recorded source. The normal production-feature Core ZK
+frontend has recorded passes, limited by concurrent source changes. The default-
+feature test harness also builds. Component journal, focused issuer-key, corrected
+enrollment-floor and expired-preparation custody controls pass. Guard-generation
+fixes compile and both extended regressions pass; remaining selected proof cases
+are running. Current privacy acceptance has 13 failures in malformed-input
+controls, profile-pin tests and resource fixtures, with repairs under validation.
+Eight focused parameter tests pass with the scoped inline-policy annotation.
+Concurrent source changes limit current-candidate qualification. The latest
+workspace check reaches Core test compile errors owned by the separate repair
+chat; workspace validation remains pending.
+The combined candidate still needs
 fresh compiler and focused-test validation, a merge-free workspace check, genuine
 private-terminal/quotient-mask profile regeneration, current native/SDK consumers
 and executable-metadata freshness. Full workspace tests, physical-device

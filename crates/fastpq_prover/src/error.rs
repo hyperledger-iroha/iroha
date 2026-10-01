@@ -4,6 +4,12 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 /// Errors produced by the FASTPQ prover/verifier.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Another local quantity-artifact producer holds the exclusive work permit.
+    ///
+    /// The unchanged request may be retried after that producer releases its
+    /// permit. This transient refusal does not classify its binding as invalid.
+    #[error("FASTPQ producer is busy")]
+    ProducerBusy,
     /// The batch references a parameter set that does not exist.
     #[error("unknown FASTPQ parameter `{0}`")]
     UnknownParameter(String),

@@ -102,6 +102,25 @@ internal object KagemushaSelectionFrameV1 {
         requireExact(frame, frame.copyOfRange(LANE, LANE + 32),
             index(previous), index(previous + 1u))
     }
+
+    /** Separate ordinary Bootstrap data layout; it never admits a monetary exact-next S. */
+    fun requireOrdinaryBootstrapExact(frame: ByteArray, lane: ByteArray) {
+        require(domain.size == 49 && frame.size == FRAME_BYTES &&
+            frame.copyOfRange(0, domain.size).contentEquals(domain)) { "Bootstrap S has the wrong V1 domain or width" }
+        require(frame.copyOfRange(domain.size, RELEASE - 2).contentEquals(
+            byteArrayOf(BODY_BYTES.toByte(), (BODY_BYTES ushr 8).toByte(), 0, 0, 0, 0, 0, 0)) &&
+            frame[RELEASE - 2] == 1.toByte() && frame[RELEASE - 1] == 0.toByte()) { "Bootstrap S has the wrong V1 framing" }
+        for (offset in intArrayOf(RELEASE, PROVIDER, APP_POLICY, CREDENTIAL, NETWORK, LANE,
+            PROFILE, HARDWARE_EPOCH, TRANSITION)) {
+            require(frame.copyOfRange(offset, offset + 32).any { it != 0.toByte() }) { "Bootstrap S has an absent identity or transition" }
+        }
+        require(frame.copyOfRange(POLICY_EPOCH, POLICY_EPOCH + 8).any { it != 0.toByte() } &&
+            frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() })
+        require(frame[OPERATION] == 0.toByte() && frame.copyOfRange(CANDIDATE, FRAME_BYTES).all { it == 0.toByte() }) {
+            "Ordinary Bootstrap requires absent outgoing commitments and zero logical indices"
+        }
+        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane)) { "Bootstrap S belongs to another original lane" }
+    }
 }
 
 /** Reject any Core S other than the exact V1 layout and prepared lane/index selection. */

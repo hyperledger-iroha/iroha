@@ -30,18 +30,35 @@ bridge controls retain their recorded passes and source bindings.
 
 Recorded normal native/JS/Python and ordinary daemon/CLI frontend checks pass.
 The native consumers use the state-free owners without Core/P2P in their normal
-graphs. The target inventory admits 98 declared binaries and 23 defaults;
+graphs. The target inventory admits 99 declared binaries and 23 defaults;
 certificate and raw-attestation encoders require explicit `dev-tools`. Recorded
 IVM-only, feature-hygiene and dependency-boundary guards pass, as does the
-retired-codec pattern check. The merged all-targets check stopped when a new
-ordinary Guard composition source was unavailable during compilation. Subsequent
-Core ZK and metadata checks exposed issuer-type and API/fixture compilation
-errors. Source repairs are applied; fresh compiler and focused-test validation
-remain pending. The resolved SDK merge remains externally owned. A merge-free
-workspace retry, executable metadata freshness and observational warm timings
-remain pending. Foreign source and HEAD changes qualify each result; workspace lint
+retired-codec pattern check. The normal production-feature Core ZK frontend and both test-feature harnesses
+have recorded builds, limited by concurrent source changes. Component journal
+tests pass for the one first-release boxed-challenge layout, including canonical
+bounds and retained challenge/scope checks. Its payload changes without a
+compatibility decoder. Focused issuer-key, corrected enrollment-floor and expired-
+preparation custody controls pass in the retained default-feature harness. The
+Guard-generation import, layout-comparison and recovery-phase fixes compile, and
+both extended regressions pass. The remaining selected proof cases are running.
+The current privacy acceptance run completes with 121 passes and 13 failures in
+malformed-input controls, profile-pin tests and resource fixtures; repairs remain
+under validation.
+Eight focused parameter tests pass with the scoped inline-policy annotation,
+resolving the observed enum-size compilation frontier in that harness.
+Concurrent policy edits limit current-source qualification. Both executable
+metadata builds compile with matching package/features, but the freshness check
+fails with concurrent source changes and library rebuilds. The latest workspace
+check reaches Core test compile errors; the separate repair chat owns those fixes.
+Workspace validation, metadata freshness qualification and observational warm
+timings remain pending. Concurrent source and HEAD changes qualify each result; workspace lint
 and panic-inventory closure remain separate.
 Exact commands, exit codes and logs belong in PR Testing or CI artifacts.
+
+Two additional numeric controls reconstruct canonical frame, CRC and SHA inputs
+in both Pasta fields. They exercise a test-only reference after the current
+integrity-stream integration; their runtime results are pending and do not
+qualify the live lease or proving relation.
 
 Final moved-model controls must enable `transparent_api`, because several
 preserved block assertions are feature-gated. Reuse the warm `finish` lane

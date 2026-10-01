@@ -95,11 +95,10 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
 
   func testPublishedBaseCoordinatorFixturesMatchCurrentSchema() throws {
     let cases = try fixtures()
-    // The immutable published base fixture contains methods1...18 only.
-    // Ordinary app methods19...21 have separate exact projection/frame tests;
-    // this archived fixture never claims complete current method coverage.
-    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(18)))
-    XCTAssertEqual(cases.count, 25)
+    // The official native framing corpus includes all current methods1...21.
+    // Structural vectors do not establish hardware or monetary qualification.
+    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(21)))
+    XCTAssertEqual(cases.count, 28)
     for item in cases {
       let request = try KagemushaCoreCoordinatorFrameV1.decodeRequest(item.method, frame: item.request)
       let response = try KagemushaCoreCoordinatorFrameV1.decodeResponse(item.method, requestFrame: item.request, responseFrame: item.response)

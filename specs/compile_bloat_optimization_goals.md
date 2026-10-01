@@ -31,14 +31,22 @@ exclude the compiler from IVM/Core and full Core/P2P from native/JS/Python.
 Fresh privacy follow-up passes 39 targeted controls and preserves all 2,075
 original registered names, including their 40 ignored cases. Recorded normal
 native/JS/Python and ordinary daemon/CLI frontend checks pass; the reviewed binary
-inventory now admits 98 declared targets and 23 defaults. Recorded IVM-only,
+inventory now admits 99 declared targets and 23 defaults. Recorded IVM-only,
 feature-hygiene, dependency-boundary and retired-codec pattern guards pass.
-The merged all-targets check stopped on an ordinary Guard composition source
-created during compilation. Subsequent Core ZK and metadata checks exposed
-issuer-type and API/fixture compilation errors. Source repairs are applied;
-fresh compiler and focused-test validation remain pending. The resolved SDK
-merge remains externally owned. A merge-free workspace retry, metadata
-freshness and observational warm timings also remain pending. The
+The normal production-feature Core ZK frontend and both test-feature harnesses
+have recorded builds, limited by concurrent source changes. Component journal
+tests pass. Focused issuer-key, corrected enrollment-floor and expired-preparation
+custody controls pass in the retained default-feature harness. The Guard-generation
+fixes compile and both extended regressions pass; the remaining selected proof
+cases are running. Current privacy acceptance records 121 passes and 13 failures
+in malformed-input controls, profile-pin tests and resource fixtures. Repairs
+remain under validation. Eight focused parameter tests pass with the scoped inline-policy
+annotation.
+Concurrent policy edits limit current-source qualification. Both metadata builds
+compile with matching package/features; the freshness check fails with concurrent
+source changes and library rebuilds. The latest workspace check reaches Core test
+compile errors owned by the separate repair chat. Workspace validation, metadata
+freshness qualification and observational warm timings remain pending. The
 [current ownership and validation note](../docs/validation/compile-bloat-ownership.md)
 describes the remaining controls. All evidence retains its scoped source and
 load qualifications; full completion is not yet established.

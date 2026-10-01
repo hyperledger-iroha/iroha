@@ -14,6 +14,7 @@ import java.security.interfaces.ECPublicKey
 /** Internal framing checks do not produce a native prepared capability or monetary authority. */
 internal enum class KagemushaAndroidAppSignaturePurposeV1(val domain: String, val bodyBytes: Int, val fields: Int) {
     OPERATION_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
+    ORDINARY_BOOTSTRAP_APPROVAL("iroha:kagemusha:v1:app-operation-approval\u0000", 275, 8),
     IDENTITY_ENROLLMENT_POSSESSION("iroha:kagemusha:v1:app-enrollment-possession\u0000", 371, 11),
 }
 

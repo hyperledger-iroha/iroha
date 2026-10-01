@@ -21,6 +21,23 @@ class KagemushaOrdinaryEnrollmentOriginalsV1 internal constructor(id: ByteArray,
     fun originalRetailCertificate(): ByteArray = originalCertificate.copyOf()
 }
 
+/** Detached captured Bootstrap approval originals; genuine State/Guard publication is separate. */
+class KagemushaOrdinaryBootstrapApprovalOriginalsV1 internal constructor(enrollment: KagemushaOrdinaryEnrollmentOriginalsV1,
+    operation: ByteArray, message: ByteArray, selection: ByteArray, receipt: ByteArray) {
+    private val id = enrollment.enrollmentId()
+    private val certificate = enrollment.originalRetailCertificate()
+    private val operationId = operation.copyOf()
+    private val signingMessage = message.copyOf()
+    private val bootstrapSelection = selection.copyOf()
+    private val originalReceipt = receipt.copyOf()
+    fun enrollmentId(): ByteArray = id.copyOf()
+    fun originalRetailCertificate(): ByteArray = certificate.copyOf()
+    fun bootstrapOperationId(): ByteArray = operationId.copyOf()
+    fun originalSigningBytes(): ByteArray = signingMessage.copyOf()
+    fun originalBootstrapSelection(): ByteArray = bootstrapSelection.copyOf()
+    fun originalApprovalReceipt(): ByteArray = originalReceipt.copyOf()
+}
+
 /** The shared Android enrollment workflow, backed by one already installed Native account/release owner.
  * Native selects and durably retains the financial secret, C challenge, platform key intent,
  * E possession invocation, wallet invocation and FI originals. The product supplies its protected
@@ -35,12 +52,13 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     private val collectOriginal: (KagemushaNativePreparedOrdinaryAppIdentityV1) -> Unit,
     private val proveOriginal: (KagemushaNativePreparedAppEnrollmentPossessionV1) -> Unit,
     private val integrity: KagemushaAndroidPlayIntegrityProviderV1,
+    private val approveBootstrapOriginal: ((KagemushaNativePreparedOrdinaryBootstrapApprovalV1) -> ByteArray)? = null,
 ) {
     constructor(context: Context, coordinator: KagemushaNativeCoreCoordinatorAdapterV1,
         transport: KagemushaOrdinaryIdentityOriginalTransportV1, walletSigner: KagemushaOrdinaryWalletAccountSignerV1,
         requireOriginalOwner: () -> Unit) : this(coordinator.appIdentityOperations(), transport, walletSigner,
             requireOriginalOwner, originalCollector(context), originalPossessionSigner(context),
-            KagemushaAndroidPlayIntegrityProviderV1(context.applicationContext))
+            KagemushaAndroidPlayIntegrityProviderV1(context.applicationContext), originalBootstrapSigner(context))
     private val mutex = Mutex()
     private var reservation: KagemushaNativeReservedOrdinaryAppIdentityV1? = null
     private var identity: KagemushaNativePreparedOrdinaryAppIdentityV1? = null
@@ -48,6 +66,8 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
     private var integrityOriginal: CompletableFuture<KagemushaAndroidPlayIntegrityTokenOriginalV1>? = null
     private var retail: KagemushaNativeOrdinaryRetailEnrollmentV1? = null
     private var completed: KagemushaOrdinaryEnrollmentOriginalsV1? = null
+    private var bootstrap: KagemushaNativePreparedOrdinaryBootstrapApprovalV1? = null
+    private var capturedBootstrap: KagemushaOrdinaryBootstrapApprovalOriginalsV1? = null
 
     /** Complete the same Native ceremony, reusing complete originals and refusing uncertain platform/wallet work. */
     suspend fun beginOrResume(): KagemushaOrdinaryEnrollmentOriginalsV1 = mutex.withLock {
@@ -99,6 +119,35 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
             .also { requireOriginalOwner(); completed = it }
     }
 
+    /** Capture the original zero-index Bootstrap W after the same FI ceremony, with no money readiness claim.
+     * The public selector is deterministic from the full original FI certificate. Native alone
+     * selects the financial S, nonce, interval, invocation fence and signature/capture WAL.
+     */
+    suspend fun beginOrResumeBootstrapApproval(): KagemushaOrdinaryBootstrapApprovalOriginalsV1 {
+        val enrollment = beginOrResume()
+        return mutex.withLock {
+            requireOriginalOwner()
+            val signer = checkNotNull(approveBootstrapOriginal) { "Actual hardware Bootstrap signer is unavailable" }
+            val heldRetail = checkNotNull(retail)
+            check(java.security.MessageDigest.isEqual(heldRetail.originalRetailCertificate(), enrollment.originalRetailCertificate()))
+            val operation = java.security.MessageDigest.getInstance("SHA-256").digest(
+                "iroha:kagemusha:v1:ordinary-bootstrap-operation-id\u0000".toByteArray(Charsets.US_ASCII) +
+                    enrollment.originalRetailCertificate())
+            val held = bootstrap ?: native.prepareOrdinaryBootstrapApproval(operation, checkNotNull(identity), heldRetail)
+                .also { bootstrap = it }
+            requireOriginalOwner()
+            capturedBootstrap?.let { captured ->
+                check(java.security.MessageDigest.isEqual(checkNotNull(held.recoverOriginalApproval()), captured.originalApprovalReceipt()))
+                requireOriginalOwner()
+                return@withLock captured
+            }
+            val receipt = signer(held)
+            requireOriginalOwner()
+            KagemushaOrdinaryBootstrapApprovalOriginalsV1(enrollment, operation, held.signingBytes(),
+                held.bootstrapSelectionOriginal(), receipt).also { requireOriginalOwner(); capturedBootstrap = it }
+        }
+    }
+
     private fun guardedTransport() = KagemushaOrdinaryIdentityOriginalTransportV1 { original ->
         requireOriginalOwner(); original.requireCurrent()
         transport.exchange(original).also { requireOriginalOwner(); original.requireCurrent() }
@@ -118,6 +167,10 @@ class KagemushaAndroidOrdinaryEnrollmentV1 internal constructor(
         fun originalPossessionSigner(context: Context): (KagemushaNativePreparedAppEnrollmentPossessionV1) -> Unit {
             val hardware = KagemushaAndroidHardwareAppKeyStoreV1(context.applicationContext)
             return { original -> hardware.proveEnrollmentPossession(original); Unit }
+        }
+        fun originalBootstrapSigner(context: Context): (KagemushaNativePreparedOrdinaryBootstrapApprovalV1) -> ByteArray {
+            val hardware = KagemushaAndroidHardwareAppKeyStoreV1(context.applicationContext)
+            return hardware::approveOrdinaryBootstrap
         }
     }
 }

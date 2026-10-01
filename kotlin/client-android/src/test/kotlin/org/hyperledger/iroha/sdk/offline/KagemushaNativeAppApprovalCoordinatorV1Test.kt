@@ -270,11 +270,115 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         assertEquals(1, endpoint.closes); assertEquals(0, endpoint.consumes); assertEquals(0, endpoint.retains)
     }
 
+    @Test fun `Bootstrap has a separate strict full projection and generic money rejects it`() {
+        val endpoint = Endpoint(bootstrap = true)
+        val method = KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL
+        val bootstrapRequest = listOf(KagemushaCoreCoordinatorFrameV1.u32(8), endpoint.id)
+        val request = KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalRequest(bootstrapRequest)
+        assertContentEquals(endpoint.id, KagemushaCoreCoordinatorFrameV1.decodeOrdinaryBootstrapApprovalRequest(request)[1])
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(method, bootstrapRequest) }
+        for (invalid in listOf(bootstrapRequest.dropLast(1), bootstrapRequest + listOf(byteArrayOf(1)),
+            listOf(bootstrapRequest[0], ByteArray(32)), listOf(bootstrapRequest[0], le64(7)))) {
+            assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalRequest(invalid) }
+        }
+        val genericRequest = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(1), endpoint.id))
+        assertFailsWith<IllegalStateException> { KagemushaCoreCoordinatorFrameV1.decodeOrdinaryBootstrapApprovalRequest(genericRequest) }
+        val encoded = KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalResponse(request, endpoint.fields)
+        val decoded = KagemushaCoreCoordinatorFrameV1.decodeOrdinaryBootstrapApprovalResponse(request, encoded)
+        assertContentEquals(endpoint.fields[13], decoded[13])
+        decoded[13].fill(0)
+        assertContentEquals(endpoint.fields[13], KagemushaCoreCoordinatorFrameV1.decodeOrdinaryBootstrapApprovalResponse(request, encoded)[13])
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeResponse(method, genericRequest, endpoint.fields) }
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request, encoded) }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalResponse(request, Endpoint().fields)
+        }
+        val invalidPhase = KagemushaCoreCoordinatorFrameV1.encodeRequest(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(8), le64(7), byteArrayOf(1)))
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalResponse(invalidPhase, listOf(bytes(1), bytes(2))) }
+    }
+
+    @Test fun `Bootstrap rejects operation relabel indices outgoing commitments and missing bindings before signing`() {
+        for (offset in listOf(331, 364, 396, 428, 444, 59, 91, 123, 155, 187, 219, 251, 283, 291, 323, 332)) {
+            val endpoint = Endpoint(bootstrap = true)
+            val s = endpoint.fields[13]
+            if (offset in listOf(331, 364, 396, 428, 444)) s[offset] = 1
+            else s.fill(0, offset, offset + if (offset in listOf(283, 323)) 8 else 32)
+            val body = "iroha:kagemusha:v1:app-operation-approval\u0000".toByteArray(Charsets.US_ASCII).size + 8
+            sha(s).copyInto(endpoint.fields[1], body + 3 + 6 * 32)
+            assertFailsWith<IllegalArgumentException> { bootstrap(endpoint) }
+            assertEquals(0, endpoint.state); assertEquals(1, endpoint.closes)
+        }
+    }
+
+    @Test fun `Bootstrap hardware fence retains exact DER and repeated capture never resigns`() {
+        val endpoint = Endpoint(bootstrap = true); var ownerChecks = 0; var signs = 0
+        val prepared = bootstrap(endpoint) { ownerChecks++ }
+        val receipt = prepared.performPlatformSigning { alias, c, point, pointDigest, w, _, guard ->
+            signs++; assertEquals(1, endpoint.state); guard()
+            assertEquals(endpoint.fields[3].toString(Charsets.UTF_8), alias)
+            assertContentEquals(endpoint.fields[4], c); assertContentEquals(endpoint.fields[5], point)
+            assertContentEquals(endpoint.fields[6], pointDigest); assertContentEquals(endpoint.fields[1], w)
+            der.copyOf()
+        }
+        assertContentEquals(der, endpoint.raw); assertEquals(1, endpoint.retains)
+        assertContentEquals(receipt, prepared.performPlatformSigning { _, _, _, _, _, _, _ -> error("No second signature") })
+        assertContentEquals(receipt, prepared.recoverOriginalApproval()); assertEquals(1, signs)
+        kotlin.test.assertTrue(ownerChecks > 3)
+        val detached = prepared.bootstrapSelectionOriginal(); detached.fill(0)
+        assertContentEquals(endpoint.fields[13], prepared.bootstrapSelectionOriginal())
+    }
+
+    @Test fun `Bootstrap lost retain return allows only original recovery in a fresh holder`() {
+        val endpoint = Endpoint(bootstrap = true).apply { loseRetainReturn = true }; var signs = 0
+        val old = bootstrap(endpoint)
+        assertFailsWith<IllegalStateException> { old.performPlatformSigning { _, _, _, _, _, _, _ -> signs++; der.copyOf() } }
+        assertEquals(2, endpoint.state); assertEquals(1, endpoint.closes)
+        assertFailsWith<IllegalStateException> { old.recoverOriginalApproval() }
+        endpoint.loseRetainReturn = false
+        assertContentEquals(endpoint.receipt(), bootstrap(endpoint).performPlatformSigning { _, _, _, _, _, _, _ -> error("No fresh signature") })
+        assertEquals(1, signs); assertEquals(1, endpoint.retains)
+    }
+
+    @Test fun `Bootstrap original owner revocation scope substitution and receipt substitution stop the holder`() {
+        var current = true
+        val revoked = Endpoint(bootstrap = true); val prepared = bootstrap(revoked) { check(current) }
+        current = false
+        assertFailsWith<IllegalStateException> { prepared.performPlatformSigning { _, _, _, _, _, _, _ -> error("No OS invocation") } }
+        assertEquals(0, revoked.state); assertEquals(1, revoked.closes)
+        for (receipt in listOf(false, true)) {
+            val endpoint = Endpoint(bootstrap = true)
+            val held = bootstrap(endpoint)
+            if (receipt) { endpoint.state = 2; endpoint.raw = der.copyOf(); endpoint.substituteReceipt = true }
+            else endpoint.substituteScope = true
+            assertFailsWith<IllegalStateException> { held.recoverOriginalApproval() }
+            assertEquals(1, endpoint.closes)
+        }
+    }
+
+    @Test fun `Bootstrap cancellation and uncertain OS outcomes cannot create another invocation`() {
+        val cancelled = Endpoint(bootstrap = true); val held = bootstrap(cancelled)
+        held.cancel()
+        assertFailsWith<IllegalStateException> { held.signingBytes() }
+        assertEquals(0, cancelled.state)
+        val uncertain = Endpoint(bootstrap = true); val prepared = bootstrap(uncertain); var calls = 0
+        assertFailsWith<IllegalStateException> { prepared.performPlatformSigning { _, _, _, _, _, _, _ -> calls++; error("OS result lost") } }
+        assertFailsWith<IllegalStateException> { prepared.performPlatformSigning { _, _, _, _, _, _, _ -> calls++; der.copyOf() } }
+        assertEquals(1, uncertain.state); assertEquals(1, calls)
+    }
+
+    private fun bootstrap(endpoint: Endpoint, guard: () -> Unit = {}): KagemushaNativePreparedOrdinaryBootstrapApprovalV1 {
+        val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/fixture/native-bootstrap-owner", endpoint)
+        val fields = bridge.invokeOrdinaryBootstrapApproval(listOf(KagemushaCoreCoordinatorFrameV1.u32(8), endpoint.id))
+        return KagemushaNativePreparedOrdinaryBootstrapApprovalV1.fromNative(bridge, endpoint.id, fields, guard)
+    }
+
     private fun facade(endpoint: Endpoint) = KagemushaNativeAppApprovalCoordinatorV1(
         KagemushaCoreCoordinatorBridgeV1.openEndpoint("/fixture/native-owner", endpoint))
 
-    private class Endpoint(val enrollment: Boolean = false) : KagemushaCoreCoordinatorEndpointV1 {
-        val fields = projection(enrollment).toMutableList()
+    private class Endpoint(val enrollment: Boolean = false, val bootstrap: Boolean = false) : KagemushaCoreCoordinatorEndpointV1 {
+        val fields = projection(enrollment, bootstrap).toMutableList()
         var offeredId: ByteArray? = null
         val id: ByteArray get() = offeredId?.copyOf() ?: if (enrollment) sha(fields[7]) else bytes(0x11)
         var state = 0 // 0 uninvoked, 1 invoked/no original, 2 retained, 3 consumed
@@ -289,9 +393,10 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         override fun invoke(handle: Long, method: Int, request: Array<ByteArray>): Array<ByteArray>? {
             assertEquals(if (enrollment) 20 else 19, method)
             val phase = ByteBuffer.wrap(request[0]).order(ByteOrder.LITTLE_ENDIAN).int
-            if (phase != 1) assertContentEquals(fields[0], request[1])
+            if (phase != (if (bootstrap) 8 else 1)) assertContentEquals(fields[0], request[1])
+            if (bootstrap && phase == 8) { assertContentEquals(id, request[1]); return fields.map(ByteArray::copyOf).toTypedArray() }
             return when (phase) {
-                1 -> { assertContentEquals(id, request[1]); fields.map(ByteArray::copyOf).toTypedArray() }
+                1 -> { check(!bootstrap); assertContentEquals(id, request[1]); fields.map(ByteArray::copyOf).toTypedArray() }
                 2 -> when (state) {
                     0 -> { state = 1; arrayOf(byteArrayOf(1), byteArrayOf(), byteArrayOf()) }
                     2 -> arrayOf(byteArrayOf(2), raw.copyOf(), byteArrayOf())
@@ -340,7 +445,7 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
         private fun framed(domain: String, body: ByteArray) = output {
             write((domain + '\u0000').toByteArray(Charsets.US_ASCII)); write(le64(body.size.toLong())); write(body)
         }
-        private fun projection(enrollment: Boolean): List<ByteArray> {
+        private fun projection(enrollment: Boolean, bootstrap: Boolean = false): List<ByteArray> {
             val pair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
             val public = pair.public as ECPublicKey
             fun coordinate(value: BigInteger) = value.toByteArray().takeLast(32).toByteArray().let { ByteArray(32 - it.size) + it }
@@ -353,7 +458,7 @@ class KagemushaNativeAppApprovalCoordinatorV1Test {
             val s = framed("iroha:kagemusha:v1:hardware-transition-selection", output {
                 write(byteArrayOf(1, 0)); write(cFields[6]); write(bytes(0x61)); write(bytes(0x62)); write(bytes(0x66))
                 write(cFields[4]); write(cFields[5]); write(cFields[7]); write(le64(1)); write(bytes(0x64)); write(le64(1))
-                write(byteArrayOf(1)); write(bytes(0x65)); write(ByteArray(64)); write(le64(7)); write(le64(0)); write(le64(8)); write(le64(0))
+                write(byteArrayOf(if (bootstrap) 0 else 1)); write(bytes(0x65)); write(ByteArray(64)); write(le64(if (bootstrap) 0 else 7)); write(le64(0)); write(le64(if (bootstrap) 0 else 8)); write(le64(0))
             })
             val credential = bytes(0x66)
             val subjectFields = if (enrollment) listOf(sha(c), cFields[1], cFields[2], cFields[3], cFields[4],

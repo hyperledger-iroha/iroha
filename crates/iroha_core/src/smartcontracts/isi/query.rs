@@ -7279,6 +7279,22 @@ mod tests {
     fn find_transactions_exact_ephemeral_counts_without_complete_carrier_snapshot() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
+        assert_eq!(
+            fixture.store.blocks[0].network_entrypoint_count(),
+            3,
+            "the original genesis owns its topology, consensus, and crypto metadata batches"
+        );
+        assert_eq!(
+            fixture
+                .store
+                .blocks
+                .iter()
+                .skip(1)
+                .map(|block| block.network_entrypoint_count())
+                .sum::<usize>(),
+            32,
+            "sixteen original successors each own two Network inputs"
+        );
         let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
@@ -7304,12 +7320,12 @@ mod tests {
             &query_handle,
             &state_view,
             &ALICE_ID,
-            Some(QueryExecutionBudget::from_weighted_limit(32, 1, 0)),
+            Some(QueryExecutionBudget::from_weighted_limit(34, 1, 0)),
         )
-        .expect_err("all 33 complete-body work units must be charged");
+        .expect_err("all 35 original Network work units must be charged");
         assert_eq!(rejected, Error::GasBudgetExceeded);
         state_view.kura().reset_canonical_query_reads_for_test();
-        let item_budget = QueryExecutionBudget::from_weighted_limit(33, 1, 0);
+        let item_budget = QueryExecutionBudget::from_weighted_limit(35, 1, 0);
         let (QueryResponse::Iterable(output), stats) = validated
             .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(item_budget))
             .expect("execute exact transaction query")
@@ -7318,14 +7334,14 @@ mod tests {
         };
         let (batch, remaining_items, has_more, cursor) = output.into_parts_with_count_mode();
         assert_eq!(transactions_from_batch(batch).len(), 3);
-        assert_eq!(remaining_items, Some(29));
+        assert_eq!(remaining_items, Some(32));
         assert!(has_more);
         assert!(cursor.is_none());
-        assert_eq!(stats.processed_items(), 33);
+        assert_eq!(stats.processed_items(), 35);
         assert_eq!(
             state_view.kura().canonical_query_reads_for_test().0,
             17,
-            "exact query reads every canonical body, including empty genesis"
+            "exact query reads every canonical body, including all three original genesis inputs"
         );
     }
     #[test]
@@ -7577,6 +7593,16 @@ mod tests {
         let query_handle = state_view.query_handle().clone();
         let expected = crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
             .expect("exact transaction baseline");
+        assert_eq!(
+            fixture.store.blocks[0].network_entrypoint_count(),
+            3,
+            "signed genesis inputs remain part of exact Network history"
+        );
+        assert_eq!(
+            expected.len(),
+            35,
+            "three original genesis inputs and sixteen two-input successors"
+        );
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -7602,15 +7628,17 @@ mod tests {
         else {
             panic!("expected iterable transaction output");
         };
-        assert_eq!(first.remaining_items, Some(27));
+        assert_eq!(first.remaining_items, Some(30));
         let mut collected = transactions_from_batch(first.batch);
+        assert_eq!(collected.len(), 5);
         let mut cursor = first.continue_cursor;
-        let mut expected_remaining = 27_u64;
+        let mut expected_remaining = 30_u64;
         while let Some(current) = cursor {
             let next = query_handle
                 .handle_iter_continue(current, &ALICE_ID)
                 .expect("continue exact transaction query");
             let page = transactions_from_batch(next.batch);
+            assert_eq!(page.len(), 5);
             expected_remaining = expected_remaining
                 .saturating_sub(u64::try_from(page.len()).expect("page length fits u64"));
             assert_eq!(next.remaining_items, Some(expected_remaining));
@@ -7621,20 +7649,18 @@ mod tests {
         assert_eq!(expected_remaining, 0);
         let (body_reads, body_bytes) = state_view.kura().canonical_query_reads_for_test();
         assert_eq!(
-            body_reads, 84,
+            body_reads, 85,
             "each continuation pays for the original tip ancestry before its page carriers"
         );
         assert_eq!(
             body_bytes,
             fixture.store.wire_bytes(1..=17)
-                + fixture.store.wire_bytes(2..=15)
-                + fixture.store.wire_bytes([10, 5])
-                + fixture.store.wire_bytes(16..=17)
                 + fixture.store.wire_bytes(13..=17)
-                + fixture.store.wire_bytes(11..=17)
+                + fixture.store.wire_bytes(10..=17)
                 + fixture.store.wire_bytes(8..=17)
-                + fixture.store.wire_bytes(6..=17)
+                + fixture.store.wire_bytes(5..=17)
                 + fixture.store.wire_bytes(3..=17)
+                + fixture.store.wire_bytes(1..=17)
         );
     }
     #[test]
@@ -7737,6 +7763,19 @@ mod tests {
             panic!("expected iterable transaction output");
         };
         let mut cursor = first.continue_cursor.expect("exact query continuation");
+        let mut corrupted_wire = fixture.store.blocks[target_height.get() - 1]
+            .encode_wire()
+            .expect("original canonical historical wire");
+        *corrupted_wire
+            .last_mut()
+            .expect("original wire is nonempty") ^= 1;
+        let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
+            .expect_err("altered source must fail its canonical frame checksum");
+        assert!(
+            matches!(&codec_error, iroha_version::error::Error::NoritoCodec(message)
+            if message == "checksum mismatch")
+        );
+        let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(target_height);
         loop {
             match query_handle.handle_iter_continue(cursor, &ALICE_ID) {
@@ -7746,8 +7785,9 @@ mod tests {
                     );
                 }
                 Err(err) => {
-                    assert!(
-                        matches!(err, Error::Conversion(message) if message.contains("storage authentication"))
+                    assert_eq!(
+                        err, expected_error,
+                        "continuation must propagate the complete canonical source refusal"
                     );
                     break;
                 }
@@ -7802,6 +7842,19 @@ mod tests {
     fn find_transactions_bounded_defers_old_corruption_but_exact_fails() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
+        let mut corrupted_wire = fixture.store.blocks[fixture.unrelated_height.get() - 1]
+            .encode_wire()
+            .expect("original canonical historical wire");
+        *corrupted_wire
+            .last_mut()
+            .expect("original wire is nonempty") ^= 1;
+        let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
+            .expect_err("altered old source must fail its canonical frame checksum");
+        assert!(matches!(
+            &codec_error,
+            iroha_version::error::Error::NoritoCodec(message) if message == "checksum mismatch"
+        ));
+        let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7834,8 +7887,9 @@ mod tests {
         let err = exact
             .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
             .expect_err("exact query must validate corrupt selected history");
-        assert!(
-            matches!(err, Error::Conversion(message) if message.contains("storage authentication"))
+        assert_eq!(
+            err, expected_error,
+            "exact history must propagate the complete canonical source refusal"
         );
     }
     #[test]

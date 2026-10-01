@@ -593,7 +593,7 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_HARDWARE_CAPABILITY_COUNT_V1 UINT16_C(16)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DEVICE_OPERATION_COUNT_V1 UINT16_C(22)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1 \
-  "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
+  "1cf1ef5c687224279fc35823b50051d16d86b624e431a15e93ac8d8a98d0df8c"
 
 // Experimental native startup. Rust provisioning must independently install the
 // immutable policy, release archives, verifier profile, private paths and trusted

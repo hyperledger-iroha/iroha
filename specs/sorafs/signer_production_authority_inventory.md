@@ -264,6 +264,7 @@ them today would not fill the code gaps above.
 
 This work does not complete the foundational, topology, resilience and lane
 inventory signer-proof chain, the 17-lane gate, independent cosign provenance,
-the full validation matrix or the 24-hour production soak. Those retain their
-own acceptance evidence in the [goals](v1_implementation_goals.md) and
+the diagnostic validation matrix or live load observations. No fixed-duration
+soak or full regression suite is a deployment prerequisite. Those diagnostics
+retain their own observation evidence in the [goals](v1_implementation_goals.md) and
 [closure ledger](v1_closure_ledger.md).

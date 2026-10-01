@@ -112,7 +112,11 @@ pub(super) fn validate_request(
             return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
         }
     }
-    if phase == 1 {
+    // Method19 phase8 is the distinct zero-State bootstrap entry: [LE32(8), operationID32].
+    // Its response uses a separate Bootstrap-only projection; ordinary phase1 stays cash-only.
+    if phase == 1
+        || (method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval && phase == 8)
+    {
         count(f, 2)?;
         return digest(&f[1]);
     }
@@ -231,6 +235,9 @@ pub(super) fn validate_response(
     }
     match phase {
         1 => approval_projection(method, &q[1], r),
+        8 if method == KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval => {
+            bootstrap_approval_projection(&q[1], r)
+        }
         2 | 5 => {
             count(r, 3)?;
             check(r[0].len() == 1)?;
@@ -328,6 +335,48 @@ fn approval_projection(
                 && e[355..371] == c[435..451],
         )
     }
+}
+/// Separate zero-State bootstrap projection. Ordinary phase1 never accepts this subject.
+/// These are only public byte correlations; the retained Native owner admits actual authority.
+fn bootstrap_approval_projection(id: &[u8], r: &[Vec<u8>]) -> Result<()> {
+    use KagemushaHardwareSelectionSigningLayoutV1 as S;
+    count(r, 14)?;
+    ticket(&r[0])?;
+    let c = c_body(&r[7])?;
+    point(&r[5])?;
+    digest(&r[6])?;
+    check(r[6] == Sha256::digest(&r[5])[..] && r[4] == Sha256::digest(&r[7])[..])?;
+    digest(&r[8])?;
+    digest(&r[9])?;
+    digest(&r[12])?;
+    platform_metadata(&r[2], &r[11], &r[10])?;
+    check(c[2] == if r[2][0] == 5 { 1 } else { 2 })?;
+    alias(&r[7], &r[2], Some(&r[6]), &r[3])?;
+    let w = signing_body(&r[1], W_DOMAIN, 275)?;
+    check(w[2] == 1)?;
+    for i in 0..8 {
+        digest(&w[3 + i * 32..3 + (i + 1) * 32])?;
+    }
+    interval(&w[259..275])?;
+    require_app_attest_selection_subject_v1(&r[13])?;
+    // The model-owned S grammar above enforces zero bootstrap indexes and zero outgoing
+    // commitments. Neither a valid cash S nor a differently scoped C can enter phase8.
+    check(
+        &w[3..35] == id
+            && w[67..99] == c[99..131]
+            && w[99..131] == c[323..355]
+            && w[131..163] == r[6]
+            && w[163..195] == r[8]
+            && w[195..227] == Sha256::digest(&r[13])[..]
+            && r[13][S::OPERATION_TAG.start] == 0
+            && r[13][S::CREDENTIAL_ID] == r[8]
+            && r[13][S::RELEASE_ID] == c[195..227]
+            && r[13][S::NETWORK_ID] == c[131..163]
+            && r[13][S::LANE_COMMITMENT] == c[163..195]
+            && r[13][S::HARDWARE_PROFILE_ID] == c[227..259]
+            && r[13][S::POLICY_EPOCH] == c[419..427]
+            && r[13][S::HARDWARE_EPOCH_GENERATION] == c[427..435],
+    )
 }
 fn receipt(method: KagemushaCoreCoordinatorMethodV1, ticket: &[u8], r: &[u8]) -> Result<()> {
     check(
@@ -500,6 +549,263 @@ fn c_response(phase: u32, q: &[Vec<u8>], r: &[Vec<u8>]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn signed_approval_projection(
+        fixture: &iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1,
+        challenge: iroha_data_model::kagemusha::KagemushaAppOperationApprovalChallengeV1,
+        apple: bool,
+    ) -> Vec<Vec<u8>> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use iroha_data_model::kagemusha::{
+            KagemushaAppOperationApprovalEvidenceV1 as Evidence, KagemushaAppOperationApprovalV1,
+            kagemusha_ordinary_android_app_key_alias_v1,
+        };
+        use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
+        let enrollment = fixture.verify(300).unwrap();
+        let credential = enrollment.app_credential();
+        let subject = credential.subject();
+        let c = &fixture.selection.preparation.challenge;
+        let key = SigningKey::from_bytes((&[7; 32]).into()).unwrap();
+        let message = challenge.canonical_signing_bytes().unwrap();
+        // Maintained known-public fixture key and actual production model equation.
+        // This signs only a public codec sample; it creates no monetary or device authority.
+        let evidence = if apple {
+            let mut auth = [0; 37];
+            auth[..32].copy_from_slice(&subject.app_signing_identity_digest);
+            auth[32] = 0x40;
+            auth[33..].copy_from_slice(&17u32.to_be_bytes());
+            let mut nonce = Sha256::new();
+            nonce.update(auth);
+            nonce.update(Sha256::digest(&message));
+            let signature: Signature = key.sign(&nonce.finalize());
+            let der = signature.to_der();
+            let mut raw = vec![0xa2, 0x69];
+            raw.extend_from_slice(b"signature");
+            raw.extend_from_slice(&[0x58, der.as_bytes().len() as u8]);
+            raw.extend_from_slice(der.as_bytes());
+            raw.push(0x71);
+            raw.extend_from_slice(b"authenticatorData");
+            raw.extend_from_slice(&[0x58, 37]);
+            raw.extend(auth);
+            Evidence::AppleAppAttest { raw_assertion: raw }
+        } else {
+            let signature: Signature = key.sign(&message);
+            Evidence::AndroidKeystore {
+                signature_der: signature.to_der().as_bytes().to_vec(),
+            }
+        };
+        let approval = KagemushaAppOperationApprovalV1 {
+            challenge,
+            evidence,
+        };
+        let floor = enrollment.possession().app_attest_counter();
+        let admitted = approval
+            .authenticate(&challenge, credential, floor, 301)
+            .unwrap();
+        assert_eq!(
+            admitted.app_attest_counter(),
+            if apple { Some(17) } else { None }
+        );
+        vec![
+            1u64.to_le_bytes().to_vec(),
+            message,
+            vec![if apple { 4 } else { 5 }],
+            if apple {
+                STANDARD.encode(subject.attested_key_id).into_bytes()
+            } else {
+                kagemusha_ordinary_android_app_key_alias_v1(c)
+                    .unwrap()
+                    .into_bytes()
+            },
+            c.attestation_challenge().unwrap().to_vec(),
+            subject.app_public_key.as_sec1_bytes().to_vec(),
+            subject.attested_key_id.to_vec(),
+            c.canonical_signing_bytes().unwrap(),
+            credential.digest().to_vec(),
+            vec![92; 32],
+            floor.map_or_else(Vec::new, |n| n.to_le_bytes().to_vec()),
+            vec![if apple { 0 } else { 1 }],
+            subject.app_signing_identity_digest.to_vec(),
+            challenge.canonical_subject_signing_bytes().unwrap(),
+        ]
+    }
+
+    #[test]
+    fn bootstrap_phase_eight_accepts_signed_native_zero_state_and_rejects_cash_subjects() {
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOrdinaryLogicalApprovalJournalV1 as Journal;
+        use iroha_data_model::{
+            kagemusha::{KagemushaHardwareSelectionSigningLayoutV1 as S, KagemushaOperationKindV1},
+            testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture,
+        };
+        let method = KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval;
+        for apple in [false, true] {
+            let fixture = Fixture::new(apple);
+            let enrollment = fixture.verify(300).unwrap();
+            let challenge = Journal::test_only_bootstrap_challenge_v1(
+                &enrollment,
+                fixture.release.clone(),
+                [43; 32],
+                [44; 32],
+                [45; 32],
+                300,
+            )
+            .unwrap();
+            assert_eq!(
+                challenge.subject.operation_kind,
+                KagemushaOperationKindV1::Bootstrap
+            );
+            let projection = signed_approval_projection(&fixture, challenge, apple);
+            let q = vec![8u32.to_le_bytes().to_vec(), challenge.operation_id.to_vec()];
+            let request = kagemusha_core_coordinator_encode_request_v1(&q).unwrap();
+            let response = kagemusha_core_coordinator_encode_response_v1(&projection).unwrap();
+            kagemusha_core_coordinator_validate_method_request_v1(method, &request).unwrap();
+            kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+                .unwrap();
+            let ordinary = vec![1u32.to_le_bytes().to_vec(), challenge.operation_id.to_vec()];
+            validate_request(method, &ordinary).unwrap();
+            assert!(validate_response(method, &ordinary, &projection).is_err());
+
+            // A separately model-authenticated cash sample remains ordinary-only, even with
+            // matching credential, W/S digest and original C scope. It is no financial owner.
+            let mut cash = challenge;
+            cash.subject.operation_kind = KagemushaOperationKindV1::Rotate;
+            cash.subject.secure_index_after = 1;
+            cash.subject_signing_digest =
+                Sha256::digest(cash.canonical_subject_signing_bytes().unwrap()).into();
+            let cash_projection = signed_approval_projection(&fixture, cash, apple);
+            validate_response(method, &ordinary, &cash_projection).unwrap();
+            assert!(validate_response(method, &q, &cash_projection).is_err());
+
+            // Rehashing S into W cannot hide mixed C scope or a nonzero bootstrap index.
+            for range in [
+                S::RELEASE_ID,
+                S::NETWORK_ID,
+                S::LANE_COMMITMENT,
+                S::HARDWARE_PROFILE_ID,
+                S::POLICY_EPOCH,
+                S::HARDWARE_EPOCH_GENERATION,
+                S::CREDENTIAL_ID,
+                S::SECURE_INDEX_AFTER,
+                S::CANDIDATE_ENVELOPE_DIGEST,
+                S::TERMINAL_BODY_COMMITMENT,
+            ] {
+                let mut changed = projection.clone();
+                changed[13][range.start] ^= 1;
+                let hash = Sha256::digest(&changed[13]);
+                let start = W_DOMAIN.len() + 8;
+                changed[1][start + 195..start + 227].copy_from_slice(&hash);
+                assert!(validate_response(method, &q, &changed).is_err());
+            }
+            let mut wrong_purpose = projection.clone();
+            wrong_purpose[1][W_DOMAIN.len() + 8 + 2] = 2;
+            assert!(validate_response(method, &q, &wrong_purpose).is_err());
+            let wrong_id = vec![8u32.to_le_bytes().to_vec(), vec![46; 32]];
+            assert!(validate_response(method, &wrong_id, &projection).is_err());
+            for invalid in [
+                vec![8u32.to_le_bytes().to_vec(), vec![0; 32]],
+                vec![8u32.to_le_bytes().to_vec(), 1u64.to_le_bytes().to_vec()],
+                vec![
+                    8u32.to_le_bytes().to_vec(),
+                    challenge.operation_id.to_vec(),
+                    vec![],
+                ],
+            ] {
+                assert!(validate_request(method, &invalid).is_err());
+            }
+            assert!(
+                validate_request(
+                    KagemushaCoreCoordinatorMethodV1::PreparedAppEnrollmentPossession,
+                    &q
+                )
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn bootstrap_approval_projection_requires_zero_indexes_and_outgoing_slots() {
+        use iroha_data_model::kagemusha::{
+            KagemushaAppOperationApprovalChallengeV1, KagemushaAppOperationApprovalPurposeV1,
+            KagemushaHardwareTransitionSelectionV1, KagemushaOperationKindV1,
+            kagemusha_ordinary_android_app_key_alias_v1,
+        };
+        use iroha_data_model::testing::ordinary_app_enrollment::KagemushaOrdinaryRetailEnrollmentFixtureV1 as Fixture;
+        // Public framing only. This fixture cannot capture an approval or publish a State.
+        let fixture = Fixture::new(false);
+        let c = &fixture.selection.preparation.challenge;
+        let credential = &fixture.selection.issuance.credential;
+        let digest = credential.canonical_digest().unwrap();
+        let subject = KagemushaHardwareTransitionSelectionV1 {
+            version: 1,
+            release_id: c.release_id,
+            provider_policy_root: [21; 32],
+            app_policy_digest: [22; 32],
+            credential_id: digest,
+            network_id: fixture.release.network_id(),
+            lane_commitment: c.lane_id,
+            hardware_profile_id: c.hardware_profile_id,
+            policy_epoch: c.policy_epoch,
+            hardware_epoch_id: [24; 32],
+            hardware_epoch_generation: c.hardware_epoch,
+            operation_kind: KagemushaOperationKindV1::Bootstrap,
+            transition_statement_digest: [25; 32],
+            candidate_envelope_digest: [0; 32],
+            terminal_body_commitment: [0; 32],
+            secure_index_before: 0,
+            secure_index_after: 0,
+        };
+        let original_s = subject.canonical_signing_bytes().unwrap();
+        let w = KagemushaAppOperationApprovalChallengeV1 {
+            version: 1,
+            purpose: KagemushaAppOperationApprovalPurposeV1::MonetaryTransition,
+            operation_id: [26; 32],
+            nonce: [27; 32],
+            account_binding: c.account_binding,
+            authority_policy_digest: c.app_authority_policy_digest,
+            attested_key_id: credential.subject.attested_key_id,
+            enrollment_digest: digest,
+            subject_signing_digest: Sha256::digest(&original_s).into(),
+            normalized_guard_digest: [28; 32],
+            issued_at_ms: 300,
+            expires_at_ms: 400,
+            subject,
+        };
+        let original_c = c.canonical_signing_bytes().unwrap();
+        let projection = vec![
+            1u64.to_le_bytes().to_vec(),
+            w.canonical_signing_bytes().unwrap(),
+            vec![5],
+            kagemusha_ordinary_android_app_key_alias_v1(c)
+                .unwrap()
+                .into_bytes(),
+            Sha256::digest(&original_c).to_vec(),
+            credential.subject.app_public_key.as_sec1_bytes().to_vec(),
+            credential.subject.attested_key_id.to_vec(),
+            original_c,
+            digest.to_vec(),
+            [29; 32].to_vec(),
+            vec![],
+            vec![3],
+            credential.subject.app_signing_identity_digest.to_vec(),
+            original_s,
+        ];
+        let method = KagemushaCoreCoordinatorMethodV1::PreparedAppOperationApproval;
+        bootstrap_approval_projection(&w.operation_id, &projection).unwrap();
+        assert!(approval_projection(method, &w.operation_id, &projection).is_err());
+        use KagemushaHardwareSelectionSigningLayoutV1 as S;
+        for offset in [
+            S::SECURE_INDEX_BEFORE.start,
+            S::SECURE_INDEX_AFTER.start,
+            S::CANDIDATE_ENVELOPE_DIGEST.start,
+            S::TERMINAL_BODY_COMMITMENT.start,
+            S::OPERATION_TAG.start,
+        ] {
+            let mut changed = projection.clone();
+            changed[13][offset] = 1;
+            let start = W_DOMAIN.len() + 8 + 195;
+            let subject_digest = Sha256::digest(&changed[13]);
+            changed[1][start..start + 32].copy_from_slice(&subject_digest);
+            assert!(bootstrap_approval_projection(&w.operation_id, &changed).is_err());
+        }
+    }
     #[test]
     fn possession_projection_binds_full_c_digest_and_rejects_retired_selectors() {
         use iroha_data_model::kagemusha::{

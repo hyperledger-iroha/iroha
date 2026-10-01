@@ -28,10 +28,7 @@ use halo2_ecc::{
     ecc::EcPoint,
     fields::{FieldChip as _, fp::FpChip},
 };
-use halo2_proofs::halo2curves::{
-    CurveAffine as _,
-    secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine},
-};
+use halo2_proofs::halo2curves::secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine};
 use iroha_data_model::kagemusha::{
     KagemushaAppOperationApprovalEvidenceV1, KagemushaAppOperationApprovalSigningLayoutV1 as A,
     KagemushaAppOperationApprovalV1, kagemusha_ordinary_apple_original_parts_v1,

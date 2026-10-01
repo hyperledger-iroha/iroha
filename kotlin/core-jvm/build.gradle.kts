@@ -1,3 +1,4 @@
+import java.net.URI
 import java.io.File
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -89,6 +90,7 @@ tasks.test {
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_core_coordinator_archives_v1.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_ordinary_app_enrollment_v1.json"))
+    inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/kagemusha_app_platform_messages_v1.tsv"))
     inputs.file(
         rootProject.layout.projectDirectory
             .dir("..")
@@ -137,6 +139,30 @@ publishing {
         maven {
             name = "mobileSdk"
             url = uri(mobileSdkRepoDir.get())
+        }
+        providers.environmentVariable("IROHA_SDK_MAVEN_URL").orNull?.let { remoteUrl ->
+            val endpoint = URI(remoteUrl)
+            require(endpoint.scheme == "https" && !endpoint.host.isNullOrBlank() &&
+                endpoint.rawUserInfo == null && endpoint.rawQuery == null && endpoint.rawFragment == null) {
+                "IROHA_SDK_MAVEN_URL must be an HTTPS repository without embedded credentials"
+            }
+            val remoteUsername = providers.environmentVariable("IROHA_SDK_MAVEN_USERNAME").orNull
+            val remotePassword = providers.environmentVariable("IROHA_SDK_MAVEN_PASSWORD").orNull
+            require((remoteUsername == null) == (remotePassword == null) &&
+                (remoteUsername == null || remoteUsername.isNotBlank() && remotePassword!!.isNotBlank())) {
+                "Remote Maven credentials must be a complete runtime-only pair"
+            }
+            maven {
+                name = "remoteSdk"
+                url = endpoint
+                isAllowInsecureProtocol = false
+                if (remoteUsername != null) {
+                    credentials {
+                        username = remoteUsername
+                        password = remotePassword
+                    }
+                }
+            }
         }
     }
 

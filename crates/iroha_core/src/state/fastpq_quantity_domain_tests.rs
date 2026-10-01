@@ -66,6 +66,24 @@ fn direct_quantity_component_refuses_an_unretained_hash_and_keeps_original_balan
         );
         assert!(tx.world.assets.get(&bob).is_none());
     }
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(crate::state::output_capacity::ExecutionOutputPlanState::Poisoned),
+    ));
+    // An unowned movement poisons its carrier. A positive component must obtain
+    // a fresh original recorder over the unchanged State rather than replace it.
+    drop((block, _recording));
+    {
+        let view = state.view();
+        assert_eq!(
+            view.world.assets.get(&alice).unwrap().as_ref(),
+            &Quantity::from(10_u32)
+        );
+        assert!(view.world.assets.get(&bob).is_none());
+    }
+    let (mut block, _recording) =
+        crate::block::ValidBlock::start_component_execution(&original, &state)
+            .expect("fresh original component recorder after refused owner drops");
     let mut tx = block.transaction_for_fastpq_testing(invocation);
     Transfer::asset_quantity(alice.clone(), 1_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut tx)

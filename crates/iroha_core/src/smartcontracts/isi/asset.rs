@@ -7516,8 +7516,16 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         authorization: crate::sns::VerifiedSnsAutoRenewalCharge,
     ) -> Result<(), Error> {
-        let (selector, owner, current_expiry_ms, target_expiry_ms, source_id, destination, amount) =
-            authorization.into_parts();
+        let (
+            permit,
+            selector,
+            owner,
+            current_expiry_ms,
+            target_expiry_ms,
+            source_id,
+            destination,
+            amount,
+        ) = authorization.into_parts();
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let record =
             crate::sns::get_name_record_by_selector(&state_transaction.world, &selector, now_ms)
@@ -7552,6 +7560,9 @@ pub mod isi {
         }
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
         let binding = canonical_numeric_movement_binding(&(
+            permit
+                .binding()
+                .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?,
             selector,
             owner.clone(),
             current_expiry_ms,
@@ -7560,15 +7571,28 @@ pub mod isi {
             destination_id.clone(),
             amount.clone(),
         ))?;
+        let authorization = NumericAssetMovementAuthorization::embedded_user(
+            &owner,
+            EmbeddedNumericAssetMovementPurpose::SnsAutoRenewal(binding),
+        );
+        let identity = authorization.resolve_transcript_identity(
+            state_transaction,
+            &[(source_id.clone(), destination_id.clone(), amount.clone())],
+        )?;
+        state_transaction
+            .authorize_sns_native_source(permit, identity)
+            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+        // A free quote or payment to the same canonical balance renews the lease
+        // without inventing a numeric movement, transcript or unapplied source E.
+        if amount.is_zero() || source_id == destination_id {
+            return Ok(());
+        }
         execute_numeric_asset_movement(
             state_transaction,
             source_id,
             destination_id,
             amount,
-            NumericAssetMovementAuthorization::embedded_user(
-                &owner,
-                EmbeddedNumericAssetMovementPurpose::SnsAutoRenewal(binding),
-            ),
+            authorization,
         )
     }
     fn resolve_fx_corridor_escrow_binding(

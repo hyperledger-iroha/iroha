@@ -77,6 +77,10 @@ APPLE_REQUIRED_ROOT_INPUTS = ("IrohaSwift/Package.resolved",)
 # CBSI consumes these Gradle builds directly through composite substitution, so
 # their shipping JVM sources must be bound alongside the native `.so` closure.
 ANDROID_ROOT_INPUTS = (
+    "scripts/publish_android_sdk.sh",
+    "scripts/android_publish_snapshot.sh",
+    "scripts/android_sbom_provenance.sh",
+    "scripts/mobile_sdk_android_publication.py",
     "gradle/mobile-sdk-external-android-build.settings.gradle.kts",
     "kotlin/settings.gradle.kts",
     "kotlin/build.gradle.kts",
@@ -105,6 +109,7 @@ ANDROID_ROOT_INPUTS = (
     "java/iroha_android/android/build.gradle.kts",
     "java/iroha_android/android/src/main",
     "scripts/package_mobile_sdk_artifacts.sh",
+    "scripts/mobile_sdk_android_package_inputs.py",
 )
 PLATFORM_TARGETS = {
     "apple": APPLE_TARGETS,

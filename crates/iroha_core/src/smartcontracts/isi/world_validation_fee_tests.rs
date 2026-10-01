@@ -585,8 +585,7 @@ fn verified_fee_sponsor_registration_fixture(
         Some(proof_expiry),
     )
     .expect("bind verified fee sponsor proof metadata");
-    let proof = fastpq_prover::prove_axt_bound_batch(&batch, &binding)
-        .expect("prove verified fee sponsor allocation");
+    let proof = crate::unit_test_support::prove_axt_bound_batch_when_available(&batch, &binding);
     let proof_blob = fastpq_prover::axt_proof_blob_from_bound_batch(
         &batch,
         proof,
@@ -909,11 +908,42 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     .unpack(|_| {})
     .unwrap_or_else(|(_, error)| panic!("original sponsor genesis executes: {error}"));
     assert!(valid.as_ref().output_results().all(|result| result.is_ok()));
-    let original_transfer_count = original
-        .drain_transfer_transcripts()
-        .values()
-        .map(Vec::len)
+    // Signed-genesis validation already captured the execution witness and
+    // drained its staging map. Inspect that retained source-owned evidence.
+    let witness = original
+        .take_exec_witness()
+        .expect("authenticated genesis retains its captured funding witness");
+    let original_transfer_count = witness
+        .fastpq_transcripts
+        .iter()
+        .map(|bundle| bundle.transcripts.len())
         .sum::<usize>();
+    assert!(original.drain_transfer_transcripts().is_empty());
+    assert_eq!(witness.fastpq_transcripts.len(), 1);
+    let bundle = &witness.fastpq_transcripts[0];
+    assert!(
+        valid
+            .as_ref()
+            .external_transactions()
+            .any(|transaction| { Hash::from(transaction.hash()) == bundle.entry_hash })
+    );
+    assert_eq!(bundle.transcripts.len(), 1);
+    let transcript = &bundle.transcripts[0];
+    assert_eq!(transcript.batch_hash, bundle.entry_hash);
+    assert_eq!(
+        transcript.authority_digest,
+        Hash::new(norito::encode_canonical(&*BOB_ID).unwrap()),
+    );
+    assert_eq!(transcript.deltas.len(), 1);
+    let delta = &transcript.deltas[0];
+    assert_eq!(delta.from_account, *ALICE_ID);
+    assert_eq!(delta.to_account, custody);
+    assert_eq!(delta.asset_definition, asset_definition_id);
+    assert_eq!(delta.amount, Quantity::from(10_u32));
+    assert_eq!(delta.from_balance_before, Quantity::from(10_u32));
+    assert_eq!(delta.from_balance_after, Quantity::zero());
+    assert_eq!(delta.to_balance_before, Quantity::zero());
+    assert_eq!(delta.to_balance_after, Quantity::from(10_u32));
     let stx = original.transaction();
     let program = stx
         .world

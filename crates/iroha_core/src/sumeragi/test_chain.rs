@@ -1511,6 +1511,31 @@ pub struct PendingTestExecution<'chain> {
 }
 
 impl PendingTestExecution<'_> {
+    /// Durably append the original certificate and finalize its actual State metadata while
+    /// a held physical history writer defers visibility. This retains the original overlay
+    /// for immutable checkpoint inspection; [`Self::publish`] retries its ordinary publisher.
+    ///
+    /// # Errors
+    /// The original certificate, durable append or actual publication preparation refuses.
+    #[cfg(test)]
+    pub fn prepare_publication_for_inspection(&mut self, signers: Signers) -> Result<(), String> {
+        if self.published.is_some() {
+            return Err("published source cannot prepare another inspection".into());
+        }
+        self.prepare(signers)?;
+        let (_, qc) = self
+            .certificate
+            .as_ref()
+            .expect("original certificate retained");
+        self.chain
+            .blocks
+            .append(&self.block, qc)
+            .map_err(|error| error.to_string())?;
+        self.chain
+            .executor
+            .prepare_publication_for_inspection(&self.block, qc)
+    }
+
     /// Hash of R returned by the original execution.
     #[must_use]
     pub fn result(&self) -> Hash32 {

@@ -79,23 +79,49 @@ fn nexus_reconfiguration_uses_state_authority_instead_of_empty_or_stale_queue_ca
     let (stale_validator, _) = gen_account_in("wonderland");
     let registry = |validator: AccountId| {
         let lane = LaneConfig::default();
-        Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
-            lane.id,
-            LaneManifestStatus {
-                lane: lane.id,
-                alias: lane.alias,
-                dataspace: lane.dataspace_id,
-                visibility: lane.visibility,
-                storage: lane.storage,
-                governance: lane.governance,
-                manifest_path: Some(PathBuf::from("/tmp/state-authority.manifest.json")),
-                governance_rules: Some(GovernanceRules {
-                    validators: vec![validator],
-                    ..GovernanceRules::default()
-                }),
-                privacy_commitments: Vec::new(),
+        let directory = tempdir().expect("original authority manifest source");
+        let source = iroha_data_model::nexus::NativeLaneManifestV1 {
+            lane: Some(lane.alias.clone()),
+            version: Some(iroha_data_model::nexus::NativeLaneManifestV1::VERSION),
+            validators: Some(vec![
+                iroha_data_model::nexus::NativeLaneValidatorBindingV1 {
+                    peer_id: Some(
+                        PeerId::new(
+                            validator
+                                .try_signatory()
+                                .expect("single-key fixture validator")
+                                .clone(),
+                        )
+                        .to_string(),
+                    ),
+                    validator: Some(validator.to_string()),
+                    torii_url: None,
+                },
+            ]),
+            ..iroha_data_model::nexus::NativeLaneManifestV1::default()
+        };
+        fs::write(
+            directory
+                .path()
+                .join(format!("{}.manifest.json", lane.alias)),
+            norito::json::to_vec(&source).expect("encode original authority manifest"),
+        )
+        .expect("write original authority manifest");
+        let registry = Arc::new(LaneManifestRegistry::from_config(
+            &LaneCatalog::default(),
+            &GovernanceCatalog::default(),
+            &LaneRegistry {
+                manifest_directory: Some(directory.path().to_path_buf()),
+                ..LaneRegistry::default()
             },
-        )])))
+        ));
+        assert_eq!(
+            registry.lane_rules(lane.id).unwrap().validators,
+            vec![validator]
+        );
+        // The source bytes remain frozen after the original path is retired.
+        drop(directory);
+        registry
     };
     // Exercise both State entry points: a fresh empty Queue and a stale Queue
     // must adopt installed authority; stale Queue policy must never resurrect

@@ -44,12 +44,61 @@ class KagemushaNativeAppApprovalCoordinatorV1 internal constructor(
         return KagemushaNativePreparedAppApprovalV1.fromNative(bridge, id, fields)
     }
 
+    /** Separate Bootstrap capability tied to the same retained FI completion and C/key originals. */
+    internal fun prepareOrdinaryBootstrapApproval(operationId: ByteArray,
+        identity: KagemushaNativePreparedOrdinaryAppIdentityV1,
+        retail: KagemushaNativeOrdinaryRetailEnrollmentV1): KagemushaNativePreparedOrdinaryBootstrapApprovalV1 {
+        identity.certificateOriginalsFor(bridge) // Reject another coordinator before C19 reservation.
+        val completed = retail.completedOriginalBindingFor(bridge)
+        val c = identity.originalChallengeSigningBytes()
+        val admission = checkNotNull(identity.recoverOriginalAdmission())
+        val alias = admission.originalKeyReference().toByteArray(Charsets.UTF_8)
+        val point = admission.publicKeySec1()
+        val credential = completed.credentialDigest()
+        fun current() {
+            completed.recheck()
+            check(MessageDigest.isEqual(identity.originalChallengeSigningBytes(), c))
+            val held = checkNotNull(identity.recoverOriginalAdmission())
+            check(MessageDigest.isEqual(held.originalKeyReference().toByteArray(Charsets.UTF_8), alias) &&
+                MessageDigest.isEqual(held.publicKeySec1(), point)) { "Original Bootstrap app key changed" }
+        }
+        current()
+        val id = operationId.copyOf()
+        val fields = bridge.invokeOrdinaryBootstrapApproval(listOf(KagemushaCoreCoordinatorFrameV1.u32(8), id))
+        try {
+            current()
+            check(MessageDigest.isEqual(fields[7], c) && MessageDigest.isEqual(fields[3], alias) &&
+                MessageDigest.isEqual(fields[5], point) && MessageDigest.isEqual(fields[8], credential)) {
+                "Bootstrap projection differs from its original FI enrollment"
+            }
+            return KagemushaNativePreparedOrdinaryBootstrapApprovalV1.fromNative(bridge, id, fields, ::current)
+        } catch (failure: Throwable) {
+            try { bridge.close() } catch (_: Throwable) { /* Preserve the original binding failure. */ }
+            throw failure
+        }
+    }
+
     /** Derive E after raw identity admission, selected only by SHA256(full original C signing bytes). */
     fun prepareEnrollmentPossession(enrollmentOperationId: ByteArray): KagemushaNativePreparedAppEnrollmentPossessionV1 {
         val id = enrollmentOperationId.copyOf()
         val fields = bridge.invoke(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_ENROLLMENT_POSSESSION,
             listOf(KagemushaCoreCoordinatorFrameV1.u32(1), id))
         return KagemushaNativePreparedAppEnrollmentPossessionV1.fromNative(bridge, id, fields)
+    }
+}
+
+/** Private ordinary Bootstrap W/S capability. Its receipt captures approval, never State readiness. */
+class KagemushaNativePreparedOrdinaryBootstrapApprovalV1 private constructor(private val state: NativeAppPreparedStateV1) {
+    fun signingBytes(): ByteArray = state.signingBytes()
+    fun bootstrapSelectionOriginal(): ByteArray = state.financialSelectionOriginal()
+    fun recoverOriginalApproval(): ByteArray? = state.recover()
+    fun cancel() = state.cancel()
+    internal fun performPlatformSigning(callback: AndroidAppSigningCallbackV1): ByteArray = state.sign(callback)
+    internal companion object {
+        fun fromNative(bridge: KagemushaCoreCoordinatorBridgeV1, id: ByteArray, fields: List<ByteArray>, requireOriginal: () -> Unit) =
+            KagemushaNativePreparedOrdinaryBootstrapApprovalV1(NativeAppPreparedStateV1(bridge,
+                KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL, id, fields,
+                ordinaryBootstrap = true, requireOriginalOwner = requireOriginal))
     }
 }
 
@@ -141,6 +190,8 @@ private class NativeAppPreparedStateV1(
     private val method: KagemushaCoreCoordinatorMethodV1,
     id: ByteArray,
     fields: List<ByteArray>,
+    private val ordinaryBootstrap: Boolean = false,
+    private val requireOriginalOwner: () -> Unit = {},
 ) {
     private val originalId = id.copyOf()
     private val original = fields.map(ByteArray::copyOf)
@@ -373,6 +424,12 @@ private class NativeAppPreparedStateV1(
 
     private fun recheck() {
         check(!unusable) { "Original app-signing outcome is uncertain or cancelled; native recovery is required" }
+        try { requireOriginalOwner() }
+        catch (failure: Throwable) {
+            unusable = true
+            try { bridge.close() } catch (_: Throwable) { /* Preserve original owner revocation. */ }
+            throw failure
+        }
         val checked = invoke(6)
         same(checked[0], scope); same(checked[1], messageDigest)
     }
@@ -381,7 +438,7 @@ private class NativeAppPreparedStateV1(
         check(!unusable) { "Original app-signing capability is unavailable" }
         val request = arrayListOf(KagemushaCoreCoordinatorFrameV1.u32(phase), ticket.copyOf())
         raw?.let { request.add(it.copyOf()) }
-        return try { bridge.invoke(method, request) }
+        return try { if (ordinaryBootstrap) bridge.invokeOrdinaryBootstrapApproval(request) else bridge.invoke(method, request) }
         catch (failure: Throwable) { unusable = true; throw failure }
     }
     private fun same(a: ByteArray, b: ByteArray) {

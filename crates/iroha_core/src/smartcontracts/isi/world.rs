@@ -22533,10 +22533,154 @@ pub mod isi {
             let error = Executor::Initial
                 .execute_instruction(&mut stx, &ALICE_ID, instruction)
                 .expect_err("header-shaped genesis cannot grant native instruction authority");
-            assert!(
-                smart_contract_error_message(error).contains("authenticated source capability")
-            );
+            let ValidationFail::NotPermitted(message) = error else {
+                panic!("header-only genesis must fail at its source authority boundary");
+            };
+            assert!(message.contains("authenticated source capability"));
             assert!(stx.world.verifying_keys.get(&id).is_none());
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn verifier_registry_bootstrap_requires_original_input_and_remains_genesis_only() {
+            use crate::state::StateReadOnly as _;
+            use crate::sumeragi::{
+                startup,
+                test_chain::{CertifiedTestChain, TestChainConfig},
+            };
+            let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+            world.account_permissions.insert(
+                ALICE_ID.clone(),
+                [Permission::from(CanManageVerifyingKeys)]
+                    .into_iter()
+                    .collect(),
+            );
+            let id = VerifyingKeyId::new("halo2/ipa", "original-bootstrap-vk");
+            let record = test_halo2_vk_record(1, canonical_test_halo2_vk_box());
+            let register: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record: record.clone(),
+            }
+            .into();
+            let mut config = TestChainConfig::new(world, 0);
+            config.genesis_key = iroha_test_samples::ALICE_KEYPAIR.clone();
+            config.genesis_instructions.push(register.clone());
+            let consensus_mode = config.consensus_mode;
+            let prepared = CertifiedTestChain::prepare(config)
+                .expect("prepare the exact signed verifier bootstrap input");
+            let source = prepared.genesis.block();
+            let index = source
+                .external_transactions()
+                .position(|signed| {
+                    matches!(signed.instructions(),
+                        iroha_data_model::transaction::Executable::Instructions(instructions)
+                            if instructions.iter().eq(core::iter::once(&register)))
+                })
+                .expect("the verifier registration is one original signed input");
+            {
+                let mut block = prepared
+                    .state
+                    .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
+                    .expect("retain the original verifier bootstrap carrier");
+                let mut transaction = block
+                    .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &register)
+                    .expect("authenticate the exact original verifier registration");
+                Executor::Initial
+                    .execute_instruction(&mut transaction, &ALICE_ID, register.clone())
+                    .expect("the original signed genesis admits verifier registration");
+                assert_eq!(transaction.world.verifying_keys.get(&id), Some(&record));
+                assert_eq!(
+                    transaction
+                        .world
+                        .verifying_keys_by_circuit
+                        .get(&(record.circuit_id.clone(), record.version)),
+                    Some(&id)
+                );
+                // A different same-family instruction cannot borrow that source capability.
+                drop(transaction);
+                let substituted: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: VerifyingKeyId::new("halo2/ipa", "substituted-bootstrap-vk"),
+                    record: record.clone(),
+                }
+                .into();
+                assert!(
+                    block
+                        .transaction_for_original_genesis_testing(
+                            source,
+                            index,
+                            &ALICE_ID,
+                            &substituted
+                        )
+                        .is_err()
+                );
+                let unchanged = block.transaction();
+                assert!(unchanged.world.verifying_keys.get(&id).is_none());
+                assert!(
+                    unchanged
+                        .world
+                        .verifying_keys_by_circuit
+                        .get(&(record.circuit_id.clone(), record.version))
+                        .is_none()
+                );
+            }
+            startup::apply_genesis(
+                &prepared.state,
+                source.clone(),
+                &ALICE_ID,
+                consensus_mode.into(),
+                None,
+            )
+            .expect("publish the original authenticated verifier bootstrap");
+            let mut block = prepared.state.block(original_world_header(&prepared.state));
+            let mut transaction = block.transaction_for_callback_testing();
+            let old_keys = transaction
+                .world
+                .verifying_keys
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let old_index = transaction
+                .world
+                .verifying_keys_by_circuit
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let events_before = transaction.world.internal_event_buf.clone();
+            let mut updated = record.clone();
+            updated.version = 2;
+            for instruction in [
+                register,
+                verifying_keys::UpdateVerifyingKey {
+                    id: id.clone(),
+                    record: updated,
+                }
+                .into(),
+            ] {
+                let error = Executor::Initial
+                    .execute_instruction(&mut transaction, &ALICE_ID, instruction)
+                    .expect_err("a manager grant cannot create a post-genesis governed lifecycle");
+                assert!(matches!(error, ValidationFail::NotPermitted(message)
+                    if message == "administrative instruction requires an explicit governed lifecycle"));
+                assert_eq!(
+                    transaction
+                        .world
+                        .verifying_keys
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect::<Vec<_>>(),
+                    old_keys
+                );
+                assert_eq!(
+                    transaction
+                        .world
+                        .verifying_keys_by_circuit
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect::<Vec<_>>(),
+                    old_index
+                );
+                assert_eq!(transaction.world.internal_event_buf, events_before);
+            }
         }
 
         macro_rules! world_test {
@@ -22678,7 +22822,9 @@ pub mod isi {
             transcript_hash: [u8; 32],
             public_state: Vec<u8>,
         ) -> consensus_keys::ApplyThresholdKeyLifecycleCertificateV1 {
-            let ordered_roster = state_transaction.commit_topology().get();
+            let ordered_roster = state_transaction
+                .threshold_key_lifecycle_frozen_roster_v1()
+                .expect("lifecycle signing follows the exact scheduled committee");
             assert_eq!(ordered_roster.len(), validator_keys.len());
             for (peer, key) in ordered_roster.iter().zip(validator_keys) {
                 assert_eq!(peer.public_key(), key.public_key());
@@ -22708,7 +22854,7 @@ pub mod isi {
                 expected_active_session_id,
                 effective_height: state_transaction.block_height(),
                 network_id: state_transaction.network_id,
-                roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(ordered_roster),
+                roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster),
                 committee_size,
                 quorum,
                 session_id,
@@ -22868,23 +23014,42 @@ pub mod isi {
         });
 
         world_test!(global_beacon_certificate_cannot_rotate_without_frozen_preparation {
-            let state = blank_test_state();
+            use crate::sumeragi::test_chain::CertifiedTestChain;
+            use crate::state::StateReadOnly as _;
+            // This maintained prefix includes the actual installed beacon authority
+            // at H10; a mutable public-key pointer is not an incumbent certificate.
+            let mut chain = CertifiedTestChain::npos_boundary_fixture();
+            chain.commit(Vec::new());
+            assert_eq!(chain.height(), 10);
+            let state = chain.state();
+            let parent = state.view().latest_block().expect("original certified H10");
+            let time_ms = u64::try_from(parent.header().creation_time().as_millis())
+                .expect("original parent time fits")
+                .checked_add(1).expect("successor clock follows its original parent");
             let header = BlockHeader::new(
-                NonZeroU64::new(40).expect("nonzero lifecycle height"),
+                NonZeroU64::new(11).expect("nonzero lifecycle height"),
+                state.view().latest_block_hash(),
                 None,
-                None,
-                0,
+                time_ms,
                 0,
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            let mut validator_keys = (0..4).map(|_| checked_keypair_with_algorithm(Algorithm::BlsNormal)).collect::<Vec<_>>();
-            validator_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-            let ordered_roster = validator_keys
-                .iter()
-                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
+            let (authority, authorization) =
+                crate::state::validator_committee::current_authority(&state_transaction)
+                    .expect("the incumbent owns authenticated native finality");
+            let ordered_roster = state_transaction.threshold_key_lifecycle_frozen_roster_v1()
+                .expect("the H11 roster is fixed by the committed consensus schedule");
+            // Retain the maintained NPoS fixture's deterministic private custody and
+            // prove every public seat against the actual source before signing.
+            let mut validator_keys = [0xC1_u8, 0xC2, 0xC3, 0xC4].into_iter()
+                .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
                 .collect::<Vec<_>>();
-            *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
+            validator_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            assert_eq!(
+                ordered_roster,
+                validator_keys.iter().map(|key| PeerId::new(key.public_key().clone())).collect::<Vec<_>>()
+            );
             let authorization_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster);
             let mut successor_validator_keys =
@@ -22899,30 +23064,38 @@ pub mod isi {
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&successor_roster);
             assert_ne!(authorization_roster_hash, successor_roster_hash);
 
-            let mut key_a =
-                crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
-                    state_transaction.network_id,
-                    [0xA4; 32],
-                    &validator_keys,
+            let iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(incumbent) =
+                authorization.beacon else {
+                panic!("the committed boundary must retain its installed incumbent beacon");
+            };
+            let key_a = state_transaction.world.global_beacon_key_sessions
+                .get(&incumbent.session_id).expect("retain the original incumbent DKG").clone();
+            assert_eq!(key_a.session.transcript_hash, incumbent.transcript_hash);
+            assert_eq!(key_a.session.network_id, authority.network_id);
+            assert!(key_a.is_active_at(state_transaction.block_height()));
+            assert!(state_transaction.world.validator_committee_transitions
+                .get(&authorization.epoch.checked_add(1).expect("next epoch fits")).is_none());
+            let (successor_session, _successor_signers) =
+                crate::beacon::prepared_session_and_signers_fixture_for_keys_v1(
+                    iroha_data_model::consensus::GlobalThresholdBeaconDkgSessionV1 {
+                        version: iroha_data_model::consensus::GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+                        network_id: state_transaction.network_id,
+                        session_id: [0xB4; 32],
+                        attempt_id: [0xB4; 32],
+                        authority_generation: authority.generation,
+                        roster_hash: successor_roster_hash,
+                        committee_size: 4,
+                        threshold: 2,
+                        start_height: 1,
+                        commitments_end_height: 2,
+                        deliveries_end_height: 3,
+                        acceptances_end_height: 4,
+                    },
+                    &successor_validator_keys,
                 );
-            let key_a_activation = key_a.session.adaptive_dkg.finalized_at_height;
-            key_a
-                .activate(key_a_activation)
-                .expect("activate predecessor beacon key");
-            state_transaction
-                .world
-                .global_beacon_key_sessions
-                .insert(key_a.session.session_id, key_a.clone());
-            state_transaction.world.global_beacon_active_session.insert(
-                crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
-                key_a.session.session_id,
-            );
-
-            let key_b = crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
-                state_transaction.network_id,
-                [0xB4; 32],
-                &successor_validator_keys,
-            );
+            let key_b = crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
+                successor_session.record().clone()
+            ).expect("the successor retains a genuinely finalized DKG transcript");
             let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
                 &validator_keys,
@@ -22944,7 +23117,11 @@ pub mod isi {
             let rejected = install_b
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("a lifecycle QC cannot bypass authenticated committee preparation");
-            assert!(format!("{rejected:?}").contains("authenticated incumbent finality"));
+            assert!(
+                matches!(rejected, InstructionExecutionError::InvariantViolation(ref message)
+                    if message.as_ref() == "beacon finalization requires an authenticated frozen committee"),
+                "the authenticated incumbent must reach its actual preparation refusal: {rejected:?}"
+            );
             drop(state_transaction);
             let restored = block.transaction();
             // Neither the candidate record nor a retirement escapes transaction rollback.
@@ -30097,6 +30274,29 @@ seiyaku GovernanceLifecycle {
                 other => panic!("unexpected error: {other:?}"),
             }
         }
+        // Registry shape/codec tests exercise the Core handler with its exact grant.
+        // This component boundary is separate from Initial-executor admission: a grant
+        // never creates the governed post-genesis lifecycle which the executor requires.
+        fn execute_vk_component_fixture(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            instruction: InstructionBox,
+        ) -> Result<(), ValidationFail> {
+            assert!(
+                instruction
+                    .as_any()
+                    .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+                    .is_some()
+                    || instruction
+                        .as_any()
+                        .downcast_ref::<verifying_keys::UpdateVerifyingKey>()
+                        .is_some(),
+                "the registry component fixture cannot replace another admission owner"
+            );
+            instruction
+                .execute(authority, state_transaction)
+                .map_err(ValidationFail::InstructionFailed)
+        }
         fn grant_manage_verifying_keys(stx: &mut StateTransaction<'_, '_>) {
             let perm: Permission = CanManageVerifyingKeys.into();
             Grant::account_permission(perm, ALICE_ID.clone())
@@ -31136,7 +31336,6 @@ seiyaku GovernanceLifecycle {
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = soracloud_bootstrap_vk_id();
             let record = soracloud_bootstrap_vk_record(u32::from(
                 SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
@@ -31146,7 +31345,7 @@ seiyaku GovernanceLifecycle {
                 record,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect("canonical Soracloud bootstrap verifier record should register");
             let stored = stx
                 .world
@@ -31203,11 +31402,9 @@ seiyaku GovernanceLifecycle {
                     Tamper::GasSchedule => record.gas_schedule_id = Some("stark_default".into()),
                 }
                 let mut stx = state_block.transaction_for_callback_testing();
-                let exec = Executor::default();
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                     .expect_err("Soracloud bootstrap verifier metadata drift must fail");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "unexpected msg for {suffix}: {msg}");
@@ -31218,15 +31415,13 @@ seiyaku GovernanceLifecycle {
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = soracloud_bootstrap_vk_id();
             let mut record = soracloud_bootstrap_vk_record(u32::from(
                 SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
             ));
             record.status = ConfidentialStatus::Active;
             let instr: InstructionBox = verifying_keys::RegisterVerifyingKey { id, record }.into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("active Soracloud bootstrap verifier requires inline key bytes");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "active verifying key bytes missing");
@@ -31252,14 +31447,12 @@ seiyaku GovernanceLifecycle {
             ));
             new_record.public_inputs_schema_hash = [0x93; 32];
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let instr: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
                 record: new_record,
             }
             .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("Soracloud bootstrap verifier update drift must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "public-input schema mismatch");
@@ -31270,7 +31463,6 @@ seiyaku GovernanceLifecycle {
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             for profile in soracloud_fhe_stark_vk_test_profiles() {
                 let id = soracloud_fhe_stark_vk_id(profile);
                 let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
@@ -31286,7 +31478,7 @@ seiyaku GovernanceLifecycle {
                     record,
                 }
                 .into();
-                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                     .unwrap_or_else(|err| {
                         panic!(
                             "canonical Soracloud {} STARK verifier should register: {err:?}",
@@ -31348,8 +31540,7 @@ seiyaku GovernanceLifecycle {
             attach_soracloud_fhe_stark_vk_box(&mut record, alternate_vk);
             let instruction: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record }.into();
-            let error = Executor::default()
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+            let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
                 .expect_err("registered alternate-layout STARK verifying key must fail");
             let message = smart_contract_error_message(error);
             assert_contains!(message, "invalid canonical STARK/FRI verifier key: non-canonical encoding", "unexpected registered alternate-layout rejection: {message}");
@@ -31360,7 +31551,6 @@ seiyaku GovernanceLifecycle {
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             for profile in soracloud_fhe_stark_vk_test_profiles() {
                 let id = soracloud_fhe_stark_vk_id(profile);
                 let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
@@ -31374,7 +31564,7 @@ seiyaku GovernanceLifecycle {
                 attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record }.into();
-                let err = match exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr) {
+                let err = match execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr) {
                     Ok(()) => panic!(
                         "Soracloud {} weak STARK verifier must fail cleanly",
                         profile.label
@@ -31413,14 +31603,12 @@ seiyaku GovernanceLifecycle {
             );
             attach_soracloud_fhe_stark_vk_box(&mut new_record, vk_box);
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let instr: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
                 record: new_record,
             }
             .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("Soracloud weak STARK verifier update must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "below consensus floor", "unexpected msg: {msg}");
@@ -31434,8 +31622,7 @@ seiyaku GovernanceLifecycle {
             let vk_box = canonical_test_halo2_vk_box();
             let record = test_halo2_vk_record(1, vk_box.clone());
             let mut stx = state_block.transaction_for_callback_testing();
-            Executor::default()
-                .execute_instruction(
+            execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::RegisterVerifyingKey {
@@ -31466,8 +31653,7 @@ seiyaku GovernanceLifecycle {
                 .expect("generate parseable key for another circuit");
             let record = test_halo2_vk_record(1, vk_box);
             let mut stx = state_block.transaction_for_callback_testing();
-            let error = Executor::default()
-                .execute_instruction(
+            let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::RegisterVerifyingKey {
@@ -31489,8 +31675,7 @@ seiyaku GovernanceLifecycle {
             let id = VerifyingKeyId::new("halo2/ipa", "updated-relabelled-demo-vk");
             let current = test_halo2_vk_record(1, canonical_test_halo2_vk_box());
             let mut stx = state_block.transaction_for_callback_testing();
-            Executor::default()
-                .execute_instruction(
+            execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::RegisterVerifyingKey {
@@ -31505,8 +31690,7 @@ seiyaku GovernanceLifecycle {
                 .expect("generate parseable key for another circuit");
             let replacement = test_halo2_vk_record(2, relabelled);
             let mut stx = state_block.transaction_for_callback_testing();
-            let error = Executor::default()
-                .execute_instruction(
+            let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::UpdateVerifyingKey {
@@ -31536,8 +31720,7 @@ seiyaku GovernanceLifecycle {
                 .copy_from_slice(&(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K + 1).to_le_bytes());
             let record = test_halo2_vk_record(1, vk_box);
             let mut stx = state_block.transaction_for_callback_testing();
-            let error = Executor::default()
-                .execute_instruction(
+            let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::RegisterVerifyingKey {
@@ -31584,8 +31767,7 @@ seiyaku GovernanceLifecycle {
             vk_record!(record, 1, circuit_id, BackendTag::Stark, "goldilocks", [0x51; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".to_owned()));
             let id = VerifyingKeyId::new(backend, "huge-inner-length-vk");
             let mut stx = state_block.transaction_for_callback_testing();
-            let error = Executor::default()
-                .execute_instruction(
+            let error = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::RegisterVerifyingKey {
@@ -31605,14 +31787,12 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_missing_gas");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("missing gas_schedule_id must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "gas_schedule_id", "unexpected msg: {msg}");
@@ -31622,7 +31802,6 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
@@ -31631,8 +31810,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("an empty verifier-key lifecycle must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "greater", "unexpected msg: {msg}");
@@ -31643,14 +31821,12 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("inline verifying key length mismatch must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "vk_len", "unexpected msg: {msg}");
@@ -31660,14 +31836,12 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_backend");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Stark, "goldilocks", [0x41; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("non-IPA backend must be rejected");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "must target stark/fri", "unexpected msg: {msg}");
@@ -31719,7 +31893,6 @@ seiyaku GovernanceLifecycle {
             backends: &[&str],
             family: RejectedVerifierBackendFamily,
         ) {
-            let exec = Executor::default();
             for (index, backend) in backends.iter().copied().enumerate() {
                 let mut stx = state_block.transaction();
                 let id = VerifyingKeyId::new(backend, family.key_name(index));
@@ -31732,8 +31905,7 @@ seiyaku GovernanceLifecycle {
                     record,
                 }
                 .into();
-                let error = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
                     .expect_err("rejected verifier backend must not register");
                 let message = smart_contract_error_message(error);
                 let expected_message = if backend == "groth16/bls12-377" {
@@ -31771,7 +31943,6 @@ seiyaku GovernanceLifecycle {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let exec = Executor::default();
             for (label_index, label) in PrivacyProtocolIdV1::ALL
                 .map(PrivacyProtocolIdV1::canonical_label)
                 .into_iter()
@@ -31796,8 +31967,7 @@ seiyaku GovernanceLifecycle {
                         record: halo2_record(circuit_id.clone()),
                     }
                     .into();
-                    let error = exec
-                        .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
                         .expect_err("reserved privacy circuit label must not register");
                     let message = smart_contract_error_message(error);
                     assert_contains!(message, "reserved privacy protocol label", "unexpected rejection for {circuit_id:?}: {message}");
@@ -31821,8 +31991,7 @@ seiyaku GovernanceLifecycle {
                         record: halo2_record(circuit_id.clone()),
                     }
                     .into();
-                    let error = exec
-                        .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
                         .expect_err("non-portable privacy alias must not register");
                     let message = smart_contract_error_message(error);
                     assert_contains!(message, "bounded portable identifier", "unexpected rejection for {circuit_id:?}: {message}");
@@ -31843,8 +32012,7 @@ seiyaku GovernanceLifecycle {
                         record: halo2_record(circuit_id.clone()),
                     }
                     .into();
-                    let error = exec
-                        .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                    let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
                         .expect_err("unregistered Halo2 circuit near miss must not register");
                     let message = smart_contract_error_message(error);
                     assert_contains!(message, "production circuit registry", "unexpected rejection for {circuit_id:?}: {message}");
@@ -31866,7 +32034,6 @@ seiyaku GovernanceLifecycle {
             original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
             for backend in [
                 "halo2/kzg",
                 "halo2/kzg/tiny-add",
@@ -31884,8 +32051,7 @@ seiyaku GovernanceLifecycle {
                 vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                     .expect_err("trusted-setup Halo2 label must be rejected");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "trusted-setup verifying key backends", "unexpected msg for {backend}: {msg}");
@@ -31938,7 +32104,6 @@ seiyaku GovernanceLifecycle {
             original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
             for backend in [
                 "stark/fri/kzg",
                 "stark/fri/KZG",
@@ -31952,8 +32117,7 @@ seiyaku GovernanceLifecycle {
                 vk_record!(rec, 1, "stark/fri:trusted-setup-circuit", BackendTag::Stark, "goldilocks", [0x73; 32], [0x74; 32]; status = ConfidentialStatus::Active, gas_schedule_id = Some("stark_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                     .expect_err("trusted-setup STARK label must be rejected before storage");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "trusted-setup verifying key backends", "unexpected msg for {backend}: {msg}");
@@ -31964,15 +32128,13 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let id = VerifyingKeyId::new(backend, "vk_stark_mixed_case_curve");
             let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
             vk_record!(rec, 1, "stark/fri/poseidon-x7-goldilocks-6x64-v1:curve-test", BackendTag::Stark, "GoLdIlOcKs", [0x42; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
                 .expect_err("mixed-case STARK curve must be rejected");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key curve must be \"goldilocks\"", "unexpected msg: {msg}");
@@ -33108,8 +33270,7 @@ seiyaku GovernanceLifecycle {
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
             vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let mut stx = state_block.transaction_for_callback_testing();
-            let err = Executor::default()
-                .execute_instruction(
+            let err = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::RegisterVerifyingKey { id, record }.into(),
@@ -33188,9 +33349,8 @@ seiyaku GovernanceLifecycle {
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
             let vk_box = canonical_test_halo2_vk_box();
             vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
-            let exec = Executor::default();
             let mut stx = state_block.transaction_for_callback_testing();
-            exec.execute_instruction(
+            execute_vk_component_fixture(
                 &mut stx,
                 &ALICE_ID.clone(),
                 verifying_keys::RegisterVerifyingKey {
@@ -33205,8 +33365,7 @@ seiyaku GovernanceLifecycle {
             replacement.version = 2;
             replacement.circuit_id = TEST_OTHER_HALO2_CIRCUIT_ID.to_owned();
             let mut stx = state_block.transaction_for_callback_testing();
-            let err = exec
-                .execute_instruction(
+            let err = execute_vk_component_fixture(
                     &mut stx,
                     &ALICE_ID.clone(),
                     verifying_keys::UpdateVerifyingKey {
@@ -33238,7 +33397,6 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             // Seed registry with a valid record
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
             let vk_box = canonical_test_halo2_vk_box();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
@@ -33247,7 +33405,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             // Attempt to update with a different supported engine tag.
@@ -33258,8 +33416,7 @@ seiyaku GovernanceLifecycle {
                 record: new_rec,
             }
             .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), upd)
                 .expect_err("update with non-IPA backend must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "backend cannot change", "unexpected msg: {msg}");
@@ -33268,7 +33425,6 @@ seiyaku GovernanceLifecycle {
             original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
             for (idx, (backend, tag, curve, schedule, expected_msg)) in [
                 (
                     "halo2/ipa/orchard",
@@ -33374,8 +33530,7 @@ seiyaku GovernanceLifecycle {
                 }
                 .into();
                 let mut stx = state_block.transaction_for_callback_testing();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+                let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), upd)
                     .expect_err("non-registry verifier label must be rejected on update");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "unexpected msg for {backend}: {msg}");
@@ -33386,7 +33541,6 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
             let vk_box = canonical_test_halo2_vk_box();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
@@ -33395,7 +33549,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
@@ -33405,8 +33559,7 @@ seiyaku GovernanceLifecycle {
                 record: new_rec,
             }
             .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), update_instruction)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), update_instruction)
                 .expect_err("inline verifying key length mismatch must fail on update");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "vk_len", "unexpected msg: {msg}");
@@ -33417,7 +33570,6 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let exec = Executor::default();
             let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
             let id = VerifyingKeyId::new(backend, "vk_stark_update_curve");
             let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:update-curve";
@@ -33440,7 +33592,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
@@ -33450,8 +33602,7 @@ seiyaku GovernanceLifecycle {
                 record: new_rec,
             }
             .into();
-            let err = exec
-                .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+            let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), upd)
                 .expect_err("mixed-case STARK curve update must fail");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key curve must be \"goldilocks\"", "unexpected msg: {msg}");
@@ -33460,7 +33611,6 @@ seiyaku GovernanceLifecycle {
             let state = original_world_state(blank_state());
             let header = original_world_header(&state);
             let mut block = state.block(header);
-            let exec = Executor::default();
             // Grant permission to manage verifying keys
             let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
@@ -33476,7 +33626,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             // Remove circuit index entry to simulate missing mapping
@@ -33516,7 +33666,6 @@ seiyaku GovernanceLifecycle {
             let state = original_world_state(blank_state());
             let header = original_world_header(&state);
             let mut block = state.block(header);
-            let exec = Executor::default();
             let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
@@ -33530,7 +33679,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             let proof_box = ProofBox::new("halo2/ipa".into(), vec![0xAA]);
@@ -33677,7 +33826,6 @@ seiyaku GovernanceLifecycle {
             let state = original_world_state(blank_state());
             let header = original_world_header(&state);
             let mut block = state.block(header);
-            let exec = Executor::default();
             let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
@@ -33693,7 +33841,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             {
@@ -33726,7 +33874,6 @@ seiyaku GovernanceLifecycle {
             let state = original_world_state(blank_state());
             let header = original_world_header(&state);
             let mut block = state.block(header);
-            let exec = Executor::default();
             let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
@@ -33742,7 +33889,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             let envelope = OpenVerifyEnvelope {
@@ -33782,7 +33929,6 @@ seiyaku GovernanceLifecycle {
             let state = original_world_state(blank_state());
             let header = original_world_header(&state);
             let mut block = state.block(header);
-            let exec = Executor::default();
             let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
@@ -33798,7 +33944,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             let envelope = OpenVerifyEnvelope {
@@ -33859,7 +34005,6 @@ seiyaku GovernanceLifecycle {
                 ),
             ] {
                 original_proof_verification_fixture!(state, block);
-                let exec = Executor::default();
                 let mut stx = block.transaction_for_callback_testing();
                 grant_alice_account_permission(
                     &mut stx,
@@ -33885,7 +34030,7 @@ seiyaku GovernanceLifecycle {
                         record: rec,
                     }
                     .into();
-                exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                     .expect("register vk");
                 stx.apply();
                 let mut envelope_public_inputs = expected_public_inputs;
@@ -34051,7 +34196,6 @@ seiyaku GovernanceLifecycle {
             let state = original_world_state(blank_state());
             let header = original_world_header(&state);
             let mut block = state.block(header);
-            let exec = Executor::default();
             let mut stx = block.transaction_for_callback_testing();
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
@@ -34065,7 +34209,7 @@ seiyaku GovernanceLifecycle {
                 record: rec,
             }
             .into();
-            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+            execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
             // Corrupt stored record by removing gas schedule

@@ -52,11 +52,15 @@ mod ordinary_guard_circuit;
 mod ordinary_guard_verifier;
 mod ordinary_issuer_config;
 #[cfg(feature = "zk-halo2-ipa")]
+mod ordinary_state_reserved;
+#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use ordinary_guard_verifier::{
     KagemushaAuthenticatedOrdinaryBootstrapGuardV1,
     KagemushaAuthenticatedOrdinaryHistoricalBootstrapGuardV1,
     verify_ordinary_bootstrap_guard_historical_v1, verify_ordinary_bootstrap_guard_v1,
 };
+#[cfg(feature = "zk-halo2-ipa")]
+pub use ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1;
 #[cfg(all(
     feature = "zk-halo2-ipa",
     any(

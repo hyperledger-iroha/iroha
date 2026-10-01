@@ -126,7 +126,7 @@ fn value_fp4_binds_each_private_terminal_column_and_rejects_malformed_inputs() {
                         .unwrap(),
                     original
                 );
-                changed[2][column] = E::from_base(F(u64::MAX));
+                changed[2][column] = E::noncanonical_fixture_v1();
                 assert!(
                     evaluator
                         .evaluate_residues_v1(opening(&changed), &changed[4], challenges)

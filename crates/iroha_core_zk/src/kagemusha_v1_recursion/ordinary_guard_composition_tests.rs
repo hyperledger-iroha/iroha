@@ -461,38 +461,80 @@ fn measured_apple_whole_guard_uses_exact_governed_release_and_full_original_in_b
 }
 
 #[test]
-fn apple_guard_keeps_terminal_purpose_and_rejects_genuine_preparation_original_in_both_parities() {
-    let mut f = fixture(true);
-    f.approval.challenge.purpose = KagemushaAppOperationApprovalPurposeV1::PrepareTransition;
-    f.approval.challenge.subject.candidate_envelope_digest = [0; 32];
-    f.approval.challenge.subject.terminal_body_commitment = [0; 32];
-    f.approval.challenge.subject_signing_digest = Sha256::digest(
-        f.approval
-            .challenge
-            .canonical_subject_signing_bytes()
-            .unwrap(),
-    )
-    .into();
-    f.approval.evidence = sign(&f.approval.challenge, true);
-    // This is a valid, freshly signed preparation message rather than a malformed terminal
-    // subject. The current Apple helper still admits only the native bootstrap/terminal
-    // purpose1; enabling State2 requires its separately selected native owner and consumer.
-    let bytes = f.approval.challenge.canonical_signing_bytes().unwrap();
-    assert_eq!(bytes[A::PURPOSE.start], 2);
-    assert_eq!(
-        f.approval
-            .evidence
-            .authenticate_signature(
-                f.credential.subject.platform_class,
-                &f.credential.subject.app_public_key,
-                f.credential.subject.app_signing_identity_digest,
-                f.credential.subject.app_release_digest,
-                f.floor,
-                &bytes,
-            )
-            .unwrap()
-            .0,
-        Some(17),
-    );
-    assert!(!pair_satisfied(&f).unwrap());
+fn shared_platform_guard_accepts_genuine_preparation_original_in_both_parities() {
+    for apple in [false, true] {
+        let mut f = fixture(apple);
+        f.approval.challenge.purpose = KagemushaAppOperationApprovalPurposeV1::PrepareTransition;
+        f.approval.challenge.subject.candidate_envelope_digest = [0; 32];
+        f.approval.challenge.subject.terminal_body_commitment = [0; 32];
+        f.approval.challenge.subject_signing_digest = Sha256::digest(
+            f.approval
+                .challenge
+                .canonical_subject_signing_bytes()
+                .unwrap(),
+        )
+        .into();
+        f.approval.evidence = sign(&f.approval.challenge, apple);
+        // Shared crypto proves both canonical purposes. This proof is not a selected Native
+        // owner; the State and terminal consumers select their one exact signed purpose.
+        let bytes = f.approval.challenge.canonical_signing_bytes().unwrap();
+        assert_eq!(bytes[A::PURPOSE.start], 2);
+        assert_eq!(
+            f.approval
+                .evidence
+                .authenticate_signature(
+                    f.credential.subject.platform_class,
+                    &f.credential.subject.app_public_key,
+                    f.credential.subject.app_signing_identity_digest,
+                    f.credential.subject.app_release_digest,
+                    f.floor,
+                    &bytes,
+                )
+                .unwrap()
+                .0,
+            if apple { Some(17) } else { None },
+        );
+        assert!(pair_satisfied(&f).unwrap());
+        // The genuine purpose2 signature cannot approve another message by changing only its
+        // purpose byte. This assertion exercises actual platform crypto, not a Native grant.
+        let mut terminal_bytes = bytes;
+        terminal_bytes[A::PURPOSE.start] = 1;
+        assert!(
+            f.approval
+                .evidence
+                .authenticate_signature(
+                    f.credential.subject.platform_class,
+                    &f.credential.subject.app_public_key,
+                    f.credential.subject.app_signing_identity_digest,
+                    f.credential.subject.app_release_digest,
+                    f.floor,
+                    &terminal_bytes,
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn original_guard_preserves_secure_indexes_independent_of_logical_sequence() {
+    for apple in [false, true] {
+        let mut original = fixture(apple);
+        assert_eq!(original.relation.statement.predecessor_logical_sequence, 10);
+        assert_eq!(original.relation.statement.successor_logical_sequence, 11);
+        original.approval.challenge.subject.secure_index_before = 41;
+        original.approval.challenge.subject.secure_index_after = 42;
+        original.approval.challenge.subject_signing_digest = Sha256::digest(
+            original
+                .approval
+                .challenge
+                .canonical_subject_signing_bytes()
+                .unwrap(),
+        )
+        .into();
+        original.approval.evidence = sign(&original.approval.challenge, apple);
+        assert!(
+            pair_satisfied(&original)
+                .expect("both complete Guard parities bind the genuine independent-index original")
+        );
+    }
 }

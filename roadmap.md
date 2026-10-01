@@ -12,8 +12,8 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
    measure repeated accepted settlements.
 2. Complete original funded execution through State/World acquisition,
    certification, Kura publication and restart; finish DS-local State and AMX.
-3. Qualify Sumeragi and authenticated Linux artifacts, complete the authorized
-   fresh Taira cutover, then prove readiness, paid writes, restart and DPN/contracts.
+3. Qualify Sumeragi and authenticated Linux artifacts; extend Taira's verified
+   four-validator readiness, paid writes and rolling restart to DPN/contracts.
 4. Validate the committed merge and follow-up fixture/runtime repairs through
    fresh workspace, genuine fixture and native SDK artifacts on one
    source candidate. Complete X509 verifier byte-source joins, terminal-claim privacy and its time failure;

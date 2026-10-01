@@ -144,6 +144,7 @@ impl KagemushaOrdinaryRetailEnrollmentAttemptV1 {
             return Err(Rejected);
         }
         let mut journal = PrivateJournal::open_existing(root, FORMAT).map_err(|_| Custody)?;
+        replay_complete_bounded(&mut journal)?;
         let mut rows = Vec::new();
         journal
             .scan_complete(|_, raw| {
@@ -554,6 +555,21 @@ fn decode_challenge(raw: &[u8]) -> Result<KagemushaOrdinaryRetailEnrollmentChall
     }
     Ok(value)
 }
+// Establish byte custody of the complete bounded prefix before positional scans. This
+// admits no retail owner: exact originals, stage semantics and authority are checked below.
+fn replay_complete_bounded(journal: &mut PrivateJournal) -> Result<()> {
+    for index in 0..=MAX_ROWS {
+        let Some((sequence, raw)) = journal.replay_next().map_err(|_| Custody)? else {
+            return if index == 0 { Err(Custody) } else { Ok(()) };
+        };
+        if index == MAX_ROWS || sequence != index as u64 {
+            return Err(Custody);
+        }
+        decode_record(&raw)?;
+    }
+    Err(Custody)
+}
+
 fn decode_record(raw: &[u8]) -> Result<Record> {
     let value: Record = norito::decode_from_bytes(raw).map_err(|_| Custody)?;
     if norito::encode_canonical(&value).map_err(|_| Custody)? != raw {
@@ -561,3 +577,7 @@ fn decode_record(raw: &[u8]) -> Result<Record> {
     }
     Ok(value)
 }
+
+#[cfg(test)]
+#[path = "retail_enrollment_journal_tests.rs"]
+mod tests;

@@ -72,7 +72,9 @@ or a proof engine before its complete authoritative production consumer exists.
   lifecycle, restart, convergence and endpoint readback.
 - SoraFS: four voting validators, multiple providers, two regional gateways,
   two DAG instances, 1,000 concurrent streams, corruption/load/recovery testing,
-  a 24-hour soak, disaster recovery and all 17 fresh signed readiness summaries.
+  diagnostic load observations, disaster recovery and all 17 fresh signed readiness summaries.
+  No fixed-duration soak or full regression suite is a deployment prerequisite;
+  on-chain governance owns deployment policy.
 - Multilane: roadmap N12 on the [lane design](sumeragi_lanes.md): four-validator
   fixed and elastic lane node tests, simulator coverage of a lane next to the
   global instance and a four-peer network soak with elastic scale-out/in under

@@ -34,6 +34,11 @@ fail the artifact before promotion can report ready.
 Their `cargo_command` evidence must be one of the reviewed gateway conformance
 commands, so substring-only or shell-expanded command strings cannot stand in
 for the actual replay harness.
+There is no fixed-duration soak prerequisite for testnet or production
+deployment. On-chain governance owns deployment policy. The duration field
+records an actual positive observation; `--min-staging-duration-secs` can select
+a longer diagnostic observation explicitly and defaults to one second.
+
 Staging-load artifacts must also keep `stream_count` and `provider_count` equal
 to the unique canonical `streams[].name` and `providers[].name` inventories,
 must contain at least two distinct providers, and reject duplicate stream or
@@ -42,7 +47,7 @@ generated `gateway-load-stream-0000`-style names, provider names must use
 reviewed `gateway-load-provider-*` slugs without placeholder or test markers,
 and `hardware_profile.name` must use a reviewed
 `gateway-load-hardware-*` label. One staging artifact, under one reviewed
-deployment context, must record at least 86,400 seconds, a peak of at least
+deployment context, must record a positive observed duration, a peak of at least
 1,000 concurrent range streams, and an exact schema-closed `cache_coverage`
 object whose `cold_cache_exercised`, `warm_cache_exercised`, and
 `mixed_cache_exercised` fields are all `true`. A single cache-state label,
@@ -83,7 +88,7 @@ capped at `10000` so impossible basis-point rates cannot satisfy promotion.
 | Metrics report | Implemented | `LoadTestReport` records total requests, elapsed time, per-scenario success/refusal/error counts, and P50/P95/P99 latency. |
 | Signed evidence | Implemented | `generate_attestation`, `verify_attestation_envelope`, and `cargo xtask sorafs-gateway-attest --verify` cover signed report validation. |
 | Payload-free rollout canary builder | Implemented | `scripts/build_sorafs_gateway_load_canary.py` builds checked-in local conformance, staging load, telemetry/SLO, transport-scope, and governance approval evidence artifacts from reviewed rollout facts. |
-| Live staging load evidence | Rollout evidence | Capture one 24-hour-or-longer run against deployed gateways with exact cold/warm/mixed coverage, at least 1,000 peak concurrent range streams, 1% corruption, revocation, malformed-flood, denylist/rate-limit pressure, failover, and at least two providers. |
+| Live staging load evidence | Rollout evidence | Capture an operator-selected diagnostic run against deployed gateways with exact cold/warm/mixed coverage, at least 1,000 peak concurrent range streams, 1% corruption, revocation, malformed-flood, denylist/rate-limit pressure, failover, and at least two providers. |
 | HTTP/3 gateway load coverage | Not applicable to V1 | V1 has no committed SoraFS HTTP/3 endpoint or release requirement. Any later transport work is separately scoped and cannot block or satisfy V1 readiness. |
 
 ## Scenario Matrix
@@ -161,8 +166,8 @@ deployment context, complete deterministic scenario and metric coverage where
 applicable, reviewed staging provider names using
 `gateway-load-provider-*` labels whose unique inventory matches
 `--provider-count` and contains at least two providers, reviewed
-`gateway-load-hardware-*` hardware-profile labels, an explicit 86,400-second
-minimum, explicit cold/warm/mixed cache-coverage flags, at least 1,000 peak
+`gateway-load-hardware-*` hardware-profile labels, a positive observed
+duration, explicit cold/warm/mixed cache-coverage flags, at least 1,000 peak
 concurrent range streams, exact 100-bps corruption, and explicit
 revocation/malformed-flood/denylist-pressure/rate-limit-pressure/failover flags.
 It also requires generated `gateway-load-stream-*` per-stream inventory labels
@@ -183,7 +188,7 @@ every unknown or extra top-level/nested field, require
 require `hardware_profile.name` to use reviewed `gateway-load-hardware-*`
 labels, and reject placeholder or test markers in provider and hardware-profile
 labels before promotion can report ready. The staging-load checker also rejects
-durations below 86,400 seconds, peak concurrency below 1,000 range streams,
+non-positive durations, peak concurrency below 1,000 range streams,
 fewer than two distinct providers, corruption values other than exactly 100
 basis points, and any missing or false cache/pressure/failover exercise flag.
 It also rejects

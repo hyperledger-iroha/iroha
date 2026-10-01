@@ -160,6 +160,28 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     }
   }
 
+  /// Release only the exact zero-state Bootstrap W original captured by Native.
+  /// This counter advancement grants no general monetary commit or fresh approval.
+  public func advanceAfterNativeBootstrapCapture(keyID: String, counter: UInt32,
+    signingDigest: Data, rawAssertion: Data, receipt: KagemushaNativeCapturedBootstrapAppApprovalReceiptV1) throws {
+    let key = try Self.keyBytes(keyID)
+    try Self.validateDigest(signingDigest)
+    guard counter > 0, receipt.keyAlias == keyID, receipt.observedCounter == counter,
+      receipt.signingDigest == signingDigest,
+      receipt.rawAssertionDigest == Data(SHA256.hash(data: rawAssertion)) else {
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+    try withLock { directory in
+      let current = try Self.readRecord(directory)
+      guard current.key == key,
+        case .complete(_, let storedCounter, let storedDigest, let storedRaw) = current.intent,
+        storedCounter == counter, storedDigest == signingDigest, storedRaw == rawAssertion else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
+      try Self.writeRecord(directory, record: Record(key: key, intent: .ready(counter: counter)))
+    }
+  }
+
   /// Release only the exact completed E original consumed by its native owner.
   /// This possession counter advancement does not issue a credential or monetary commit.
   public func advanceAfterNativeEnrollmentPossession(keyID: String, counter: UInt32,

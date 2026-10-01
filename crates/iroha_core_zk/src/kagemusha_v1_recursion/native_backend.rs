@@ -684,6 +684,33 @@ pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     commit_wrapper_ep_binding: iroha_data_model::kagemusha::KagemushaArtifactBindingV1,
 }
 
+pub(super) struct OrdinaryBootstrapAuxiliaryMaterialV1<'a> {
+    pub(super) eq_incoming_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_incoming_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_mint_authorization_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_mint_authorization_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) eq_mint_protocol: &'a PlonkProtocol<EqAffine>,
+    pub(super) ep_mint_protocol: &'a PlonkProtocol<EpAffine>,
+    pub(super) genesis_authorization_id: DigestV1,
+}
+
+impl KagemushaAuthenticatedRecursiveVerifierV1 {
+    pub(super) fn ordinary_bootstrap_auxiliary_material(
+        &self,
+    ) -> Result<OrdinaryBootstrapAuxiliaryMaterialV1<'_>, String> {
+        self.monetary_release()?;
+        Ok(OrdinaryBootstrapAuxiliaryMaterialV1 {
+            eq_incoming_protocol: &self.eq_commit_wrapper_protocol,
+            ep_incoming_protocol: &self.ep_commit_wrapper_protocol,
+            eq_mint_authorization_protocol: &self.eq_mint_authorization_protocol,
+            ep_mint_authorization_protocol: &self.ep_mint_authorization_protocol,
+            eq_mint_protocol: &self.eq_mint_protocol,
+            ep_mint_protocol: &self.ep_mint_protocol,
+            genesis_authorization_id: self.mint_genesis_authorization_id,
+        })
+    }
+}
+
 impl KagemushaAuthenticatedRecursiveVerifierV1 {
     /// Resolve and reauthenticate the exact state/Guard verifying keys for one release.
     ///
@@ -3559,7 +3586,7 @@ fn terminal_relation_public_instances<F: KagemushaPoseidonFieldV1>(
     Ok(public)
 }
 
-fn mint_public_instances<F: KagemushaPoseidonFieldV1>(
+pub(super) fn mint_public_instances<F: KagemushaPoseidonFieldV1>(
     request: &super::KagemushaMintFinalityHelperVerificationRequestV1<'_>,
     history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
 ) -> Result<Vec<F>, String> {

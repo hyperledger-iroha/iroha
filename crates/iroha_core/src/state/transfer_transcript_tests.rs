@@ -459,12 +459,48 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     };
     // Admit the original lane catalog and its exact incarnations at construction,
     // before any transcript borrows its frozen runtime cut.
-    let state_batch = State::new_with_nexus_for_testing(
-        world_batch,
-        nexus,
-        crate::query::store::LiveQueryStore::start_test(),
+    use crate::sumeragi::{
+        startup,
+        test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    let mut config = TestChainConfig::new(world_batch, 0);
+    config.nexus = Some(nexus);
+    let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
+    let mode = config.consensus_mode;
+    let prepared =
+        CertifiedTestChain::prepare(config).expect("prepare the original three-lane genesis");
+    let state_batch = Arc::try_unwrap(prepared.state)
+        .unwrap_or_else(|_| panic!("the original unpublished batch State is unique"));
+    startup::apply_genesis(
+        &state_batch,
+        prepared.genesis.block().clone(),
+        &genesis_authority,
+        mode.into(),
+        None,
+    )
+    .expect("apply the original three-lane genesis before capturing active sources");
+    assert_eq!(state_batch.committed_height(), 1);
+    let parent = state_batch
+        .view()
+        .latest_block()
+        .expect("original three-lane parent");
+    let batch_header = BlockHeader::new(
+        nonzero!(2_u64),
+        Some(parent.hash()),
+        None,
+        u64::try_from(parent.header().creation_time().as_millis())
+            .unwrap()
+            .checked_add(1)
+            .unwrap(),
+        0,
     );
-    let mut block_batch = state_batch.block(header);
+    for lane in [first_lane, second_lane, rejected_lane] {
+        assert!(
+            state_batch.lane_incarnation_at_height(lane, 2).is_some(),
+            "each attempted source follows its original active physical incarnation"
+        );
+    }
+    let mut block_batch = state_batch.block(batch_header);
     let batch_start_fragments = block_batch.committed_fragment_count();
     let mut first_delta = DetachedStateTransactionDelta::default();
     let first_instruction: InstructionBox =
@@ -595,7 +631,7 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
         )
     };
     let mut cursors = DaShardCursorIndex::new(&block_batch.nexus.lane_config);
-    let height = header.height().get();
+    let height = batch_header.height().get();
     cursors
         .advance(
             block_batch.nexus.lane_config.shard_id(second_lane),

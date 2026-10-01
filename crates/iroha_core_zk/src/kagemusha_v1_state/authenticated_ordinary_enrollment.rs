@@ -236,12 +236,12 @@ impl<'a> KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'a> {
         capacity: KagemushaDurableCapacityV1,
         trusted_native_now_ms: u64,
     ) -> Result<Self, KagemushaStateErrorV1> {
-        if trusted_native_now_ms != enrollment.authenticated_at_ms() {
+        if trusted_native_now_ms < enrollment.authenticated_at_ms() {
             return Err(KagemushaStateErrorV1::SnapshotRollback);
         }
         enrollment
             .possession()
-            .recheck_at_trusted_time(trusted_native_now_ms)
+            .recheck_at_trusted_time(enrollment.authenticated_at_ms())
             .map_err(|_| KagemushaStateErrorV1::SnapshotRollback)?;
         let release = admitted_release(&recursive_verifier)?;
         let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(

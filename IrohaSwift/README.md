@@ -74,6 +74,16 @@ The required live `bootstrapState(allowBootstrap:)` callback is checked again af
 durable/native reservation, immediately before device dispatch. An approval value
 is never persisted as authority.
 
+Ordinary app enrollment uses `KagemushaNativePreparedRetailEnrollmentV1` to retain
+the exact FI challenge, wallet signature and complete signed certificate through
+Native Core. After certificate acceptance, `prepareBootstrapAppApproval()` derives
+the same selector from that retained original and prepares a distinct zero-state
+Bootstrap W. `KagemushaAppAttestBootstrapApprovalProviderV1` keeps its exact Apple
+assertion in the private intent journal and returns a separate receipt only after
+Native verifies and durably captures the original within its signed interval.
+Recovery reuses retained originals. This Bootstrap receipt cannot enter the generic
+monetary approval path or reconstruct Native's captured capability.
+
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
 schema-2 transport. It checks the complete ABI-25 inventory and correlates method
 responses with the caller's request. It fails closed when the native coordinator

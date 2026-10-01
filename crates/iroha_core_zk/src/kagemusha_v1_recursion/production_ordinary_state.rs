@@ -22,6 +22,9 @@ use iroha_data_model::kagemusha::{
 use sha2::Sha256;
 use zeroize::Zeroize as _;
 
+#[path = "production_ordinary_bootstrap_inputs.rs"]
+mod bootstrap_inputs;
+
 /// Borrow public auxiliary original proofs without exposing financial witness material.
 /// These data alone authorize no wallet or proof; the Native prover replaces the financial
 /// relation with the actual retained owner and checks the complete final paired proof.
@@ -286,6 +289,8 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             .zeroize();
         let artifacts = self.artifacts.ordinary_recursion_artifacts()?;
         let state = &witness.state;
+        let (eq_reserved, ep_reserved) =
+            super::super::super::ordinary_state_reserved::kagemusha_ordinary_state_reserved_guard_positions_v1();
         let preview = selection.preview().map_err(owner_error)?;
         let guard = &preview.normalized_guard_statement;
         if !valid_placeholders
@@ -322,6 +327,8 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
             || state.ep_protocol_digest != artifacts.ep_protocol_digest
             || state.guard_eq_protocol_digest != artifacts.guard_bundle_eq_protocol_digest
             || state.guard_ep_protocol_digest != artifacts.guard_bundle_ep_protocol_digest
+            || state.guard_eq_credential_audit != eq_reserved
+            || state.guard_ep_credential_audit != ep_reserved
             || state.mint_eq_protocol_digest != artifacts.mint_finality_eq_protocol_digest
             || state.mint_ep_protocol_digest != artifacts.mint_finality_ep_protocol_digest
             || state.mint_authorization_eq_protocol_digest

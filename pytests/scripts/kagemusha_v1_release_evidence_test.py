@@ -40,6 +40,8 @@ INTERNAL_HELPER_PROOF_LENGTHS = {
     "guard_bundle": (12_000, 12_032),
     "mint_hash_shard": (8_064, 8_096),
     "mint_hash_claim": (12_064, 12_096),
+    # Synthetic exact-length evidence exercises projection, never proof qualification.
+    "ordinary_app_guard": (12_128, 12_160),
 }
 
 
@@ -448,8 +450,8 @@ def _fixture(
         "state_ep_protocol_digest": state_ep,
         "terminal_authorization_eq_protocol_digest": _digest(3),
         "terminal_authorization_ep_protocol_digest": _digest(4),
-        "commit_wrapper_eq_protocol_digest": _digest(17),
-        "commit_wrapper_ep_protocol_digest": _digest(18),
+        "commit_wrapper_eq_protocol_digest": _digest(19),
+        "commit_wrapper_ep_protocol_digest": _digest(20),
         "helper_protocols": helper_protocols,
     }
     artifact_projection = [
@@ -1126,7 +1128,7 @@ def test_release_artifact_ordinals_match_current_rust_model() -> None:
         for ordinal, role in enumerate(VERIFIER.ARTIFACT_ROLES)
     ]
     assert rust_roles == expected
-    assert len(rust_roles) == 50
+    assert len(rust_roles) == 54
 
 
 def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
@@ -1186,7 +1188,7 @@ def test_release_rejects_missing_inner_mint_artifacts(
     fixture.write_manifest()
     result = _run(fixture)
     assert result.returncode == 1
-    assert "artifact inventory must contain exactly the 50 V1 roles" in result.stderr
+    assert "artifact inventory must contain exactly the 54 V1 roles" in result.stderr
 
 
 def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
@@ -1197,6 +1199,35 @@ def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
     result = _run(fixture)
     assert result.returncode == 1
     assert "artifact inventory is not in the canonical V1 role order" in result.stderr
+
+
+@pytest.mark.parametrize("replacement", ["guard_bundle_vk_eq", "ordinary_app_guard_vk_ep"])
+def test_release_rejects_ordinary_guard_artifact_role_substitution(
+    tmp_path: Path, replacement: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["artifacts"][51]["role"] = replacement
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "artifact inventory is not in the canonical V1 role order" in result.stderr
+
+
+def test_internal_helper_classification_matches_current_rust_model() -> None:
+    source = (
+        ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs"
+    ).read_text()
+    helper_impl = source.split("impl KagemushaQualifiedHelperCircuitV1 {", 1)[1]
+    internal = helper_impl.split("const fn uses_internal_proof_evidence(self) -> bool {", 1)[1].split(
+        "\n    }", 1
+    )[0]
+    rust_names = re.findall(r"Self::([A-Za-z0-9]+)", internal)
+    python_names = [
+        "".join(part[:1].upper() + part[1:] for part in name.split("_"))
+        for name in VERIFIER.HELPERS if name in VERIFIER.INTERNAL_PROOF_HELPERS
+    ]
+    assert python_names == rust_names
+    assert "ordinary_app_guard" in VERIFIER.INTERNAL_PROOF_HELPERS
 
 
 def test_public_message_inventory_matches_current_rust_exchange() -> None:
@@ -1308,7 +1339,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "terminal_authorization_vk_ep",
         "commit_wrapper_vk_ep",
     }
-    assert len(profile["helper_circuits"]) == 6
+    assert len(profile["helper_circuits"]) == 7
     assert [row["helper"] for row in profile["helper_circuits"]] == list(
         VERIFIER.HELPERS
     )
@@ -1327,7 +1358,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         VERIFIER.ACCEPTANCE_CASES
     )
     assert len(profile["acceptance_cases"]) == len(VERIFIER.ACCEPTANCE_CASES)
-    assert len(projection["artifact_inventory"]) == 50
+    assert len(projection["artifact_inventory"]) == 54
     assert [row["role"] for row in projection["artifact_inventory"]][2:10] == [
         "inner_state_pk_eq",
         "inner_state_vk_eq",
@@ -1364,6 +1395,16 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
         "mint_hash_claim_pk_ep",
         "mint_hash_claim_vk_ep",
     ]
+    assert [row["role"] for row in projection["artifact_inventory"]][50:54] == [
+        "ordinary_app_guard_pk_eq",
+        "ordinary_app_guard_vk_eq",
+        "ordinary_app_guard_pk_ep",
+        "ordinary_app_guard_vk_ep",
+    ]
+    ordinary = profile["helper_circuits"][-1]
+    assert ordinary["helper"] == "ordinary_app_guard"
+    assert ordinary["eq_verifying_key"]["role"] == "ordinary_app_guard_vk_eq"
+    assert ordinary["ep_verifying_key"]["role"] == "ordinary_app_guard_vk_ep"
     assert len(projection["verifier_commands"]) == len(fixture.commands)
     candidate_context_digest = projection["receipt_projection"]["evidence_closure"][
         "candidate_context_digest"

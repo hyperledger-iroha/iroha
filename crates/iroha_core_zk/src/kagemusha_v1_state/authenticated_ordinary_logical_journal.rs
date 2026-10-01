@@ -126,6 +126,10 @@ impl KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_> {
     pub(crate) fn original(&self) -> &[u8] {
         self.original.original()
     }
+    /// Counter from the retained authenticated original; this does not renew its approval.
+    pub(crate) fn app_attest_counter(&self) -> Option<u32> {
+        self.original.app_attest_counter()
+    }
     pub(crate) fn proof_binding_digest(&self) -> DigestV1 {
         self.original.proof_binding_digest()
     }
@@ -278,7 +282,29 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         integrity_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
         now: u64,
     ) -> Result<Self, KagemushaStateErrorV1> {
+        Self::open_existing_with_native_current_integrity_lease(
+            path,
+            selection,
+            enrollment,
+            integrity_leases,
+            None,
+            now,
+        )
+    }
+
+    /// Reauthenticate the entire historical WAL before adopting a Native-selected current lease.
+    /// The actual financial owner supplies this opaque capability and clock. Adoption cannot
+    /// change an original reservation, approval interval, capture time, counter or publication.
+    pub(crate) fn open_existing_with_native_current_integrity_lease(
+        path: &Path,
+        selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
+        enrollment: Arc<KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1>,
+        integrity_leases: &[Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>],
+        current_integrity_lease: Option<&Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        now: u64,
+    ) -> Result<Self, KagemushaStateErrorV1> {
         validate_lease_input_budget(integrity_leases)?;
+        selection.recheck_at_trusted_time(now)?;
         let (release, bootstrap) = retain_selected_originals(selection, &enrollment)?;
         let expected = initial_record(&enrollment, &release, &bootstrap)?;
         let mut journal = Self {
@@ -411,8 +437,48 @@ impl KagemushaOrdinaryLogicalApprovalJournalV1 {
         if !initialized {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
-        journal.recheck_at_trusted_time(now)?;
+        journal.finalize_replayed_native_current_integrity_lease(current_integrity_lease, now)?;
         Ok(journal)
+    }
+
+    fn finalize_replayed_native_current_integrity_lease(
+        &mut self,
+        current_integrity_lease: Option<&Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1>>,
+        now: u64,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        if let Some(lease) = current_integrity_lease {
+            // Full historical replay has completed. Current validation uses the independently
+            // admitted new original at Native now, never at an old approval/capture instant.
+            self.retain_integrity_lease(Arc::clone(lease), now)?;
+        }
+        self.recheck_at_trusted_time(now)
+    }
+
+    /// Exercise the actual native zero-State challenge producer with independently verified
+    /// known-public fixture originals. This test-only projection creates no journal or owner.
+    /// # Errors
+    /// Rejects invalid fixture enrollment, release, preview or challenge inputs.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn test_only_bootstrap_challenge_v1(
+        enrollment: &KagemushaVerifiedOrdinaryRetailEnrollmentCertificateV1,
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        state_nonce_commitment: DigestV1,
+        operation_id: DigestV1,
+        approval_nonce: DigestV1,
+        now: u64,
+    ) -> Result<KagemushaAppOperationApprovalChallengeV1, KagemushaStateErrorV1> {
+        let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
+            enrollment, release,
+        )?;
+        let (_, preview) = derive_preview(
+            &floor,
+            state_nonce_commitment,
+            KagemushaDurableCapacityV1 {
+                inbox_bytes: KagemushaDurableCapacityV1::MINIMUM_INBOX_BYTES,
+                outbox_bytes: KagemushaDurableCapacityV1::MINIMUM_OUTBOX_BYTES,
+            },
+        )?;
+        derive_challenge_from_floor(&floor, &preview, operation_id, approval_nonce, now)
     }
 
     /// Data-only exact bootstrap S, derived from the same genuine owner and model serializer
@@ -985,6 +1051,35 @@ mod tests {
             derive_challenge_from_floor(&floor, &preview, [44; 32], [45; 32], 300).unwrap();
         run(&floor, &preview, expected);
     }
+    #[cfg(feature = "kagemusha-production-prover")]
+    #[test]
+    fn ordinary_bootstrap_platform_receipt_binds_credential_and_survives_replay() {
+        for apple in [false, true] {
+            check(apple, |floor, _, challenge| {
+                // Reuse the actual zero-State producer and known-public fixture signer.
+                // Neither platform fixture constructs production or financial authority.
+                let approval = sign(challenge, apple, 17);
+                let verified = approval
+                    .authenticate(
+                        &challenge,
+                        floor.credential(),
+                        floor.app_attest_counter_floor(),
+                        301,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    verified.app_attest_counter(),
+                    if apple { Some(17) } else { None }
+                );
+                super::super::super::ordinary_bootstrap_owner::assert_bootstrap_platform_receipt_binding_and_replay(
+                    &approval,
+                    floor.credential().subject().app_release_digest,
+                    verified.app_attest_counter(),
+                );
+            });
+        }
+    }
+
     #[test]
     fn historical_publication_retains_original_admission_time_and_current_descriptor() {
         use std::io::Write as _;
@@ -1223,7 +1318,7 @@ mod tests {
     #[test]
     fn reservation_deadline_is_frozen_to_its_exact_initial_or_refresh_original() {
         use iroha_crypto::{Algorithm, KeyPair};
-        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
         let enrollment = fixture.verify(300).unwrap();
         let original_floor =
             KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
@@ -1385,5 +1480,88 @@ mod tests {
             let mut reopened = PrivateJournal::open_existing(&path, FORMAT).unwrap();
             assert!(reopened.replay_next().is_err());
         });
+    }
+
+    #[test]
+    fn native_bootstrap_rejects_genuine_preparation_without_consuming_reserved_attempt() {
+        for apple in [false, true] {
+            let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(apple);
+            let enrollment = Arc::new(fixture.verify(300).unwrap());
+            let floor = KagemushaAuthenticatedOrdinaryCredentialFloorV1::from_verified_enrollment(
+                enrollment.as_ref(),
+                Arc::clone(&fixture.release),
+            )
+            .unwrap();
+            let (_, bootstrap) = derive_preview(&floor, [43; 32], capacity()).unwrap();
+            let counter_floor = floor.app_attest_counter_floor();
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("purpose-boundary");
+            let mut wal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+            wal.append(
+                &norito::encode_canonical(
+                    &initial_record(enrollment.as_ref(), &fixture.release, &bootstrap).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            drop(floor);
+            // Only this test constructs a journal from genuine model fixture admissions. Its
+            // real reserve/accept methods exercise native custody; no financial owner is made.
+            let mut journal = KagemushaOrdinaryLogicalApprovalJournalV1 {
+                wal,
+                enrollment,
+                release: Arc::clone(&fixture.release),
+                bootstrap,
+                pending: None,
+                counter_floor,
+                integrity_lease: None,
+            };
+            let expected = *journal.reserve_bootstrap([44; 32], 300).unwrap();
+            assert_eq!(
+                expected.purpose,
+                KagemushaAppOperationApprovalPurposeV1::MonetaryTransition
+            );
+            let prefix = journal.wal.recovery_prefix().unwrap();
+            let mut preparation = expected;
+            preparation.purpose = KagemushaAppOperationApprovalPurposeV1::PrepareTransition;
+            preparation.subject_signing_digest =
+                Sha256::digest(preparation.canonical_subject_signing_bytes().unwrap()).into();
+            let original = sign(preparation, apple, 17);
+            // The freshly signed purpose2 message is valid under the actual enrolled key and
+            // scope. It must fail the independently reserved purpose1 Native consumer.
+            assert!(
+                original
+                    .authenticate(
+                        &preparation,
+                        journal.enrollment.app_credential(),
+                        counter_floor,
+                        301,
+                    )
+                    .is_ok()
+            );
+            assert!(
+                journal
+                    .require_bootstrap_challenge(&preparation, None)
+                    .is_err()
+            );
+            let raw = norito::encode_canonical(&original).unwrap();
+            assert!(journal.accept_original(&raw, 301).is_err());
+            assert!(journal.wal.recovery_prefix().unwrap() == prefix);
+            assert_eq!(journal.counter_floor, counter_floor);
+            assert_eq!(journal.pending.as_ref().unwrap().challenge, expected);
+            assert!(journal.pending.as_ref().unwrap().approved.is_none());
+            // Refusal consumed neither nonce nor Apple floor. The exact reserved purpose1
+            // original can still be durably admitted on this same native attempt.
+            let terminal = sign(expected, apple, 17);
+            let terminal_raw = norito::encode_canonical(&terminal).unwrap();
+            journal.accept_original(&terminal_raw, 301).unwrap();
+            let approved = journal.approved_at_trusted_time(301).unwrap();
+            assert_eq!(approved.challenge(), &expected);
+            assert_eq!(approved.original(), terminal_raw.as_slice());
+            assert_eq!(
+                approved.app_attest_counter(),
+                if apple { Some(17) } else { None }
+            );
+        }
     }
 }

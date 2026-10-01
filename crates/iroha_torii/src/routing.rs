@@ -18838,6 +18838,35 @@ fn multisig_proposal_intent<W: iroha_core::state::WorldReadOnly>(
             })
         })
         .or_else(|| {
+            // A single typed transfer exposes transport/display fields without
+            // making a partial projection of a multi-instruction proposal.
+            let [instruction] = proposal.instructions.as_slice() else {
+                return None;
+            };
+            let iroha_data_model::isi::TransferBox::Asset(transfer) = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::TransferBox>()?
+            else {
+                return None;
+            };
+            let mut payload = Map::new();
+            payload.insert("kind".into(), Value::from("TRANSFER"));
+            payload.insert(
+                "asset_id".into(),
+                Value::from(transfer.source().definition().to_string()),
+            );
+            payload.insert("amount".into(), Value::from(transfer.object().to_string()));
+            payload.insert(
+                "from_account_id".into(),
+                Value::from(transfer.source().account().to_string()),
+            );
+            payload.insert(
+                "to_account_id".into(),
+                Value::from(transfer.destination().to_string()),
+            );
+            Some(IrohaJson::new(Value::Object(payload)))
+        })
+        .or_else(|| {
             proposal.instructions.first().and_then(|instruction| {
                 let Ok(
                     iroha_executor_data_model::isi::multisig::MultisigInstructionBox::InvalidateOutstanding(invalidate),
@@ -21344,6 +21373,50 @@ mod multisig_selector_tests {
             MultisigProposalStatus::CollectingSignatures,
             "only a native terminal record may prove final execution",
         );
+    }
+    #[test]
+    fn single_asset_transfer_has_exact_typed_intent_and_rejects_partial_projection() {
+        let source = checked_multisig_selector_account_id(0x77, "derive transfer intent source");
+        let destination =
+            checked_multisig_selector_account_id(0x78, "derive transfer intent destination");
+        let definition = test_asset_definition_id();
+        let instruction: dm::InstructionBox = dm::Transfer::asset_quantity(
+            dm::AssetId::new(definition.clone(), source.clone()),
+            25_u32,
+            destination.clone(),
+        )
+        .into();
+        let mut proposal = MultisigProposalValue::new(
+            vec![instruction.clone()],
+            100,
+            200,
+            BTreeSet::new(),
+            None,
+        );
+        let world = World::default();
+        let world_view = world.view();
+        assert_eq!(
+            multisig_proposal_operation_type(&world_view, &source, &proposal),
+            "TRANSFER",
+        );
+        let intent = multisig_proposal_intent(&world_view, &source, &proposal)
+            .expect("single transfer intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("transfer intent value");
+        assert_eq!(
+            intent,
+            norito::json!({
+                "kind": "TRANSFER",
+                "asset_id": (definition.to_string()),
+                "amount": "25",
+                "from_account_id": (source.to_string()),
+                "to_account_id": (destination.to_string()),
+            }),
+        );
+        proposal.instructions.push(instruction);
+        assert!(multisig_proposal_intent(&world_view, &source, &proposal).is_none());
+        proposal.instructions.clear();
+        assert!(multisig_proposal_intent(&world_view, &source, &proposal).is_none());
     }
     #[test]
     fn policy_change_invalidation_has_explicit_operation_type_and_exact_account_intent() {

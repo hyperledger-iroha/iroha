@@ -94,18 +94,19 @@ Both Core startup selections run the native durable archive recovery group
 (`sumeragi::executor::archive_tests`): a partial archive failure retains the
 exact decision and retries without re-execution, and pending capture rejects a
 substituted header, certificate or state. This group runs immediately after
-configuration and MV ownership checks in both scopes. Any failure stops qualification before other startup groups, shipping binary builds
-or network execution; it reuses the same compiled harness and runs each case once.
+configuration and MV ownership checks in both scopes. Any failure stops the
+optional diagnostic before its other startup groups, shipping binary builds
+or fixture network execution; it reuses the same compiled harness and runs each case once.
 
 After startup checks, the gate runs the exact reset-scope CLI control and Torii
 canonical outcome, transaction-visibility and prepared-account admission tests
-before shipping codegen. Preparation records this passed prefix in its
-pre-network checkpoint. The gate then runs the real four-peer beacon fixture
+before its fixture shipping codegen. The optional diagnostic records this passed
+prefix in its pre-network checkpoint; `prepare` records that regressions were not run. The gate then runs the real four-peer beacon fixture
 before the long independent regression census. This order
 exposes a fresh-network liveness or prepared-account failure early without
 dropping any selected check or changing
-the immutable evidence graph. A failed four-peer fixture stops qualification;
-no release or live cutover is admitted from the earlier passing groups alone.
+the diagnostic evidence graph. A failed four-peer fixture fails the optional
+diagnostic. Its passing groups do not grant deployment authority.
 
 Both scopes run their selected MV ownership checks after configuration and
 before native archive recovery: finite allocation credits, exact release/poison wakes, charged
@@ -122,8 +123,8 @@ After portable tests and their copied executables finish, the same coordinated
 warm lane builds mandatory configuration and any remaining selected harnesses.
 Configuration must still pass before the overall diagnostic succeeds, including
 portable-only requests. Each phase reports its own feature graph; these results
-provide no release qualification or independent-checkpoint credit. Immutable
-qualification continues to compile and test its complete graph.
+provide no release qualification or independent-checkpoint credit. Authenticated
+`prepare` builds and captures its signed source without running this test graph.
 
 The source census includes charged Concread notification custody and the current
 native State source, recorded-execution and allocation owners. Archive refusal,
@@ -145,8 +146,8 @@ immediately with the path in the diagnostic. An unset `TMPDIR` keeps the
 platform default. When the exact four-peer beacon regression is focused, the
 diagnostic audits the complete shipping binary table but compiles only its
 runtime inputs: `iroha3d`, `iroha`, `iroha3d_taira`, and `kagami`. A future different network runtime selection
-uses the complete shipping build. Immutable qualification and signed release
-continue to compile and capture `sorafs-node` with all shipping binaries.
+uses the complete diagnostic shipping build. Authenticated `prepare`
+continues to compile and capture `sorafs-node` with all shipping binaries.
 
 Both scopes also require the signed stopped-predecessor controls: strict state
 decoding, retained directory identity across archive/restore, complete process
@@ -204,7 +205,8 @@ Both scopes execute the additive catalog data-model, immutable policy, manifest,
 transaction staging and startup reconstruction regressions. The four-validator
 catalog test adds a dataspace and lane through one committed transition, then
 checks retained history and replay. The data-model library joins the same native
-Cargo graph; its selected tests execute before any network or Linux release build.
+Cargo graph; its selected tests execute before the optional diagnostic
+fixture network and shipping-binary build. They do not precede or gate `prepare`.
 
 Query failures decode the node's bounded error envelope; a missing asset, unknown
 route or malformed response cannot be reported as an expired or missing cursor
@@ -460,23 +462,23 @@ Incremental native runs bypass sccache, which rejects `CARGO_INCREMENTAL=1`.
 Nonincremental native and Linux release builds retain the persistent sccache.
 An explicit `CARGO_INCREMENTAL=0` preserves a constrained or CI build policy;
 only `0` and `1` are admitted. This preference is passed only to native builds
-and tests, and preparation records it with the native-check checkpoint. Linux
+and tests. Build-only preparation records that regression checks were not run. Linux
 release compilation retains its original sanitized environment and release
 profile. Each feature graph keeps its own Cargo cache; no test features are
 added or removed to force reuse. The first incremental run populates those
 caches, so a speed improvement must be measured on subsequent focused changes.
-The source checks, startup and priority native regressions precede the
-four-validator runtime check; their failures stop before production binary
-compilation. The remaining independent regressions run after that check from the
+Within the optional diagnostic, source checks, startup and priority native
+regressions precede the four-validator fixture check; their failures stop that
+diagnostic before its shipping-binary compilation. The remaining independent regressions run after that check from the
 earlier combined graph shared by the contract test harnesses. Its log
 records the actual Cargo-selected native binary paths and profiles separately
 from the later Linux release artifacts.
 
 Authenticated `prepare` retains the repository's `target/` lane and its fixed
 Git-object source capture. The live preparation bootstrap must match its selected
-signed source. Native qualification loads the gate from the authenticated capture,
-so unrelated edits to the checkout's development gate do not alter release test
-selection or require copying older checks into the checkout. Its explicit `--target-dir` override remains available;
+signed source. Build-only `prepare` does not run native qualification or select
+regression tests; optional development diagnostics use the checkout's current
+gate. Its explicit `--target-dir` override remains available;
 the development environment selector does not affect preparation. Checks refuse
 the exact repository `target/`, existing source capture lanes, and lanes marked
 for release. Preparation refuses the routine lane and lanes marked for development.
@@ -584,8 +586,8 @@ release qualification, exact signed-source and artifact checks, or the offline
 probes against actual Linux release binaries. Public readiness still requires
 the end-to-end live checks.
 
-CI no longer runs this census. The `build` job in `.github/workflows/workspace_release.yml` runs the nextest `release-gate` profile (`.config/nextest.toml`), which selects tests by package and module path instead of hand-listed names, then builds the full workspace. This script is retired with the rest of the Taira toolchain (see `specs/network_deployment.md`). The existing local Taira release caller should run
-it before cross-compilation. The canonical
+CI no longer runs this census. The `build` job in `.github/workflows/workspace_release.yml` runs the nextest `release-gate` profile (`.config/nextest.toml`), which selects tests by package and module path instead of hand-listed names, then builds the full workspace. This script is retired with the rest of the Taira toolchain (see `specs/network_deployment.md`). The census remains an optional developer diagnostic and is not a prerequisite for
+cross-compilation or deployment. The canonical
 release artifact producer remains `scripts/run_release_pipeline.py`; it does
 not gain a hidden build step or additional runtime authority.
 
@@ -619,4 +621,5 @@ killed or restarted. Start a new explicit check against the intended source.
 Unchanged tracked files are represented by Git HEAD and its diff, rather than
 rehashing the entire tree. This is a race detector, not proof of the source consumed
 by Cargo; it provides no release qualification. Immutable `prepare` retains its
-existing authenticated source and complete gates.
+authenticated source, pinned tools and artifact custody without running
+regression tests.

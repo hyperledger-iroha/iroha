@@ -706,9 +706,22 @@ mod retry_and_periodic {
             "a_ordinary"
         );
         assert_eq!(second.invocation.schedule_index, 1);
-        // This fixture has no prior header and hence a zero-length interval;
-        // the future scheduled action is invoked solely because its retry is due.
-        assert_eq!(first.invocation.event.interval.length_ms, 0);
+        let parent = state
+            .view()
+            .latest_block()
+            .expect("the original signed Time parent");
+        let parent_ms = u64::try_from(parent.header().creation_time().as_millis()).unwrap();
+        let source_ms = u64::try_from(source.header().creation_time().as_millis()).unwrap();
+        assert_eq!(first.invocation.event.interval.since_ms, parent_ms);
+        assert_eq!(
+            first.invocation.event.interval.length_ms,
+            source_ms - parent_ms
+        );
+        assert_eq!(source_ms - parent_ms, 2);
+        assert!(
+            source_ms < 1_000,
+            "the future action is invoked solely because its retry is due"
+        );
         assert!(first.result.is_ok());
         assert_eq!(first.result.as_ref().unwrap().len(), 1);
         assert_eq!(first.completions.len(), 1);

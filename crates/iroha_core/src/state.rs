@@ -355,6 +355,7 @@ mod fastpq_quantity_capture;
 mod fastpq_rejection_tail;
 #[cfg(test)]
 mod fastpq_source_quota_tests;
+pub(crate) mod native_maintenance;
 mod prepared_transfer_transcript;
 mod replay_outputs;
 pub use fastpq_source_inventory::{
@@ -38079,7 +38080,8 @@ impl<'state> StateBlock<'state> {
         // Owner-authorized alias lease renewal is native block maintenance, not a
         // synthetic client transaction or subscription trigger. The sweep is
         // bounded and advances a durable cursor in canonical storage-key order.
-        if let Err(error) = crate::sns::process_alias_auto_renewals(self) {
+        let native_scope = self.native_maintenance_time_scope()?;
+        if let Err(error) = crate::sns::process_alias_auto_renewals(self, &native_scope) {
             if self.local_storage_refusal.is_none() {
                 self.local_storage_refusal = Some(error.clone());
             }
@@ -39685,6 +39687,24 @@ mod fastpq_tx_set_hash_tests {
         collections::{BTreeMap, BTreeSet},
         time::Duration,
     };
+    // Bind the actual original recorder before State applies any start effects.
+    // These internal-call component controls carry no Network inputs or finality.
+    fn recorded_component_fixture(
+        state: &State,
+        header: BlockHeader,
+    ) -> (Box<StateBlock<'_>>, crate::exec_witness::ExecWitnessGuard) {
+        state
+            .block_with_owned_start_stages(
+                header,
+                |block| {
+                    let recording = crate::exec_witness::begin_exec_witness_capture()?;
+                    block.bind_original_execution_recorder()?;
+                    Ok::<_, String>(recording)
+                },
+                |_, recording| Ok(recording),
+            )
+            .expect("original recorder retained before component effects")
+    }
     #[test]
     fn validate_and_record_transactions_sets_tx_set_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -39758,9 +39778,7 @@ mod fastpq_tx_set_hash_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let _guard = crate::exec_witness::exec_witness_guard();
-        crate::exec_witness::start_block();
+        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -39898,9 +39916,7 @@ mod fastpq_tx_set_hash_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
         let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let _guard = crate::exec_witness::exec_witness_guard();
-        crate::exec_witness::start_block();
+        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -39976,9 +39992,7 @@ mod fastpq_tx_set_hash_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
         let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let _guard = crate::exec_witness::exec_witness_guard();
-        crate::exec_witness::start_block();
+        let (mut state_block, _guard) = recorded_component_fixture(&state, header);
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =

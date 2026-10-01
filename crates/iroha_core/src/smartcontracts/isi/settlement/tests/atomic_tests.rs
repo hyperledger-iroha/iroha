@@ -16,6 +16,21 @@ fn atomic_state_in_scope(
     scope: AssetBalanceScope,
     policy: AssetBalancePolicy,
 ) -> (State, Vec<AtomicSettlementMovement>, AssetDefinitionId) {
+    atomic_state_in_scope_with_source_delta_limit(
+        count,
+        scope,
+        policy,
+        u32::try_from(count)
+            .expect("bounded movement count")
+            .max(16),
+    )
+}
+fn atomic_state_in_scope_with_source_delta_limit(
+    count: usize,
+    scope: AssetBalanceScope,
+    policy: AssetBalancePolicy,
+    max_deltas: u32,
+) -> (State, Vec<AtomicSettlementMovement>, AssetDefinitionId) {
     let domain_id = DomainId::try_new("atomic", "universal").expect("domain");
     let definition =
         AssetDefinitionId::derive_from_components(domain_id.clone(), "cash".parse().expect("name"));
@@ -54,6 +69,38 @@ fn atomic_state_in_scope(
         assets,
         [],
     );
+    // The 255-payment corpus exceeds the sixteen-delta bootstrap profile.
+    // Install its finite complete-frame bound before State freezes the source
+    // quota. This component policy grants no Network or publication authority.
+    {
+        use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1, Parameter};
+
+        let mut parameters = world.parameters.block();
+        let previous = parameters.get().block().fastpq_source();
+        let mut intrinsic = previous.intrinsic;
+        let chunks = u64::from(max_deltas.div_ceil(intrinsic.max_deltas).max(1));
+        intrinsic.max_deltas = max_deltas;
+        intrinsic.max_input_transcript_bytes = intrinsic
+            .max_input_transcript_bytes
+            .checked_mul(chunks)
+            .expect("finite input corpus");
+        intrinsic.max_statement_bytes = intrinsic
+            .max_statement_bytes
+            .checked_mul(chunks)
+            .expect("finite statement corpus");
+        intrinsic.max_total_statement_bytes = intrinsic.max_statement_bytes;
+        let profile = FastpqSourcePolicyV1::from_sizing(
+            parameters.get().block().execution_output(),
+            intrinsic,
+            previous.mandatory,
+            FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
+        )
+        .expect("finite atomic source profile");
+        parameters
+            .get_mut()
+            .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
+        parameters.commit();
+    }
     (
         State::new(
             world,
@@ -451,6 +498,30 @@ fn atomic_settlement_reference_retention_includes_the_final_movement() {
         assert!(error.to_string().contains("committed settlement receipt"));
         assert_eq!(atomic_observable_state(&stx), before);
     }
+}
+
+#[test]
+fn atomic_settlement_source_delta_refusal_preserves_every_observable_effect() {
+    let (state, movements, _) = atomic_state_in_scope_with_source_delta_limit(
+        255,
+        AssetBalanceScope::Global,
+        AssetBalancePolicy::Global,
+        254,
+    );
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"atomic-fixture-carrier"));
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    let before = atomic_observable_state(&stx);
+    let error = instruction
+        .execute(&CARPENTER_ID, &mut stx)
+        .expect_err("one-delta-short profile must refuse the complete atomic batch");
+    assert!(matches!(
+        error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.as_ref() == "FASTPQ source intrinsic limit exceeded"
+    ));
+    assert_eq!(atomic_observable_state(&stx), before);
 }
 
 #[test]

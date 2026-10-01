@@ -103,6 +103,8 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         scripts.mkdir(parents=True)
         package_owner = scripts / PACKAGE_OWNER.name
         shutil.copy2(PACKAGE_OWNER, package_owner)
+        shutil.copy2(REPOSITORY_ROOT / "scripts/mobile_sdk_android_artifacts.py", scripts / "mobile_sdk_android_artifacts.py")
+        shutil.copy2(REPOSITORY_ROOT / "scripts/mobile_sdk_android_package_inputs.py", scripts / "mobile_sdk_android_package_inputs.py")
         owner_source = package_owner.read_text(encoding="utf-8")
         publication = (
             'no_replace_flag = 0x4 if sys.platform == "darwin" else 0x1\n'
@@ -141,6 +143,15 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                 """\
                 #!/usr/bin/env bash
                 set -euo pipefail
+                if [[ "${PACKAGE_TEST_MUTATE_AND_RESTORE_SOURCE:-0}" == "1" ]]; then
+                  fixture_source="$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/core-jvm/libs/core-jvm-1.0.0.jar"
+                  fixture_original="$(cat "$fixture_source")"
+                  printf 'temporary substituted source' > "$fixture_source"
+                  printf '%s\\n' "$fixture_original" > "$fixture_source"
+                fi
+                if [[ "${PACKAGE_TEST_MUTATE_SOURCE_AFTER_VALIDATION:-0}" == "1" ]]; then
+                  printf 'changed after validation' > "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/core-jvm/libs/core-jvm-1.0.0.jar"
+                fi
                 if [[ "${PACKAGE_TEST_CHECK_FAIL:-0}" == "1" ]]; then
                   echo "forced late package validation failure" >&2
                   exit 91
@@ -179,6 +190,57 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                 "assets/iroha/native-build-provenance-v1.json",
                 provenance_payload,
             )
+            archive.writestr("AndroidManifest.xml", "<manifest />")
+            archive.writestr("classes.jar", b"managed client fixture")
+            for abi in ("arm64-v8a", "x86_64"):
+                archive.writestr(f"jni/{abi}/libconnect_norito_bridge.so", (native_root / abi / "libconnect_norito_bridge.so").read_bytes())
+
+        self._write_android_publications(VERSION)
+
+    def _write_android_publications(self, version):
+        gradle = self.artifacts / "gradle-build/iroha_kotlin_sdk"
+        jar = next((gradle / "core-jvm/libs").glob("core-jvm-*.jar"))
+        if jar.name != f"core-jvm-{version}.jar":
+            jar.rename(jar.with_name(f"core-jvm-{version}.jar"))
+        for module, dependency in [("core-jvm", ""), ("client-android", "core-jvm"),
+                                   ("kagemusha-wallet-android", "client-android")]:
+            packaging = "jar" if module == "core-jvm" else "aar"
+            deps = (f"<dependencies><dependency><groupId>org.hyperledger.iroha.sdk</groupId>"
+                    f"<artifactId>{dependency}</artifactId><version>{version}</version>"
+                    "</dependency></dependencies>") if dependency else ""
+            pom_text = (f'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>'
+                        f'<groupId>org.hyperledger.iroha.sdk</groupId><artifactId>{module}</artifactId>'
+                        f'<version>{version}</version><packaging>{packaging}</packaging>{deps}</project>')
+            pom = gradle / module / "publications/release/pom-default.xml"
+            pom.parent.mkdir(parents=True, exist_ok=True)
+            pom.write_text(pom_text)
+            original = gradle / module / (f"libs/core-jvm-{version}.jar" if module == "core-jvm"
+                                         else f"outputs/aar/{module}-release.aar")
+            if module == "kagemusha-wallet-android":
+                original.parent.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(original, "w") as archive:
+                    archive.writestr("AndroidManifest.xml", "<manifest />")
+                    archive.writestr("classes.jar", b"managed wallet fixture")
+            directory = self.artifacts / "maven/org/hyperledger/iroha/sdk" / module / version
+            directory.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(original, directory / f"{module}-{version}.{packaging}")
+            (directory / f"{module}-{version}.pom").write_text(pom_text)
+            variants = []
+            for usage in ("java-api", "java-runtime"):
+                attributes = {"org.gradle.category": "library", "org.gradle.dependency.bundling": "external",
+                              "org.gradle.libraryelements": packaging, "org.gradle.usage": usage}
+                if module == "core-jvm":
+                    attributes["org.gradle.jvm.version"] = 8
+                dependencies = ([{"group": "org.hyperledger.iroha.sdk", "module": dependency,
+                                  "version": {"requires": version}}] if dependency else [])
+                variants.append({"name": "apiElements" if usage == "java-api" else "runtimeElements",
+                    "attributes": attributes, "dependencies": dependencies,
+                    "files": [{"name": f"{module}-{version}.{packaging}", "url": f"{module}-{version}.{packaging}",
+                               "size": original.stat().st_size, "sha256": hashlib.sha256(original.read_bytes()).hexdigest()}]})
+            (directory / f"{module}-{version}.module").write_text(json.dumps({
+                "formatVersion": "1.1", "component": {"group": "org.hyperledger.iroha.sdk", "module": module, "version": version},
+                "variants": variants}))
+
 
     def _environment(self, **updates: str) -> dict[str, str]:
         environment = os.environ.copy()
@@ -410,6 +472,8 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
     def test_combined_package_extra_file_is_rejected_before_publication(self) -> None:
         self._inject_extra_package_file()
         seal_environment = self._write_fake_apple_owner()
+        shutil.rmtree(self.artifacts / "maven")
+        self._write_android_publications("pr-9-deadbeef")
         result = self._package(
             mode="all",
             version="pr-9-deadbeef",
@@ -438,9 +502,75 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_STORED) as archive:
             for name, value in contents.items():
                 archive.writestr(name, value)
+        shutil.copyfile(aar, self.artifacts / f"maven/org/hyperledger/iroha/sdk/client-android/{VERSION}/client-android-{VERSION}.aar")
+        metadata = self.artifacts / f"maven/org/hyperledger/iroha/sdk/client-android/{VERSION}/client-android-{VERSION}.module"
+        document = json.loads(metadata.read_text())
+        for variant in document["variants"]:
+            variant["files"][0].update(size=aar.stat().st_size, sha256=hashlib.sha256(aar.read_bytes()).hexdigest())
+        metadata.write_text(json.dumps(document))
         result = self._package()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("diagnostic Android artifact scope", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_missing_wallet_maven_member_prevents_publication(self):
+        (self.artifacts / f"maven/org/hyperledger/iroha/sdk/kagemusha-wallet-android/{VERSION}/kagemusha-wallet-android-{VERSION}.aar").unlink()
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.output.exists())
+
+    def test_maven_client_substitution_prevents_publication(self):
+        path = self.artifacts / f"maven/org/hyperledger/iroha/sdk/client-android/{VERSION}/client-android-{VERSION}.aar"
+        path.write_bytes(b"foreign Maven client")
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("differs from the selected canonical build", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_source_changed_after_native_validation_refuses_publication(self):
+        result = self._package(PACKAGE_TEST_MUTATE_SOURCE_AFTER_VALIDATION="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.output.exists())
+
+    def test_source_mutation_and_restoration_refuses_original_identity_snapshot(self):
+        result = self._package(PACKAGE_TEST_MUTATE_AND_RESTORE_SOURCE="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("package source identity differs", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_generated_native_original_mismatch_refuses_client_correlation(self):
+        native = self.artifacts / "gradle-build/iroha_kotlin_sdk/client-android/generated/jniLibs/default/arm64-v8a/libconnect_norito_bridge.so"
+        native.write_bytes(b"unrelated generated bridge")
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("client AAR native payload", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def _inject_copied_payload_mutation(self, restore):
+        owner = self.repository / "scripts/package_mobile_sdk_artifacts.sh"
+        source = owner.read_text()
+        original = '(cd "$stage_container" && zip -qr "$android_zip" "$(basename "$stage")")'
+        replacement = ('saved_original="$stage_container/original-core.jar"\n'
+                       '  cp "$stage/core-jvm/core-jvm-${VERSION#v}.jar" "$saved_original"\n'
+                       '  printf "substituted copied payload" > "$stage/core-jvm/core-jvm-${VERSION#v}.jar"\n'
+                       '  ' + original)
+        if restore:
+            replacement += '\n  cp "$saved_original" "$stage/core-jvm/core-jvm-${VERSION#v}.jar"'
+        self.assertEqual(source.count(original), 1)
+        owner.write_text(source.replace(original, replacement))
+
+    def test_substituted_copied_payload_refuses_publication(self):
+        self._inject_copied_payload_mutation(False)
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("copied Android payload differs", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_copied_payload_mutation_then_restoration_cannot_hide_wrong_zip(self):
+        self._inject_copied_payload_mutation(True)
+        result = self._package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Android ZIP payload", result.stderr)
         self.assertFalse(self.output.exists())
 
     def test_success_publishes_only_to_absent_destination(self) -> None:
@@ -450,6 +580,12 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         manifest = self.output / f"mobile-sdk-android-{VERSION}.artifacts.json"
         checksums = self.output / f"SHA256SUMS-android-{VERSION}.txt"
         self.assertTrue(archive.is_file())
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+            prefix = f"iroha-mobile-sdk-android-{VERSION}/"
+            self.assertIn(prefix + "kagemusha-wallet-android/kagemusha-wallet-android-release.aar", names)
+            for module, extension in [("core-jvm", "jar"), ("client-android", "aar"), ("kagemusha-wallet-android", "aar")]:
+                self.assertIn(prefix + f"maven/org/hyperledger/iroha/sdk/{module}/{VERSION}/{module}-{VERSION}.{extension}", names)
         self.assertTrue(manifest.is_file())
         self.assertTrue(checksums.is_file())
         self.assertFalse((self.output / ".NoritoBridge.archive.lockfile").exists())

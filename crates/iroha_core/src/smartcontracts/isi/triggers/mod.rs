@@ -2234,11 +2234,7 @@ mod tests {
         let state = authenticated_trigger_state();
         let mut state_block = state.block(authenticated_trigger_header(&state));
         let mut stx = state_block.transaction_for_callback_testing();
-        // Create domain and account
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        // Trigger ownership uses universal accounts; this test needs no alias lease.
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -2318,11 +2314,6 @@ mod tests {
         let state = authenticated_trigger_state();
         let mut state_block = state.block(authenticated_trigger_header(&state));
         let mut stx = state_block.transaction_for_callback_testing();
-        Register::domain(Domain::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();

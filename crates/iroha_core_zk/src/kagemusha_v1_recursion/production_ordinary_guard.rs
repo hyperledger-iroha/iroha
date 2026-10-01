@@ -5,7 +5,7 @@
 //! relation copies before returning. The nonexportable app key's private scalar is never used.
 
 use super::super::super::{
-    KagemushaPlatformCredentialStatementV1, KagemushaProviderRootCircuitParamsV1,
+    KagemushaPlatformCredentialStatementV1,
     ordinary_guard_circuit::{
         KagemushaOrdinaryAppGuardEpCircuitV1, KagemushaOrdinaryAppGuardEqCircuitV1,
         KagemushaOrdinaryGuardCircuitParamsV1, OrdinaryGuardWitnessV1,
@@ -332,6 +332,18 @@ pub(super) fn derive_relation(
             "native financial witness does not open ordinary enrollment",
         ));
     }
+    let mut relation = HeldRelation(public_relation(selection)?);
+    relation.0.predecessor_device_authority_secret = *secret;
+    relation.0.successor_device_authority_secret = *secret;
+    relation.0.validate().map_err(ordinary_proving_error)?;
+    Ok(relation)
+}
+
+pub(super) fn public_relation(
+    selection: &KagemushaAuthenticatedOrdinaryBootstrapProvingSelectionV1<'_>,
+) -> Result<KagemushaGuardBundleRelationWitnessV1, KagemushaArtifactGenerationErrorV1> {
+    let credential = selection.enrollment().app_credential();
+    let s = credential.subject();
     let release = selection.authenticated_release().map_err(owner_error)?;
     let policy = release
         .provider_policy()
@@ -373,15 +385,14 @@ pub(super) fn derive_relation(
         canonical_empty_effect_digest: canonical_empty_durable_effect(&release)?,
         provider_profile_index: policy.provider_profile_index,
     };
-    let relation = HeldRelation(KagemushaGuardBundleRelationWitnessV1 {
+    let relation = KagemushaGuardBundleRelationWitnessV1 {
         statement: preview.normalized_guard_statement.clone(),
         canonical_empty_effect_digest: projection.canonical_empty_effect_digest,
         predecessor_credential: projection,
         successor_credential: projection,
-        predecessor_device_authority_secret: *secret,
-        successor_device_authority_secret: *secret,
-    });
-    relation.0.validate().map_err(ordinary_proving_error)?;
+        predecessor_device_authority_secret: [0; 32],
+        successor_device_authority_secret: [0; 32],
+    };
     Ok(relation)
 }
 

@@ -5256,6 +5256,16 @@ seiyaku GuardedOverlay {
             world
                 .bind_contract_alias(&contract_address, contract_alias.clone(), None, None, 0)
                 .expect("bind guarded contract alias");
+            // Entrypoint admission and subject-owned effects have separate grants.
+            let mut effect_permissions = Permissions::new();
+            assert!(effect_permissions.insert(Permission::from(
+                iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                    account: authority.clone(),
+                },
+            )));
+            world
+                .account_permissions_mut_for_testing()
+                .insert(contract_address.subject_id(), effect_permissions);
             if authorized {
                 let mut permissions = Permissions::new();
                 assert!(permissions.insert(entrypoint_permission.clone()));
@@ -5517,6 +5527,44 @@ seiyaku GuardedOverlayRebound {
         );
         drop(authorized_proved_transaction);
         drop(authorized_proved_block);
+        let mut revoked_effect_block = execution_block(&authorized_state);
+        let mut revoked_effect_transaction = revoked_effect_block.transaction();
+        assert!(
+            revoked_effect_transaction
+                .world
+                .account_permissions
+                .get_mut(&contract_address.subject_id())
+                .expect("contract effect permissions")
+                .remove(&Permission::from(
+                    iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                        account: authority.clone(),
+                    },
+                ))
+        );
+        let error = proved_overlay
+            .apply(&mut revoked_effect_transaction, &authority)
+            .expect_err("live entrypoint permission cannot replace a revoked effect permission");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message) if message == "authority cannot modify this metadata"
+        ));
+        assert!(
+            revoked_effect_transaction
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&queued_key)
+                .is_none()
+                && revoked_effect_transaction
+                    .world
+                    .smart_contract_state
+                    .get(&guarded_path)
+                    .is_none(),
+            "revoked subject effect permission must apply zero queued or durable effects"
+        );
+        drop(revoked_effect_transaction);
+        drop(revoked_effect_block);
         let mut revoked_context_block = execution_block(&unauthorized_state);
         let mut revoked_context_transaction = revoked_context_block.transaction();
         context_only_overlay
@@ -5815,6 +5863,11 @@ seiyaku GuardedOverlayRebound {
             assert!(child_contract_permissions.insert(Permission::from(
                 iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
             )));
+            assert!(child_contract_permissions.insert(Permission::from(
+                iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                    account: root_contract_subject.clone(),
+                },
+            )));
             world
                 .account_permissions_mut_for_testing()
                 .insert(authority.clone(), root_permissions);
@@ -5934,6 +5987,44 @@ seiyaku GuardedOverlayRebound {
         );
         drop(authorized_tx);
         drop(authorized_block);
+        let mut revoked_effect_block = execution_block(&authorized_state);
+        let mut revoked_effect_tx = revoked_effect_block.transaction();
+        assert!(
+            revoked_effect_tx
+                .world
+                .account_permissions
+                .get_mut(&child_contract_subject)
+                .expect("child effect permissions")
+                .remove(&Permission::from(
+                    iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                        account: root_contract_subject.clone(),
+                    },
+                ))
+        );
+        let error = build_overlay(child_authorization.clone())
+            .apply(&mut revoked_effect_tx, &authority)
+            .expect_err("complete entrypoint chain cannot replace a revoked child effect grant");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message) if message == "authority cannot modify this metadata"
+        ));
+        assert!(
+            revoked_effect_tx
+                .world
+                .account(&root_contract_subject)
+                .expect("root contract account")
+                .metadata()
+                .get(&metadata_key)
+                .is_none()
+                && revoked_effect_tx
+                    .world
+                    .smart_contract_state
+                    .get(&durable_path)
+                    .is_none(),
+            "revoked child effect grant must apply zero queued or durable effects"
+        );
+        drop(revoked_effect_tx);
+        drop(revoked_effect_block);
         for (label, grant_root, grant_child, child_active) in [
             ("revoked root", false, true, true),
             ("revoked child", true, false, true),

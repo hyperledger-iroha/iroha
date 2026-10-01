@@ -1466,6 +1466,8 @@ mod tests {
     }
     #[test]
     fn native_auto_renew_debits_exact_owner_quote_once() {
+        // Preserve the native retry reason if the exact debit oracle fails.
+        let _logger = iroha_logger::test_logger();
         let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
         let owner_before = asset_balance(&fixture.state, &fixture.payment_asset, &fixture.owner);
         let collector_before =
@@ -3666,8 +3668,14 @@ mod tests {
             ensure.clone().into(),
         ];
         let signed = chain.sign(&registrar_key, instructions, 1_999);
-        assert_eq!(chain.commit_at(2_000, vec![signed]), vec![true]);
+        let committed = chain.commit_at(2_000, vec![signed]);
         let tip = chain.committed(2);
+        assert_eq!(
+            committed,
+            vec![true],
+            "native atomic registration outputs: {:?}",
+            tip.block().execution_outputs(),
+        );
         let (wallet_original, signer_original, lease_original, payer_after, collector_after) = {
             let view = chain.state().view();
             let wallet_original = view.world().accounts().get(&wallet).unwrap().clone();

@@ -1020,17 +1020,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--android-sdk-username",
-        help="Repository username/token used with --android-sdk-repo-url.",
+        help="Runtime repository username used with --android-sdk-repo-url.",
     )
     parser.add_argument(
         "--android-sdk-password",
         help="Repository password used with --android-sdk-repo-url.",
     )
-    parser.add_argument(
-        "--android-sdk-skip-sbom",
-        action="store_true",
-        help="Skip SBOM/provenance generation in scripts/publish_android_sdk.sh (tests still run).",
-    )
+
 
     args = parser.parse_args()
     fastpq_rollout_stamp = validate_fastpq_rollout_stamp(
@@ -1599,49 +1595,43 @@ def main() -> int:
     if args.publish_android_sdk:
         android_dir = evidence_stage / "android"
         android_repo_dir = android_dir / "maven"
+        android_sbom_dir = android_dir / "sbom"
+        android_report_dir = android_dir / "publication"
+        if not args.dry_run:
+            android_dir.mkdir(mode=0o700, exist_ok=False)
         publish_cmd = [
             str(REPO_ROOT / "scripts" / "publish_android_sdk.sh"),
             "--version",
             provided_version,
             "--repo-dir",
             str(android_repo_dir),
+            "--report-dir", str(android_report_dir),
+            "--sbom-dir", str(android_sbom_dir),
         ]
         if args.android_sdk_repo_url:
             publish_cmd.extend(["--repo-url", args.android_sdk_repo_url])
+        publisher_env = release_env.copy()
         if args.android_sdk_username:
-            publish_cmd.extend(["--username", args.android_sdk_username])
+            publisher_env["ANDROID_PUBLISH_REPO_USERNAME"] = args.android_sdk_username
         if args.android_sdk_password:
-            publish_cmd.extend(["--password", args.android_sdk_password])
-        if args.android_sdk_skip_sbom:
-            publish_cmd.append("--skip-sbom")
+            publisher_env["ANDROID_PUBLISH_REPO_PASSWORD"] = args.android_sdk_password
         if args.dry_run:
             print(f"[release-pipeline] (dry-run) {render_command(publish_cmd)}")
         else:
             run_trusted_release_action(
                 commit,
                 "Android Maven publication refused changed release source",
-                lambda: run(publish_cmd, env=release_env),
+                lambda: run(publish_cmd, env=publisher_env),
             )
 
-        sbom_src = REPO_ROOT / "artifacts" / "android" / "sbom" / provided_version
-        sbom_dest = android_dir / "sbom"
         if args.dry_run:
-            print(f"[release-pipeline] (dry-run) copy Android SBOM bundle {sbom_src} -> {sbom_dest}")
-        elif sbom_src.is_dir():
-            copy_closed_tree(
-                sbom_src,
-                android_dir,
-                "sbom",
-                dry_run=False,
-            )
-        else:
-            raise PipelineError(
-                f"Android SBOM bundle not found at {sbom_src}"
-            )
+            print(f"[release-pipeline] (dry-run) retain signed Android SBOM bundle {android_sbom_dir}")
+        elif not android_sbom_dir.is_dir():
+            raise PipelineError(f"Android SBOM bundle not found at {android_sbom_dir}")
 
         readme_path = android_dir / "README.txt"
-        summary_path = android_repo_dir / "publish_summary.json"
-        checksum_path = android_repo_dir / "checksums.txt"
+        summary_path = android_report_dir / "publish_summary.json"
+        checksum_path = android_report_dir / "checksums.txt"
         if not args.dry_run:
             lines = [
                 "Android SDK release bundle",
@@ -1653,9 +1643,9 @@ def main() -> int:
             if args.android_sdk_repo_url:
                 lines.append("Remote Maven publication: completed")
             if summary_path.is_file():
-                lines.append("Summary: maven/publish_summary.json")
+                lines.append("Summary: publication/publish_summary.json")
             if checksum_path.is_file():
-                lines.append("Checksums: maven/checksums.txt")
+                lines.append("Checksums: publication/checksums.txt")
             exclusive_write_bytes(
                 readme_path,
                 ("\n".join(lines) + "\n").encode("utf-8"),

@@ -3991,7 +3991,7 @@ def validate_gateway_load_staging_fingerprint_contract(
     payload: dict[str, Any],
     errors: list[str],
 ) -> None:
-    """Recheck the non-waivable 24-hour load contract at promotion time."""
+    """Recheck authentic load observations without a fixed soak prerequisite."""
 
     fingerprints = payload_free_summary_artifact_fingerprints(
         payload,

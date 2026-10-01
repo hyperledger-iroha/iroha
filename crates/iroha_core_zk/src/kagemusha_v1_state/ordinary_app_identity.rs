@@ -9,6 +9,9 @@ use iroha_data_model::kagemusha::*;
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 
+#[path = "ordinary_app_identity/governed_policy.rs"]
+mod governed_policy;
+pub use governed_policy::KagemushaOrdinaryGovernedPolicyOriginalsV1;
 #[path = "ordinary_app_identity/journal.rs"]
 mod journal;
 pub use journal::KagemushaOrdinaryAppEnrollmentAttemptV1;

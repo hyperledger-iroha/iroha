@@ -1428,6 +1428,9 @@ mod tests {
         payload_retry_interval_ms: u64,
         extra: impl FnOnce(&[KeyPair]) -> Vec<Parameter>,
     ) -> Chain {
+        // Each independently executed node-test group needs its own logger initialization.
+        // The maintained static handle retains the configured diagnostics after this helper.
+        let _logger = iroha_logger::test_logger();
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("sumeragi-node-test");
         let mut keys = (0..validators)
@@ -1713,6 +1716,21 @@ mod tests {
                     eprintln!("{:#?}", validator.node.driver.handle().status());
                     eprintln!("lanes: {:#?}", validator.node.lanes.handle().statuses());
                     let view = validator.state.view();
+                    let block_parameters = view.world().parameters().block();
+                    let pending = validator.queue.bounded_pending_snapshot_for_testing(
+                        &view,
+                        crate::sumeragi::payload::MAX_QUEUE_SCAN,
+                    );
+                    eprintln!(
+                        "  original parent: {:?}, root: {:?}, Network capacity: {:?}, queued: {}, pending: {:?}",
+                        view.native_execution_tip(),
+                        crate::sumeragi::lanes::routing::committed_root_scope(view.world()),
+                        block_parameters
+                            .fastpq_source()
+                            .maximum_network_inputs(block_parameters.execution_output()),
+                        validator.queue.queued_len(),
+                        pending.as_ref().map(Vec::len),
+                    );
                     for height in 2..=view.height() {
                         let block = validator
                             .state
@@ -2458,6 +2476,18 @@ mod tests {
             .replay(&body, &commit_qc)
             .expect("the certified result reproduces");
         assert_eq!(startup::applied_height(&state), 2);
+        // Even a deployment without SoraFS archives binds its empty capture
+        // catalog after replay. A completed replay receipt is no live overlay
+        // and must retire before this same-worker startup handoff.
+        executor
+            .attach_finalized_archives(super::super::executor::FinalizedArchives::default())
+            .expect("completed replay permits the once-only archive handoff");
+        assert!(
+            executor
+                .attach_finalized_archives(super::super::executor::FinalizedArchives::default())
+                .is_err(),
+            "replay retirement must preserve once-only archive custody"
+        );
     }
 
     #[test]

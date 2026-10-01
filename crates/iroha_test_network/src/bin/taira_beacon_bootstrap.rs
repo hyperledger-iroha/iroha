@@ -3,6 +3,10 @@
 //! The existing native DKG owns every secret seat. This binary reads original Kura
 //! carriers, submits ordinary signed transactions, and retains completed custody.
 //! It does not adopt, complete, or rewrite a public-reset deployment journal.
+//!
+//! This disposable test-network development tool requires explicit opt-in:
+//! `cargo run -p iroha_test_network --features dev-tools --bin taira_beacon_bootstrap -- <arguments>`.
+//! Signing inputs remain in owner-private runtime configuration, never on argv.
 
 use color_eyre::eyre::{Result, ensure, eyre};
 use iroha::client::{

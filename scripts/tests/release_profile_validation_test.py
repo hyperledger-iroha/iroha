@@ -531,7 +531,7 @@ def test_release_pipeline_signs_final_manifest_before_publish_plan() -> None:
     android_source_validation = main_source.index(
         "Android Maven publication refused changed release source"
     )
-    android_publish = main_source.index("lambda: run(publish_cmd, env=release_env)")
+    android_publish = main_source.index("lambda: run(publish_cmd, env=publisher_env)")
     build_plan = main_source.index("build_publish_plan(")
     assert close_evidence < generate_manifest < sign_source_validation < sign_manifest
     assert android_source_validation < android_publish

@@ -786,7 +786,13 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
     if witness.hash_claim.is_none() {
         return Err("recursive state requires its authenticated complete SHA claim".to_owned());
     }
-    match build_recursive_state_pair_impl_v1(eq_params, ep_params, witness, false)? {
+    match build_recursive_state_pair_impl_v1(
+        eq_params,
+        ep_params,
+        witness,
+        false,
+        RecursiveStateConstructionV1::Production,
+    )? {
         RecursiveStateBuildV1::Authenticated(eq, ep, eq_audit, ep_audit) => {
             Ok((eq, ep, eq_audit, ep_audit))
         }
@@ -801,7 +807,7 @@ pub(super) fn build_kagemusha_recursive_state_pair_v1(
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
-enum RecursiveStateBuildV1 {
+pub(super) enum RecursiveStateBuildV1 {
     Authenticated(
         KagemushaRecursiveStateEqCircuitV1,
         KagemushaRecursiveStateEpCircuitV1,
@@ -827,7 +833,13 @@ pub(super) fn recursive_state_sha_messages_v1(
     mut witness: KagemushaRecursiveStateWitnessV1<'_>,
 ) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>), String> {
     witness.hash_claim = None;
-    match build_recursive_state_pair_impl_v1(eq_params, ep_params, witness, true)? {
+    match build_recursive_state_pair_impl_v1(
+        eq_params,
+        ep_params,
+        witness,
+        true,
+        RecursiveStateConstructionV1::Production,
+    )? {
         RecursiveStateBuildV1::Messages(eq, ep) => Ok((eq, ep)),
         RecursiveStateBuildV1::Authenticated(_, _, _, _) => {
             Err("recursive state discovery unexpectedly constructed a circuit".to_owned())
@@ -840,12 +852,65 @@ pub(super) fn recursive_state_sha_messages_v1(
     feature = "kagemusha-real-proof-harness",
     feature = "kagemusha-production-prover"
 ))]
-fn build_recursive_state_pair_impl_v1(
+
+/// Closed construction dispatch. The shipping variant preserves the explicit refusal.
+/// The test variant only exercises the identical complete zero-Bootstrap relation; it
+/// cannot install a Native owner or enter a monetary operation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RecursiveStateConstructionV1 {
+    Production,
+    #[cfg(test)]
+    OrdinaryZeroBootstrapQualification,
+}
+
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+impl RecursiveStateConstructionV1 {
+    fn require_allowed_witness(
+        self,
+        witness: &KagemushaRecursiveStateWitnessV1<'_>,
+    ) -> Result<(), String> {
+        #[cfg(test)]
+        if self == Self::OrdinaryZeroBootstrapQualification {
+            let s = &witness.state;
+            if s.operation != KagemushaOperationV1::Bootstrap
+                || s.predecessor.is_some()
+                || s.amount != 0
+                || s.successor.balance != 0
+                || s.successor.logical_sequence != 0
+                || s.successor.secure_index != 0
+                || s.successor.next_one_use_key_reference != [0; 32]
+                || witness.ordinary_selection.is_none()
+                || witness.hardware_selection.is_some()
+                || witness.mint_fold_opening.is_some()
+            {
+                return Err(
+                    "ordinary qualification requires the exact zero Bootstrap and original Guard"
+                        .into(),
+                );
+            }
+        }
+        let _ = witness;
+        Ok(())
+    }
+}
+
+#[cfg(any(
+    test,
+    feature = "kagemusha-real-proof-harness",
+    feature = "kagemusha-production-prover"
+))]
+pub(super) fn build_recursive_state_pair_impl_v1(
     eq_params: &ParamsIPA<EqAffine>,
     ep_params: &ParamsIPA<EpAffine>,
     witness: KagemushaRecursiveStateWitnessV1<'_>,
     discover_messages: bool,
+    construction: RecursiveStateConstructionV1,
 ) -> Result<RecursiveStateBuildV1, String> {
+    construction.require_allowed_witness(&witness)?;
     if discover_messages != witness.hash_claim.is_none() {
         return Err(
             "recursive state SHA claim is absent or present in the wrong construction phase"
@@ -1019,6 +1084,7 @@ fn build_recursive_state_pair_impl_v1(
         )
         .collect::<Vec<_>>();
     let (mut eq_builder, eq_sha, eq_output, eq_claim_binding) = build_scalar_half::<EqAffine>(
+        construction,
         witness.state.clone(),
         witness.guard_relation.clone(),
         &eq_svk,
@@ -1082,6 +1148,7 @@ fn build_recursive_state_pair_impl_v1(
         },
     )?;
     let (mut ep_builder, ep_sha, ep_output, ep_claim_binding) = build_scalar_half::<EpAffine>(
+        construction,
         witness.state,
         witness.guard_relation,
         &ep_svk,
@@ -1617,6 +1684,7 @@ fn constrain_apple_signed_subject_state_fields_v1<F: KagemushaPoseidonFieldV1>(
     feature = "kagemusha-production-prover"
 ))]
 fn build_scalar_half<C>(
+    construction: RecursiveStateConstructionV1,
     state: KagemushaStateRelationWitnessV1,
     guard_relation: KagemushaGuardBundleRelationWitnessV1,
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
@@ -1636,7 +1704,9 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
-    if witness.ordinary_selection.is_some() {
+    if witness.ordinary_selection.is_some()
+        && construction == RecursiveStateConstructionV1::Production
+    {
         return Err(
             "ordinary State requires the complete fixed-topology Guard original and current-lease consumer"
                 .to_owned(),
@@ -1832,6 +1902,14 @@ where
         .ok_or_else(|| "Kagemusha Ep credential audit public limbs are absent".to_owned())?
         .try_into()
         .map_err(|_| "Kagemusha Ep credential audit public limbs have wrong shape".to_owned())?;
+
+    if ordinary_data.is_some() {
+        super::ordinary_state_reserved::constrain_ordinary_state_reserved_guard_positions_v1(
+            &mut builder,
+            guard_eq_audit,
+            guard_ep_audit,
+        );
+    }
 
     let range = builder.range_chip();
     let operation = builder.assigned_instances[0][public_instance::OPERATION];
@@ -4834,6 +4912,59 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     const RECEIVER_LANE_TEST_K: u32 = 17;
+
+    #[test]
+    fn bootstrap_parser_slots_cannot_enter_checked_mint_fold_without_its_private_opening() {
+        let (public, _) = super::super::tests::state_verification_fixture();
+        let mut state = KagemushaStateRelationWitnessV1 {
+            operation: public.operation,
+            predecessor: public.predecessor,
+            successor: public.successor,
+            amount: public.amount,
+            journal_revision_before: public.journal_revision_before,
+            journal_revision_after: public.journal_revision_after,
+            transition_effect_digest: public.transition_effect_digest,
+            mint_finality_semantic_digest: public.mint_finality_semantic_digest,
+            mint_finality_proof_binding_digest: public.mint_finality_proof_binding_digest,
+            peer_credit_id: public.peer_credit_id,
+            recipient_encryption_key_binding: public.recipient_encryption_key_binding,
+            receive_credit: None,
+            receive_credit_binding_digest: public.receive_credit_binding_digest,
+            lifecycle_binding_digest: public.lifecycle_binding_digest,
+            prepared_transition_binding_digest: public.prepared_transition_binding_digest,
+            prepared_intent: public.prepared_intent,
+            transport_semantic_digest: public.transport_semantic_digest,
+            guard_statement_digest: public.guard_statement_digest,
+            eq_protocol_digest: public.eq_protocol_digest,
+            ep_protocol_digest: public.ep_protocol_digest,
+            guard_eq_protocol_digest: public.guard_eq_protocol_digest,
+            guard_ep_protocol_digest: public.guard_ep_protocol_digest,
+            mint_eq_protocol_digest: public.mint_eq_protocol_digest,
+            mint_ep_protocol_digest: public.mint_ep_protocol_digest,
+            mint_authorization_eq_protocol_digest: public.mint_authorization_eq_protocol_digest,
+            mint_authorization_ep_protocol_digest: public.mint_authorization_ep_protocol_digest,
+            commit_wrapper_eq_protocol_digest: public.commit_wrapper_eq_protocol_digest,
+            commit_wrapper_ep_protocol_digest: public.commit_wrapper_ep_protocol_digest,
+            guard_eq_credential_audit: public.guard_eq_credential_audit,
+            guard_ep_credential_audit: public.guard_ep_credential_audit,
+            eq_deferred_audit: public.eq_deferred_audit,
+            ep_deferred_audit: public.ep_deferred_audit,
+            replay_insert: None,
+        };
+        state
+            .validate()
+            .expect("complete zero-State relation shape");
+        // The actual production gate validates the canonical inactive lifecycle for Bootstrap.
+        // Neither the shape-valid parser originals nor zero balance create an opening cap.
+        validate_mint_fold_opening_against_state_v1(&state, None)
+            .expect("Bootstrap requires no mint opening");
+        state.operation = KagemushaOperationV1::MintFold;
+        assert_eq!(
+            validate_mint_fold_opening_against_state_v1(&state, None).unwrap_err(),
+            "MintFold requires its checked-preview private opening",
+        );
+        assert!(state.validate().is_err());
+    }
 
     #[test]
     fn paired_monetary_builder_rejects_unproved_one_use_key_heads() {

@@ -730,6 +730,11 @@ fn configured_dataspace_projection_preserves_description_only_identity() {
 
 #[test]
 fn restore_adopts_original_startup_pool_before_runtime_configuration() {
+    if crate::unit_test_support::run_in_isolated_harness(
+        "state::runtime_configuration_tests::restore_adopts_original_startup_pool_before_runtime_configuration",
+    ) {
+        return;
+    }
     run_runtime_configuration_test(|| {
         let state = State::new_for_testing(
             World::default(),
@@ -756,12 +761,28 @@ fn restore_adopts_original_startup_pool_before_runtime_configuration() {
         let probe_budget = iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         );
+        assert_eq!(probe_budget.reserved_bytes(), 0);
         let probe = restore(probe_budget.clone(), snapshot.clone()).unwrap();
         let retained_bytes = probe_budget.reserved_bytes();
         let restore_peak = probe_budget.peak_reserved_bytes();
         assert!(retained_bytes > 0);
         assert!(restore_peak >= retained_bytes);
+        // Dropping State retires its actual EBR allocations; the charge must
+        // remain while this real reader pin prevents reclamation.
+        let retirement_pin = crossbeam_epoch::pin();
         drop(probe);
+        retirement_pin.flush();
+        assert_eq!(probe_budget.reserved_bytes(), retained_bytes);
+        drop(retirement_pin);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while probe_budget.reserved_bytes() != 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "original restored owners were not reclaimed after their readers released"
+            );
+            crossbeam_epoch::pin().flush();
+            std::thread::yield_now();
+        }
         assert_eq!(probe_budget.reserved_bytes(), 0);
         let budget = iroha_allocation::AllocationBudget::new(restore_peak + 137);
         let held = budget.try_reserve_bytes(120).unwrap();

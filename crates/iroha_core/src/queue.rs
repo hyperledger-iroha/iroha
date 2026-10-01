@@ -3898,6 +3898,10 @@ impl Queue {
     }
     /// Whether the exact input remains locally pending at this applied State.
     pub fn contains_pending_hash(&self, hash: EntrypointHash, state: &State) -> bool {
+        #[cfg(test)]
+        if let Some(handoff) = self.pending_hash_state_view_handoff.lock().take() {
+            let _ = handoff.send(());
+        }
         let view = state.view();
         let _guard = self.push_remove_lock.lock();
         self.txs
@@ -7029,6 +7033,7 @@ pub mod tests {
             Metadata::default(),
         );
         let tx_hash = tx.as_ref().hash_as_entrypoint();
+        let original_input = tx.entrypoint_bytes().to_vec();
         queue.push(tx, state.view()).expect("push");
         assert_eq!(
             queue
@@ -7038,6 +7043,19 @@ pub mod tests {
                 .coordinator_route(),
             RoutingDecision::default()
         );
+        let original_hint = queue.routing_plan_hint(&tx_hash).unwrap();
+        let expected_current = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+            &nexus,
+            queue.txs.get(&tx_hash).unwrap().as_accepted(),
+            &state.world_view(),
+            0,
+            state_height_for_routing(&state),
+        )
+        .expect("independent committed routing policy");
+        assert_eq!(
+            expected_current.coordinator_route(),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
         state
             .set_nexus(nexus.clone())
             .expect("change routing policy within the original configured catalog");
@@ -7046,9 +7064,23 @@ pub mod tests {
             queue
                 .routing_plans
                 .get(&tx_hash)
-                .expect("immutable routing plan")
+                .expect("refreshed routing hint")
                 .coordinator_route(),
-            RoutingDecision::default()
+            expected_current.coordinator_route()
+        );
+        assert_eq!(
+            original_hint,
+            RoutingPlan::single(RoutingDecision::default())
+        );
+        assert_eq!(
+            queue
+                .txs
+                .get(&tx_hash)
+                .unwrap()
+                .as_accepted()
+                .entrypoint_bytes()
+                .as_slice(),
+            original_input.as_slice()
         );
         let admitted = queue
             .txs
@@ -7114,13 +7146,15 @@ pub mod tests {
                 )
             })
             .find(|tx| {
-                let hash = tx.as_ref().hash_as_entrypoint();
+                let hash = tx.routing_hash();
                 let mut bytes = [0_u8; core::mem::size_of::<u64>()];
                 bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
                 u64::from_le_bytes(bytes) % 2 == 1
             })
             .expect("fixture should find a transaction hashing to the elastic shard");
         let tx_hash = tx.as_ref().hash_as_entrypoint();
+        let original_input = tx.entrypoint_bytes().to_vec();
+        let routed_input = tx.clone();
         queue.push(tx, state.view()).expect("push pending tx");
         assert_eq!(
             queue
@@ -7130,6 +7164,7 @@ pub mod tests {
                 .coordinator_route(),
             RoutingDecision::default()
         );
+        let original_hint = queue.routing_plan_hint(&tx_hash).unwrap();
         let mut elastic = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_string(),
@@ -7156,6 +7191,18 @@ pub mod tests {
         state.reseed_static_lane_incarnations_for_tests();
         seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
+        let expected_current = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+            &committed_nexus,
+            &routed_input,
+            &state.world_view(),
+            0,
+            state_height_for_routing(&state),
+        )
+        .expect("independent current elastic routing plan");
+        assert_eq!(
+            expected_current.coordinator_route(),
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+        );
         let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
@@ -7163,9 +7210,9 @@ pub mod tests {
             queue
                 .routing_plans
                 .get(&tx_hash)
-                .expect("immutable plan")
+                .expect("refreshed current plan")
                 .coordinator_route(),
-            RoutingDecision::default()
+            expected_current.coordinator_route()
         );
         let admitted_plan = queue
             .routing_plans
@@ -7174,16 +7221,31 @@ pub mod tests {
             .clone();
         assert_eq!(
             admitted_plan.coordinator_route(),
-            RoutingDecision::default(),
-            "autoscale scale-out must preserve the exact admitted proposal routing plan"
+            expected_current.coordinator_route(),
+            "autoscale scale-out refreshes the current routing hint"
         );
         assert_eq!(
             queue
                 .routing_plan_hint(&tx_hash)
                 .map(|plan| plan.coordinator_route()),
-            Some(RoutingDecision::default()),
-            "the queue-owned plan store must preserve the exact admitted plan"
+            Some(expected_current.coordinator_route()),
+            "the queue-owned plan store follows independently resolved current policy"
         );
+        assert_eq!(
+            original_hint,
+            RoutingPlan::single(RoutingDecision::default())
+        );
+        assert_eq!(
+            queue
+                .txs
+                .get(&tx_hash)
+                .unwrap()
+                .as_accepted()
+                .entrypoint_bytes()
+                .as_slice(),
+            original_input.as_slice()
+        );
+        assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
         assert!(!queue.accepted_work_validation_faulted());
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
         assert!(
@@ -9646,11 +9708,31 @@ pub mod tests {
             }
             world.commit();
         }
-        // The original signed genesis derives the real roster and height-one subject.
-        let chain =
+        // The original signed genesis derives the real roster. A subject is
+        // written only for message or rotation work, not for initial installation.
+        let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(world, 0)).expect("signed SCCP genesis");
+        assert_eq!(
+            subjects::statement_digest_of(&chain.state().view(), 1),
+            None
+        );
+        let heartbeat_ms = chain
+            .state()
+            .world_view()
+            .sccp_parameters()
+            .as_ref()
+            .expect("configured SCCP")
+            .roster_max_age_ms;
+        let heartbeat = chain.sign(
+            &ALICE_KEYPAIR,
+            [Log::new(Level::INFO, "original signed SCCP heartbeat work".into()).into()],
+            heartbeat_ms,
+        );
+        assert_eq!(chain.commit_at(heartbeat_ms, vec![heartbeat]), [true]);
+        let subject_height = chain.height();
+        assert_eq!(subject_height, 2);
         let state = chain.state();
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(heartbeat_ms));
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let accepted = |keypair: &KeyPair, instructions: Vec<InstructionBox>| {
             let transaction = TransactionBuilder::new_with_time_source(
@@ -9686,11 +9768,11 @@ pub mod tests {
                     .expect("original bridge key is a roster member"),
             )
             .expect("four-member index fits u8");
-            let digest = subjects::statement_digest_of(&view, 1)
-                .expect("original committed genesis statement digest");
+            let digest = subjects::statement_digest_of(&view, subject_height)
+                .expect("original committed heartbeat statement digest");
             let instruction = SubmitSccpAttestationsV1 {
                 entries: vec![SccpAttestationSignatureV1 {
-                    height: 1,
+                    height: subject_height,
                     signer_index,
                     signature: key.sign_digest(&digest).expect("sign committed statement"),
                 }],

@@ -621,27 +621,45 @@ check_android() {
   require_file "$settings" "Kotlin settings"
   require_literal "$settings" 'include(":core-jvm")' "Kotlin core-jvm module"
   require_literal "$settings" 'include(":client-android")' "Kotlin client-android module"
+  require_literal "$settings" 'include(":kagemusha-wallet-android")' "Kotlin wallet module"
   require_file "$ROOT_DIR/kotlin/core-jvm/build.gradle.kts" "Kotlin core-jvm build"
   require_file "$ROOT_DIR/kotlin/client-android/build.gradle.kts" "Kotlin client-android build"
+  require_file "$ROOT_DIR/kotlin/kagemusha-wallet-android/build.gradle.kts" "Kotlin wallet build"
 
   if [[ "$REQUIRE_ANDROID_OUTPUTS" != "1" ]]; then
     return 0
   fi
-  local paths jar aar
+  local paths jar aar wallet_aar remainder
   local path_arguments=("$ROOT_DIR/scripts/mobile_sdk_android_artifacts.py" --root "$ROOT_DIR")
   if [[ -n "${MOBILE_SDK_ANDROID_ARTIFACT_DIR+x}" ]]; then
     path_arguments+=(--artifact-dir "$MOBILE_SDK_ANDROID_ARTIFACT_DIR")
+  fi
+  if [[ -n "${MOBILE_SDK_MAVEN_VERSION:-}" ]]; then
+    path_arguments+=(--version "$MOBILE_SDK_MAVEN_VERSION")
   fi
   paths="$(run_isolated_checker_python "${path_arguments[@]}")" || {
     fail "canonical Kotlin Android build artifacts are missing or invalid"
     return
   }
   jar="${paths%%$'\n'*}"
-  aar="${paths#*$'\n'}"
+  remainder="${paths#*$'\n'}"
+  aar="${remainder%%$'\n'*}"
+  wallet_aar="${remainder#*$'\n'}"
+  [[ "$paths" != "$remainder" && "$remainder" != "$wallet_aar" && "$wallet_aar" != *$'\n'* ]] || {
+    fail "canonical Android artifact selection must return exactly three paths"
+    return
+  }
+  require_file "$jar" "core-jvm runtime JAR"
+  require_file "$wallet_aar" "kagemusha-wallet-android release AAR"
   require_file "$aar" "client-android release AAR"
   [[ -f "$aar" ]] || return
   command -v unzip >/dev/null 2>&1 || { fail "unzip is required for Android artifact validation"; return; }
   local entry
+  for entry in AndroidManifest.xml classes.jar; do
+    if ! unzip -Z1 "$wallet_aar" | grep -Fxq -- "$entry"; then
+      fail "kagemusha-wallet-android release AAR is missing $entry"
+    fi
+  done
   for entry in \
     AndroidManifest.xml \
     classes.jar \

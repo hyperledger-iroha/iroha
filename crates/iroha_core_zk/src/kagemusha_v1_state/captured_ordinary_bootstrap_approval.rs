@@ -301,10 +301,10 @@ mod tests {
             integrity_lease: None,
         }
     }
-    fn refresh(
+    fn current_lease(
         fixture: &KagemushaOrdinaryRetailEnrollmentFixtureV1,
-        journal: &mut KagemushaOrdinaryLogicalApprovalJournalV1,
-    ) {
+        journal: &KagemushaOrdinaryLogicalApprovalJournalV1,
+    ) -> Arc<KagemushaVerifiedPlayIntegrityRefreshLeaseV1> {
         let (challenge, lease) = fixture.integrity_refresh_originals();
         let issuer =
             iroha_crypto::KeyPair::from_seed(vec![61; 32], iroha_crypto::Algorithm::Ed25519);
@@ -321,13 +321,23 @@ mod tests {
                 )
                 .unwrap(),
         );
+        lease
+    }
+    fn refresh(
+        fixture: &KagemushaOrdinaryRetailEnrollmentFixtureV1,
+        journal: &mut KagemushaOrdinaryLogicalApprovalJournalV1,
+    ) {
+        let lease = current_lease(fixture, journal);
         journal.retain_integrity_lease(lease, 1500).unwrap();
     }
     #[test]
     fn captured_bootstrap_survives_slow_proving_without_renewing_live_approval() {
         let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
         let tmp = tempfile::tempdir().unwrap();
-        let mut journal = journal(&fixture, &tmp.path().join("capture"));
+        let mut journal = journal(
+            &fixture,
+            &tmp.path().canonicalize().unwrap().join("capture"),
+        );
         journal
             .persist_bootstrap_capture_at_checked_native_time(302)
             .unwrap();
@@ -365,7 +375,10 @@ mod tests {
     fn first_capture_requires_original_live_interval_and_exact_native_admission() {
         let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
         let tmp = tempfile::tempdir().unwrap();
-        let mut journal = journal(&fixture, &tmp.path().join("expired"));
+        let mut journal = journal(
+            &fixture,
+            &tmp.path().canonicalize().unwrap().join("expired"),
+        );
         let prefix = journal.wal.recovery_prefix().unwrap();
         assert!(
             journal
@@ -396,7 +409,7 @@ mod tests {
         use std::io::Write as _;
         let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::new(false);
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("durable");
+        let path = tmp.path().canonicalize().unwrap().join("durable");
         let mut journal = journal(&fixture, &path);
         assert!(journal.captured_bootstrap_at_native_time(302).is_err());
         journal
@@ -408,12 +421,24 @@ mod tests {
         let original = cap.original().to_vec();
         drop(cap);
         let prefix = journal.wal.recovery_prefix().unwrap();
-        let mut reader = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        assert!(matches!(
+            PrivateJournal::open_existing(&path, FORMAT),
+            Err(PrivateJournalError::AlreadyOpen)
+        ));
         let mut originals = Vec::new();
-        while let Some((_, bytes)) = reader.replay_next().unwrap() {
-            originals.push(norito::decode_canonical::<Record>(&bytes).unwrap());
-        }
-        assert_eq!(reader.recovery_prefix().unwrap(), prefix);
+        assert_eq!(
+            journal
+                .wal
+                .scan_complete(|_, bytes| {
+                    originals.push(
+                        norito::decode_canonical::<Record>(bytes)
+                            .map_err(|_| PrivateJournalError::Corrupt)?,
+                    );
+                    Ok(())
+                })
+                .unwrap(),
+            prefix
+        );
         assert_eq!(originals.len(), 4);
         assert!(matches!(&originals[2],Record::Approval{original:raw,..} if raw==&original));
         assert_eq!(
@@ -432,5 +457,140 @@ mod tests {
             .write_all(&[1])
             .unwrap();
         assert!(cap.recheck_captured_bootstrap_at_native_time(304).is_err());
+    }
+
+    #[test]
+    fn native_current_lease_finalization_preserves_capture_and_reopened_wal() {
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().canonicalize().unwrap().join("current-recovery");
+        let mut journal = journal(&fixture, &path);
+        journal
+            .persist_bootstrap_capture_at_checked_native_time(302)
+            .unwrap();
+        let original = journal
+            .captured_bootstrap_at_native_time(302)
+            .unwrap()
+            .original()
+            .to_vec();
+        let before = journal.wal.recovery_prefix().unwrap();
+        assert!(
+            journal
+                .finalize_replayed_native_current_integrity_lease(None, 1500)
+                .is_err()
+        );
+        assert_eq!(journal.wal.recovery_prefix().unwrap(), before);
+        let lease = current_lease(&fixture, &journal);
+        journal
+            .finalize_replayed_native_current_integrity_lease(Some(&lease), 1500)
+            .unwrap();
+        let selected = Arc::clone(journal.retained_integrity_lease().unwrap());
+        assert!(Arc::ptr_eq(&selected, &lease));
+        let cap = journal.captured_bootstrap_at_native_time(1500).unwrap();
+        assert_eq!(cap.captured_at_ms(), 302);
+        assert_eq!(cap.original(), original);
+        assert!(cap.original_approval_integrity_lease().is_none());
+        assert!(journal.approved_at_trusted_time(1500).is_err());
+        drop(cap);
+        let prefix = journal.wal.recovery_prefix().unwrap();
+        let independently_readmitted = current_lease(&fixture, &journal);
+        assert!(!Arc::ptr_eq(&selected, &independently_readmitted));
+        journal
+            .finalize_replayed_native_current_integrity_lease(Some(&independently_readmitted), 1501)
+            .unwrap();
+        assert_eq!(journal.wal.recovery_prefix().unwrap(), prefix);
+        assert!(Arc::ptr_eq(
+            journal.retained_integrity_lease().unwrap(),
+            &selected
+        ));
+        drop(journal);
+        let mut reader = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+        let mut records = Vec::new();
+        while let Some((_, raw)) = reader.replay_next().unwrap() {
+            records.push(norito::decode_canonical::<Record>(&raw).unwrap());
+        }
+        assert_eq!(reader.recovery_prefix().unwrap(), prefix);
+        assert_eq!(records.len(), 5);
+        assert!(matches!(&records[2], Record::Approval { original: raw, .. } if raw == &original));
+        assert!(matches!(
+            &records[3],
+            Record::CaptureBootstrap {
+                captured_at_ms: 302,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&records[4], Record::IntegrityLease { original: raw } if raw == selected.original())
+        );
+    }
+
+    #[test]
+    fn native_current_lease_finalization_rejects_expiry_and_foreign_preview_without_append() {
+        let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
+        let temp = tempfile::tempdir().unwrap();
+        let mut journal = journal(
+            &fixture,
+            &temp.path().canonicalize().unwrap().join("rejected-current"),
+        );
+        journal
+            .persist_bootstrap_capture_at_checked_native_time(302)
+            .unwrap();
+        let before = journal.wal.recovery_prefix().unwrap();
+        let lease = current_lease(&fixture, &journal);
+        assert!(
+            journal
+                .finalize_replayed_native_current_integrity_lease(Some(&lease), 2400)
+                .is_err()
+        );
+        assert_eq!(journal.wal.recovery_prefix().unwrap(), before);
+        journal.bootstrap.state.lane.device_lane_id = [99; 32];
+        assert!(
+            journal
+                .finalize_replayed_native_current_integrity_lease(Some(&lease), 1500)
+                .is_err()
+        );
+        assert_eq!(journal.wal.recovery_prefix().unwrap(), before);
+        assert!(journal.retained_integrity_lease().is_none());
+        assert_eq!(journal.pending.as_ref().unwrap().captured_at_ms, Some(302));
+    }
+
+    #[test]
+    fn uncertain_native_current_lease_adoption_poison_prevents_capture_exposure() {
+        use crate::kagemusha_v1_state::private_journal::TestPersistenceFailure;
+        for failure in [
+            TestPersistenceFailure::BeforeSync,
+            TestPersistenceFailure::AfterSync,
+            TestPersistenceFailure::ReplaceAfterSync,
+        ] {
+            let fixture = KagemushaOrdinaryRetailEnrollmentFixtureV1::android_with_integrity();
+            let temp = tempfile::tempdir().unwrap();
+            let mut journal = journal(
+                &fixture,
+                &temp
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .join("uncertain-current"),
+            );
+            journal
+                .persist_bootstrap_capture_at_checked_native_time(302)
+                .unwrap();
+            let lease = current_lease(&fixture, &journal);
+            journal.wal.failure.set(Some(failure));
+            assert!(
+                journal
+                    .finalize_replayed_native_current_integrity_lease(Some(&lease), 1500)
+                    .is_err()
+            );
+            assert!(journal.retained_integrity_lease().is_none());
+            assert_eq!(journal.pending.as_ref().unwrap().captured_at_ms, Some(302));
+            assert!(journal.captured_bootstrap_at_native_time(1500).is_err());
+            journal.wal.failure.set(None);
+            assert!(
+                journal
+                    .finalize_replayed_native_current_integrity_lease(Some(&lease), 1501)
+                    .is_err()
+            );
+        }
     }
 }

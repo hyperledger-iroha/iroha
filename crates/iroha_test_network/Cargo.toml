@@ -9,6 +9,12 @@ license.workspace = true
 
 [features]
 default = []
+dev-tools = []
+
+[[bin]]
+name = "taira_beacon_bootstrap"
+path = "src/bin/taira_beacon_bootstrap.rs"
+required-features = ["dev-tools"]
 
 [[test]]
 name = "taira_consensus_contracts"

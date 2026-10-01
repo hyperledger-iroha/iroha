@@ -10,6 +10,56 @@ pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
     )))
 }
 
+/// Run one exact test in this harness with private process-wide globals.
+///
+/// Returns `true` in the parent after the child completes exactly once, and
+/// `false` in the child so the caller executes its original assertions.
+pub(crate) fn run_in_isolated_harness(exact: &str) -> bool {
+    const CHILD: &str = "IROHA_CORE_ISOLATED_UNIT_TEST_CHILD";
+    if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new(exact)) {
+        return false;
+    }
+    let output = std::process::Command::new(
+        std::env::current_exe().expect("resolve Core unit-test executable"),
+    )
+    .arg(exact)
+    .args(["--exact", "--nocapture", "--test-threads=1"])
+    .env(CHILD, exact)
+    .output()
+    .expect("execute exact isolated test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "{exact} failed in its isolated harness\nstdout:\n{stdout}\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.contains(&format!("test {exact} ... ok"))
+            && stdout.contains("test result: ok. 1 passed; 0 failed;"),
+        "{exact} did not complete exactly once\nstdout:\n{stdout}\nstderr:\n{stderr}",
+    );
+    true
+}
+
+/// Produce the complete original AXT fixture after transient local contention.
+///
+/// Only the typed busy result is retried. Semantic, resource and verification
+/// failures remain immediate test failures, and the request never changes.
+pub(crate) fn prove_axt_bound_batch_when_available(
+    batch: &fastpq_prover::TransitionBatch,
+    binding: &iroha_data_model::nexus::AxtFastpqBinding,
+) -> Vec<u8> {
+    loop {
+        match fastpq_prover::prove_axt_bound_batch(batch, binding) {
+            Ok(proof) => return proof,
+            Err(fastpq_prover::Error::ProducerBusy) => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("original AXT fixture proof failed: {error:?}"),
+        }
+    }
+}
+
 mod tests {
     use super::synthetic_network_id;
 

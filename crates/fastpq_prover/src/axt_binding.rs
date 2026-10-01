@@ -201,7 +201,9 @@ pub fn set_axt_remote_spend_claims(
 ///
 /// # Errors
 /// Rejects batch/resource limits, noncanonical or mismatched bindings, unsupported
-/// claims, invalid witnesses, concurrent production or failed proof verification.
+/// claims, invalid witnesses or failed proof verification. Concurrent production
+/// returns [`Error::ProducerBusy`]; callers may retry the unchanged request after
+/// the active producer releases its permit.
 pub fn prove_axt_bound_batch(
     batch: &TransitionBatch,
     binding: &AxtFastpqBinding,

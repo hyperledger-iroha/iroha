@@ -788,10 +788,6 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
     );
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction_for_callback_testing();
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
     Register::account(new_sample_account(&ALICE_ID))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -846,6 +842,11 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
 }
 #[test]
 fn ivm_time_trigger_reuses_cache_across_blocks() {
+    if crate::unit_test_support::run_in_isolated_harness(
+        "state::tests::ivm_time_trigger_reuses_cache_across_blocks",
+    ) {
+        return;
+    }
     // Positive reuse requires enabled retention throughout both owner lifetimes.
     let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
         capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
@@ -1806,6 +1807,11 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction_for_callback_testing();
+        seed_trigger_domain_name_lease(
+            &mut stx,
+            &ALICE_ID,
+            &DomainId::try_new("wonderland", "universal").expect("asset-owning domain"),
+        );
         Register::domain(Domain::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
         ))

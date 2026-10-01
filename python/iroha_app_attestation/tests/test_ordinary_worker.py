@@ -69,3 +69,20 @@ class OrdinaryWorkerProtectionTests(unittest.TestCase):
                 patch.object(worker,'NativeParentChannel') as channel:
             self.assertEqual(worker.main(),78)
             channel.assert_not_called()
+
+    def test_darwin_failed_kernel_probe_precedes_private_channel_or_role_intake(self):
+        with patch.object(worker.sys,'platform','darwin'),patch.object(worker.sys,'argv',['worker']), \
+                patch.object(worker,'protect_darwin_process',side_effect=AttestationRejected('closed')), \
+                patch.object(worker,'close_unrelated_worker_descriptors') as roles, \
+                patch.object(worker,'NativeParentChannel') as channel:
+            self.assertEqual(worker.main(),78)
+            roles.assert_not_called()
+            channel.assert_not_called()
+
+    def test_unsupported_platform_does_not_select_a_protection_fallback(self):
+        with patch.object(worker.sys,'platform','unsupported'),patch.object(worker.sys,'argv',['worker']), \
+                patch.object(worker,'protect_private_process') as protection, \
+                patch.object(worker,'NativeParentChannel') as channel:
+            self.assertEqual(worker.main(),78)
+            protection.assert_not_called()
+            channel.assert_not_called()

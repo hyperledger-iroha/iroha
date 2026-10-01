@@ -9729,6 +9729,12 @@ mod tests {
                 pending
                     .prepare(crate::sumeragi::test_chain::Signers::Quorum)
                     .expect("certify the original execution before storing its body");
+                assert!(pending.inspect_prepared(|_| ()).is_err());
+                pending
+                    .prepare_publication_for_inspection(
+                        crate::sumeragi::test_chain::Signers::Quorum,
+                    )
+                    .expect("durable original metadata defers at the actual history writer");
                 let certified = pending
                     .inspect_prepared(|view| view.block.as_ref().clone())
                     .expect("retain the exact unpublished certified carrier");

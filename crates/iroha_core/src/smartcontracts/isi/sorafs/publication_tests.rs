@@ -60,14 +60,37 @@ fn publication_assertion_requires_exact_live_assignment_and_all_completions() {
     assert!(assertion.clone().execute(&other, &mut stx).is_err());
     let canonical = validate_stored_replication_order(&order, "publication fixture").unwrap();
     for assignment in canonical.assignments {
-        completion_instruction(
-            order_id,
-            ProviderId::new(assignment.provider_id),
-            5,
-            &alice(),
-        )
-        .execute(&alice(), &mut stx)
-        .unwrap();
+        let provider_id = ProviderId::new(assignment.provider_id);
+        let authority = stx
+            .world
+            .provider_ingest_completion_authorities
+            .get(&provider_id)
+            .cloned()
+            .expect("automatic replication provider has a registered completion authority");
+        let mut completion = completion_instruction(order_id, provider_id, 5, &alice());
+        assert_ne!(completion.expected_authority, authority);
+        let before = stx.world.replication_orders.get(&order_id).unwrap().clone();
+        let error = completion
+            .clone()
+            .execute(&alice(), &mut stx)
+            .expect_err("fabricated completion policy must not authorize publication");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("completion authority changed before commit")
+        ));
+        assert_eq!(stx.world.replication_orders.get(&order_id), Some(&before));
+        completion.expected_authority = authority.clone();
+        completion.expected_assignment_revision = order.assignment_revision;
+        completion
+            .execute(&alice(), &mut stx)
+            .expect("exact registered provider authority completes its live assignment");
+        let retained = stx.world.replication_orders.get(&order_id).unwrap();
+        let completed = retained.provider_completion(provider_id).unwrap();
+        assert_eq!(completed.completion_authority, authority);
+        assert_eq!(completed.assignment_revision, order.assignment_revision);
+        assert_eq!(completed.finalized_anchor, completion_anchor());
     }
     AssertSorafsPublicationV1 {
         require_complete: true,

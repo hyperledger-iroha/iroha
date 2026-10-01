@@ -28,6 +28,8 @@ from .ordinary_service import OrdinaryCredentialService, PATH, RAW_PATH, REFRESH
 from .ordinary_refresh_issuance import DurableOrdinaryIntegrityRefreshIssuer
 from .play_integrity import GooglePlayIntegrityVerifier
 from .service import _decode_base64, _decode_hex32
+from .private_process import (close_unrelated_worker_descriptors, disable_core_dumps,
+                              protect_darwin_process, require_worker_role_originals)
 
 STARTUP_SCHEMA = "iroha.kagemusha.ordinary-issuer-worker-startup.v1"
 REQUEST_SCHEMA = "iroha.kagemusha.ordinary-issuer-worker-request.v1"
@@ -36,7 +38,11 @@ MAX_PACKET_BYTES = 3*1024*1024
 
 def protect_private_process() -> None:
     """Set and verify protection in this image, since exec resets dumpability."""
-    require(sys.platform == "linux", "private issuer requires Linux protection")
+    require(sys.platform in ("linux", "darwin"), "private issuer process protection unavailable")
+    disable_core_dumps()
+    if sys.platform == "darwin":
+        protect_darwin_process()
+        return
     process = ctypes.CDLL(None, use_errno=True)
     prctl = process.prctl
     prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
@@ -143,7 +149,7 @@ def _command_path(command: dict) -> str:
     return {"raw":RAW_PATH,"credential":PATH,"refresh":REFRESH_PATH}[command["phase"]]
 
 
-def serve_native_parent(channel:NativeParentChannel) -> None:
+def serve_native_parent(channel:NativeParentChannel, roles:frozenset[int]) -> None:
     oauth=None;encoder=None;raw_encoder=None
     try:
         startup=channel.receive()
@@ -153,6 +159,7 @@ def serve_native_parent(channel:NativeParentChannel) -> None:
             and type(startup["credential_owner_uid"]) is int and startup["credential_owner_uid"]==0
             and type(startup["google_credential_present"]) is bool,
             "Native worker startup layout differs")
+        require_worker_role_originals(roles,startup["google_credential_present"])
         raw_projection=_decode_base64(startup["projection_base64"],"Native policy projection",2*1024*1024)
         pin=_decode_hex32(startup["projection_sha256"],"Native policy projection pin")
         require(hashlib.sha256(raw_projection).digest()==pin,"Native policy projection original changed")
@@ -207,13 +214,16 @@ def serve_native_parent(channel:NativeParentChannel) -> None:
 
 
 def main() -> int:
-    if len(sys.argv)!=1 or sys.platform!="linux" or sys.version_info<(3,10):
+    if len(sys.argv)!=1 or sys.platform not in ("linux","darwin") or sys.version_info<(3,10):
         return 78
     channel=None
     try:
         protect_private_process()
+        require(sys.flags.isolated and sys.flags.ignore_environment and sys.flags.dont_write_bytecode,
+                "private Native worker requires its installed isolated Python launch")
+        roles=close_unrelated_worker_descriptors()
         channel=NativeParentChannel(9,10)
-        serve_native_parent(channel)
+        serve_native_parent(channel,roles)
         return 0
     except Exception:
         # No diagnostics containing private credentials, request originals or

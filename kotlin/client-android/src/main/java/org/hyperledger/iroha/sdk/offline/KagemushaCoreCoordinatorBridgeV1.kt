@@ -28,15 +28,29 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
 ) : AutoCloseable {
     /** Invoke one method only after strict framing; reject substituted response identities. */
     @Synchronized
-    fun invoke(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>): List<ByteArray> {
+    fun invoke(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>): List<ByteArray> =
+        invokeOriginal(method, fields, ordinaryBootstrap = false)
+
+    @Synchronized
+    internal fun invokeOrdinaryBootstrapApproval(fields: List<ByteArray>): List<ByteArray> =
+        invokeOriginal(KagemushaCoreCoordinatorMethodV1.PREPARED_APP_OPERATION_APPROVAL, fields, ordinaryBootstrap = true)
+
+    private fun invokeOriginal(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>, ordinaryBootstrap: Boolean): List<ByteArray> {
         check(handle != 0L) { "KAGEMUSHA native coordinator handle is closed" }
-        val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields)
-        val nativeFields = KagemushaCoreCoordinatorFrameV1.decodeRequest(method, request).toTypedArray()
+        val request = if (ordinaryBootstrap) KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalRequest(fields)
+            else KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields)
+        val nativeFields = (if (ordinaryBootstrap) KagemushaCoreCoordinatorFrameV1.decodeOrdinaryBootstrapApprovalRequest(request)
+            else KagemushaCoreCoordinatorFrameV1.decodeRequest(method, request)).toTypedArray()
         return try {
             val response = endpoint.invoke(handle, method.code, nativeFields)
                 ?: throw IllegalStateException("KAGEMUSHA native coordinator rejected or could not execute the method")
-            val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, response.toList())
-            KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request, responseFrame)
+            if (ordinaryBootstrap) {
+                val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeOrdinaryBootstrapApprovalResponse(request, response.toList())
+                KagemushaCoreCoordinatorFrameV1.decodeOrdinaryBootstrapApprovalResponse(request, responseFrame)
+            } else {
+                val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, response.toList())
+                KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request, responseFrame)
+            }
         } catch (error: Throwable) {
             // Dispatch may have advanced hardware even when JNI or response decoding failed.
             // Drop the local handle before asking native Core to revoke its owner.

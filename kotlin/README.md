@@ -475,7 +475,7 @@ proof unchanged and independently verifies those originals before publishing fun
 Exact retries recover the same history identity, proof and physical evidence; host
 operation storage, generic device operation 17 and Core/software signatures cannot
 substitute. A fresh authenticated wallet observation follows native completion.
-The current closed schema-2 inventory contains all 18 coordinator methods.
+The current closed schema-2 inventory contains all 21 coordinator methods.
 Method 18 reads the installed native release ID, hardware-policy digest and provider
 policy registry root from the original selected Core owner under its observation
 lease. The policy digest remains bound to qualification signatures; aggregate state
@@ -485,7 +485,47 @@ wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiv
 codec handles bounded canonical preparation, candidate, recovery, and redemption
 receipt projections. The adapter checks public-input digests, operation identities,
 qualified creation context, retained recovery scope, and installed aggregate scope.
-The same adapter exposes `initialEnrollment()` for the bounded method-12 ceremony.
+`KagemushaAndroidOrdinaryEnrollmentV1` composes the same adapter's Native C21
+reservation, authenticated signed preparation, persistent generated hardware
+P-256 key, raw admission, E20 possession, governed Play Integrity request and
+credential admission. Native C20 phases 9–14 then retain the FI challenge,
+wallet invocation and exact original wallet signature before the protected FI
+finish request. The wallet signer remains separate from the platform app key.
+Explicit retries reuse the same complete Google and wallet originals; a retained
+wallet invocation without a signature requires Native recovery. The explicit
+Google invalid-provider error permits a new warmup only on the next user action.
+`beginOrResumeBootstrapApproval()` first completes that same FI ceremony, then
+uses the separate method-19 phase-8 Bootstrap capability bound to the original C, enrolled
+alias/key and retained FI credential. Its selector is SHA-256 of ASCII
+`iroha:kagemusha:v1:ordinary-bootstrap-operation-id` followed by a NUL byte and
+the complete original FI certificate bytes. Native independently checks that
+selector before preparing the zero-index S and exact W. The platform signs only
+after the Native durable fence; retries consume retained DER or recover the exact
+original receipt without signing again. Generic monetary approval still rejects
+Bootstrap. Returned enrollment and approval originals grant no money permission;
+genuine State/Guard publication and the ordinary Native monetary owner remain
+separate requirements.
+`KagemushaOrdinaryCashApprovalProjectionV1` checks copied public W325/S460 originals
+through separate preparation and terminal entry points. Preparation requires signed
+purpose 2 and zero candidate/body commitments; terminal requires signed purpose 1
+and both commitments exactly for send/redemption. Both require exact-next unsigned
+128-bit logical indices and SHA-256 of the complete original S460 bytes, including
+its existing domain and length once. Retained ordinary public bindings must match
+the full S and original operation/account/authority/key/credential/Guard fields;
+S's credential ID must equal W's enrollment digest. These projections authenticate
+no issuer, platform signature, current lease, State/Guard proof or monetary owner.
+The ordinary cash method-19 producer and current-money holder remain separate work;
+the projection does not reuse the Bootstrap capability or OEM enrollment.
+`KagemushaOrdinaryTransitionStatementProjectionV1` accepts the existing full model
+digest preimage: BE64(40), its NUL-terminated transition domain, BE64(1089), and
+the 1089-byte body with little-endian integers. It hashes all 1145 original bytes
+once, matches S's transition digest and operation, and correlates common release,
+network/lane/profile/policy scope. It provides no alternate encoder or reconstruction
+from the recursive State's 93 public cells; Native must supply the complete retained
+model original and authenticate both State/Guard parities and current custody.
+The product supplies protected HTTP and wallet signing after the trusted Native
+account/release source is installed. An applet is not an enrollment prerequisite.
+The adapter also exposes `initialEnrollment()` for the bounded OEM method-12 ceremony.
 It retains one phase-1 selection only in the original process. Phase-7 rechecks
 that exact selection, and phase-4 reads its original possession proof, while the
 same native owner remains live. A failed dispatch or response publication revokes

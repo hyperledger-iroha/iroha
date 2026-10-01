@@ -247,6 +247,68 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         assertEquals(2, googleCalls); assertEquals(1, httpCertificates)
     }
 
+    @Test fun sharedWorkflowBootstrapsOnlyTheCompletedFiOriginalAndRetainsOneHardwareInvocation() = runBlocking {
+        val e = Endpoint(); var walletCalls = 0; var httpCalls = 0; var osCalls = 0
+        val workflow = e.workflow({ request -> httpCalls++; e.reply(request) }, { walletCalls++; ByteArray(64) { 0x61 } },
+            bootstrapSigner = { prepared -> prepared.performPlatformSigning { alias, challenge, point, digest, message, _, guard ->
+                osCalls++; assertEquals(3, e.retailState); assertEquals(1, e.bootstrapState); guard()
+                assertEquals(e.alias.toString(Charsets.UTF_8), alias); assertContentEquals(e.attempt, challenge)
+                assertContentEquals(e.point, point); assertContentEquals(sha(e.point), digest)
+                assertContentEquals(e.bootstrapFields()[1], message); der.copyOf()
+            } })
+        val first = workflow.beginOrResumeBootstrapApproval()
+        val expected = sha("iroha:kagemusha:v1:ordinary-bootstrap-operation-id\u0000".toByteArray(Charsets.US_ASCII) + e.retailCertificate)
+        assertContentEquals(expected, first.bootstrapOperationId())
+        assertContentEquals(e.retailCertificate, first.originalRetailCertificate())
+        assertContentEquals(e.enrollmentId, first.enrollmentId())
+        assertContentEquals(e.bootstrapReceipt(), first.originalApprovalReceipt())
+        assertContentEquals(der, e.bootstrapRaw)
+        assertEquals(1, e.bootstrapPreparations); assertEquals(1, e.bootstrapRetains)
+        first.bootstrapOperationId().fill(0); first.originalApprovalReceipt().fill(0); first.originalBootstrapSelection().fill(0)
+        val again = workflow.beginOrResumeBootstrapApproval()
+        assertContentEquals(expected, again.bootstrapOperationId()); assertContentEquals(e.bootstrapReceipt(), again.originalApprovalReceipt())
+        assertEquals(4, httpCalls); assertEquals(1, walletCalls); assertEquals(1, osCalls)
+        assertEquals(1, e.bootstrapPreparations); assertEquals(1, e.bootstrapRetains)
+    }
+
+    @Test fun sharedWorkflowCannotPrepareBootstrapBeforeAnAmbiguousFiFinishHasCompleted() = runBlocking {
+        val e = Endpoint(); var lost = true; var osCalls = 0
+        val workflow = e.workflow({ request ->
+            if (request.path.endsWith("/finish") && lost) { lost = false; error("Lost FI reply") }; e.reply(request)
+        }, { ByteArray(64) { 0x61 } }, bootstrapSigner = { prepared ->
+            prepared.performPlatformSigning { _, _, _, _, _, _, guard -> osCalls++; guard(); der.copyOf() }
+        })
+        assertFails { workflow.beginOrResumeBootstrapApproval() }
+        assertEquals(2, e.retailState); assertEquals(0, e.bootstrapPreparations); assertEquals(0, osCalls)
+        val completed = workflow.beginOrResumeBootstrapApproval()
+        assertContentEquals(e.bootstrapReceipt(), completed.originalApprovalReceipt())
+        assertEquals(1, osCalls); assertEquals(1, e.bootstrapPreparations)
+    }
+
+    @Test fun sharedWorkflowRejectsACorrelatedAlternateBootstrapCredentialBeforeTheHardwareFence() = runBlocking {
+        val e = Endpoint().apply { alternateBootstrapCredential = true }; var osCalls = 0
+        val workflow = e.workflow(e::reply, { ByteArray(64) { 0x61 } }, bootstrapSigner = { prepared ->
+            prepared.performPlatformSigning { _, _, _, _, _, _, _ -> osCalls++; der.copyOf() }
+        })
+        assertFailsWith<IllegalStateException> { workflow.beginOrResumeBootstrapApproval() }
+        assertEquals(3, e.retailState); assertEquals(0, e.bootstrapState); assertEquals(0, osCalls)
+        assertTrue(e.closes > 0)
+    }
+
+    @Test fun sharedWorkflowBootstrapOwnerGuardStopsAChangedRetainedFiCertificate() = runBlocking {
+        val e = Endpoint(); var osCalls = 0
+        val workflow = e.workflow(e::reply, { ByteArray(64) { 0x61 } }, bootstrapSigner = { prepared ->
+            prepared.performPlatformSigning { _, _, _, _, _, _, guard ->
+                e.retailCertificate[0] = 0x66; guard(); osCalls++; der.copyOf()
+            }
+        })
+        assertFailsWith<IllegalStateException> { workflow.beginOrResumeBootstrapApproval() }
+        assertEquals(1, e.bootstrapState); assertEquals(0, osCalls); assertEquals(0, e.bootstrapRetains)
+        assertTrue(e.closes > 0)
+        assertFails { workflow.beginOrResumeBootstrapApproval() }
+        assertEquals(0, osCalls)
+    }
+
     @Test fun pureSelectedGoogleProjectionRejectsExtraMembersUnsupportedNumbersAndBrokenIdentitySyntax() {
         assertEquals(7L, KagemushaOrdinaryIdentityHttpCodecV1.playIntegrityCloudProjectOriginal(policy()))
         for (mutation in listOf("extra", "project-extra", "project-zero", "project-overflow", "principal", "certificate", "version")) {
@@ -304,6 +366,25 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         val retailMessage = bytes(0x60); val retailChallenge = byteArrayOf(0x51, 0x52); var retailIntakes = 0
         val retailCertificate = byteArrayOf(0x62, 0x63); val enrollmentId = bytes(0x64)
         var retailState = 0; var retailSignature = byteArrayOf(); var retailCompletions = 0
+        var bootstrapState = 0; var bootstrapRaw = byteArrayOf(); var bootstrapPreparations = 0; var bootstrapRetains = 0
+        var alternateBootstrapCredential = false
+        private fun bootstrapOperationId() = sha("iroha:kagemusha:v1:ordinary-bootstrap-operation-id\u0000".toByteArray(Charsets.US_ASCII) + retailCertificate)
+        fun bootstrapFields(): List<ByteArray> {
+            val credentialDigest = if (alternateBootstrapCredential) bytes(0x75) else sha(credential)
+            val selection = framed("iroha:kagemusha:v1:hardware-transition-selection", byteArrayOf(1, 0) +
+                listOf(c.releaseId(), bytes(0x61), bytes(0x62), credentialDigest, c.networkId(), c.laneId(), c.hardwareProfileId())
+                    .flatMap { it.toList() }.toByteArray() + le64(1) + bytes(0x64) + le64(2) + byteArrayOf(0) + bytes(0x65) + ByteArray(96))
+            val message = framed("iroha:kagemusha:v1:app-operation-approval", byteArrayOf(1, 0, 1) +
+                listOf(bootstrapOperationId(), bytes(0x68), c.accountBinding(), c.appAuthorityPolicyDigest(), sha(point),
+                    credentialDigest, sha(selection), bytes(0x69)).flatMap { it.toList() }.toByteArray() + le64(1000) + le64(121000))
+            return listOf(le64(20), message, byteArrayOf(5), alias.copyOf(), attempt.copyOf(), point.copyOf(), sha(point),
+                c.canonicalSigningBytes(), credentialDigest, bytes(0x70), byteArrayOf(), byteArrayOf(1), bytes(0x50), selection)
+        }
+        fun bootstrapReceipt(): ByteArray {
+            val original = bootstrapFields()
+            return "KGMAPP1\u0000".toByteArray(Charsets.US_ASCII) + byteArrayOf(1, 0, 1) + le64(20) +
+                bootstrapOperationId() + original[9] + sha(original[1]) + sha(bootstrapRaw) + original[8] + ByteArray(5)
+        }
         fun retailStartReply() = json(linkedMapOf("challenge_id" to hex(attempt),
             "canonical_challenge_base64" to base64(retailChallenge), "account_signing_message_base64" to base64(retailMessage),
             "expires_at_ms" to 121000L))
@@ -321,11 +402,11 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
             signer: KagemushaOrdinaryWalletAccountSignerV1,
             backend: KagemushaPlayIntegrityBackendV1 = object : KagemushaPlayIntegrityBackendV1 {
                 override fun prepare(cloudProjectNumber: Long): CompletableFuture<KagemushaPlayIntegrityPreparedV1> = error("Absent Native PI policy")
-            }): KagemushaAndroidOrdinaryEnrollmentV1 {
+            }, bootstrapSigner: ((KagemushaNativePreparedOrdinaryBootstrapApprovalV1) -> ByteArray)? = null): KagemushaAndroidOrdinaryEnrollmentV1 {
             val facade = KagemushaNativeAppApprovalCoordinatorV1(KagemushaCoreCoordinatorBridgeV1.openEndpoint("/fixture/ordinary-flow", this))
             return KagemushaAndroidOrdinaryEnrollmentV1(facade, transport, signer, { check(!changedScope) },
                 { assertNotNull(it.recoverOriginalAttestation()) }, { assertNotNull(it.recoverOriginalPossession()) },
-                KagemushaAndroidPlayIntegrityProviderV1(backend))
+                KagemushaAndroidPlayIntegrityProviderV1(backend), bootstrapSigner)
         }
         override fun contract() = intArrayOf(2, 25, 3, 6, 54, 8, 7, 22, 16, 0xffff, 1, 21)
         override fun install(storagePath: String) = 0
@@ -333,6 +414,31 @@ class KagemushaOrdinaryCertificateHttpOriginalV1Test {
         override fun close(handle: Long): Int { closes++; return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> {
             val phase = ByteBuffer.wrap(fields[0]).order(ByteOrder.LITTLE_ENDIAN).int; phases.add(phase)
+            if (method == 19) {
+                check(retailState == 3) { "FI must complete before Bootstrap" }
+                val original = bootstrapFields()
+                if (phase != 8) assertContentEquals(le64(20), fields[1])
+                return when (phase) {
+                    8 -> { assertContentEquals(bootstrapOperationId(), fields[1]); bootstrapPreparations++; original.map(ByteArray::copyOf).toTypedArray() }
+                    2 -> when (bootstrapState) {
+                        0 -> { bootstrapState = 1; arrayOf(byteArrayOf(1), byteArrayOf(), byteArrayOf()) }
+                        2 -> arrayOf(byteArrayOf(2), bootstrapRaw.copyOf(), byteArrayOf())
+                        3 -> arrayOf(byteArrayOf(3), bootstrapRaw.copyOf(), bootstrapReceipt())
+                        else -> error("Unknown hardware invocation")
+                    }
+                    3 -> { check(bootstrapState == 1); bootstrapRetains++; bootstrapRaw = fields[2].copyOf(); bootstrapState = 2; arrayOf(sha(bootstrapRaw)) }
+                    4 -> { check(bootstrapState in 2..3); bootstrapState = 3; arrayOf(bootstrapReceipt()) }
+                    5 -> when (bootstrapState) {
+                        0 -> arrayOf(byteArrayOf(0), byteArrayOf(), byteArrayOf())
+                        2 -> arrayOf(byteArrayOf(1), bootstrapRaw.copyOf(), byteArrayOf())
+                        3 -> arrayOf(byteArrayOf(2), bootstrapRaw.copyOf(), bootstrapReceipt())
+                        else -> error("Unknown hardware invocation")
+                    }
+                    6 -> arrayOf(original[9].copyOf(), sha(original[1]))
+                    7 -> emptyArray()
+                    else -> error("No monetary fixture authority")
+                }
+            }
             return if (method == 21) when (phase) {
                 12 -> reserved.map(ByteArray::copyOf).toTypedArray()
                 11 -> arrayOf(attempt.copyOf())

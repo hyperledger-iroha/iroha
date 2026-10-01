@@ -50,6 +50,7 @@ fn ordinary_gossip_and_selection_follow_committed_routing_across_policy_change()
         Metadata::default(),
     );
     let hash = tx.as_ref().hash_as_entrypoint();
+    let original_input = tx.entrypoint_bytes().to_vec();
     queue.push(tx.clone(), state.view()).expect("push tx");
     assert!(queue.contains_entrypoint_hash(hash));
     assert_eq!(
@@ -59,9 +60,19 @@ fn ordinary_gossip_and_selection_follow_committed_routing_across_policy_change()
             .map(|entry| entry.value().coordinator_route()),
         Some(RoutingDecision::default())
     );
+    let original_hint = queue.routing_plan_hint(&hash).unwrap();
     let mut nexus = state.nexus_snapshot();
     nexus.routing_policy.default_lane = refreshed.lane_id;
     nexus.routing_policy.default_dataspace = refreshed.dataspace_id;
+    let expected_current = evaluate_policy_plan_with_nexus_and_world_at_block_height(
+        &nexus,
+        &tx,
+        &state.world_view(),
+        0,
+        state_height_for_routing(&state),
+    )
+    .expect("independent current routing policy");
+    assert_eq!(expected_current.coordinator_route(), refreshed);
     state.set_nexus(nexus).expect("apply fresh Nexus state");
     let current_route = queue
         .route_plan_with_state(&tx, &state)
@@ -76,14 +87,29 @@ fn ordinary_gossip_and_selection_follow_committed_routing_across_policy_change()
             .routing_plans
             .get(&hash)
             .map(|entry| entry.value().coordinator_route()),
-        Some(RoutingDecision::default())
+        Some(expected_current.coordinator_route())
     );
     assert_eq!(
         queue
             .routing_plan_hint(&hash)
             .map(|plan| plan.coordinator_route()),
-        Some(RoutingDecision::default())
+        Some(expected_current.coordinator_route())
     );
+    assert_eq!(
+        original_hint,
+        RoutingPlan::single(RoutingDecision::default())
+    );
+    assert_eq!(
+        queue
+            .txs
+            .get(&hash)
+            .unwrap()
+            .as_accepted()
+            .entrypoint_bytes()
+            .as_slice(),
+        original_input.as_slice()
+    );
+    assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
     assert!(!queue.accepted_work_validation_faulted());
 }
 

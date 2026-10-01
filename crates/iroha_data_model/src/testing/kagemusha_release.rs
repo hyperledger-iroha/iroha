@@ -94,14 +94,22 @@ pub const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
 pub const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
 pub const COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3D; 32];
 pub const COMMIT_WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3E; 32];
-pub const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x41; 32];
-pub const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x42; 32];
-pub const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x43; 32];
-pub const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = [0x44; 32];
+// Synthetic compiled-protocol identities must still be canonical Pasta scalars.
+// Keep each tag distinct below 2^248, before the receipt and release are signed.
+const fn canonical_fixture_protocol_digest(tag: u8) -> [u8; 32] {
+    let mut digest = [tag; 32];
+    digest[31] = 0;
+    digest
+}
+
+pub const MINT_HASH_SHARD_EQ_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x41);
+pub const MINT_HASH_SHARD_EP_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x42);
+pub const MINT_HASH_CLAIM_EQ_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x43);
+pub const MINT_HASH_CLAIM_EP_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x44);
 /// Deterministic EQ protocol tag for the synthetic ordinary-app guard fixture.
-pub const ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x45; 32];
+pub const ORDINARY_APP_GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x45);
 /// Deterministic EP protocol tag for the synthetic ordinary-app guard fixture.
-pub const ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x46; 32];
+pub const ORDINARY_APP_GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = canonical_fixture_protocol_digest(0x46);
 pub const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
 pub const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
 pub const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
