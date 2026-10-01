@@ -9147,6 +9147,7 @@ mod sccp_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::World;
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{

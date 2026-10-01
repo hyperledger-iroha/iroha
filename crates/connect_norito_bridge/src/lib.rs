@@ -16518,3 +16518,6 @@ mod tests {
 }
 include!("bridge_tail_tests.rs");
 include!("sorafs_tests.rs");
+
+#[cfg(test)]
+mod native_execution_capture_tests;

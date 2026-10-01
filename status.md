@@ -26,15 +26,18 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 ## Immediate blockers
 
 Exact finalized-carrier retries now authenticate the original execution and
-acknowledge admission without requeueing or charging again. The rebuilt local
-Nexus happy-day and smoke workloads complete financial, signed RS16 finality and
-exact-retry checks across all 16 peers; smoke also preserves the funded settlement
-through all 16 validator restarts. The measured smoke settlement takes 45.17 seconds.
-Repeated accepted settlements remain unqualified on one fixed source candidate.
-A fresh disjoint-committee run exposed an applied-body pruning race that stops
-the availability worker during an in-flight file read; its correction awaits
-rebuilt node qualification. Restricted native-lane gossip also needs fresh
-daemon/harness qualification with disjoint global and participant committees.
+acknowledge admission without requeueing or charging again. The embedded MCP
+descriptor size drift that prevented daemon startup is corrected with a bounded
+loader and compile-time guard. A fixed local daemon/harness candidate completes
+the Nexus smoke workload's financial, signed RS16 finality and exact-retry checks
+across all 16 peers and preserves the settlement through all 16 restarts. Its
+settlement takes 59.17 seconds. The campaign validator now recognizes the exact
+retry observer's canonical phase label and verifies the retained evidence.
+The rebuilt disjoint-committee workload also preserves progress while one lane
+stops and after every peer restarts, covering the applied-body pruning repair.
+Ten fresh paid-settlement runs also pass on that fixed candidate, each with 16
+signed RS16 observations, exact-retry checks and finality at height 9. Qualification
+of the combined source and the settlement latency target remain open.
 
 Core/World acquisition and retained State ownership are being repaired without
 oversized-stack workarounds. The combined test graph, complete resource funding
@@ -83,17 +86,16 @@ require the explicitly approved OVH target.
 ## Build and release qualification
 
 Default daemon/CLI binaries have scoped compilation coverage after compiler and
-runtime-owner extraction. Last completed epoch9 Core/Kagami, CLI and schema
-builds pass; the completed Core control union has 1,146 executions over 1,088
-names, all passing. The workspace all-targets check fails on fixture/import API
-errors. Genuine four-validator startup fails on the embedded MCP descriptor byte
-limit. Reviewed successor repairs require normal rebuilds and reruns. Apple
-slices compile but packaging fails its export inventory; Swift host and device
-qualification remain open. Full workspace execution and same-candidate release
+runtime-owner extraction. Historical epoch10 Core/Kagami, CLI and network builds
+pass, along with 1,144 default Core controls and two four-validator component
+checks. The workspace all-targets check fails on six fixture/API errors. Apple
+ABI-25 packaging passes; Swift host fixtures and physical-device qualification
+remain open. A subsequent merge changes compiled inputs, invalidating remaining
+in-flight Core, IVM and FASTPQ qualification. Reconciled repairs need normal builds
+and tests on the completed source. Full workspace and same-candidate release
 validation remain incomplete. Dependency ownership and measured compiler memory
-are active gates; code line-count gates are retired. See the
-[architecture plan](specs/first_release_architecture_redesign.md) and
-[compile-bloat goals](specs/compile_bloat_optimization_goals.md).
+remain gates; see the [architecture plan](specs/first_release_architecture_redesign.md)
+and [compile-bloat goals](specs/compile_bloat_optimization_goals.md).
 
 Memory qualification retains a 25% model-baseline reduction, measured limits for
 introduced units and a 13-GiB per-unit release ceiling. Core/Torii test and daemon
@@ -114,14 +116,15 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** last completed epoch9 X509 maximum proof and separate replay
-  pass verification and byte/RSS limits, but proving takes 2,405.93 seconds against
-  300 seconds. The reviewed transform/sample-commit changes require native parity
-  and a new complete proof. Current q77 known-answer controls pass; ten FASTPQ
-  fixture failures have reviewed corrections, while current maximum ordinary/AXT
-  proofs remain unrun. Complete RAM-LFE encryption/execution and IVM
-  execution/finalized-State relations, protocol/side-channel and hardware/network
-  qualification remain open under the [ZK goals](specs/zk_first_release_goals.md).
+- **Privacy/crypto:** historical epoch10 X509 maximum proof and separate replay
+  pass verification and byte/RSS limits, but proving takes 2,925.31 seconds against
+  300 seconds. Public terminal claims also require a zero-knowledge repair.
+  Prepared transform and selective auxiliary replay changes need native parity
+  and a new complete proof. Historical q77 controls pass; the maximum ordinary
+  producer crosses source changes and cannot qualify the merge. RAM-LFE secure
+  encryption/full execution, IVM execution/finalized-State binding, protocol and
+  side-channel review, hardware/network evidence and final signing remain open
+  under the [ZK goals](specs/zk_first_release_goals.md).
 - **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

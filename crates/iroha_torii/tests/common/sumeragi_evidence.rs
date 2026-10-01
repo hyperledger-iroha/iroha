@@ -57,12 +57,14 @@ pub(super) fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
 /// Matching explicit fixture attribution; only Core history verification may produce admitted records.
 pub(super) fn make_phase_vote_attribution(height: u64, seed: u8) -> EvidenceAttribution {
     EvidenceAttribution {
+        scope: iroha_data_model::block::consensus::EvidenceScope::Root,
         instance: [seed; 32],
         height,
         epoch: 0,
         context_id: [seed.wrapping_add(1); 32],
         authority_generation: [seed.wrapping_add(2); 32],
         offenders: vec![EvidenceOffender {
+            lane_stake: None,
             signer: 0,
             peer_id: PeerId::new(keys(seed)[0].public_key().clone()),
         }],

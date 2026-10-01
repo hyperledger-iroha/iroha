@@ -46,11 +46,14 @@ review or partial test selection closes one of them.
 
 ## Current implementation and evidence
 
-The following implementation boundaries require qualification against the final
-unchanged candidate. Native measurements below are the last completed epoch9
-validation. The coordinated successor includes reviewed source, fixture and
-packaging repairs; those changes require fresh normal builds and tests. Earlier
-source revisions and test totals do not qualify the current checkout.
+The completed epoch10 native, SDK and network evidence below is historical. A
+subsequent merge on `optimizations` changed compiled inputs while three remaining
+control runs were active. Their native events and public artifacts are retained,
+but their source guards fail; they qualify no successor. Merge conflict resolution
+has finished and the reconciled repairs are applied. The merge remains uncommitted
+because the local signing executable is unavailable. The exact uncommitted
+candidate requires new normal builds, genuine fixtures, native proofs, SDK
+consumers and integrated checks. No partial selection closes a goal.
 
 ### ZK01 — secret arithmetic
 
@@ -70,158 +73,172 @@ qualification remains open.
 
 ### ZK03 — complete proof semantics
 
-`zk::verify_for_relation` admits only an explicit semantic role supported by its
-compiled relation. IVM replay-binding circuits, registry support, keygen,
-Torii derive/prove/jobs and associated SDK/CLI APIs are retired. Reserved names
-reject. Production `IvmProved` admission stays closed until the complete native
-transition relation and finalized State authority exist; G3 in the
-[Kotodama/IVM goals](kotodama_ivm_completion.md) owns this work.
+`zk::verify_for_relation` admits only an explicit role supported by its compiled
+relation. IVM replay-binding circuits, registrations, keygen, service routes and
+associated SDK/CLI consumers are retired. Production `IvmProved` admission stays
+closed until the complete native transition relation and authoritative finalized
+State binding exist; G3 in the [IVM goals](kotodama_ivm_completion.md) owns this work.
 
-RAM-LFE registration, activation, restoration and receipts reject both signed and
-proof BFV modes: the exact-lift profile loses public-key noise modulo 257. Public
-evaluators refuse before private work. The execute API's false plaintext-opening
-claim is removed. Secure encryption replacement, the complete relation and
-integrated network qualification remain open.
+RAM-LFE registration, activation, restoration, evaluation and receipts reject the
+insecure signed/proof BFV modes before private work. The exact-lift profile loses
+public-key noise modulo 257. The diagnostic interpreter's clearing tape, bounded
+initializer, reduction and commitments are prerequisites, not an execution proof.
+Secure encryption replacement, exact refresh, malicious-key/input validation,
+circuit privacy, the complete program relation and integrated qualification remain
+open under the [replacement contract](ram_lfe_encryption_replacement.md).
 
-The diagnostic interpreter owns clearing private tape cells and binds its
-bounded BLAKE3 initializer, fixed-work modulo-257 reduction, canonical policy/tape
-commitments and `initializer_descriptor_hash`. A trace is not a proof. The
-[execution contract](ram_lfe_execution_proof.md), proposed
-[semantic commitments](ram_lfe_semantic_commitments.md),
-[replacement encryption](ram_lfe_encryption_replacement.md) and
-[scalar packing](ram_lfe_plaintext_packing.md) own remaining construction and
-resource obligations. Test-only planners and leaf circuits qualify no production
-relation. Reviewed memory-owner/request tests and an unregistered effective-address
-bank are applied prerequisites. The epoch9 IVM quick selection passes 114 native
-controls; a separate ownership fixture fails compilation on the retired
-`Perm::empty()` API. Its successor repair requires native validation. These
-prerequisites do not complete memory authority, the transition relation or
-finalized State binding.
+The candidate [packing](ram_lfe_plaintext_packing.md) and
+[semantic](ram_lfe_semantic_commitments.md) interfaces preserve private length,
+ordered scalar output including 256, clearing owners and explicit public
+policy/key/profile/context binding. They authenticate no submitted key or proof.
+Input and proof-envelope caps remain independently 1 MiB, with the configured
+proof cap at 192 KiB. Input and output ciphertexts do not share the same input
+frame; complete replacement proof encoding and total working memory remain open. Retained public arithmetic/parameter research
+does not establish a complete refresh or qualified encryption construction.
+
+The historical IVM quick selection passes 114 native controls. Three of the 19
+separate scalar/AIR proof controls complete natively; the third crosses source
+changes, and the remaining 16 are unexecuted. No 133-control union is admitted.
+The owner-summary fixture has one native failure from a missing unit-result slot;
+its prepared correction requires current native validation. Reviewed LOAD/STORE
+banks preserve native logging, trap, alias and write-order behavior, but remain
+unregistered prerequisites. Memory authority, initialization/history, execution
+sequencing, integrated resource accounting and finalized State binding remain open.
 
 ### ZK04 — FASTPQ
 
 The public Quantity facade uses the masked bounded DEEP producer and independent
-verifier. Transparent replay APIs require development/test features. Expected
-statements derive from canonical authenticated context; proof consistency alone
-does not authorize remote spending. RequiredMetal checks readiness before private
-work and never silently falls back.
+verifier. Expected statements derive from canonical authenticated context; proof
+consistency alone does not authorize remote spending. Development replay APIs and
+required-Metal readiness preserve their existing boundaries.
 
-[FASTPQ readiness](fastpq_production_readiness.md) owns current relation and
-resource limits. The integrated 77-query SHA3/SHAKE construction has authentic
-native profile, seeded and ordinary/AXT single-proof outputs. Epoch9 passes all
-four retained known-answer controls. The complete selected FASTPQ run records
-1,298 passes and ten fixture failures, with no skips; reviewed resource, context,
-and SHA3 fixture corrections preserve their substantive assertions and require
-native reruns. Current maximum ordinary/AXT proofs remain unrun; earlier maximum
-measurements cover the previous profile.
+The historical 77-query SHA3/SHAKE library selection passes 1,315 native controls,
+including all six known-answer controls; 16 offline ordinary controls also pass.
+The seeded CPU and required-Metal proofs pass positive/negative verification and
+authentic golden-byte checks, producing identical 485,219-byte proofs. Its evidence wrapper initially rejected the
+native diagnostic path spelling; a separate source-bound reevaluation preserves
+that wrapper failure and authenticates the real proof and receipt. One maximum ordinary producer completes natively and retains a 973,318-byte
+proof, but the source changes during that run. Its wrapper also rejects a stale
+child-frame expectation; a strict parser repair does not repair source provenance.
+Independent replay and the remaining maximum pairs are unexecuted. No earlier
+maximum result qualifies the new merged candidate.
 
-Dedicated independent derivations provide conditional soundness and ideal-QROM
-hiding bounds for explicit query/attempt assumptions. They do not establish
-concrete Keccak security, device behavior, side channels or finalized authority;
-changed-source review admission remains required. Finalized-source four-validator
-behavior, broader application shapes and hardware qualification remain open.
+[FASTPQ readiness](fastpq_production_readiness.md) owns unchanged proof, payload
+and work limits. Dedicated derivations provide conditional classical-ROM and
+ideal-QROM bounds under explicit query/attempt assumptions. They do not establish
+concrete Keccak security, full zero-knowledge, device/side-channel behavior or
+finalized authority. Finalized-source network behavior, broader workload shapes
+and current hardware coverage remain open.
 
 ### ZK05 — ZK-X509
 
-The MAIN relation retains all 49 registrations and supported certificate, CRL,
-disclosure and ownership coverage. Paired FRI openings and RFC temporal geometry
-derive a 9,420,938-byte maximum encoding against the unchanged 9,437,184-byte
-ceiling. Geometry is 285 base / 280 auxiliary / 102 fixed columns, 1,681
-constraints and degree four. It binds 72 authenticated times, 73 comparisons
-and nonwrapping 38-bit differences. Private columns replay from clearing owners.
+MAIN retains all 49 registrations and certificate, CRL, disclosure and ownership
+coverage. The maximum encoding is 9,420,938 bytes against the unchanged
+9,437,184-byte ceiling. Geometry remains 285 base / 280 auxiliary / 102 fixed
+columns, 1,681 constraints and degree four; native temporal and padding repairs
+preserve the supported relation and rejection of superseded profiles.
 
-The last completed epoch9 normal optimized binary passes 147 focused native
-executions covering 146 distinct tests, with no failures or ignored tests. These
-include repaired padding/RFC channels, all 49 registration boundaries, bounded
-DEEP/commitment parity and supported Metal controls. Genuine replacement profile
-and component fixtures are integrated; superseded profiles still reject. Four
-additional source-contract tests execute separately: two pass and two fail on
-stale function/test-module boundaries. Their reviewed repairs preserve the
-substantive ordering and closed-path checks.
+The historical normal optimized binary passes 184 focused native executions over
+183 distinct tests, with no failures or skips. The complete maximum credential
+produces a verified 9,420,938-byte proof; self-check, public verification,
+wrong-genesis and tampered-proof controls pass. A separate verifier process accepts
+the exact retained proof without regeneration. Peak producer RSS is 9,593,044,992
+bytes, below 12 GiB. Proving takes 2,925.309071 seconds against 300 seconds, so the
+maximum test fails and activation remains unavailable. The public proof SHA-256 is
+`f24b64f44345c015d2a76b7c038b3c8effab42f60a415fce284a2f6df573d9ae`.
 
-The maximum structural credential produces a verified 9,420,938-byte proof.
-Producer self-check, public verification and wrong-genesis/tampered-proof controls
-pass. A separate native verifier process also accepts the retained bytes without
-regeneration. Peak RSS is 9,983,410,176 bytes, below 12 GiB. Proving takes
-2,405.926166 seconds against the unchanged 300-second target, so the maximum test
-fails and activation remains unavailable. The retained public proof SHA-256 is
-`8a58f948a3e57d29375fac0706012c891ae1f096f533042abb8039099276ab90`.
-Evidence lives under
-`dist/zk-remediation/2026-09-30/epoch9-core-privacy-fastpq-build4/privacy-native`,
-with separate replay under `x509-epoch9-independent-replay1`. Both runs preserve
-source and compiled-input guards. Concurrent load prevents a causal speedup
-claim relative to earlier candidates.
+The original maximum wrapper stopped on repeated append-only receipt metadata;
+its failure remains retained. Separate recovery validates that exact receipt and
+runs the standalone verifier under the unchanged historical source and binary admission. Evidence
+is under `dist/zk-remediation/2026-09-30/x509-epoch10-maximum-proof1` and
+`x509-epoch10-retained-replay-recovery1`. Concurrent work and two bounded stack
+samples preclude a causal performance comparison with earlier runs.
 
-The successor routes private quotient/native transforms through bounded exact-root
-acceleration and reuses original native batches during initial sample/commit.
-Successful entropy order, masks and proof framing are preserved by construction;
-failed calls consume a prefix and stop under sticky accelerator quarantine.
-Native parity, all original source/capacity controls and another complete proof
-must validate these changes within unchanged byte, RSS and time limits.
-Independent cryptographic, hardware and final-candidate qualification remain open.
+Measured phases include 1,128.98 seconds in composition and 662.83 seconds in
+query openings. Reviewed successor work factors Metal twiddles and projects only
+requested arithmetic auxiliary families, skipping inactive fixed public rows.
+The dense oracle, exact terminal ownership, clearing/error behavior, coverage and
+limits remain unchanged; native parity and another full maximum run are required.
+The historical exact-root CPU/Metal parity diagnostic passes at native19/common22
+geometry; its timings do not establish the successor's speedup.
+
+Public terminal-product claims expose values not covered by trace masking. A
+protocol repair and artifact-bound zero-knowledge review are required alongside
+performance work. A faster proof alone cannot clear activation.
+
+### ZK06 — cryptographic qualification
+
+Dedicated independent source reads, derivations and adversarial controls are
+recorded against exact protocol artifacts. Their scope is explicit: component
+arithmetic, conditional soundness/hiding bounds and authentic native verification
+do not establish complete soundness, zero-knowledge, transcript security,
+side-channel resistance or release qualification. RAM-LFE construction and full
+IVM semantics remain absent; X509 has the terminal-claim privacy and time blockers.
+Physical hardware and authenticated final release artifacts require actual runs.
 
 ### ZK07 — developer workflow
 
-The Rust wallet owns clearing private inputs, canonical keys and circuit selection,
-with typed preflight/proving errors. Callers supply actual notes and paths without
-dummy inputs or transcript choices. JavaScript, Python, Swift, Kotlin/Java and C#
-use the shared native owner with bounded inputs and asynchronous job custody.
-Managed strings cannot promise erasure. Epoch9 normal Rust producers and the
-57 official Kotodama sample mappings pass current authentic generation/checks.
-The host bridge deadline repair compiles; Kotlin records 1,556 passes, Android
-host consumers 291 passes, and two native host suites 62 passes against ABI-25.
-Installed Python consumers pass five genuine maximum-tree wallet controls and
-4,370 broader tests plus 281 subtests, with no skips. C# records 6,005 passes and
-three typed multisig fixture failures; their reviewed repair requires rerunning
-current consumers. Additional held Kotlin full-tree controls have six native
-passes, but adoption still requires source-bound readmission.
+Typed wallet workflows own clearing private inputs, canonical keys and circuit
+selection; callers do not supply dummy inputs or transcript internals. JavaScript,
+Python, Swift, Kotlin/Java and C# use the shared native owner with bounded inputs
+and asynchronous custody. Managed strings do not promise erasure.
 
-All five Apple static slices compile normally. Packaging fails because three
-maintained export inventories omit the existing coordinator install function;
-the reviewed inventory correction retains exact-symbol and resource gates.
-Swift host execution and package size admission remain pending. The successor
-also corrects JavaScript artifact-identity fixtures. Compiler closure changes
-require new authentic generation and consumer provenance. Physical devices and
-signed multi-platform artifacts remain open; earlier SDK passes do not qualify
-a changed candidate.
+Historical host ABI-25 controls pass 62 tests with 397 expected exports, plus ten
+top-up executions. Kotlin records 1,562 passes and six full-tree controls; Android
+host/JNI consumers pass 291 tests. C# records 6,015 passes. Installed Python passes
+4,370 tests plus 281 subtests and five genuine maximum-tree wallet controls.
+Normal Kotodama generation and all 57 official sample mappings pass.
 
-RAM-FHE metadata requires the compiled initializer descriptor, exact seven-field
-profile, sole encrypted-envelope mode and bounded unsigned dimensions. Associated
-data uses canonical Norito independently of ambient flags. BFV secret keys own
-clearing private coefficients and redact diagnostics. Public plaintext-encryption
-helpers refuse with a stable unavailable error; deterministic encryptors belong
-only to test fixtures. No retired mode, public seed overload or JSON compatibility
-shim is admitted. Remaining scratch, current native consumers and integrated
-SDK/Torii qualification must be verified on one candidate.
+All five Apple slices and the ABI-25 package/resource checks pass. Swift host
+compilation fails on two missing `try` expressions in fixtures; the prepared
+repair is present in the incoming merge but requires native rerunning. The historical JavaScript suite records 3,634
+passes and 15 failures in bundle accounting, manifest fields, scope and artifact
+identity. Reviewed corrections retain strict parsing and unchanged bundle caps;
+the reconciled manifest and bundle/replication proposals pass five and 35 focused
+managed controls. Full integrated/native rerunning remains required.
 
-Public guidance belongs in `iroha-docs`; generated IVM help requires normal
-pinned-source generation and authentic provenance.
+Historical Android native arm64/x86_64 libraries and diagnostic APK packaging
+pass source, native-payload, signature, manifest and six-method DEX census checks.
+Dependency resolution recovered the original offline-cache packaging failure,
+which remains retained. No physical tests have run; a connected Android device
+has been requested. The diagnostic APK's debug signature is not release signing.
+
+A genuine Core/Kagami finalized-execution fixture producer and public SDK bridge
+consumer are prepared. Actual generation, consumer execution, current installed
+packages, physical Apple/Android evidence and signed final artifacts remain open.
+The candidate RAM interfaces and stable unavailable errors confer no encryption
+qualification. Public guidance belongs in `iroha-docs`; this checkout's build and
+validation do not depend on that sibling repository.
 
 ### ZK08 — current source contracts
 
-Epoch9 normal Core/Kagami, CLI, schema and four-validator test compilation pass.
-The completed Core union records 1,146 native executions over 1,088 distinct
-names, all passing with no skips; this includes the eight optimized AXT controls.
-The separate IVM quick selection passes 114 controls. The complete execution
-relations remain unavailable.
+Normal historical Core/Kagami, CLI, daemon and network-test builds pass. The
+default Core selection passes 1,144 executions before the merge. All eight
+separately optimized AXT controls complete natively, but source changes during
+that run; its failed source guard prevents a successor union. The original
+247-control mapping retains historical coverage; the replacement genuine producer
+remains unexecuted.
 
-The normal workspace all-targets check fails with 34 rendered compiler diagnostic
-spans across Core, Torii, JavaScript codec, IVM, deploy and Mochi fixtures/imports.
-Reviewed corrections require a new normal check. Of 559 local compiler artifact
-records, the original run admitted 506 and lacked prior compiler metadata for 53.
-A separate recovery now authenticates exact historical compiler records for all
-53 against historical, pre-check and retained bytes; normal current-source
-readmission remains required and the failed workspace receipt is unchanged.
+The historical workspace all-targets check fails on six fixture/API diagnostics
+in JavaScript host, network proofs and Torii tests. The incoming merge supersedes
+some prepared corrections; the reconciled remainder needs a normal workspace
+check. The panic-boundary inventory also detects new executor module roots that
+require explicit review. Compiler artifact recovery never converts a failed
+command into a pass.
 
-Two genuine four-validator runs fail at daemon startup because the embedded MCP
-descriptor exceeds its unchanged 128-KiB byte cap. The reviewed correction
-compacts only JSON whitespace, preserves all 60 descriptor records and adds
-exact-boundary/rejection controls. Full four-validator Sumeragi, lanes, finalized
-FASTPQ source and wallet workflows remain unqualified until successful reruns.
+Both historical four-validator component controls pass: transaction commitment
+and lane transactions across a full network restart. Each observes exactly four
+concurrent daemons. These controls do not qualify the merged source, finalized
+FASTPQ authority, wallet workflows or release readiness.
 
-Preserve every substantive Halo2/note-STARK source assertion and X509 geometry
-check. Source assertions and byte accounting do not replace normal native,
-integrated workspace or four-validator network qualification.
+The applied reconciled patch preserves incoming fixes and substantive assertions.
+The unregistered initialization bank additionally binds successful STORE effects
+to exact bytes in absolute cells and the same frame generation; eleven native
+regressions remain pending. Frame lifecycle, permissions, initial history and
+complete execution authority remain unfinished. Regenerate genuine fixtures and
+run normal builds, native proofs, SDK consumers, formatting, codec guards,
+workspace and four-validator checks on the recorded candidate. Retain all protocol
+and resource limits; old native outcomes do not qualify changed source.
 
 ## Remaining execution sequence
 
@@ -230,8 +247,9 @@ integrated workspace or four-validator network qualification.
 2. Rerun corrected FASTPQ fixtures and native regressions, then produce
    maximum ordinary/AXT proofs; qualify finalized-source network and hardware
    behavior without changing proof or resource limits.
-3. Resolve the measured X509 proving-time failure with native parity and another
-   complete maximum proof under unchanged coverage, byte, memory and time limits.
+3. Repair X509 terminal-claim privacy and the measured proving-time failure, with
+   native parity, independent review and another complete maximum proof under
+   unchanged coverage, byte, memory and time limits.
 4. Complete IVM G3's native execution relation and finalized authority. Validate
    rejection of retired APIs and relation-confusion attempts in current consumers.
 5. Capture one integrated source after the reviewed repair cohort; rebuild SDK artifacts,

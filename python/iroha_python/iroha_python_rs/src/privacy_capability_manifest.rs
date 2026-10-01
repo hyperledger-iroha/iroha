@@ -215,6 +215,16 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         )
     }
     #[cfg(test)]
+    pub(crate) fn test_fetched_binding_for_protocol(
+        protocol_id: PrivacyProtocolIdV1,
+        network_id: NetworkId,
+    ) -> Self {
+        // Unit fixture for the post-fetch boundary; archive inspection itself grants no origin.
+        let inspected = Self::test_binding_for_protocol(protocol_id);
+        Self::from_authenticated_torii(&inspected.canonical_archive, network_id)
+            .expect("validated test response at the authenticated transport boundary")
+    }
+    #[cfg(test)]
     pub(crate) fn test_binding_for_protocol(protocol_id: PrivacyProtocolIdV1) -> Self {
         use iroha_data_model::privacy::{
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyActiveLifecycleV1,

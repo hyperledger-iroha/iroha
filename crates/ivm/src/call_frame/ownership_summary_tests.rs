@@ -168,17 +168,73 @@ fn exact_owner_summary_matches_all_ancestors_across_nested_calls_and_returns() {
 #[test]
 fn exact_owner_summary_preserves_zero_tables_and_zero_sized_frames_at_arbitrary_depth() {
     let mut frames = CallFrameMemory::default();
+    // The v1 callable ABI requires a result slot, including for Unit. An empty
+    // result table is malformed; a zero-byte frame and empty arguments are valid.
+    let rejected = callable(0, 0);
+    assert!(!rejected.validate());
+    assert!(matches!(
+        frames.enter_root(TOP, &rejected, tables(0, 0, 0), TOP),
+        Err(VMError::AssertionFailed)
+    ));
+    assert!(frames.is_empty());
+    assert_equivalent(&frames);
+    let leaf = EmbeddedCallableV1 {
+        result_words: vec![ivm_abi::call::CallWordV1::Unit],
+        ..callable(0, 0)
+    };
+    assert!(leaf.validate());
+    let reserved = EmbeddedCallableV1 {
+        frame_bytes: 16,
+        ..leaf.clone()
+    };
+    let result_table = |result_base| CallTables {
+        argument_base: 0,
+        argument_words: 0,
+        result_base,
+        result_words: 1,
+    };
+    // Preserve 257 live ancestor frames, with the minimum valid reservation
+    // needed to own each child's mandatory result slot.
+    let top = TOP + 16;
     frames
-        .enter_root(TOP, &callable(0, 0), tables(0, 0, 0), TOP)
+        .enter_root(top, &reserved, result_table(RESULT), top)
         .unwrap();
-    for _ in 0..256 {
+    for depth in 0..=256 {
         assert_equivalent(&frames);
+        let stack = frames.frames.last().unwrap().stack.region;
+        assert_eq!(frames.frames.len(), depth + 1);
+        assert!(matches!(
+            frames.prepare_child(stack.start, &rejected, tables(0, 0, 0), top),
+            Err(VMError::AssertionFailed)
+        ));
+        assert_eq!(frames.frames.len(), depth + 1);
         frames
-            .enter_child(TOP, &callable(0, 0), tables(0, 0, 0), TOP)
+            .enter_child(stack.start, &leaf, result_table(stack.start), top)
             .unwrap();
+        assert!(frames.frames.last().unwrap().stack.region.empty());
+        assert_equivalent(&frames);
+        // Empty stack ownership cannot host another callable's result slot.
+        assert!(matches!(
+            frames.prepare_child(stack.start, &leaf, result_table(stack.start), top),
+            Err(VMError::AssertionFailed)
+        ));
+        assert_eq!(frames.frames.len(), depth + 2);
+        assert!(frames.finish(stack.start, stack.start, 1).is_err());
+        frames.record_write(stack.start, 8);
+        frames.finish(stack.start, stack.start, 1).unwrap();
+        assert_equivalent(&frames);
+        if depth != 256 {
+            frames
+                .enter_child(stack.start, &reserved, result_table(stack.start), top)
+                .unwrap();
+        }
     }
     while !frames.is_empty() {
-        frames.finish(TOP, 0, 0).unwrap();
+        let frame = frames.frames.last().unwrap();
+        let entry = frame.entry_stack_pointer;
+        let result = frame.results.region.start;
+        frames.record_write(result, 8);
+        frames.finish(entry, result, 1).unwrap();
         assert_equivalent(&frames);
     }
 }

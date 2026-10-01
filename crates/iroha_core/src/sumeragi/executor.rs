@@ -1069,6 +1069,13 @@ impl<'s> Worker<'s> {
         let height = block.header().height;
         let iroha_block = match payload::decode(block.payload().as_slice()) {
             Ok(block) => block,
+            Err(error @ payload::PayloadError::DecodeResource)
+                if !cfg!(all(test, sumeragi_core_mutation = "HC8")) =>
+            {
+                // The caller retains the original available owner. Failed is retried and
+                // never enters the deterministic negative-result cache.
+                return ExecOutcome::Failed(error.to_string());
+            }
             Err(error) => return invalid(height, &error),
         };
         if self.state.view().latest_block().is_none() {

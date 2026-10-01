@@ -6,7 +6,10 @@
 use std::time::{Duration, Instant};
 
 use eyre::{Result, bail};
-use integration_tests::sandbox::{self, SerializedNetwork};
+use integration_tests::{
+    sandbox::{self, SerializedNetwork},
+    sync::sumeragi_statuses_reach_height,
+};
 use iroha::data_model::{
     account::Account,
     isi::{Log, Register, SetParameter},
@@ -112,23 +115,16 @@ fn committed_height(network: &Network) -> Result<u64> {
         .committed_height)
 }
 
-/// Wait until every running peer committed `height`, failing on a halted instance.
+/// Wait for every configured global peer; exits remain failed observations.
 fn wait_for_committed(network: &Network, height: u64, limit: Duration) -> Result<()> {
+    let peers = network.peers();
     let deadline = Instant::now() + limit;
     loop {
-        let mut reached = true;
-        for peer in network.peers().iter().filter(|peer| peer.is_running()) {
-            match peer.client().client().get_sumeragi_status() {
-                Ok(status) => {
-                    if let Some(halted) = status.halted {
-                        bail!("a peer halted: {halted:?}");
-                    }
-                    reached &= status.committed_height >= height;
-                }
-                Err(_) => reached = false,
-            }
-        }
-        if reached {
+        let statuses: Vec<_> = peers
+            .iter()
+            .map(|peer| peer.client().client().get_sumeragi_status())
+            .collect();
+        if sumeragi_statuses_reach_height(&statuses, height)? {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -138,12 +134,14 @@ fn wait_for_committed(network: &Network, height: u64, limit: Duration) -> Result
     }
 }
 
-/// Every running peer's view of lane 2.
+/// Every configured peer's view of lane 2; a stopped peer cannot disappear from a wait.
 fn lane_statuses(network: &Network) -> Result<Vec<SumeragiLaneStatus>> {
+    if network.peers().is_empty() {
+        bail!("cannot establish lane progress without any configured peers");
+    }
     network
         .peers()
         .iter()
-        .filter(|peer| peer.is_running())
         .map(|peer| {
             let lanes = peer.client().client().get_sumeragi_lanes()?;
             lanes

@@ -59,6 +59,7 @@ use zeroize::Zeroizing;
 
 /// Version of the fixed threshold-BLS transcript profile.
 pub const THRESHOLD_BLS_PROTOCOL_VERSION_V1: u16 = 1;
+const SESSION_CANONICAL_BYTES_V1: usize = SESSION_DOMAIN_V1.len() + 2 + 1 + 32 * 3 + 2 * 2;
 /// Minimum exact `3f + 1` committee size accepted by the v1 profile.
 pub const THRESHOLD_BLS_MIN_COMMITTEE_SIZE_V1: u16 = 4;
 /// Maximum exact `3f + 1` committee size accepted by the v1 profile.
@@ -342,15 +343,27 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsSession<P> {
         Ok(message)
     }
 
+    fn canonical_bytes(&self) -> [u8; SESSION_CANONICAL_BYTES_V1] {
+        let mut out = [0; SESSION_CANONICAL_BYTES_V1];
+        let mut offset = 0;
+        for field in [
+            SESSION_DOMAIN_V1,
+            &THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes(),
+            &[P::ROLE_TAG],
+            &self.network_id,
+            &self.session_id,
+            &self.roster_hash,
+            &self.committee_size.to_be_bytes(),
+            &self.threshold.to_be_bytes(),
+        ] {
+            out[offset..offset + field.len()].copy_from_slice(field);
+            offset += field.len();
+        }
+        out
+    }
+
     fn write_canonical(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(SESSION_DOMAIN_V1);
-        out.extend_from_slice(&THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes());
-        out.push(P::ROLE_TAG);
-        out.extend_from_slice(&self.network_id);
-        out.extend_from_slice(&self.session_id);
-        out.extend_from_slice(&self.roster_hash);
-        out.extend_from_slice(&self.committee_size.to_be_bytes());
-        out.extend_from_slice(&self.threshold.to_be_bytes());
+        out.extend_from_slice(&self.canonical_bytes());
     }
 }
 
@@ -505,9 +518,10 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsParameters<P> {
     /// Returns [`ThresholdBlsError::InvalidAdaptiveGenerator`] if hash-to-curve
     /// unexpectedly yields an identity, duplicate, or standard generator.
     pub fn derive(session: &ThresholdBlsSession<P>) -> Result<Self, ThresholdBlsError> {
-        let mut message = Vec::new();
-        message.extend_from_slice(ADAPTIVE_PARAMETERS_DOMAIN_V1);
-        session.write_canonical(&mut message);
+        let mut message = [0; ADAPTIVE_PARAMETERS_DOMAIN_V1.len() + SESSION_CANONICAL_BYTES_V1];
+        message[..ADAPTIVE_PARAMETERS_DOMAIN_V1.len()]
+            .copy_from_slice(ADAPTIVE_PARAMETERS_DOMAIN_V1);
+        message[ADAPTIVE_PARAMETERS_DOMAIN_V1.len()..].copy_from_slice(&session.canonical_bytes());
         let h = G2Projective::hash_to_curve(&message, ADAPTIVE_H_DST_V1, &[]).to_affine();
         let v = G2Projective::hash_to_curve(&message, ADAPTIVE_V_DST_V1, &[]).to_affine();
         if bool::from(h.is_identity())
@@ -554,9 +568,7 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsParameters<P> {
     fn digest(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(ADAPTIVE_PARAMETERS_DOMAIN_V1);
-        let mut session = Vec::new();
-        self.session.write_canonical(&mut session);
-        hasher.update(session);
+        hasher.update(self.session.canonical_bytes());
         hasher.update(self.h);
         hasher.update(self.v);
         hasher.finalize().into()
@@ -690,10 +702,13 @@ impl<P: ThresholdBlsPurpose> DasRenDealerCommitment<P> {
         if coefficients.len() != usize::from(parameters.session().threshold()) {
             return Err(ThresholdBlsError::InvalidCoefficientCommitment);
         }
-        let coefficients = coefficients
-            .iter()
-            .map(|bytes| DasRenCoefficientCommitment::from_bytes(parameters, *bytes))
-            .collect::<Result<Vec<_>, _>>()?;
+        // The exact backing is known after the degree check. Never grow a
+        // second coefficient owner while verifying an admitted public graph.
+        let mut parsed_coefficients = Vec::with_capacity(coefficients.len());
+        for bytes in coefficients {
+            parsed_coefficients.push(DasRenCoefficientCommitment::from_bytes(parameters, *bytes)?);
+        }
+        let coefficients = parsed_coefficients;
         let proof =
             DasRenSchnorrPok::<P>::from_bytes(constant_pok_commitment, constant_pok_response)?;
         let challenge = dealer_pok_challenge(parameters, dealer_index, &coefficients, &proof)?;
@@ -1814,9 +1829,7 @@ fn dealer_pok_challenge<P: ThresholdBlsPurpose>(
     hasher.update(DEALER_POK_DOMAIN_V1);
     hasher.update(THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes());
     hasher.update(parameters.digest());
-    let mut session = Vec::new();
-    parameters.session.write_canonical(&mut session);
-    hasher.update(session);
+    hasher.update(parameters.session.canonical_bytes());
     hasher.update(dealer_index.to_be_bytes());
     let coefficient_count = u32::try_from(coefficients.len())
         .map_err(|_| ThresholdBlsError::InvalidCoefficientCommitment)?;
@@ -1877,9 +1890,7 @@ fn adaptive_participant_hash<P: ThresholdBlsPurpose>(
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(ADAPTIVE_PARTICIPANT_DOMAIN_V1);
-    let mut session_bytes = Vec::new();
-    session.write_canonical(&mut session_bytes);
-    hasher.update(session_bytes);
+    hasher.update(session.canonical_bytes());
     hasher.update(index.to_be_bytes());
     hasher.finalize().into()
 }
@@ -2085,6 +2096,93 @@ mod tests {
             .to_affine()
             .to_compressed();
         ThresholdBlsSignature::from_bytes(*session.session_id(), &signature).expect("signature")
+    }
+
+    #[test]
+    fn stack_session_preimages_preserve_parameter_dealer_and_participant_hashes() {
+        fn original_session<P: ThresholdBlsPurpose>(session: &ThresholdBlsSession<P>) -> Vec<u8> {
+            let mut bytes = SESSION_DOMAIN_V1.to_vec();
+            bytes.extend_from_slice(&THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes());
+            bytes.push(P::ROLE_TAG);
+            bytes.extend_from_slice(&session.network_id);
+            bytes.extend_from_slice(&session.session_id);
+            bytes.extend_from_slice(&session.roster_hash);
+            bytes.extend_from_slice(&session.committee_size.to_be_bytes());
+            bytes.extend_from_slice(&session.threshold.to_be_bytes());
+            bytes
+        }
+        fn check<P: ThresholdBlsPurpose>() {
+            let session = session::<P>();
+            let canonical = original_session(&session);
+            assert_eq!(session.canonical_bytes().as_slice(), canonical);
+            let mut written = Vec::new();
+            session.write_canonical(&mut written);
+            assert_eq!(written, canonical);
+            let mut signed = MESSAGE_DOMAIN_V1.to_vec();
+            signed.extend_from_slice(&canonical);
+            signed.extend_from_slice(&3_u32.to_be_bytes());
+            signed.extend_from_slice(b"msg");
+            assert_eq!(session.signing_message(b"msg").unwrap(), signed);
+            let mut parameters_message = ADAPTIVE_PARAMETERS_DOMAIN_V1.to_vec();
+            parameters_message.extend_from_slice(&canonical);
+            let parameters = AdaptiveThresholdBlsParameters::derive(&session).unwrap();
+            assert_eq!(
+                parameters.h,
+                G2Projective::hash_to_curve(&parameters_message, ADAPTIVE_H_DST_V1, &[])
+                    .to_affine()
+                    .to_compressed()
+            );
+            assert_eq!(
+                parameters.v,
+                G2Projective::hash_to_curve(&parameters_message, ADAPTIVE_V_DST_V1, &[])
+                    .to_affine()
+                    .to_compressed()
+            );
+            let mut digest = Sha256::new();
+            digest.update(parameters_message);
+            digest.update(parameters.h);
+            digest.update(parameters.v);
+            assert_eq!(parameters.digest(), <[u8; 32]>::from(digest.finalize()));
+            let mut participant = Sha256::new();
+            participant.update(ADAPTIVE_PARTICIPANT_DOMAIN_V1);
+            participant.update(canonical);
+            participant.update(1_u16.to_be_bytes());
+            assert_eq!(
+                adaptive_participant_hash(&session, 1),
+                <[u8; 32]>::from(participant.finalize())
+            );
+        }
+        check::<BeaconPurpose>();
+        check::<TleReleasePurpose>();
+        let parameters =
+            AdaptiveThresholdBlsParameters::derive(&session::<BeaconPurpose>()).unwrap();
+        let (dealer, _) = adaptive_dealer(&parameters, 1);
+        assert_eq!(dealer.coefficients.len(), dealer.coefficients.capacity());
+        let mut challenge = Sha256::new();
+        challenge.update(DEALER_POK_DOMAIN_V1);
+        challenge.update(THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes());
+        challenge.update(parameters.digest());
+        challenge.update(original_session(parameters.session()));
+        challenge.update(dealer.dealer_index.to_be_bytes());
+        challenge.update(
+            u32::try_from(dealer.coefficients.len())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        for coefficient in &dealer.coefficients {
+            challenge.update(coefficient.bytes);
+        }
+        challenge.update(dealer.proof.commitment);
+        assert_eq!(
+            dealer_pok_challenge(
+                &parameters,
+                dealer.dealer_index,
+                &dealer.coefficients,
+                &dealer.proof
+            )
+            .unwrap(),
+            scalar_from_transcript(&challenge).unwrap()
+        );
     }
 
     type DealerScalars = [[Scalar; 3]; 2];

@@ -8,6 +8,9 @@
 //! handled event costs virtual CPU time (per pairing counted by the crypto wrapper), during
 //! which the replica is busy; its actions take effect at the end of that time.
 
+mod progress;
+mod storage;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -680,7 +683,8 @@ impl World {
         out
     }
 
-    /// Run until the duration or the first violation.
+    /// Run for the minimum duration or until the first violation. Scenarios requesting bounded
+    /// progress completion then observe their remaining heights under captured O-LIVE deadlines.
     ///
     /// # Errors
     /// The failure report of the first violation.
@@ -688,7 +692,12 @@ impl World {
         while self.failure.is_none() && self.step() {}
         if self.failure.is_none() {
             self.now = self.now.max(self.duration);
-            self.finish();
+            if self.checks.complete_progress {
+                self.complete_progress_observation();
+            }
+            if self.failure.is_none() {
+                self.finish();
+            }
         }
         self.failure
             .as_ref()
@@ -771,11 +780,7 @@ impl World {
             }
             Ev::IoDone { r, epoch, id } => {
                 if self.alive(r, epoch) {
-                    match self.io_kill_at(r) {
-                        Some(true) => self.io_kill(r),
-                        Some(false) => self.io_done(r, id, true),
-                        None => self.io_done(r, id, false),
-                    }
+                    self.io_attempt(r, id);
                 }
             }
             Ev::ExecDone { r, epoch, job } => {
@@ -980,11 +985,7 @@ impl World {
 
     fn write_latency(&mut self, m: usize) -> Millis {
         let p = self.machines[m].profile;
-        let mut latency = self.rng.range(p.write_min, p.write_max);
-        while self.rng.chance(p.write_fail_ppm) {
-            latency = latency.saturating_add(p.write_retry);
-        }
-        latency
+        self.rng.range(p.write_min, p.write_max)
     }
 
     fn apply_action(&mut self, r: usize, action: Action, at: Millis) {
@@ -1105,7 +1106,9 @@ impl World {
             }
             Action::CommitBlock { block, commit_qc } => {
                 self.expose_qc(r, &commit_qc);
-                let latency = self.write_latency(m) + self.machines[m].profile.block_write_extra;
+                let latency = self
+                    .write_latency(m)
+                    .saturating_add(self.machines[m].profile.block_write_extra);
                 let (id, done) = self.replicas[r].io.write(
                     at,
                     latency,

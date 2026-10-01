@@ -1316,7 +1316,9 @@ async fn error_response_contains_details() {
         ),
         actual: iroha_data_model::transaction::TransactionDomain::Genesis,
     };
-    let expected_message = format!("failed to accept transaction: {mismatch}");
+    let expected_message = format!(
+        "failed to accept transaction: Signed transaction domain does not match the admitted domain: {mismatch}"
+    );
     let err = Error::AcceptTransaction(
         iroha_core::tx::AcceptTransactionFail::TransactionDomainMismatch(mismatch),
     );

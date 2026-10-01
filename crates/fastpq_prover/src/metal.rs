@@ -147,7 +147,7 @@ const MAX_RETAINED_TELEMETRY_SAMPLES: usize = 4_096;
 #[cfg(test)]
 const BN254_TWIDDLE_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const GOLDILOCKS_TWIDDLE_CACHE_MAX_ENTRIES: usize =
-    crate::goldilocks_transform::EXACT_ROOT_METAL_TWIDDLE_ENTRIES_V1;
+    crate::gpu_memory::METAL_TWIDDLE_CACHE_MAX_ENTRIES;
 // Metal's bytes-no-copy API requires both ends of the wrapped region to be
 // page-aligned. A 16 KiB region satisfies both 4 KiB Intel and 16 KiB Apple
 // Silicon macOS page sizes.
@@ -2403,6 +2403,7 @@ struct TwiddleCacheKey {
     log_len: u32,
     root: u64,
     inverse: bool,
+    factorized: bool,
 }
 struct TwiddleCacheEntry {
     buffer: Buffer,
@@ -2423,6 +2424,7 @@ impl TwiddleCache {
         log_len: u32,
         root: u64,
         inverse: bool,
+        factorized: bool,
     ) -> MetalResult<Buffer> {
         if log_len == 0 {
             return Err(GpuError::InvalidInput(
@@ -2434,17 +2436,27 @@ impl TwiddleCache {
             log_len,
             root,
             inverse,
+            factorized,
         };
         if let Some(entry) = self.buffers.get(&key) {
             record_twiddle_cache_sample(entry.build_cost_ms, true);
             return Ok(entry.buffer.clone());
         }
         let started = Instant::now();
-        let stage_twiddles = compute_stage_twiddles(log_len, root, inverse);
+        let stage_twiddles = if factorized {
+            compute_factorized_root_twiddles(root, inverse)
+        } else {
+            compute_stage_twiddles(log_len, root, inverse)
+        };
         let byte_len =
             u64::try_from(mem::size_of_val(stage_twiddles.as_slice())).map_err(|_| {
                 GpuError::InvalidInput("Metal twiddle buffer length exceeds 64-bit representation")
             })?;
+        if byte_len > crate::gpu_memory::METAL_TWIDDLE_MAX_ENTRY_BYTES as u64 {
+            return Err(GpuError::InvalidInput(
+                "Metal twiddle cache entry exceeds its payload bound",
+            ));
+        }
         validate_metal_buffer_byte_len(device, byte_len)?;
         let buffer = try_new_buffer_with_data(
             device,
@@ -2726,7 +2738,18 @@ impl MetalPipelines {
             .twiddle_cache
             .lock()
             .expect("Metal twiddle cache poisoned");
-        cache.resolve(&self.device, log_len, root, inverse)
+        cache.resolve(&self.device, log_len, root, inverse, false)
+    }
+    fn factorized_root_twiddle_buffer(
+        &self,
+        log_len: u32,
+        root: u64,
+        inverse: bool,
+    ) -> MetalResult<Buffer> {
+        self.twiddle_cache
+            .lock()
+            .expect("Metal twiddle cache poisoned")
+            .resolve(&self.device, log_len, root, inverse, true)
     }
     #[cfg(test)]
     fn bn254_fft_twiddle_buffer(&self, log_size: u32) -> MetalResult<Buffer> {
@@ -6003,6 +6026,22 @@ fn goldilocks_pow(mut base: u64, mut exponent: u64) -> u64 {
 }
 fn goldilocks_inv(value: u64) -> u64 {
     goldilocks_pow(value, FIELD_MODULUS - 2)
+}
+// Public table: T[digit * 256 + byte] = omega^(byte * 256^digit).
+// No private value selects a table address or enters its construction.
+fn compute_factorized_root_twiddles(root: u64, inverse: bool) -> Vec<u64> {
+    let mut table = Vec::with_capacity(crate::gpu_memory::METAL_FACTORIZED_TWIDDLE_WORDS);
+    let mut factor = if inverse { goldilocks_inv(root) } else { root };
+    for _ in 0..4 {
+        let mut value = 1;
+        for _ in 0..256 {
+            table.push(value);
+            value = goldilocks_mul(value, factor);
+        }
+        // The next digit's unit is exactly 256 times this digit's exponent.
+        factor = value;
+    }
+    table
 }
 fn compute_stage_twiddles(log_len: u32, root: u64, inverse: bool) -> Vec<u64> {
     if log_len == 0 {

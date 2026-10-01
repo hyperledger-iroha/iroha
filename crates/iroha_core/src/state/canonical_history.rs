@@ -132,6 +132,59 @@ impl<'a> CanonicalHistorySource<'a> {
         self.load(height)
     }
 
+    /// Load one canonical body after the caller admits its exact durable frame.
+    /// Metadata and cache presence cannot authorize unpaid body I/O or decoding.
+    /// The caller retains one allocation scope across this and subsequent reads.
+    pub(crate) fn block_with_admission(
+        self,
+        height: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+    ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
+        let expected = self
+            .expected_hash(height)
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
+        let height_u64 = height.get() as u64;
+        let missing = || {
+            QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable {
+                height: height_u64,
+                expected_hash: expected,
+            })
+        };
+        if self.kura.is_canonical_body_missing(height) {
+            return Err(missing());
+        }
+        let storage_error = |error: crate::kura::Error| match error {
+            crate::kura::Error::NoritoFrame(error) if error.is_decode_resource_limit() => {
+                QueryExecutionFail::GasBudgetExceeded
+            }
+            crate::kura::Error::VersionedCodec(error) if error.is_decode_resource_limit() => {
+                QueryExecutionFail::GasBudgetExceeded
+            }
+            error => QueryExecutionFail::Conversion(error.to_string()),
+        };
+        let source = self
+            .kura
+            .native_frame_read(height_u64, expected)
+            .map_err(storage_error)?
+            .ok_or_else(missing)?;
+        let wire_len = source.wire_len();
+        before_read(1, wire_len)?;
+        let bytes = source
+            .read(wire_len)
+            .map_err(storage_error)?
+            .ok_or_else(missing)?;
+        let block =
+            iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|error| {
+                if error.is_decode_resource_limit() {
+                    QueryExecutionFail::GasBudgetExceeded
+                } else {
+                    QueryExecutionFail::Conversion(error.to_string())
+                }
+            })?;
+        authenticate_canonical_block(height, expected, Some(Arc::new(block)))
+            .map_err(QueryExecutionFail::CanonicalHistory)
+    }
+
     /// Read execution identity through the original State tip, without inspecting
     /// any local QC. Every source frame is admitted before its bytes are read.
     /// Parent core hash, parent R and Iroha parent hash jointly authenticate the
@@ -161,10 +214,28 @@ impl<'a> CanonicalHistorySource<'a> {
         self,
         first: NonZeroUsize,
         last: NonZeroUsize,
-        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
         mut visit: impl FnMut(
             crate::sumeragi::certified_chain::CommittedBlock,
         ) -> Result<(), QueryExecutionFail>,
+    ) -> Result<(), QueryExecutionFail> {
+        self.visit_executed_backwards_while(first, last, before_read, |receipt| {
+            visit(receipt)?;
+            Ok(true)
+        })
+    }
+
+    /// The same original-tip walk, stopping after an authenticated visitor returns false.
+    /// The visitor may choose an older target from a newly verified certificate without
+    /// reading or decoding the already authenticated prefix a second time.
+    pub(crate) fn visit_executed_backwards_while(
+        self,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
+        mut before_read: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+        mut visit: impl FnMut(
+            crate::sumeragi::certified_chain::CommittedBlock,
+        ) -> Result<bool, QueryExecutionFail>,
     ) -> Result<(), QueryExecutionFail> {
         if first > last {
             return Err(QueryExecutionFail::Conversion(
@@ -203,39 +274,7 @@ impl<'a> CanonicalHistorySource<'a> {
                     "native execution parent contradicts State hash at {source_height}"
                 )));
             }
-            if self.kura.is_canonical_body_missing(index) {
-                return Err(QueryExecutionFail::CanonicalHistory(
-                    CanonicalHistoryError::BodyUnavailable {
-                        height: source_height,
-                        expected_hash: expected_iroha,
-                    },
-                ));
-            }
-            let source = self
-                .kura
-                .native_frame_read(source_height, expected_iroha)
-                .map_err(|error| invalid(error.to_string()))?
-                .ok_or(QueryExecutionFail::CanonicalHistory(
-                    CanonicalHistoryError::BodyUnavailable {
-                        height: source_height,
-                        expected_hash: expected_iroha,
-                    },
-                ))?;
-            let wire_len = source.wire_len();
-            before_read(1, wire_len)?;
-            let bytes = source
-                .read(wire_len)
-                .map_err(|error| invalid(error.to_string()))?
-                .ok_or(QueryExecutionFail::CanonicalHistory(
-                    CanonicalHistoryError::BodyUnavailable {
-                        height: source_height,
-                        expected_hash: expected_iroha,
-                    },
-                ))?;
-            let block = iroha_data_model::block::decode_framed_signed_block(&bytes)
-                .map_err(|error| invalid(error.to_string()))?;
-            let block = authenticate_canonical_block(index, expected_iroha, Some(Arc::new(block)))
-                .map_err(QueryExecutionFail::CanonicalHistory)?;
+            let block = self.block_with_admission(index, &mut before_read)?;
             let receipt = crate::sumeragi::certified_chain::read_frame(block, source_height)
                 .map_err(|error| invalid(error.to_string()))?;
             if receipt.core_hash() != expected_core || receipt.result() != expected_result {
@@ -254,8 +293,8 @@ impl<'a> CanonicalHistorySource<'a> {
                         invalid("native successor omits Iroha parent hash".into())
                     })?;
             }
-            if source_height <= selected_last {
-                visit(receipt)?;
+            if source_height <= selected_last && !visit(receipt)? {
+                return Ok(());
             }
             if source_height == target {
                 return Ok(());

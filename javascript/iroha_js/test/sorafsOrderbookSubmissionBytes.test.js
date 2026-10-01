@@ -43,6 +43,21 @@ test("orderbook byte custody rejects coercions and non-byte inputs", () => {
   for (const value of [undefined, null, "010203", [1, 2, 3], { byteLength: 3 },
     { valueOf() { assert.fail("non-byte input must never be coerced"); } }]) {
     assert.throws(() => snapshotSorafsOrderbookSubmissionBytes(value, "test"),
-      { name: "TypeError", message: "test.signedTransaction must be exact bytes" });
+      { name: "TypeError", message: "test.signedTransaction must be exact bytes backed by an ordinary ArrayBuffer" });
+  }
+});
+
+test("orderbook byte custody ignores caller getters and rejects shared backing", () => {
+  const bytes = Uint8Array.of(1, 2, 3);
+  for (const key of ["buffer", "byteOffset", "byteLength"]) {
+    Object.defineProperty(bytes, key, {
+      get() { assert.fail(`caller ${key} getter must never run`); },
+    });
+  }
+  assert.deepEqual(snapshotSorafsOrderbookSubmissionBytes(bytes, "test"), Buffer.from([1, 2, 3]));
+  const shared = new SharedArrayBuffer(3);
+  for (const input of [shared, new Uint8Array(shared), new DataView(shared)]) {
+    assert.throws(() => snapshotSorafsOrderbookSubmissionBytes(input, "test"),
+      /ordinary ArrayBuffer/u);
   }
 });

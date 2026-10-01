@@ -18118,39 +18118,39 @@ test("local manifest builder enforces exact V1 dynamic access hints", async () =
   for (const [baseKey, expected] of [
     [
       "state:",
-      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       "state:*",
-      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       "state:Balances/",
-      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       "state:Balances/suffix",
-      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       "state:Balances:suffix",
-      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       "state:int",
-      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       "account:alice",
-      /dynamic_reads\[0\]\.base_key must be state: plus one canonical state declaration identifier/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       " state:Balances",
-      /dynamic_reads\[0\]\.base_key must not contain surrounding whitespace/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
     [
       "state:Balances ",
-      /dynamic_reads\[0\]\.base_key must not contain surrounding whitespace/u,
+      /dynamicReads\[0\]\.baseKey must be state: plus one canonical state declaration identifier/u,
     ],
   ]) {
     await assert.rejects(
@@ -18161,16 +18161,16 @@ test("local manifest builder enforces exact V1 dynamic access hints", async () =
   for (const keyType of ["Json", "ReferendumId", "Int", "Quantity", "Amount"]) {
     await assert.rejects(
       submit({ keyType }),
-      /dynamic_reads\[0\]\.key_type must be an exact Kotodama V1 StateMap key scalar/u,
+      /dynamicReads\[0\]\.keyType must be an exact Kotodama V1 StateMap key scalar/u,
     );
   }
   for (const [boundKind, expected] of [
-    ["", /dynamic_reads\[0\]\.bound_kind must not be empty/u],
-    ["Take", /dynamic_reads\[0\]\.bound_kind must be exactly take or page/u],
-    ["prefix", /dynamic_reads\[0\]\.bound_kind must be exactly take or page/u],
+    ["", /dynamicReads\[0\]\.boundKind must be a non-empty string/u],
+    ["Take", /dynamicReads\[0\]\.boundKind must be exactly take or page/u],
+    ["prefix", /dynamicReads\[0\]\.boundKind must be exactly take or page/u],
     [
       "range ",
-      /dynamic_reads\[0\]\.bound_kind must not contain surrounding whitespace/u,
+      /dynamicReads\[0\]\.boundKind must be exactly take or page/u,
     ],
   ]) {
     await assert.rejects(
@@ -18180,12 +18180,12 @@ test("local manifest builder enforces exact V1 dynamic access hints", async () =
   }
   await assert.rejects(
     submit({ maxKeys: 0 }),
-    /dynamic_reads\[0\]\.max_keys must be a positive integer/u,
+    /dynamicReads\[0\]\.maxKeys must be positive/u,
   );
   for (const maxKeys of [65, 0xffff_ffff]) {
     await assert.rejects(
       submit({ maxKeys }),
-      /dynamic_reads\[0\]\.max_keys must be at most 64/u,
+      /dynamicReads\[0\]\.maxKeys must be at most 64/u,
     );
   }
   await submit({ maxKeys: 64 });
@@ -18241,12 +18241,12 @@ test("local manifest builder resolves dynamic hints to declared StateMaps per li
     });
     await assert.rejects(
       submit({ [field]: [hint, { ...hint }] }),
-      /contains a duplicate dynamic access hint/u,
+      /duplicates an earlier dynamic access hint/u,
       `${field} must reject an exact duplicate`,
     );
     await assert.rejects(
       submit({ [field]: [{ ...hint, baseKey: "state:Missing" }] }),
-      /base_key must reference a declared top-level StateMap/u,
+      /baseKey must reference a declared top-level StateMap/u,
       `${field} must reject an unknown state`,
     );
     await assert.rejects(
@@ -18254,12 +18254,12 @@ test("local manifest builder resolves dynamic hints to declared StateMaps per li
         [field]: [hint],
         states: [{ name: "Balances", typeName: "quantity" }],
       }),
-      /base_key must reference a declared top-level StateMap/u,
+      /baseKey must reference a declared top-level StateMap/u,
       `${field} must reject a scalar state`,
     );
     await assert.rejects(
       submit({ [field]: [{ ...hint, keyType: "Name" }] }),
-      /key_type Name does not match declared StateMap key type AccountId/u,
+      /keyType Name does not match declared StateMap key type AccountId/u,
       `${field} must reject a mismatched key scalar`,
     );
   }
@@ -18292,7 +18292,7 @@ test("local manifest builder rejects retired English entrypoint kinds", async ()
           entrypoints: [{ name: "legacy", kind: retired }],
         },
       }),
-      /must be Kotoage, View, Hajimari, or Kaizen/,
+      /must be one of 'Kotoage', 'View', 'Hajimari', or 'Kaizen'/,
     );
   }
 
@@ -18408,11 +18408,11 @@ test("local manifest builder requires agreeing parameter and state type aliases"
   );
   await assert.rejects(
     submit({}, { typeName: "quantity" }),
-    /params\[0\]\.type_name must be a string/u,
+    /params\[0\]\.type_name must be a non-empty string/u,
   );
   await assert.rejects(
     submit({ typeName: "quantity" }, {}),
-    /states\[0\]\.type_name must be a string/u,
+    /states\[0\]\.type_name must be a non-empty string/u,
   );
 });
 
@@ -18623,7 +18623,7 @@ test("local manifest builder rejects malformed and over-depth flat List tapes be
       { kind: "List", value: { capacity: 1, element: { nodes: [] } } },
       { kind: "Leaf", value: { kind: "Int", value: null } },
     ]),
-    /must contain exactly capacity/u,
+    /must contain only capacity; the element subtree follows in the enclosing node tape/u,
   );
   await assert.rejects(
     submit([
@@ -18664,7 +18664,7 @@ test("local manifest builder rejects forged branded manifest declarations before
   ]) {
     await assert.rejects(
       submit({ seiyakuName }),
-      /seiyaku_name must (?:not be empty|be a canonical Kotodama V1 identifier)/u,
+      /seiyakuName must be a (?:non-empty string|canonical Kotodama V1 type declaration identifier)/u,
     );
   }
   for (const typeName of [
@@ -18683,7 +18683,7 @@ test("local manifest builder rejects forged branded manifest declarations before
       submit({
         errorTypes: [{ identity: namespace, variants: [{ name: "Denied", code: 7 }] }],
       }),
-      /error_types\[0\]\.identity must be a stable package\/unit\/enum identity/u,
+      /errorTypes\[0\]\.identity must be a stable package\/unit\/enum identity/u,
     );
   }
   for (const keyType of [
@@ -18712,7 +18712,7 @@ test("local manifest builder rejects forged branded manifest declarations before
           dynamicWrites: [],
         },
       }),
-      /dynamic_reads\[0\]\.key_type must be an exact Kotodama V1 StateMap key scalar/u,
+      /dynamicReads\[0\]\.keyType must be an exact Kotodama V1 StateMap key scalar/u,
     );
   }
   for (const retired of ["U128", "Amount"]) {
@@ -18802,7 +18802,7 @@ test("local manifest builder rejects forged branded manifest declarations before
         },
       ],
     }),
-    /has parameters but no exact argument schema/u,
+    /argument_schema is required for declared parameters/u,
   );
   await assert.rejects(
     submit({
@@ -18815,7 +18815,7 @@ test("local manifest builder rejects forged branded manifest declarations before
         },
       ],
     }),
-    /params\[0\]\.name must be a canonical Kotodama V1 identifier/u,
+    /params\[0\]\.name must be unique and canonical/u,
   );
   await assert.rejects(
     submit({
@@ -18836,7 +18836,7 @@ test("local manifest builder rejects forged branded manifest declarations before
         },
       ],
     }),
-    /capacity must be in the V1 range 1\.\.64/u,
+    /capacity must be in 1\.\.64/u,
   );
   await assert.rejects(
     submit({
@@ -21650,7 +21650,7 @@ test("bounded readers cancel when custom header methods throw", async () => {
 test("bounded code-byte responses cancel after UTF-8 and JSON rejection", async () => {
   for (const [bytes, expected] of [
     [Uint8Array.of(0xc3, 0x28), /must be valid UTF-8/],
-    [new TextEncoder().encode("{"), /must contain valid JSON/],
+    [new TextEncoder().encode("{"), /contract code bytes response contains invalid JSON at character 1: expected a string/],
   ]) {
     let bodyCancelCalls = 0;
     let reads = 0;

@@ -1,4 +1,5 @@
-import { canonicalHashLiteral } from "../src/instructionBuilderPrimitives.js";
+import { validateManifestFieldsV1 } from "../src/contractManifestRules.js";
+import { canonicalHashLiteral, parseHashLiteralToBuffer } from "../src/instructionBuilderPrimitives.js";
 import { universalArtifactInstruction } from "./contractArtifactTestHelpers.js";
 import { universalArtifactInput } from "./contractArtifactTestHelpers.js";
 import test from "node:test";
@@ -16,7 +17,7 @@ const fixture = JSON.parse(
 );
 
 function manifestFixture() {
-  return structuredClone(fixture.manifest);
+  return structuredClone(fixture.registration_manifest);
 }
 
 function observe(object, key, events, label = key, value = object[key]) {
@@ -33,13 +34,15 @@ function observe(object, key, events, label = key, value = object[key]) {
 test("public manifest builder preserves the Rust fixture and canonical instruction bytes", () => {
   const manifest = manifestFixture();
   const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest }));
-  assert.deepEqual(instruction, universalArtifactInstruction({ RegisterSmartContractCode: { manifest: { ...fixture.manifest, code_hash: canonicalHashLiteral(Buffer.alloc(32, 0x11)) } } }));
-  assert.deepEqual(manifest, fixture.manifest);
+  assert.deepEqual(instruction, universalArtifactInstruction({
+    RegisterSmartContractCode: { manifest: fixture.registration_manifest },
+  }));
+  assert.deepEqual(manifest, fixture.registration_manifest);
   assert.notEqual(instruction.RegisterSmartContractCode.manifest, manifest);
   assert.notEqual(instruction.RegisterSmartContractCode.manifest.entrypoints, manifest.entrypoints);
 
   const encoded = noritoEncodeInstruction(instruction, 753);
-  const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
+  const rustManifest = Buffer.from(fixture.registration_manifest_compact_hex, "hex");
   assert.notEqual(encoded.indexOf(rustManifest), -1, "instruction must contain exact Rust manifest bytes");
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded, instruction);
@@ -58,7 +61,7 @@ test("entrypoint getters retain their validation order", () => {
   for (const field of fields) observe(entrypoint, field, events);
   const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({ manifest }));
   assert.deepEqual(events, fields);
-  assert.deepEqual(instruction.RegisterSmartContractCode.manifest, fixture.manifest);
+  assert.deepEqual(instruction.RegisterSmartContractCode.manifest, fixture.registration_manifest);
 });
 
 test("an entrypoint getter failure stops before later entrypoint fields", () => {
@@ -157,3 +160,74 @@ for (const surface of ["provenance", "authority"]) {
     }
   });
 }
+
+test("manifest fields reject retired and conflicting spellings before reading them", () => {
+  for (const fields of [
+    { contractName: "Ledger" },
+    { seiyaku_name: "Ledger", seiyakuName: "Ledger" },
+    { code_hash: null, codeHash: null },
+  ]) {
+    const manifest = { ...fields };
+    for (const name of Object.keys(manifest)) {
+      Object.defineProperty(manifest, name, { enumerable: true, get() {
+        assert.fail("unsupported/conflicting manifest field was read");
+      } });
+    }
+    assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest }),
+      /manifest contains (?:unsupported fields|conflicting aliases):/u);
+  }
+});
+
+test("manifest identity hashes reject a missing marker instead of changing content identity", () => {
+  // CRC vectors are independently computed with Python binascii.crc_hqx(..., 0xffff).
+  const unmarkedLiteral = `hash:${"AA".repeat(32)}#0E5B`;
+  const markedLiteral = `hash:${"AA".repeat(31)}AB#3E38`;
+  assert.deepEqual(parseHashLiteralToBuffer(unmarkedLiteral, "unmarked vector"), Buffer.alloc(32, 0xaa));
+  assert.equal(parseHashLiteralToBuffer(markedLiteral, "marked vector")[31], 0xab);
+  for (const field of ["codeHash", "abiHash"]) {
+    for (const value of ["aa".repeat(32), Buffer.alloc(32, 0xaa), new Uint8Array(32).fill(0xaa), unmarkedLiteral]) {
+      assert.throws(() => buildRegisterSmartContractCodeInstruction(universalArtifactInput({
+        manifest: { [field]: value },
+      })), new RegExp(`${field} must set the Iroha Hash marker bit`, "u"));
+    }
+    const value = Buffer.alloc(32, 0xaa);
+    value[31] |= 1;
+    for (const admitted of [value, markedLiteral]) {
+      const instruction = buildRegisterSmartContractCodeInstruction(universalArtifactInput({
+        manifest: { [field]: admitted },
+      }));
+      assert.equal(instruction.RegisterSmartContractCode.manifest[field === "codeHash" ? "code_hash" : "abi_hash"], canonicalHashLiteral(value));
+    }
+    assert.equal(value[31], 0xab);
+  }
+});
+
+test("manifest entrypoint selectors reject padding and reserved names", () => {
+  for (const name of [" run", "run ", "match", "__kotodama_link_forged"]) {
+    assert.throws(() => buildRegisterSmartContractCodeInstruction(universalArtifactInput({
+      manifest: { entrypoints: [{ name, kind: "View" }] },
+    })), /name must be a canonical Kotodama V1 identifier or branded lifecycle selector/u);
+  }
+});
+
+
+test("manifest hash admission snapshots caller-owned byte arrays once", () => {
+  const hash = Array(32).fill(0x11);
+  let reads = 0;
+  Object.defineProperty(hash, 31, { enumerable: true, get() {
+    reads += 1;
+    return reads === 1 ? 0xaa : 0xab;
+  } });
+  assert.throws(() => buildRegisterSmartContractCodeInstruction({
+    manifest: { codeHash: hash },
+  }), /codeHash must set the Iroha Hash marker bit/u);
+  assert.equal(reads, 1);
+});
+
+test('shared field owner preserves builder error code/path and rejects response aliases before getters',()=>{
+  assert.throws(()=>buildRegisterSmartContractCodeInstruction({manifest:{contractName:'Legacy'}}),{code:'ERR_INVALID_OBJECT',path:'manifest'});
+  assert.throws(()=>buildRegisterSmartContractCodeInstruction({manifest:{codeHash:Buffer.alloc(32,0xaa)}}),{code:'ERR_INVALID_HEX',path:'manifest.codeHash'});
+  const manifest={code_hash:null,codeHash:null};
+  for(const key of Object.keys(manifest))Object.defineProperty(manifest,key,{enumerable:true,get(){assert.fail('conflicting field getter evaluated');}});
+  assert.throws(()=>validateManifestFieldsV1(manifest,'response.manifest'),/response\.manifest contains conflicting aliases: code_hash, codeHash/);
+});

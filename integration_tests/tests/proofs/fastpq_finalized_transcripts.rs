@@ -26,7 +26,7 @@ use iroha_data_model::{
     prelude::*,
     sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, VerifiedSumeragiBlock},
 };
-use iroha_model_base::domain::DomainId;
+use iroha_model_base::{domain::DomainId, metadata::Metadata, peer::PeerId};
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
@@ -406,7 +406,7 @@ fn four_validator_fastpq_transcripts_bind_finality_and_survive_restart() -> Resu
         );
         let definition = AssetDefinition::numeric(
             asset.clone(),
-            "finalized transcript custody".into(),
+            "finalized transcript custody",
             AssetBalancePolicy::Global,
             None,
         );

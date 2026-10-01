@@ -245,7 +245,7 @@ def evidence_fixture(index: int, validator_sha: str, *, authority_height: int = 
                          "legs": legs, "finalized_height": finalized_height},
         "restarts.json": [{"peer_index": peer, "before_pid": 100+peer, "after_pid": 200+peer} for peer in range(16)]}
     for phase in M.STATE_PHASES:
-        evidence[f"state-{phase}.json"] = {"label": f"smoke-{phase}",
+        evidence[f"state-{phase}.json"] = {"label": "after-finalized-retry" if phase == "replay" else f"smoke-{phase}",
             "validators": [observation(peer, phase in ("finalized", "replay"), baseline_height=authority_height, finalized_height=finalized_height)
                            for peer in range(16)]}
     for peer in range(16):
@@ -304,6 +304,19 @@ class SmokeEvidenceTests(unittest.TestCase):
     def test_complete_synthetic_contract_and_live_staged_observation(self) -> None:
         self.assertEqual(self.validate()["continuous_checks"], 64)
         self.assertEqual(len(M.EVIDENCE_NAMES), 112)
+
+    def test_exact_retry_snapshot_requires_its_original_phase_and_all_validators(self) -> None:
+        self.assertEqual(self.evidence["state-replay.json"]["label"], "after-finalized-retry")
+        self.validate()
+        for label in ("smoke-replay", "before-finalized-retry", "smoke-finalized"):
+            with self.subTest(label=label):
+                self.evidence["state-replay.json"]["label"] = label
+                with self.assertRaisesRegex(M.CampaignError, "state-replay.json omits/relabels validators"):
+                    self.validate()
+        self.evidence["state-replay.json"]["label"] = "after-finalized-retry"
+        self.evidence["state-replay.json"]["validators"].pop()
+        with self.assertRaisesRegex(M.CampaignError, "state-replay.json omits/relabels validators"):
+            self.validate()
 
     def test_local_reconciliation_preserves_atomic_ledger_and_requires_terminal_cleanup(self) -> None:
         bundle = bytes(32)

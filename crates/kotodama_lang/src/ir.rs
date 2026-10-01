@@ -3308,16 +3308,28 @@ fn push_copy(block: &mut BasicBlock, dest: Temp, src: Temp) {
     }
     block.instrs.push(Instr::Copy { dest, src });
 }
+/// The environment and predecessor block produced by one conditional arm.
+struct ConditionalExit<'a> {
+    env: &'a HashMap<String, Temp>,
+    block: usize,
+}
+
 fn merge_conditional_envs(
     ctx: &mut LowerCtx,
     entry_env: &HashMap<String, Temp>,
-    then_env: &HashMap<String, Temp>,
-    else_env: &HashMap<String, Temp>,
-    then_exit: usize,
-    else_exit: usize,
+    then_branch: ConditionalExit<'_>,
+    else_branch: ConditionalExit<'_>,
     join_label: Label,
     vars: &mut HashMap<String, Temp>,
 ) {
+    let ConditionalExit {
+        env: then_env,
+        block: then_exit,
+    } = then_branch;
+    let ConditionalExit {
+        env: else_env,
+        block: else_exit,
+    } = else_branch;
     let mut products = Vec::new();
     let mut mutated = BTreeSet::new();
     for (name, entry_temp) in entry_env {
@@ -3878,7 +3890,18 @@ fn lower_statement(
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
             merge_conditional_envs(
-                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, end_label, vars,
+                ctx,
+                &entry_env,
+                ConditionalExit {
+                    env: &then_vars,
+                    block: then_idx,
+                },
+                ConditionalExit {
+                    env: &else_vars,
+                    block: else_idx,
+                },
+                end_label,
+                vars,
             );
         }
         TypedStatement::IfLet {
@@ -3907,7 +3930,18 @@ fn lower_statement(
             ctx.finish_current(Terminator::Jump(end_label));
             let else_idx = ctx.blocks.len() - 1;
             merge_conditional_envs(
-                ctx, &entry_env, &then_vars, &else_vars, then_idx, else_idx, end_label, vars,
+                ctx,
+                &entry_env,
+                ConditionalExit {
+                    env: &then_vars,
+                    block: then_idx,
+                },
+                ConditionalExit {
+                    env: &else_vars,
+                    block: else_idx,
+                },
+                end_label,
+                vars,
             );
         }
         TypedStatement::While { cond, body } => {
@@ -9089,6 +9123,56 @@ mod tests {
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         assert_eq!(ir.functions[0].blocks.len(), 4); // entry, then, else, end
     }
+    #[test]
+    fn conditional_environment_joins_copy_each_arm_to_the_returned_value() {
+        let source = r#"
+            fn via_if(bool flag, int left, int right) -> int {
+                var value = 0;
+                if flag { value = left; } else { value = right; }
+                return value;
+            }
+            fn via_if_let(Option<int> input, int fallback) -> int {
+                var value = 0;
+                if let Option::some(item) = input { value = item; }
+                else { value = fallback; }
+                return value;
+            }
+        "#;
+        let ir = lower(&analyze(&parse(source).unwrap()).unwrap()).expect("lower both joins");
+        assert_eq!(ir.functions.len(), 2);
+        for function in &ir.functions {
+            let (join_label, returned) = function
+                .blocks
+                .iter()
+                .find_map(|block| {
+                    if let Terminator::Return(Some(value)) = block.terminator {
+                        Some((block.label, value))
+                    } else {
+                        None
+                    }
+                })
+                .expect("joined return");
+            let sources: Vec<_> = function.blocks.iter().filter(|block| {
+                matches!(block.terminator, Terminator::Jump(target) if target == join_label)
+            }).map(|block| {
+                block.instrs.iter().find_map(|instruction| match instruction {
+                    Instr::Copy { dest, src } if *dest == returned => Some(*src),
+                    _ => None,
+                }).expect("each predecessor initializes the joined value")
+            }).collect();
+            assert_eq!(
+                sources.len(),
+                2,
+                "{} must retain both predecessors",
+                function.name
+            );
+            assert_ne!(
+                sources[0], sources[1],
+                "each arm must retain its own source"
+            );
+        }
+    }
+
     #[test]
     fn logical_operators_lower_to_short_circuit_cfg() {
         let src = include_str!("ir/fixtures/v1/i031.ko");

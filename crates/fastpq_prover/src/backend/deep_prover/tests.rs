@@ -230,18 +230,20 @@ fn public_self_check_allowance_dominates_the_complete_bounded_verifier() {
 #[test]
 fn retained_device_pool_remains_charged_during_the_larger_cpu_quotient_phase() {
     let pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES;
+    let twiddles = crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE;
     assert_eq!(
         active_phase_payload(2 * pool, pool + 8, pool + 16).unwrap(),
-        3 * pool
+        3 * pool + twiddles
     );
-    // A larger digest stage includes this allowance already; do not add it twice.
+    // A larger row/coefficient phase keeps its envelope; persistent public
+    // root tables remain charged once outside the maximum in every case.
     assert_eq!(
         active_phase_payload(8, 3 * pool, 2 * pool).unwrap(),
-        3 * pool
+        3 * pool + twiddles
     );
     assert_eq!(
         active_phase_payload(8, 2 * pool, 3 * pool).unwrap(),
-        3 * pool
+        3 * pool + twiddles
     );
     assert!(active_phase_payload(usize::MAX, 0, 0).is_err());
 }

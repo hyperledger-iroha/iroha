@@ -819,14 +819,19 @@ mod tests {
 
     #[test]
     fn signed_inspection_reports_invalid_signature_without_echoing_diagnostics() {
-        let mut signed_wire = fixture_signed_wire();
-        let transaction = fixture_signed_transaction();
-        let signature = transaction.signature().payload().payload();
-        let signature_offset = signed_wire
-            .windows(signature.len())
-            .position(|window| window == signature)
-            .expect("fixture wire contains its signature bytes");
-        signed_wire[signature_offset] ^= 0x01;
+        let mut transaction = fixture_signed_transaction();
+        let mut signature = transaction.signature().payload().payload().to_vec();
+        signature[0] ^= 0x01;
+        transaction.set_signature(iroha_data_model::transaction::TransactionSignature(
+            iroha_crypto::SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(
+                &signature,
+            )),
+        ));
+        // Canonical Norito frames may compress signature bytes; mutate the typed
+        // signature and re-encode instead of searching inside a compressed frame.
+        let signed_wire = transaction
+            .encode_wire_v1()
+            .expect("encode changed signature");
         let network_id = fixture_network_id();
 
         let inspected = inspect_signed_transaction(&network_id, &signed_wire)

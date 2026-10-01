@@ -286,7 +286,10 @@ test("published recipe documentation exactly matches the portable allowlist", ()
 });
 
 test("package smoke rejects every non-portable or missing required artifact", () => {
-  const requiredLazyPaths = [
+  const requiredHelperPaths = [
+    "dist/boundedByteSnapshot.js",
+    "dist/validationFeeTrust.js",
+    "dist/sorafsOrderbookPreflight.js",
     "dist/smartContractDeploymentSubmit.js",
     "dist/sumeragiTyped.js",
   ];
@@ -312,7 +315,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/sorafsOrderbookSubmission.js",
     "dist/sorafsOrderbookSubmission.d.ts",
     "dist/tairaTestnetProfile.js",
-    ...requiredLazyPaths,
+    ...requiredHelperPaths,
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
   ];
@@ -347,7 +350,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/kagemusha.js",
     "dist/tairaTestnetProfile.js",
     ...PORTABLE_RECIPES,
-    ...requiredLazyPaths,
+    ...requiredHelperPaths,
   ]) {
     assert.throws(
       () =>

@@ -905,14 +905,16 @@ fn encode_bounded(proof: &DeepProof, maximum: usize) -> Result<Vec<u8>> {
     }
     Ok(output)
 }
-/// Digest stages already charge both live staging and the complete Metal pool.
-/// The CPU quotient follows the row commitment, so those idle pool allocations
-/// also survive that phase even though it performs no device dispatch.
+/// Keep the established quotient-phase pool reserve and each row/coefficient
+/// live-staging envelope. SHA3 row/coefficient forecasts do not include root
+/// tables: those public tables can persist from an earlier exact-root FFT in
+/// the same process. Charge their full cache outside every phase maximum.
 fn active_phase_payload(quotient: usize, rows: usize, coefficients: usize) -> Result<usize> {
-    Ok(
+    add(
         add(quotient, crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES)?
             .max(rows)
             .max(coefficients),
+        crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE,
     )
 }
 

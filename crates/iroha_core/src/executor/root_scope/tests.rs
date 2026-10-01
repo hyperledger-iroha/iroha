@@ -13,13 +13,13 @@ use iroha_data_model::{
     NetworkId, Registrable,
     account::Account,
     block::BlockHeader,
-    isi::SetParameter,
+    isi::{RegisterPeerWithPop, SetParameter},
     nexus::{DataSpaceCatalog, DataSpaceMetadata},
     smart_contract::ContractAddress,
     transaction::{Executable, IvmBytecode, IvmProved},
 };
 use iroha_model_base::topology::DataSpaceId;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use iroha_test_samples::ALICE_ID;
 
 fn private_state() -> (State, DataSpaceId) {
     let ds = DataSpaceId::new((1_u64 << 40) + 17);
@@ -110,9 +110,9 @@ fn parameter_control_cannot_hide_in_deferred_multisig_or_an_unknown_local_target
         b"private-root unreviewed peer instruction".to_vec(),
         iroha_crypto::Algorithm::BlsNormal,
     );
-    let no_scope: InstructionBox = iroha_data_model::isi::register::RegisterPeerWithPop::new(
+    let no_scope: InstructionBox = RegisterPeerWithPop::new(
         iroha_model_base::peer::PeerId::new(peer_key.public_key().clone()),
-        iroha_crypto::bls_normal_pop_prove(peer_key.private_key()).unwrap(),
+        iroha_crypto::bls_normal_pop_prove(peer_key.private_key()).expect("fixture PoP"),
     )
     .into();
     assert!(

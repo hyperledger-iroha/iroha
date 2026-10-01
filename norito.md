@@ -329,6 +329,13 @@ Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
 
+Rust error adapters retain these refusals through
+`core::Error::decode_resource_error` and the copyable `core::DecodeResourceError`.
+Conversion back to `Error` preserves every original variant and field without
+allocating a diagnostic. Sumeragi's native codec and the model evidence decoder
+preserve this category, so a scoped refusal is not reported as malformed evidence.
+This error representation changes no V1 frame, schema or signed bytes.
+
 Both `Ok` and `Err` branches of the result slice decoder enter the shared
 nesting guard before decoding their bounded child. The guard restores the
 previous depth on success, child error or consumed-length rejection, including

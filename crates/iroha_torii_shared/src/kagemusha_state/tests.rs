@@ -5,7 +5,7 @@ use iroha_data_model::{
     Registrable,
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinitionId},
-    sumeragi::SumeragiStatus,
+    sumeragi::{SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::{
         SumeragiFinalityAttestationBody, WorldStateElementKindV1, WorldStateSnapshotEntryV1,
         test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
@@ -94,7 +94,7 @@ fn fixture() -> &'static KagemushaAuthorityStateV1 {
                 unanchored: false,
                 abstaining: false,
                 halted: None,
-                footprint: Default::default(),
+                footprint: SumeragiFootprint::default(),
             },
             finality_proof: proof,
         };

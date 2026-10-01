@@ -1,4 +1,7 @@
-//! Select one original lane incarnation only from an already authenticated chronological prefix.
+//! Compact selection inside an already authenticated chronological prefix.
+//!
+//! The original creation bytes own the selected graph elsewhere. This selector retains only
+//! immutable authority identity and activation scalars; it never clones a lane record.
 use iroha_data_model::sumeragi_lanes::{SumeragiLaneRecord, SumeragiLaneState};
 use iroha_model_base::topology::LaneId;
 use std::io;
@@ -6,8 +9,31 @@ use std::io;
 pub(super) struct LaneSelection {
     lane: LaneId,
     incarnation: [u8; 32],
-    original: Option<SumeragiLaneRecord>,
+    original: Option<(iroha_crypto::Hash, u64)>,
     disappeared: bool,
+}
+fn immutable_identity(record: &SumeragiLaneRecord) -> io::Result<iroha_crypto::Hash> {
+    iroha_crypto::Hash::new_from_writer(|mut writer| {
+        writer.write_all(b"iroha/native-lane-authority-selection/v1")?;
+        norito::codec::encode_adaptive_into(
+            &(
+                record.lane,
+                record.dataspace,
+                record.incarnation,
+                record.da_layout,
+                record.created_at,
+                record.active_from,
+                record.anchor_freshness,
+            ),
+            &mut writer,
+        )
+        .map_err(io::Error::other)?;
+        norito::codec::encode_adaptive_into(&record.params, &mut writer)
+            .map_err(io::Error::other)?;
+        norito::codec::encode_adaptive_into(&record.committee, &mut writer)
+            .map_err(io::Error::other)?;
+        Ok(())
+    })
 }
 impl LaneSelection {
     pub(super) fn new(lane: LaneId, incarnation: [u8; 32]) -> Self {
@@ -18,15 +44,15 @@ impl LaneSelection {
             disappeared: false,
         }
     }
-    // The enclosing provider calls this only with a VerifiedNativeExecutionCarrier receipt.
-    // No result leaves that provider until the full interval matches the original State tip.
-    pub(super) fn observe(&mut self, height: u64, state: &SumeragiLaneState) -> io::Result<()> {
+    // Returns true exactly when this original creation carrier must acquire byte custody.
+    // The provider grants no authority until its complete prefix reaches the captured State tip.
+    pub(super) fn observe(&mut self, height: u64, state: &SumeragiLaneState) -> io::Result<bool> {
         let record = state
             .lane(self.lane)
             .filter(|record| record.incarnation == self.incarnation);
         let Some(record) = record else {
             self.disappeared |= self.original.is_some();
-            return Ok(());
+            return Ok(false);
         };
         if self.disappeared
             || record.created_at > height
@@ -36,28 +62,26 @@ impl LaneSelection {
                 "historical incarnation reappears or has invalid activation",
             ));
         }
-        if let Some(original) = &self.original {
-            if original.lane != record.lane
-                || original.dataspace != record.dataspace
-                || original.incarnation != record.incarnation
-                || original.params != record.params
-                || original.da_layout != record.da_layout
-                || original.committee != record.committee
-                || original.created_at != record.created_at
-                || original.active_from != record.active_from
-                || original.anchor_freshness != record.anchor_freshness
-            {
+        let identity = immutable_identity(record)?;
+        if let Some((original, _)) = self.original {
+            if original != identity {
                 return Err(super::invalid(
                     "historical incarnation changes its immutable authority",
                 ));
             }
+            Ok(false)
         } else {
-            self.original = Some(record.clone());
+            // A later snapshot cannot substitute for the actual creation carrier. Genesis
+            // reaches this selector only after its actual H2 successor authenticates its R.
+            if record.created_at != height {
+                return Err(super::invalid("original lane creation carrier is missing"));
+            }
+            self.original = Some((identity, record.active_from));
+            Ok(true)
         }
-        Ok(())
     }
-    pub(super) fn finish(self, tip: u64) -> Option<SumeragiLaneRecord> {
-        self.original.filter(|record| record.active_from <= tip)
+    pub(super) fn is_active(&self, tip: u64) -> bool {
+        self.original.is_some_and(|(_, active)| active <= tip)
     }
 }
 
@@ -99,7 +123,7 @@ mod tests {
         let original = record();
         let mut selection = LaneSelection::new(original.lane, original.incarnation);
         selection.observe(10, &state(original.clone())).unwrap();
-        assert!(selection.finish(11).is_none());
+        assert!(!selection.is_active(11));
         let mut selection = LaneSelection::new(original.lane, original.incarnation);
         selection.observe(10, &state(original.clone())).unwrap();
         let mut progressed = original.clone();
@@ -114,7 +138,7 @@ mod tests {
         let mut replacement = original.clone();
         replacement.incarnation = [0x22; 32];
         selection.observe(41, &state(replacement)).unwrap();
-        assert_eq!(selection.finish(41), Some(original));
+        assert!(selection.is_active(41));
     }
     #[test]
     fn another_incarnation_or_lane_is_never_substituted_for_the_request() {
@@ -124,8 +148,8 @@ mod tests {
             (original.lane, [0x22; 32]),
         ] {
             let mut selected = LaneSelection::new(lane, incarnation);
-            selected.observe(12, &state(original.clone())).unwrap();
-            assert!(selected.finish(12).is_none());
+            selected.observe(10, &state(original.clone())).unwrap();
+            assert!(!selected.is_active(12));
         }
     }
     #[test]
@@ -160,13 +184,18 @@ mod tests {
     }
     #[test]
     fn malformed_future_activation_and_overflow_never_grant_authority() {
-        for (created, active, height) in [(10, 11, 10), (10, 12, 9), (u64::MAX, 1, u64::MAX)] {
+        for (created, active, height) in [
+            (10, 11, 10),
+            (10, 12, 9),
+            (10, 12, 11),
+            (u64::MAX, 1, u64::MAX),
+        ] {
             let mut record = record();
             record.created_at = created;
             record.active_from = active;
             let mut selected = LaneSelection::new(record.lane, record.incarnation);
             assert!(selected.observe(height, &state(record)).is_err());
-            assert!(selected.finish(height).is_none());
+            assert!(!selected.is_active(height));
         }
     }
 }

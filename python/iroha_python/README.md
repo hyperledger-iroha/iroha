@@ -1297,6 +1297,8 @@ inputs with exact committed-query response bytes for offline consumers. Both
 helpers authenticate rejected results; check `result_ok` before treating an
 operation as successful. Header signatures alone do not authenticate outputs.
 The ABI-25 native call returns projection JSON and checkpoint bytes separately.
+An authenticated contract rejection includes a nullable `message` from the
+contract's static error catalog, preserving its exact Unicode text and spacing.
 
 Native instructions and deployed-contract calls can share one ordered, atomic
 batch. Any batch containing a contract call must bind a positive `gas_limit`

@@ -535,7 +535,7 @@ mod tests {
     }
     #[test]
     fn erasure_work_budget_rejects_large_retained_row_matrix() {
-        let err = validate_erasure_work_budget(32, MAX_CHUNK_SIZE_BYTES as usize, 1, 32, 1)
+        let err = validate_erasure_work_budget(32, MAX_CHUNK_SIZE_BYTES as usize, 1, 1, 1)
             .expect_err("row-parity matrix must fit the explicit workspace budget");
         assert!(err.contains("RS16 workspace budget"), "{err}");
     }

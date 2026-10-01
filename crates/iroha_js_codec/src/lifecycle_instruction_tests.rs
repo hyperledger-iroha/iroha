@@ -181,7 +181,7 @@ fn deployment(name: &'static str) -> Value {
         fields(&mut payload).insert(
             "artifact_id".into(),
             object([
-                ("dataspace_id", Value::String("42".into())),
+                ("dataspace_id", Value::String(u64::MAX.to_string())),
                 ("code_hash", hash()),
             ]),
         );

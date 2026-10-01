@@ -76,9 +76,12 @@ fn last_fields_charge(job_count: usize, bytes: usize) -> Result<usize, GpuError>
     // Pool::take can reuse a larger capacity than this request. The complete
     // retained-pool allowance covers those borrowed excess pages plus all idle
     // entries; it is added once, independently of the four active requests.
+    // Root-specific public FFT tables can remain from an earlier dispatch in
+    // the same process; their complete independent cache is also always charged.
     Ok(total.max(4 * STAGING_PAGE_BYTES + 8 * 48)
         + 2 * STAGING_PAGE_BYTES
-        + crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES)
+        + crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES
+        + crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE)
 }
 
 #[cfg(any(test, feature = "fastpq-gpu"))]
@@ -500,7 +503,8 @@ mod tests {
     #[test]
     fn exact_batch_charge_includes_page_rounding_and_public_readiness() {
         let context = 2 * STAGING_PAGE_BYTES;
-        let retained_pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES;
+        let retained_pool = crate::gpu_memory::METAL_POOL_MAX_CACHED_BYTES
+            + crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE;
         assert!(
             (6 * 65 * 3 + 9) * 8
                 + 256

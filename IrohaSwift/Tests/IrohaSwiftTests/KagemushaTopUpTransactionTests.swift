@@ -108,7 +108,7 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
         let fixture = try nativeTopUpFixture()
         let key = try SigningKey.ed25519(privateKey: XCTUnwrap(Data(hexString: fixture.testOnlyPayerPrivateKeyHex)))
         let authority = try AccountId.makeI105(publicKey: key.publicKey())
-        XCTAssertEqual(key.publicKey(), try XCTUnwrap(Data(hexString: fixture.payerPublicKeyHex)))
+        XCTAssertEqual(try key.publicKey(), try XCTUnwrap(Data(hexString: fixture.payerPublicKeyHex)))
         XCTAssertEqual(fixture.creationTimeMs, creationTimeMs)
         XCTAssertEqual(fixture.ttlMs, ttlMs)
         let canonicalRequest = try XCTUnwrap(Data(hexString: fixture.canonicalRequestHex))
@@ -119,6 +119,8 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
         XCTAssertNoThrow(try KagemushaPreparedTopUpSubmissionV1(
             signedTransaction: nativeSigned, expectedRequest: request))
         let envelope = try build(request, authority: authority, signingKey: key)
+        XCTAssertNotNil(NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito),
+            "The native canonical transaction decoder must accept the authored carrier")
         let (signature, payload, _) = try signedParts(envelope)
         XCTAssertEqual(payload, try XCTUnwrap(Data(hexString: fixture.transactionPayloadHex)))
         // CryptoKit may randomize Ed25519 signatures. Verify the exact native
@@ -141,10 +143,17 @@ final class KagemushaTopUpTransactionTests: XCTestCase {
             signedTransaction: tampered, expectedRequest: request)) {
             XCTAssertEqual($0 as? KagemushaTopUpSubmissionErrorV1, .requestMismatch)
         }
-        let unsealed = try kagemushaTopUpRequest(payer: authority)
-        let unsealedEnvelope = try build(unsealed, authority: authority, signingKey: key)
+    }
+
+    func testNativeIngressRejectsInventedIssuanceAndCreditIDs() throws {
+        let key = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
+        let authority = try AccountId.makeI105(publicKey: key.publicKey())
+        // This authoring fixture binds the same IDs everywhere but does not derive them.
+        // Native ingress must still reject it; structural SDK encoding grants no authority.
+        let request = try kagemushaTopUpRequest(payer: authority)
+        let envelope = try build(request, authority: authority, signingKey: key)
         XCTAssertThrowsError(try KagemushaPreparedTopUpSubmissionV1(
-            signedTransaction: unsealedEnvelope.norito, expectedRequest: unsealed)) {
+            signedTransaction: envelope.norito, expectedRequest: request)) {
             XCTAssertEqual($0 as? KagemushaTopUpSubmissionErrorV1, .requestMismatch)
         }
     }

@@ -2919,6 +2919,8 @@ fn manual_descriptor_embedded_asset_preserves_all_fields_at_exact_byte_limit() {
     let boundary = parse_manual_static_tool_descriptors(&padded);
     assert_eq!(boundary.len(), embedded.len());
     for (function, original) in &embedded {
+        assert!(!original.name.is_empty());
+        assert!(original.input_schema.is_object());
         let actual = boundary.get(function).expect("same descriptor function");
         assert_eq!(actual.name, original.name);
         assert_eq!(actual.effect, original.effect);

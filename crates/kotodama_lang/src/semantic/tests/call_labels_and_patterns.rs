@@ -140,15 +140,10 @@ fn mixed_source_call_evaluates_in_source_order() {
 
 #[test]
 fn positional_only_call_modes_reject_names() {
-    for (source, code) in [
-        (
-            "fn target(int _ value) -> int { value } fn main() -> int { target(value: 1) }",
-            "E_POSITIONAL_ARGUMENT_REQUIRED",
-        ),
-    ] {
-        let error = analyze_error(source);
-        assert_eq!(error.code, code);
-    }
+    let error = analyze_error(
+        "fn target(int _ value) -> int { value } fn main() -> int { target(value: 1) }",
+    );
+    assert_eq!(error.code, "E_POSITIONAL_ARGUMENT_REQUIRED");
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! Synchronization helpers for integration tests.
-use eyre::{Result, WrapErr};
+use eyre::{Result, WrapErr, bail};
 use iroha::{blocking::Client, client::ClientBuilder};
+use iroha_data_model::sumeragi::SumeragiStatus;
 use iroha_test_network::{BlockHeight, Network};
 use iroha_torii_shared::status::Status;
 use std::{
@@ -14,6 +15,35 @@ use tokio::runtime::Runtime;
 // Torii is unreachable, but allow env overrides for slower hosts.
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
+
+/// Check one complete observation of the peers a Sumeragi progress wait selected.
+///
+/// Failed queries remain pending; callers must keep querying the original peers so a
+/// crashed process cannot disappear from the completion condition.
+///
+/// # Errors
+/// Returns an error for an empty observation or any halted consensus instance.
+pub fn sumeragi_statuses_reach_height(
+    statuses: &[Result<SumeragiStatus>],
+    height: u64,
+) -> Result<bool> {
+    if statuses.is_empty() {
+        bail!("cannot establish Sumeragi progress without any peer observations");
+    }
+    let mut reached = true;
+    for status in statuses {
+        match status {
+            Ok(status) => {
+                if let Some(halted) = status.halted {
+                    bail!("a peer halted: {halted:?}");
+                }
+                reached &= status.committed_height >= height;
+            }
+            Err(_) => reached = false,
+        }
+    }
+    Ok(reached)
+}
 /// Create a fresh blocking context from an explicitly configured client builder.
 ///
 /// This keeps integration-test configuration changes from mutating or escaping
@@ -291,6 +321,64 @@ mod tests {
         collections::HashMap,
         sync::{Mutex, MutexGuard, OnceLock},
     };
+
+    fn native_status(height: u64) -> SumeragiStatus {
+        SumeragiStatus {
+            protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
+            config_fingerprint: Hash::new(b"progress-test"),
+            beacon_horizon: None,
+            instance: [1; 32],
+            height: height + 1,
+            view: 0,
+            stage: 0,
+            leader: None,
+            proxy_tail: None,
+            high_qc_view: None,
+            level: 0,
+            start_level: 0,
+            t_retx_ms: 100,
+            committed_height: height,
+            applied_height: height,
+            awaiting: false,
+            signer: None,
+            unanchored: false,
+            abstaining: false,
+            halted: None,
+            footprint: iroha_data_model::sumeragi::SumeragiFootprint::default(),
+        }
+    }
+
+    #[test]
+    fn native_progress_rejects_empty_or_halted_observations() {
+        assert!(sumeragi_statuses_reach_height(&[], 1).is_err());
+        let mut halted = native_status(4);
+        halted.halted = Some(iroha_data_model::sumeragi::SumeragiHaltReason::ApplyDiverged(4));
+        // A prior failed query must not conceal a later fatal consensus observation.
+        assert!(
+            sumeragi_statuses_reach_height(&[Err(eyre::eyre!("peer stopped")), Ok(halted)], 4,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn native_progress_requires_every_selected_peer_to_reach_the_height() {
+        assert!(
+            !sumeragi_statuses_reach_height(
+                &[Ok(native_status(4)), Err(eyre::eyre!("peer stopped"))],
+                4,
+            )
+            .unwrap()
+        );
+        assert!(
+            !sumeragi_statuses_reach_height(&[Ok(native_status(4)), Ok(native_status(3))], 4,)
+                .unwrap()
+        );
+        assert!(
+            sumeragi_statuses_reach_height(&[Ok(native_status(4)), Ok(native_status(5))], 4,)
+                .unwrap()
+        );
+    }
+
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     #[allow(unsafe_code)]
     fn remove_env_var(key: &str) {

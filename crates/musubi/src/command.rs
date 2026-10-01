@@ -1548,7 +1548,10 @@ fn load_selected_workspace(
 }
 
 /// Build a package using only the caller's retained runtime identity and optional storage policy.
-pub(crate) fn build_runtime_package(
+///
+/// # Errors
+/// Returns the complete build diagnostic if package resolution, custody or compilation fails.
+pub fn build_runtime_package(
     config: &iroha::config::Config,
     manifest: &Path,
     package: Option<&str>,

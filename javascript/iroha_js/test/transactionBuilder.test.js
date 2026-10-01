@@ -2181,8 +2181,9 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
+        artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xab) },
         manifest: {
-          codeHash: Buffer.alloc(32, 0xaa),
+          codeHash: Buffer.alloc(32, 0xab),
           compilerFingerprint: "rustc",
         },
         privateKey: PRIVATE_KEY,
@@ -2192,6 +2193,9 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
   );
   assert.equal(captures.length, 1);
   const parsed = JSON.parse(captures[0].instructions[0]);
+  assert.equal(parsed.RegisterSmartContractCode.artifact_id.dataspace_id, "18446744073709551615");
+  assert.equal(Object.hasOwn(parsed.RegisterSmartContractCode, "code_hash"), false);
+  assert.equal(parsed.RegisterSmartContractCode.artifact_id.code_hash, parsed.RegisterSmartContractCode.manifest.code_hash);
   assert.equal(
     parsed.RegisterSmartContractCode.manifest.compiler_fingerprint,
     "rustc",
@@ -2235,7 +2239,7 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        codeHash: Buffer.alloc(32, 0xdd),
+        artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xdd) },
         code: codeBytes,
         privateKey: PRIVATE_KEY,
       });
@@ -2243,6 +2247,8 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
     },
   );
   const parsed = JSON.parse(captures[0].instructions[0]);
+  assert.equal(parsed.RegisterSmartContractBytes.artifact_id.dataspace_id, "18446744073709551615");
+  assert.equal(Object.hasOwn(parsed.RegisterSmartContractBytes, "code_hash"), false);
   assert.equal(
     parsed.RegisterSmartContractBytes.code,
     codeBytes.toString("base64"),
@@ -2267,13 +2273,15 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        codeHash: Buffer.alloc(32, 0xaa),
+        artifactId: { dataspaceId: "18446744073709551615", codeHash: Buffer.alloc(32, 0xab) },
         reason: "cleanup",
         privateKey: PRIVATE_KEY,
       });
     },
   );
   const parsed = JSON.parse(captures[0][0]);
+  assert.equal(parsed.RemoveSmartContractBytes.artifact_id.dataspace_id, "18446744073709551615");
+  assert.equal(Object.hasOwn(parsed.RemoveSmartContractBytes, "code_hash"), false);
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
 });
 

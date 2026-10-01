@@ -9667,10 +9667,11 @@ seiyaku GuardedOverlay {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
-            contract_address.dataspace_id().expect("contract dataspace"),
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
             code_hash,
-        );
+        )
+        .expect("fixture artifact scope");
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
@@ -9844,10 +9845,11 @@ seiyaku DynamicAccessCounter {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
-            contract_address.dataspace_id().expect("contract dataspace"),
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
             code_hash,
-        );
+        )
+        .expect("fixture artifact scope");
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests
@@ -10047,10 +10049,11 @@ seiyaku DynamicTarget {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
-        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
-            contract_address.dataspace_id().expect("contract dataspace"),
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+            &contract_address,
             code_hash,
-        );
+        )
+        .expect("fixture artifact scope");
         world.contract_code.insert(artifact_id, program);
         world
             .contract_manifests

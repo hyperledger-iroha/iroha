@@ -8342,10 +8342,15 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
 const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;
+// Includes the fully typed account-onboarding receipt schemas in the embedded catalog.
 const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 * 1024;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
+const _: () = assert!(
+    MANUAL_STATIC_TOOL_ASSET.len() <= MANUAL_STATIC_TOOL_ASSET_MAX_BYTES,
+    "embedded manual MCP descriptor asset exceeds its byte budget"
+);
 
 #[derive(Clone)]
 struct ManualStaticToolDescriptor {

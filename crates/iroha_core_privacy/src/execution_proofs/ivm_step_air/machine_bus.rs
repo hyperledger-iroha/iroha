@@ -8,6 +8,9 @@
 // TODO: Connect these equations to the sole complete machine's constrained
 // request/initializer/owner ports before any production verifier admission.
 
+mod memory_initialization;
+mod memory_load;
+mod memory_store;
 mod packet;
 mod permutation;
 mod sorted;

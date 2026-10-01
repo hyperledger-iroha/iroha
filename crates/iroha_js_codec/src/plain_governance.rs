@@ -44,14 +44,13 @@ pub fn from_json(value: &Value) -> Option<CodecResult<InstructionBox>> {
             &["referendum_id", "owner", "amount", "duration_blocks"]
         };
         crate::require_exact_json_fields(fields, required, name)?;
+        crate::validate_governance_instruction_selectors(value)?;
         let referendum_id = crate::parse_string_value(fields["referendum_id"].clone(), name)?;
-        if !iroha_data_model::governance::is_valid_governance_selector_v1(&referendum_id) {
-            return Err(invalid(
-                "plain governance referendum_id is not a canonical selector",
-            ));
-        }
         let owner = crate::parse_account_id_value(fields["owner"].clone(), name)?;
-        let amount = crate::parse_canonical_quantity_value(fields["amount"].clone(), name)?;
+        let amount = crate::parse_canonical_quantity_value(
+            fields["amount"].clone(),
+            &format!("{name}.amount"),
+        )?;
         // JavaScript converts its lossless duration to an exact JSON integer token.
         let duration_blocks = fields["duration_blocks"].as_u64().ok_or_else(|| {
             invalid("plain governance duration_blocks must be a JSON u64 integer")

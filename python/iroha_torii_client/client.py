@@ -11098,8 +11098,20 @@ class ToriiClient(
             allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_CLASSES))
             raise RuntimeError(f"{context}.class must be one of: {allowed}")
         raw_offenders = record["offenders"]
-        if not isinstance(raw_offenders, list) or not 1 <= len(raw_offenders) <= 1024:
-            raise RuntimeError(f"{context}.offenders must contain between 1 and 1024 entries")
+        # Different-view CommitQC conflicts do not attribute individual signers.
+        permits_unattributed_safety_violation = (
+            evidence_class == "conflicting_certificates"
+            and record["safety_violation"] is True
+        )
+        if (
+            not isinstance(raw_offenders, list)
+            or len(raw_offenders) > 1024
+            or (not raw_offenders and not permits_unattributed_safety_violation)
+        ):
+            raise RuntimeError(
+                f"{context}.offenders must contain between 1 and 1024 entries, "
+                "or be empty for a conflicting-certificate safety violation"
+            )
         offenders = []
         peers = set()
         previous_signer = -1

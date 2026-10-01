@@ -804,6 +804,27 @@ fn wrong_issuer_and_changed_proof_commitment_are_rejected() {
 }
 
 #[test]
+fn missing_native_deadline_cannot_be_replaced_at_admission_handoff() {
+    let f = Fixture::new();
+    let pending = f.begin();
+    let proof = f.proof(pending.client_nonce().unwrap());
+    let certificate = f.certificate(&proof);
+    let mut admission = pending
+        .complete(
+            &proof.canonical_bytes().unwrap(),
+            &certificate.canonical_bytes().unwrap(),
+            &f.verified_app(&proof.challenge),
+        )
+        .unwrap();
+    admission.pending.deadline = None;
+    assert!(admission.pending.live_selection.is_none());
+    assert_eq!(
+        admission.deadline().err(),
+        Some(InitialEnrollmentErrorV1::Binding)
+    );
+}
+
+#[test]
 fn expired_native_attempt_is_rejected_before_proof_parsing_or_clock_renewal() {
     let f = Fixture::new();
     let mut pending = f.begin();

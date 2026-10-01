@@ -28,7 +28,7 @@ use std::{
 };
 
 #[path = "store/read.rs"]
-mod read;
+pub(in crate::sumeragi) mod read;
 #[path = "store/recovery.rs"]
 mod recovery;
 use read::{LaneBodyRead, RestoreFrame, certified_source, record_error};
@@ -279,10 +279,14 @@ impl FileLaneBlockStore {
             .as_ref()
             .is_some_and(|read| read.height != height)
         {
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "another original lane read is pending",
-            ));
+            // A worker may cancel its request while this store still owns a refused read.
+            // Finish that exact source before switching heights; neither its partial backing
+            // nor an authentication failure may be discarded by a new request.
+            let original = state.read.as_mut().expect("retained original lane read");
+            if original.ready.is_none() {
+                original.ready = Some(original.job.poll(&self.budget)?);
+            }
+            state.read = None;
         }
         if state.read.is_none() {
             state.read = Some(PendingRead {

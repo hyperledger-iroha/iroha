@@ -467,7 +467,6 @@ pub struct Prepared {
     config_fingerprint: iroha_crypto::Hash,
     blocks: Arc<KuraBlockStore>,
     executor: StateExecutor,
-    consensus_mode: ConsensusMode,
     applied_watch: Arc<crate::sumeragi::lanes::global::AppliedWatch>,
     lane_stores: Arc<crate::sumeragi::lanes::registry::LaneStores>,
     chain_id: String,
@@ -662,7 +661,6 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         config_fingerprint,
         blocks,
         executor,
-        consensus_mode,
         applied_watch,
         lane_stores,
         chain_id,
@@ -708,7 +706,6 @@ impl Prepared {
             config_fingerprint,
             blocks,
             executor,
-            consensus_mode,
             applied_watch,
             lane_stores,
             chain_id,
@@ -980,7 +977,7 @@ impl NetworkedNode {
 }
 
 /// Retains independently authenticated observations for the next original global candidate.
-/// TODO(S8): lane instances need their own authenticated native history admission route.
+/// Lane reducers retain their own bounded reports through the lane runner observer.
 struct NativeEvidenceObserver {
     state: Arc<State>,
     downstream: Arc<dyn Observer>,

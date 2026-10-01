@@ -1374,6 +1374,7 @@ async fn operator_auth_registration_login_and_rollover_es256() {
     signed_bytes.extend_from_slice(&assertion_auth_data);
     signed_bytes.extend_from_slice(&client_hash);
     let signature: p256::ecdsa::Signature = signing_key.sign(&signed_bytes);
+    let signature = signature.normalize_s().unwrap_or(signature);
     let payload = build_assertion_payload(
         &credential_id,
         &client_data_json,
@@ -1452,6 +1453,7 @@ fn authentication_counter_changes_only_after_persistence_succeeds() {
     signed_bytes.extend_from_slice(&authenticator_data);
     signed_bytes.extend_from_slice(&client_hash);
     let signature: p256::ecdsa::Signature = signing_key.sign(&signed_bytes);
+    let signature = signature.normalize_s().unwrap_or(signature);
     let payload = build_assertion_payload(
         &credential_id,
         &client_data_json,
@@ -1517,6 +1519,7 @@ fn authentication_counter_cannot_fall_back_to_zero() {
     signed_bytes.extend_from_slice(&authenticator_data);
     signed_bytes.extend_from_slice(&client_hash);
     let signature: p256::ecdsa::Signature = signing_key.sign(&signed_bytes);
+    let signature = signature.normalize_s().unwrap_or(signature);
     let payload = build_assertion_payload(
         &credential_id,
         &client_data_json,

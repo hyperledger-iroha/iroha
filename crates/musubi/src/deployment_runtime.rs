@@ -557,7 +557,7 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(dispatches.get(), 0);
-        after_review(&(), &mut |_| Ok(()), || {
+        after_review(&(), &mut |()| Ok(()), || {
             dispatches.set(dispatches.get() + 1);
             Ok(())
         })

@@ -5630,10 +5630,15 @@ impl Kura {
                     Err(error) => {
                         error!(?error, block_index, "Failed to decode block from disk");
                         drop(block_store);
-                        self.poison_corrupt_canonical_read(
-                            block_index,
-                            "committed inline block body is not decodable",
-                        );
+                        // A caller's nested Norito budget may refuse a valid stored
+                        // frame. That refusal cannot establish persistent corruption
+                        // or revoke native admission for the entire node.
+                        if !error.is_decode_resource_limit() {
+                            self.poison_corrupt_canonical_read(
+                                block_index,
+                                "committed inline block body is not decodable",
+                            );
+                        }
                         return None;
                     }
                 }

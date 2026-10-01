@@ -37,13 +37,6 @@ impl MusubiObservationCut for WorldTransaction<'_, '_> {}
 impl MusubiObservationCut for Box<WorldTransaction<'_, '_>> {}
 
 /// A completed semantic check of one still-borrowed cut, never a funding permit.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: complete verifier/helper-error custody before reader registration"
-    )
-)]
 pub(in crate::state) struct ValidatedMusubiSource<'cut, W: MusubiObservationCut> {
     world: &'cut W,
     // Keep the caller's original pool identity, without reserving fictitious

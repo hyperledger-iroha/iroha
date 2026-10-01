@@ -15430,12 +15430,13 @@ seiyaku StaleRuntimeBinding {
         let code = view
             .world()
             .contract_code()
-            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                contract_address
-                    .dataspace_id()
-                    .expect("installed contract dataspace"),
-                code_hash,
-            ))
+            .get(
+                &iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                    contract_address,
+                    code_hash,
+                )
+                .expect("fixture artifact scope"),
+            )
             .expect("installed contract code");
         let parsed = ivm::ProgramMetadata::parse(code).expect("parse installed contract");
         let descriptor = parsed
@@ -19924,13 +19925,11 @@ seiyaku EffectfulView {
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
         tx.world.contract_manifests.insert(
-            iroha_data_model::smart_contract::ContractArtifactId::new(
-                record
-                    .contract_address
-                    .dataspace_id()
-                    .expect("installed contract dataspace"),
+            iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &callee,
                 record.code_hash,
-            ),
+            )
+            .expect("fixture artifact scope"),
             malicious_manifest,
         );
         tx.apply();

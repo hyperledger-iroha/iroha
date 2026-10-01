@@ -201,6 +201,62 @@ No raw program, private count report or planning trace is added as a public
 sidecar. Detailed errors belong to the policy owner's local builder; public
 execution refusal must not reveal hidden opcodes or instruction positions.
 
+### Test-only typed shape and public-statement boundary
+
+The existing plaintext module now has `ClientInput` and `ScalarOutput` owners.
+They reuse `ScalarSlots`/`ClearingWords`, move an existing allocation when
+validating decoded slots, and reject byte 256, nonzero undeclared slots, input
+length 64 and output counts outside 1..64. An output owns its ordered snapshot;
+its count and full 128-word allocation clear on drop. These local checks do not
+prove an encryption relation or establish oblivious validation. Borrowed and
+compiler-created copies remain outside the owners' erasure claim. No private
+plaintext wire format or hash is introduced.
+
+`InputAdmissionStatementCandidateV1` is a test-only public Norito grammar with
+this exact order: version, policy hash, parameter digest, encryption-public-key
+digest, evaluation-key digest, encryption-profile digest, semantic-context hash,
+packing-contract hash, associated-data hash, input-ciphertext hash and input
+byte length. This is only the already-public ciphertext frame length, never
+slot 0 or the private plaintext byte count. A selected fixed-profile ciphertext
+codec must enforce its fixed shape; the local input owner does not publish its
+length. The canonical frame is 348 bytes. All nine hashes use the existing
+public Iroha `Hash` representation, never reduction into Fp. The policy hash is
+explicit; the current production receipt, which lacks that field, is unchanged.
+
+The semantic context must bind chain, program, owner and backend under the
+selected future policy grammar. The profile and key digests must cover their
+complete canonical authenticated contents. A future purpose verifier must derive
+the expected statement from authoritative policy/context and the actual submitted
+input, then bind both proof relations to that same statement. This code only
+hashes bounded opaque input bytes and compares public fields. It neither checks
+ciphertext canonicality nor authenticates the caller-supplied identities. There
+is no trusted input issuer, admitted-ciphertext type or execution capability.
+The future semantic Fp input commitment, if adopted, must additionally be
+constrained to this exact ciphertext binding; this public hash is not an alias
+for that field commitment.
+
+The packing-contract hash covers its candidate V1 schema, N=4096, t=257,
+128 scalar slots, the 63-byte/64-output limits, all seven ordered Galois roles,
+and required relinearization. It selects neither a refresh algorithm nor a
+bootstrap prohibition; any refresh/sanitizer and its extra authenticated keys
+belong to the unresolved encryption profile. This is an encoding/key-role
+contract, not a selected BFV-RNS security profile. The planner imports the same
+Galois-role constant. Exact level/basis variants, primes, key distributions,
+key ownership and admission proofs remain unresolved.
+
+The checked proof-envelope inventory includes the 348-byte statement, both
+nonempty proof byte counts and declared remaining envelope bytes. The separate
+encrypted-input cap remains 1 MiB; an input hash does not place the ciphertext
+in the proof envelope. The inventory rejects arithmetic overflow, combined proofs
+above 192 KiB and proof-envelope totals above 1 MiB. Remaining bytes must include
+all additional framing/instances and any input/output/key bytes actually carried;
+separately owned input/output/key material is not silently duplicated. This is
+a declared-size calculation, not an implemented complete envelope codec:
+completeness, policy-key loading, algorithm/prover scratch and actual proof
+verification remain required.
+All nine existing `UnqualifiedPlan` blockers remain; no production caller uses
+these candidate owners or statements.
+
 ### One explicit lowering for all eleven operations
 
 Use a uniform broadcast-scalar representation for each register and memory
@@ -255,8 +311,11 @@ The seven Galois-key roles and relinearization role must be authenticated from
 the typed policy. The old diagnostic bundle's prohibition of rotation keys
 cannot be reused for this replacement. Required actual level/basis variants,
 decomposition digits, special primes and key sizes remain explicit unresolved
-profile requirements. No bootstrap, refresh-as-bootstrap or implicit modulus
-reset is permitted.
+profile requirements. No bootstrap/refresh algorithm is implemented or
+authorized by this plaintext contract. A future reviewed encryption profile
+must specify its complete refresh/sanitization algorithm, extra authenticated
+keys, public schedule, exact arithmetic and resource/noise rules. A refresh mask
+is not a bootstrap, and no implicit modulus reset is permitted.
 
 ### Resource accounting and unresolved qualification
 
@@ -314,8 +373,9 @@ the clearing RNG owner require independent review and implementation evidence.
 
 Input and output frames, both proof relations, verification keys, authenticated
 evaluation-key material and any public-instance encodings must have exact
-bounded canonical sizes. The total proof budget remains 192 KiB, outer envelope
-1 MiB and k<=16; inputs/evaluation keys already owned by the consumer must not be
+bounded canonical sizes. The combined proof budget remains 192 KiB, proof envelope
+1 MiB and k<=16. The encrypted-input cap is separately 1 MiB;
+inputs/evaluation keys already owned by the consumer must not be
 duplicated as sidecars. Policy-key storage/loading is also bounded separately,
 not hidden outside the accounting. Profile-specific maxima and prover-memory
 ceilings remain to be supplied rather than invented here. The maximum single

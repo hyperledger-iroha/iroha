@@ -38,12 +38,14 @@ fn record() -> EvidenceRecord {
     EvidenceRecord {
         evidence: Evidence::from_native(&native()).expect("bounded original frame"),
         attribution: EvidenceAttribution {
+            scope: iroha_data_model::block::consensus::EvidenceScope::Root,
             instance: [1; 32],
             height: 12,
             epoch: 7,
             context_id: [2; 32],
             authority_generation: [8; 32],
             offenders: vec![EvidenceOffender {
+                lane_stake: None,
                 signer: 2,
                 peer_id: PeerId::from(key.public_key().clone()),
             }],
@@ -71,6 +73,49 @@ fn native_pair_constructor_is_order_independent_and_wire_is_strict() {
     assert!(norito::json::from_str::<Evidence>(&norito::json::to_json(&invalid).unwrap()).is_err());
     assert_eq!(evidence.native_frame(), evidence.native.as_slice());
 }
+
+#[test]
+fn nested_native_evidence_resource_refusal_is_preserved_and_retryable() {
+    #[derive(norito::Encode, norito::Decode, norito::derive::JsonDeserialize)]
+    struct UncheckedEvidence {
+        native: Vec<u8>,
+    }
+    let evidence = Evidence::from_native(&native()).unwrap();
+    let binary = evidence.encode();
+    let json = norito::json::to_json(&evidence).unwrap();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 4);
+    norito::with_decode_limits_scope(limits, || {
+        let wire = UncheckedEvidence::decode_all(&mut binary.as_slice()).unwrap();
+        assert_eq!(wire.native, evidence.native);
+    });
+    let error =
+        norito::with_decode_limits_scope(limits, || Evidence::decode_all(&mut binary.as_slice()))
+            .unwrap_err();
+    assert!(
+        matches!(error, norito::Error::NestingDepthExceeded { limit: 4, .. }),
+        "{error:?}"
+    );
+    // JSON has no outer binary field scope, so the same native depth is one lower.
+    let json_limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 3);
+    norito::with_decode_limits_scope(json_limits, || {
+        let wire: UncheckedEvidence = norito::json::from_str(&json).unwrap();
+        assert_eq!(wire.native, evidence.native);
+    });
+    let error =
+        norito::with_decode_limits_scope(json_limits, || norito::json::from_str::<Evidence>(&json))
+            .unwrap_err();
+    assert!(
+        matches!(error, norito::json::Error::DecodeResourceLimit),
+        "{error:?}"
+    );
+    assert_eq!(
+        Evidence::decode_all(&mut binary.as_slice()).unwrap(),
+        evidence
+    );
+    assert_eq!(norito::json::from_str::<Evidence>(&json).unwrap(), evidence);
+    assert_eq!(evidence.encode(), binary);
+}
+
 #[test]
 fn native_evidence_roundtrips_with_exact_attribution() {
     let record = record();
@@ -99,6 +144,7 @@ fn native_evidence_roundtrips_with_exact_attribution() {
         );
     }
     for field in [
+        "scope",
         "instance",
         "height",
         "epoch",
@@ -182,4 +228,68 @@ fn native_effects_require_both_vectors_and_reject_retired_slots() {
             "retired {field}"
         );
     }
+}
+
+#[test]
+fn lane_attribution_roundtrip_preserves_native_height_and_original_root_cut() {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        block::consensus::{EvidenceScope, LaneEvidenceScope},
+        sumeragi_lanes::SumeragiLaneStakeBinding,
+    };
+    use iroha_model_base::topology::LaneId;
+    let mut record = record();
+    let parent = u64::MAX - 2;
+    let scope = LaneEvidenceScope {
+        lane: LaneId::new(7),
+        incarnation: [0x31; 32],
+        created_at: 23,
+        admission_parent_height: parent,
+        admission_parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"original parent")),
+        admission_parent_core_hash: [0x32; 32],
+        admission_parent_result: [0x33; 32],
+    };
+    record.attribution.scope = EvidenceScope::Lane(scope);
+    record.attribution.height = 9;
+    record.recorded_at_height = parent + 1;
+    record.attribution.offenders[0].lane_stake = Some(SumeragiLaneStakeBinding {
+        owner_lane: LaneId::new(0),
+        validator: Hash::new(b"original account"),
+        activation_height: 11,
+        tenure: Hash::new(b"original escrow and registration"),
+    });
+    let wire = record.encode();
+    assert_eq!(
+        EvidenceRecord::decode_all(&mut wire.as_slice()).unwrap(),
+        record
+    );
+    let json = norito::json::to_value(&record).unwrap();
+    assert_eq!(
+        norito::json::from_value::<EvidenceRecord>(json).unwrap(),
+        record
+    );
+    assert_eq!(record.attribution.height, 9);
+    assert_eq!(record.recorded_at_height, u64::MAX - 1);
+    for field in [
+        "lane",
+        "incarnation",
+        "created_at",
+        "admission_parent_height",
+        "admission_parent_hash",
+        "admission_parent_core_hash",
+        "admission_parent_result",
+    ] {
+        let mut missing = norito::json::to_value(&scope).unwrap();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            norito::json::from_value::<LaneEvidenceScope>(missing).is_err(),
+            "missing {field}"
+        );
+    }
+    let mut substituted = norito::json::to_value(&scope).unwrap();
+    substituted
+        .as_object_mut()
+        .unwrap()
+        .insert("global_offence_height".into(), 9_u64.into());
+    assert!(norito::json::from_value::<LaneEvidenceScope>(substituted).is_err());
 }

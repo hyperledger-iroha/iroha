@@ -1379,7 +1379,8 @@ mod tests {
         assert_eq!(identity.contract_address, contract_address);
         assert_eq!(identity.code_hash, code_hash);
         assert_eq!(identity.contract_alias, None);
-        let artifact_id = ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+        let artifact_id = ContractArtifactId::for_address(&contract_address, code_hash)
+            .expect("fixture artifact scope");
         let borrowed = with_code_bytes(&view, &artifact_id, |bytes| {
             (bytes.as_ptr(), bytes.to_vec())
         })
@@ -1388,10 +1389,7 @@ mod tests {
         let stored_ptr = view
             .world()
             .contract_code()
-            .get(&iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                code_hash,
-            ))
+            .get(&artifact_id)
             .expect("stored bytes")
             .as_ptr();
         assert_eq!(borrowed.0, stored_ptr, "borrow helper must not clone bytes");

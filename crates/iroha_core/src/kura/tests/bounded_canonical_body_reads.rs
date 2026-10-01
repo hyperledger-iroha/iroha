@@ -3,6 +3,37 @@
 // native_execution_reads; these checks add DA-file bounds and State query charging.
 
 #[test]
+fn canonical_cold_read_budget_refusal_preserves_storage_and_retry() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    let kura = chain.kura();
+    let height = nonzero!(1_usize);
+    let expected = chain.committed(1).block().clone();
+    kura.block_data.lock()[0].1 = None;
+    let before = kura.canonical_block_wire_bytes_for_testing(height).unwrap();
+    let limits = norito::DecodeLimits::new(1, 1, 1, 1, 1);
+    let refused = norito::with_decode_limits_scope(limits, || kura.get_block(height));
+    assert!(
+        refused.is_none(),
+        "cold read must respect its caller's budget"
+    );
+    assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    assert!(kura.block_data.lock().cached_body(0).is_none());
+    assert_eq!(
+        kura.canonical_block_wire_bytes_for_testing(height).unwrap(),
+        before
+    );
+    assert_eq!(kura.get_block(height).unwrap().as_ref(), expected.as_ref());
+
+    // A real stored-wire fault must still close admission; a budget refusal is
+    // not a license to ignore independently detected canonical corruption.
+    kura.corrupt_native_frame_for_test(height);
+    kura.block_data.lock()[0].1 = None;
+    assert!(kura.get_block(height).is_none());
+    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+}
+
+#[test]
 fn authenticated_da_body_read_refuses_oversized_occupied_file_without_repair() {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     chain.commit(Vec::new());

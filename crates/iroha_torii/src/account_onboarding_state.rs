@@ -313,7 +313,7 @@ mod tests {
             response.alias_target_account_id,
             Some(account_id.to_string())
         );
-        assert_eq!(response.observed_block_height, 1);
+        assert_eq!(response.observed_block_height, 2);
         assert_eq!(response.observed_block_hash, observed_block_hash);
         assert_eq!(response.network_id, *app.state.network_id_ref());
 

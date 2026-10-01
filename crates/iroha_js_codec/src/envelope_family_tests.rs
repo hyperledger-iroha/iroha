@@ -8,9 +8,11 @@
 
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::smart_contract::ContractArtifactId;
 use iroha_data_model::{
     asset::definition::ConfidentialPolicyMode, isi::TransferAssetBatchEntry, proof::VerifyingKeyId,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::NumericSpec;
 use norito::json::Value;
 
@@ -621,8 +623,8 @@ fn kaigi_participant_and_relay_envelopes_roundtrip_native_frames() {
 #[test]
 fn governance_and_code_byte_envelopes_roundtrip_native_frames() {
     let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
-    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
-        iroha_model_base::topology::DataSpaceId::new(42),
+    let artifact_id = ContractArtifactId::new(
+        DataSpaceId::new(u64::MAX),
         Hash::new(b"envelope-family-code"),
     );
     let cases: [(&str, InstructionBox); 5] = [

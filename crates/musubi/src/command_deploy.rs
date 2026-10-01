@@ -101,10 +101,10 @@ pub(super) fn run_deploy(
         &artifact.package,
         &artifact.target,
     )?;
-    let session = DeploymentSlot::open(&slot).map_err(runtime_diagnostic)?;
+    let session = DeploymentSlot::open(&slot).map_err(|error| runtime_diagnostic(&error))?;
     session
         .ensure_previous_terminal(&service)
-        .map_err(runtime_diagnostic)?;
+        .map_err(|error| runtime_diagnostic(&error))?;
     let prepared = service
         .prepare(&DeploymentRequest {
             artifact: artifact_bytes,
@@ -115,7 +115,7 @@ pub(super) fn run_deploy(
         .map_err(|error| deployment_diagnostic(&error))?;
     let journal = session
         .persist(&service, &prepared)
-        .map_err(runtime_diagnostic)?;
+        .map_err(|error| runtime_diagnostic(&error))?;
     if args.prepare {
         return Ok(Success {
             message: format!(
@@ -189,7 +189,7 @@ fn recover_deployment(
     receipt_output(&receipt, journal)
 }
 
-fn runtime_diagnostic(error: eyre::Report) -> Diagnostic {
+fn runtime_diagnostic(error: &eyre::Report) -> Diagnostic {
     Diagnostic::new(ErrorCode::Network, format!("{error:#}"))
 }
 
@@ -536,6 +536,21 @@ fn deployment_diagnostic(error: &DeploymentError) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_diagnostic_preserves_the_complete_error_chain() {
+        let report =
+            eyre::eyre!("journal descriptor was replaced").wrap_err("open retained deployment");
+        let diagnostic = runtime_diagnostic(&report);
+        assert_eq!(diagnostic.code(), ErrorCode::Network);
+        let rendered = diagnostic.render_human();
+        assert!(rendered.contains("open retained deployment"));
+        assert!(rendered.contains("journal descriptor was replaced"));
+        assert_eq!(
+            report.root_cause().to_string(),
+            "journal descriptor was replaced"
+        );
+    }
 
     #[test]
     fn deployment_rejects_replaced_artifact_bytes_before_signing() {

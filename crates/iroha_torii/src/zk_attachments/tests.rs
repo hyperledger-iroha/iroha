@@ -222,7 +222,11 @@ fn persistence_preflight_rejects_symlinked_prover_ancestor_before_cleanup() {
 
     let error = super::init_persistence()
         .expect_err("a symlinked prover ancestor must fail before cleanup");
-    assert!(error.to_string().contains("not a direct directory"));
+    assert!(
+        error.to_string().contains("not a direct directory")
+            || matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR),
+        "unexpected ancestor refusal: {error}"
+    );
     assert!(
         external_temp.exists(),
         "preflight must not delete through a symlinked ancestor"
@@ -496,7 +500,11 @@ fn quota_scan_rejects_canonical_metadata_symlink() {
 
     let error = super::quota_metas_for_tenant(&tenant, &mut scan)
         .expect_err("canonical metadata symlink must not be skipped");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error.kind() == io::ErrorKind::InvalidData
+            || matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR),
+        "unexpected symlink refusal: {error}"
+    );
 }
 #[cfg(unix)]
 #[test]
@@ -517,7 +525,11 @@ fn global_quota_scan_rejects_canonical_tenant_symlink() {
 
     let error = super::other_tenants_quota_usage(&submitting, &mut scan)
         .expect_err("canonical tenant symlink must not be skipped");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error.kind() == io::ErrorKind::InvalidData
+            || matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR),
+        "unexpected symlink refusal: {error}"
+    );
 }
 fn test_sanitizer_config(max_expanded_bytes: u64, max_archive_depth: u32) -> SanitizerConfig {
     SanitizerConfig {
@@ -646,6 +658,9 @@ fn ensure_test_config() {
             crate::routing::MaybeTelemetry::disabled(),
         );
     });
+    // Each scoped data directory is a new store and must perform node startup
+    // recovery before serving requests, including after an earlier fault test.
+    super::init_persistence().expect("initialize the scoped attachment store");
 }
 fn checked_attachment_ed25519_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -2512,8 +2527,7 @@ async fn quota_victims_survive_incoming_persistence_failure() {
         .collect::<BTreeSet<_>>();
     let incoming = br#"{"incoming":"must-fail-before-eviction"}"#;
     let incoming_id = canonical_test_meta(&tenant, incoming).id;
-    fs::create_dir(super::bin_path(&tenant, &incoming_id))
-        .expect("install a real filesystem persistence failure");
+    let _failure = super::fail_next_directory_sync(&super::attachments_dir(&tenant));
     let mut headers = HeaderMap::new();
     headers.insert(
         axum::http::header::CONTENT_TYPE,
@@ -2538,9 +2552,10 @@ async fn quota_victims_survive_incoming_persistence_failure() {
     );
     assert!(!super::meta_path(&tenant, &incoming_id).exists());
     assert!(
-        super::bin_path(&tenant, &incoming_id).is_dir(),
-        "the injected directory should be the only incoming-path artifact"
+        !super::bin_path(&tenant, &incoming_id).exists(),
+        "the incomplete incoming write must be rolled back"
     );
+    assert!(!super::attachment_mutation_transaction_path().exists());
 }
 #[tokio::test]
 async fn quota_eviction_failure_returns_error_and_retains_recovery_intent() {
@@ -2560,11 +2575,10 @@ async fn quota_eviction_failure_returns_error_and_retains_recovery_intent() {
         }
     }
     let oldest = oldest.expect("oldest quota victim");
-    let victim_body = super::bin_path(&tenant, &oldest);
-    fs::remove_file(&victim_body).expect("replace victim body with deletion fault");
-    fs::create_dir(&victim_body).expect("create victim body obstruction");
-    let obstruction = victim_body.join("still-present");
-    fs::write(&obstruction, b"block deletion").expect("write deletion obstruction");
+    // Fail only during victim removal, after the incoming pair and recovery
+    // intent are durable. A malformed victim would be rejected at admission.
+    let _failure =
+        super::fail_next_directory_sync(&super::prover_processing_reference_dir(&oldest));
     let mut headers = HeaderMap::new();
     headers.insert(
         axum::http::header::CONTENT_TYPE,
@@ -2589,8 +2603,6 @@ async fn quota_eviction_failure_returns_error_and_retains_recovery_intent() {
         "failed eviction must retain its durable recovery intent"
     );
 
-    fs::remove_file(&obstruction).expect("remove deletion obstruction file");
-    fs::remove_dir(&victim_body).expect("remove deletion obstruction directory");
     assert!(
         super::recover_attachment_quota_transaction()
             .expect("retry durable quota eviction after fault repair")

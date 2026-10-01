@@ -2092,10 +2092,15 @@ fn checkpoint_completed_proofs(
     if completed_proof_indices.is_empty() {
         return Ok(());
     }
+    let processed_ms = crate::utils::unix_now_ms();
+    // Completed verification may outlast the initial attempt's retry deadline.
+    // A durable checkpoint starts a full backoff from its own progress timestamp.
+    let retry_not_before_ms = retry_not_before_ms
+        .max(processed_ms.saturating_add(processing_retry_delay_ms(retry_count)));
     let receipt = ProverProcessingReceipt {
         version: ZK_PROVER_PROCESSING_STATE_VERSION,
         id: loc.id.clone(),
-        processed_ms: crate::utils::unix_now_ms(),
+        processed_ms,
         terminal: false,
         retry_not_before_ms: Some(retry_not_before_ms),
         retry_count,
@@ -3165,7 +3170,7 @@ mod tests {
             max_scan_bytes,
             5_000,
             iroha_config::parameters::defaults::torii::zk_prover_keys_dir(),
-            iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
+            vec![fixture_attachment().backend],
             allowed_circuits,
             Some(state),
             MaybeTelemetry::disabled(),

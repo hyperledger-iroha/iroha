@@ -24,6 +24,11 @@ private final class ToriiRejectRedirectTaskDelegate: NSObject, URLSessionTaskDel
 /// resume is supplied by the SDK, and must be invoked exactly once by the owner.
 public typealias ToriiTopUpOwnershipV1 = @MainActor @Sendable (_ action: @MainActor () throws -> Void) throws -> Void
 
+/// Distinguishes a local owner refusal from a URLSession transport failure.
+private struct ToriiOwnerValidationFailure: Error {
+    let underlying: Error
+}
+
 /// One bounded task on the caller's exact URLSession. Task creation, owner check
 /// and resume share MainActor execution; cancellation never queues a later POST.
 /// This is internal transport machinery, never an unverified top-up constructor.
@@ -8319,7 +8324,7 @@ public struct ToriiUaidManifestScope: Decodable, Sendable {
         }
         guard !value.isEmpty,
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
-              value == value.precomposedStringWithCanonicalMapping else {
+              value.utf8.elementsEqual(value.precomposedStringWithCanonicalMapping.utf8) else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
@@ -26028,7 +26033,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                     _ = try Self.validatedContentLength(response, context: context, maximumBytes: maximumBytes)
                 }
                 let (data, response) = try await task.execute(
-                    session: session, request: request, withCurrentOwner: withCurrentOwner)
+                    session: session, request: request, withCurrentOwner: { action in
+                        do { try withCurrentOwner(action) }
+                        catch { throw ToriiOwnerValidationFailure(underlying: error) }
+                    })
                 recordObservedServerClock(from: response, observedAtLocalMs: observedAtLocalMs)
                 let declaredLength = try Self.validatedContentLength(
                     response, context: context, maximumBytes: maximumBytes)
@@ -26093,6 +26101,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 )
             }
             return (data, http)
+        } catch let error as ToriiOwnerValidationFailure {
+            throw error.underlying
         } catch let error as ToriiClientError {
             throw error
         } catch {

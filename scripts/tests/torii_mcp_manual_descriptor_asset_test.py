@@ -24,7 +24,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "e80a0361708afeae35261c4e765e80c3814e7be50be9ae81699ba729d7a83c89"
+    "f3a0a64f1e46c5a5368b0f59a7f6218f858134eceb9af27021bfbd24b9e4eb30"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),

@@ -2777,6 +2777,12 @@ pub enum EvidencePreparationError {
         /// Maximum cumulative bytes permitted by the active decode scope.
         limit_bytes: u64,
     },
+    /// Exact local Norito ceiling or allocator refusal while decoding an original proof.
+    #[error("consensus evidence decoder resource refusal: {0}")]
+    DecodeResource(norito::core::DecodeResourceError),
+    /// Original native history or its funded read owner cannot complete yet.
+    #[error("original native evidence history is pending")]
+    OriginalHistoryPending,
     /// A bounded append violated the count proved by the borrowed scan.
     #[error("consensus penalty preparation plan exceeded its fixed capacity")]
     Invariant,
@@ -12049,6 +12055,9 @@ pub struct State {
     /// Process-lived finite owner for committed-evidence preparation allocations.
     /// Funded slices cover fixed prune keys and pending penalty metadata only.
     evidence_preparation_budget: iroha_allocation::AllocationBudget,
+    /// One bounded pristine-parent evidence read, retaining original jobs across local refusal.
+    pub(crate) native_evidence_admission:
+        parking_lot::Mutex<crate::sumeragi::evidence::admission::AdmissionCache>,
     /// Original process-local owner for flat consensus stake-index key backing.
     stake_index_budget: iroha_allocation::AllocationBudget,
     /// Tiered state backend coordinating hot/cold snapshots.
@@ -26619,6 +26628,10 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -26715,6 +26728,10 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -27611,6 +27628,9 @@ impl State {
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
             evidence_preparation_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
+            ),
+            native_evidence_admission: parking_lot::Mutex::new(
+                crate::sumeragi::evidence::admission::AdmissionCache::default(),
             ),
             stake_index_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,

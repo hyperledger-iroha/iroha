@@ -26,7 +26,7 @@ pub(super) fn record_error(error: LaneRecordError) -> io::Error {
     io::Error::new(kind, error)
 }
 
-pub(super) enum RecordPoll {
+pub(in crate::sumeragi) enum RecordPoll {
     Absent,
     Pending(ByteAdmissionError),
     Ready(LaneRecord),
@@ -37,17 +37,20 @@ enum RecordState {
     Decoding(LaneRecordDecode),
     Consumed,
 }
-pub(super) struct ReadRecord {
+pub(in crate::sumeragi) struct ReadRecord {
     state: RecordState,
     budget: AllocationBudget,
 }
 impl ReadRecord {
-    pub(super) fn open(path: &Path, budget: AllocationBudget) -> io::Result<Self> {
+    pub(in crate::sumeragi) fn open(path: &Path, budget: AllocationBudget) -> io::Result<Self> {
         let state = ArtifactRead::open(path, MAX_FRAME_FILE_BYTES)?
             .map_or(RecordState::Absent, RecordState::Reading);
         Ok(Self { state, budget })
     }
-    pub(super) fn poll(&mut self, budget: &AllocationBudget) -> Result<RecordPoll, BodyReadError> {
+    pub(in crate::sumeragi) fn poll(
+        &mut self,
+        budget: &AllocationBudget,
+    ) -> Result<RecordPoll, BodyReadError> {
         if !self.budget.same_pool(budget) {
             return Err(BodyReadError::ForeignBudget);
         }

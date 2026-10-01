@@ -19,7 +19,8 @@ Purpose
       killed_by_test           at least one of its named tests failed (the §13.4 requirement);
       killed_by_scenario_only  its named tests passed, a listed scenario failed;
       survived                 nothing failed;
-      error                    it did not build, or a named test filter matched no test.
+      error                    build/execution failed, timed out, or a filter matched no
+                               executed test. A process failure is not a mutation kill.
 
     The table MUTATIONS mirrors §13.4 (MS*/ML* rows, the MA* rows of the commit-attestation
     extension, §3.7, and the MX* rows of the simulator's toy AMX application, §11) plus ME*
@@ -45,6 +46,7 @@ Examples
     scripts/sumeragi_mutation_gate.py --jobs 4
     scripts/sumeragi_mutation_gate.py --only MS2,MS27 --fast
     scripts/sumeragi_mutation_gate.py --list
+    scripts/sumeragi_mutation_gate.py --core --strict --jobs 1
 """
 
 from __future__ import annotations
@@ -241,6 +243,11 @@ MUTATIONS = [
       ["det_s40_tc_exact_signer_count"], []),
     m("MS41", "form_qc emits certificates from more than q votes",
       ["det_s41_form_qc_exact_signer_count"], []),
+    m("MS49", "native codec erases typed local decode resource refusals",
+      ["scoped_decode_refusal_is_not_malformed_native_evidence",
+       "codec_resource_errors_survive_lossless_norito_conversion"], []),
+    m("MS50", "static byte-domain bounds become retryable local decode refusals",
+      ["protocol_byte_lengths_are_terminal_codec_errors"], []),
     # ---- liveness rules
     m("ML1", "level returns start(h)", ["det_l1_levels_grow"], ["f15"]),
     m("ML2", "on_tick rebroadcast 1 deleted", ["det_l2_lost_timeout_resent"], ["f09"]),
@@ -407,14 +414,67 @@ MUTATIONS = [
       ["det_amx_record_bound_to_result"], ["f31"]),
 ]
 
-BY_ID = {mu.id: mu for mu in MUTATIONS}
+# Core-owned rules use the same strict harness classifier; no simulator hook can stand in
+# for production State/custody admission. Opt in explicitly with --core.
+CORE_MUTATIONS = [
+    m("HC1", "evidence: use native lane height instead of original retirement for replay pruning",
+      ["sumeragi::evidence::tests::lane_terminal_replay_fence_uses_immutable_retirement_deadline_and_original_incarnation"]),
+    m("HC2", "staking: omit original lane custody and exact registration revalidation",
+      ["sumeragi::penalties::tests::original_lane_liability_checks_exact_registration_before_exposure",
+       "sumeragi::penalties::tests::lane_liability_rejects_changed_incarnation_policy_and_same_tenure_escrow"]),
+    m("HC3", "penalties: use native lane subject height as the global admission-delay clock",
+      ["sumeragi::penalties::tests::original_lane_liability_slashes_retired_owner_without_using_native_height",
+       "sumeragi::evidence_history::lane::tests::native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission"]),
+    m("HC4", "admission: omit the original lane retirement deadline preflight",
+      ["sumeragi::evidence_history::lane::tests::lane_admission_capture_checks_inclusive_deadline_and_missing_original_incarnation"]),
+    m("HC5", "admission: retain terminal source failures as locally retryable jobs",
+      ["sumeragi::evidence_history::lane::tests::terminal_lane_source_failure_cannot_pin_competing_original_admission_forever",
+       "sumeragi::evidence_history::lane::tests::local_proposer_skips_terminal_lane_source_without_deleting_observation"]),
+    m("HC6", "history: discard original completed owner on decoder-limit handoff refusal",
+      ["sumeragi::evidence_history::lane_read::tests::completed_lane_history_retains_original_owner_on_finish_decode_refusal"]),
+    m("HC7", "evidence: classify typed local decoder refusal as invalid original proof",
+      ["sumeragi::evidence::codec_tests::native_decode_refusal_refunds_capture_without_blaming_original_proof",
+       "sumeragi::evidence::codec_tests::persisted_root_decode_refusal_retains_original_validation_cut_for_retry"]),
+    m("HC8", "executor: classify local payload decode refusal as cached invalid data",
+      ["sumeragi::executor::publication_tests::payload_decode_refusal_retains_available_owner_without_negative_cache"]),
+    m("HC9", "evidence: retain native result witnesses without original-pool admission",
+      ["sumeragi::evidence::admission::witness_tests::retained_native_evidence_witnesses_belong_to_original_preparation_pool"]),
+    m("HC10", "history: skip original query scratch admission before signed RS16 reconstruction",
+      ["sumeragi::certified_chain::tests::state_certificate::state_certificate_signed_availability_scratch_uses_original_query_allowance"]),
+    m("HC11", "history: use a warm decoded body instead of rereading the pinned durable certificate",
+      ["sumeragi::certified_chain::tests::durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm"]),
+    m("HC12", "beacon: reconstruct prepared beacon proofs without original-pool admission",
+      ["beacon::validation::tests::beacon_verification_reserves_exact_buffers_and_refuses_before_unfunded_work"]),
+]
+
+
+def index_mutations(mutations):
+    """Reject duplicate ids before selecting a test or counting a mutation kill."""
+    indexed = {}
+    for mutation in mutations:
+        if mutation.id in indexed:
+            raise ValueError(f"duplicate mutation id {mutation.id}")
+        indexed[mutation.id] = mutation
+    return indexed
+
+
+BY_ID = index_mutations(MUTATIONS)
+
+
+
+def package_options(args):
+    """Select the actual implementation owner without propagating a mutation to dependencies."""
+    if getattr(args, "core", False):
+        return "iroha_core", "mutation-testing,iroha-core-tests", "SUMERAGI_CORE_MUTATION"
+    return CRATE, FEATURES, "SUMERAGI_MUTATION"
 
 TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored)", re.M)
+TEST_COMPLETION = re.compile(r"^test result: (ok|FAILED)\. \d+ passed; \d+ failed;", re.M)
 
 
 @dataclass
 class Step:
-    status: str  # pass | fail | build-error | timeout | missing-test | skipped
+    status: str  # pass | fail | build-error | execution-error | timeout | missing-test | skipped
     seconds: float = 0.0
     failed: list = field(default_factory=list)
     ran: list = field(default_factory=list)
@@ -426,15 +486,19 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     """Run `cargo test` for the crate; returns (returncode or None on timeout, output)."""
     env = dict(os.environ)
     env.pop("SUMERAGI_MUTATION", None)
+    env.pop("SUMERAGI_CORE_MUTATION", None)
+    crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
     if mutation:
-        env["SUMERAGI_MUTATION"] = mutation
+        env[mutation_env] = mutation
     if seeds is not None:
         env["SUMERAGI_SIM_SEEDS"] = str(seeds)
     else:
         env.pop("SUMERAGI_SIM_SEEDS", None)
     env["CARGO_TARGET_DIR"] = str(target_dir)
-    cmd = ["cargo", "test", "-p", CRATE, "--release", "--features", FEATURES, "--lib"]
+    profile = getattr(args, "core_profile", None) if getattr(args, "core", False) else None
+    profile_options = ["--profile", profile] if profile else ["--release"]
+    cmd = ["cargo", "test", "-p", crate, *profile_options, "--features", features, "--lib"]
     if no_run:
         cmd.append("--no-run")
     else:
@@ -444,7 +508,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     proc = subprocess.Popen(cmd, cwd=REPO, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
-        out, _ = proc.communicate(timeout=timeout)
+        out, _ = proc.communicate(timeout=timeout or None)
         code = proc.returncode
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -453,7 +517,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     elapsed = time.monotonic() - started
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w") as f:
-        f.write(f"$ {' '.join(cmd)}\n# SUMERAGI_MUTATION={mutation or ''} "
+        f.write(f"$ {' '.join(cmd)}\n# {mutation_env}={mutation or ''} "
                 f"SUMERAGI_SIM_SEEDS={seeds or ''} CARGO_TARGET_DIR={target_dir}\n")
         f.write(out or "")
         f.write(f"\n# exit {code} after {elapsed:.1f}s\n")
@@ -463,7 +527,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
 def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
     code, out, elapsed = cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path)
     results = TEST_LINE.findall(out)
-    ran = sorted({name for name, _ in results})
+    ran = sorted({name for name, verdict in results if verdict != "ignored"})
     failed = sorted({name for name, verdict in results if verdict == "FAILED"})
     step = Step(status="pass", seconds=round(elapsed, 1), failed=failed, ran=ran,
                 log=str(log_path))
@@ -474,18 +538,23 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
     elif "error[E" in out or "could not compile" in out:
         step.status = "build-error"
         step.detail = [line for line in out.splitlines() if line.startswith("error")][:5]
-    elif failed or code != 0:
+    elif code not in (0, 101) or (code != 0 and not failed):
+        step.status = "execution-error"
+        step.detail.append(f"cargo exited {code} without a normal completed test failure")
+    elif failed:
         step.status = "fail"
         seeds_failed = re.findall(r"failing seeds (\[[^\]]*\])", out)
         violations = re.findall(r"violation: (.*)", out)
         panics = re.findall(r"panicked at [^\n]*\n([^\n]*)", out)
         step.detail = (seeds_failed[:3] + violations[:3] + panics[:3])[:6]
-        if not failed:
-            step.detail.insert(0, f"cargo exited {code} without a failed test line")
     if missing and step.status in ("pass", "fail"):
-        step.detail.append(f"no test matched: {missing}")
-        if step.status == "pass":
-            step.status = "missing-test"
+        step.detail.append(f"no executed test matched: {missing}")
+        step.status = "missing-test"
+    if step.status in ("pass", "fail"):
+        expected = "FAILED" if step.status == "fail" else "ok"
+        if TEST_COMPLETION.findall(out) != [expected] or code != (101 if failed else 0):
+            step.status = "execution-error"
+            step.detail.append("cargo did not complete exactly one expected test harness")
     return step
 
 
@@ -499,9 +568,11 @@ def build(args, target_dir, mutation, log_path):
                 detail=detail, log=str(log_path))
 
 
-def has_switch(mid):
-    needle = f'sumeragi_mutation = "{mid}"'
-    return any(needle in p.read_text() for p in CRATE_SRC.rglob("*.rs"))
+def has_switch(mid, *, core=False):
+    cfg = "sumeragi_core_mutation" if core else "sumeragi_mutation"
+    source = REPO / "crates" / "iroha_core" / "src" if core else CRATE_SRC
+    needle = f'{cfg} = "{mid}"'
+    return any(needle in p.read_text() for p in source.rglob("*.rs"))
 
 
 def evaluate(args, target_dir, mu):
@@ -509,7 +580,8 @@ def evaluate(args, target_dir, mu):
     result = {"id": mu.id, "site": mu.site, "named_tests": list(mu.tests),
               "scenarios": [SCENARIOS[s] for s in mu.scenarios]}
     started = time.monotonic()
-    if not has_switch(mu.id):
+    present = has_switch(mu.id, core=True) if getattr(args, "core", False) else has_switch(mu.id)
+    if not present:
         result.update(verdict="error", reason="no cfg switch for this id in the crate")
         return result
     b = build(args, target_dir, mu.id, logs / f"{mu.id}.build.log")
@@ -520,16 +592,18 @@ def evaluate(args, target_dir, mu):
     named = run_step(args, target_dir, mu.id, mu.tests, None, args.timeout_test,
                      logs / f"{mu.id}.named.log")
     result["named"] = named.__dict__
-    killed_by_test = named.status in ("fail", "timeout")
+    killed_by_test = named.status == "fail"
     scen = None
     if mu.scenarios and not args.fast:
         filters = [SCENARIOS[s] for s in mu.scenarios]
         scen = run_step(args, target_dir, mu.id, filters, args.seeds, args.timeout_scenario,
                         logs / f"{mu.id}.scenario.log")
         result["scenario"] = scen.__dict__
-    killed_by_scenario = scen is not None and scen.status in ("fail", "timeout")
-    if named.status in ("build-error", "missing-test"):
+    killed_by_scenario = scen is not None and scen.status == "fail"
+    if named.status not in ("pass", "fail"):
         result.update(verdict="error", reason=f"named tests: {named.status}")
+    elif scen is not None and scen.status not in ("pass", "fail"):
+        result.update(verdict="error", reason=f"scenarios: {scen.status}")
     elif killed_by_test:
         result["verdict"] = "killed_by_test"
     elif killed_by_scenario:
@@ -570,6 +644,8 @@ def main():
                     "deterministic test (then by its randomized scenario); the unmutated build "
                     "must pass.",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+    parser.add_argument("--core", action="store_true",
+                        help="qualify registered production iroha_core rules with their Core tests")
     parser.add_argument("--only", help="comma-separated mutation ids (default: all)")
     parser.add_argument("--jobs", type=int, default=1,
                         help="parallel jobs, each with its own target sub-directory")
@@ -577,35 +653,46 @@ def main():
                         help="named deterministic tests only (skip the randomized scenarios)")
     parser.add_argument("--seeds", type=int, default=200,
                         help="SUMERAGI_SIM_SEEDS for the scenarios (default 200)")
-    parser.add_argument("--target-dir", type=Path, default=REPO / "target" / "sumeragi-mutants",
-                        help="dedicated CARGO_TARGET_DIR root (default: target/sumeragi-mutants)")
+    parser.add_argument("--target-dir", type=Path,
+                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants)")
     parser.add_argument("--skip-baseline", action="store_true",
                         help="do not run the unmutated build")
     parser.add_argument("--strict", action="store_true",
                         help="also fail when a mutation is killed only by its scenario "
                              "(the literal §13.4 CI rule)")
-    parser.add_argument("--timeout-build", type=int, default=1800, help="seconds per build")
+    parser.add_argument("--core-profile", choices=("release", "test"),
+                        help="Core-only build profile (default: release); identical for baseline and mutant")
+    parser.add_argument("--timeout-build", type=int, default=1800,
+                        help="seconds per build (0 waits without terminating it)")
     parser.add_argument("--timeout-test", type=int, default=900,
-                        help="seconds per named-test run")
+                        help="seconds per named-test run (0 waits without terminating it)")
     parser.add_argument("--timeout-scenario", type=int, default=3600,
-                        help="seconds per scenario run")
+                        help="seconds per scenario run (0 waits without terminating it)")
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")
     args = parser.parse_args()
+    if args.target_dir is None:
+        args.target_dir = REPO / "target" / ("sumeragi-core-mutants" if args.core else "sumeragi-mutants")
     args.target_dir = args.target_dir.resolve()
+    if args.core_profile is not None and not args.core:
+        parser.error("--core-profile requires --core; protocol qualification always uses release")
+    table = CORE_MUTATIONS if args.core else MUTATIONS
+    by_id = index_mutations(table)
+    if min(args.timeout_build, args.timeout_test, args.timeout_scenario) < 0:
+        parser.error("timeouts must be nonnegative; 0 waits without terminating a command")
 
     if args.list:
-        for mu in MUTATIONS:
+        for mu in table:
             print(f"{mu.id:22} {', '.join(mu.tests):60} {' '.join(mu.scenarios) or '-':10} "
                   f"{mu.site}")
         return 0
 
-    selected = MUTATIONS
+    selected = table
     if args.only:
         wanted = [x.strip() for x in args.only.split(",") if x.strip()]
-        unknown = [x for x in wanted if x not in BY_ID]
+        unknown = [x for x in wanted if x not in by_id]
         if unknown:
             parser.error(f"unknown mutation id(s): {', '.join(unknown)}")
-        selected = [BY_ID[x] for x in wanted]
+        selected = [by_id[x] for x in wanted]
     args.target_dir.mkdir(parents=True, exist_ok=True)
 
     work = queue.Queue()
@@ -661,6 +748,8 @@ def main():
     report = {
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "command": sys.argv,
+        "package": package_options(args)[0],
+        "profile": (args.core_profile or "release") if args.core else "release",
         "seeds": None if args.fast else args.seeds,
         "fast": args.fast,
         "summary": summary,

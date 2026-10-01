@@ -964,6 +964,7 @@ fn apply_queued_block_allow_errors(harness: &GovHarness) -> Vec<bool> {
 #[tokio::test]
 async fn citizen_status_reports_registered_record() {
     let harness = mk_governance_harness(false);
+    let bonded_height = (harness.native_chain.lock().height() + 1).to_string();
     let instruction = InstructionBox::from(RegisterCitizen {
         owner: harness.authority.clone(),
         amount: Quantity::zero(),
@@ -1000,7 +1001,10 @@ async fn citizen_status_reports_registered_record() {
     assert!(response.is_citizen);
     assert_eq!(response.account_id, harness.authority.to_string());
     assert_eq!(response.amount.as_deref(), Some("0"));
-    assert_eq!(response.bonded_height.as_deref(), Some("1"));
+    assert_eq!(
+        response.bonded_height.as_deref(),
+        Some(bonded_height.as_str())
+    );
 }
 #[tokio::test]
 async fn citizen_count_reports_exact_registry_total() {
@@ -1149,7 +1153,15 @@ async fn protected_namespaces_rejects_noncanonical_tokens_before_drafting() {
         )
         .await
         .expect_err("noncanonical namespace must fail before drafting");
-        assert!(error.to_string().contains("namespaces[0]"));
+        assert!(
+            matches!(
+                &error,
+                crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+                )) if message.contains("namespaces[0]")
+            ),
+            "unexpected namespace validation error: {error:?}"
+        );
     }
 }
 #[tokio::test]
@@ -1696,32 +1708,55 @@ async fn standalone_plain_ballot_rejects_stored_typed_proposal_fingerprint() {
     }
 }
 #[tokio::test]
-async fn ballot_plain_accepts_account_aliases() {
+async fn ballot_plain_requires_canonical_ids_even_when_alias_is_bound() {
     let (state, _queue, _chain_id) = mk_basic_context();
     let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY).expect("account parses");
     bind_account_alias_for_test(&state, &authority, "ballot@universal");
-    let body = crate::json_object(vec![
-        crate::json_entry("authority", "ballot@universal"),
-        crate::json_entry("network_id", *state.network_id_ref()),
-        crate::json_entry("referendum_id", "r1"),
-        crate::json_entry("owner", "ballot@universal"),
-        crate::json_entry("amount", "100"),
-        crate::json_entry("duration_blocks", "600"),
-        crate::json_entry("direction", "Aye"),
-    ]);
-    let parsed: PlainBallotDto =
-        norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
-    let res = handle_gov_ballot_plain_with_policy(
-        state,
-        &authority,
-        NoritoJson(parsed),
-        MaybeTelemetry::for_tests(),
-    )
-    .await
-    .expect("handler ok");
-    assert!(res.0.drafted);
-    assert_eq!(res.0.tx_instructions.len(), 1);
+    let canonical = authority.to_string();
+    for (authority_literal, owner_literal, rejected_field) in [
+        (
+            "ballot@universal",
+            canonical.as_str(),
+            Some("invalid authority:"),
+        ),
+        (
+            canonical.as_str(),
+            "ballot@universal",
+            Some("invalid owner:"),
+        ),
+        (canonical.as_str(), canonical.as_str(), None),
+    ] {
+        let body = crate::json_object(vec![
+            crate::json_entry("authority", authority_literal),
+            crate::json_entry("network_id", *state.network_id_ref()),
+            crate::json_entry("referendum_id", "r1"),
+            crate::json_entry("owner", owner_literal),
+            crate::json_entry("amount", "100"),
+            crate::json_entry("duration_blocks", "600"),
+            crate::json_entry("direction", "Aye"),
+        ]);
+        let parsed: PlainBallotDto = norito::json::from_value(body).expect("ballot DTO");
+        let result = handle_gov_ballot_plain_with_policy(
+            state.clone(),
+            &authority,
+            NoritoJson(parsed),
+            MaybeTelemetry::for_tests(),
+        )
+        .await;
+        if let Some(field) = rejected_field {
+            let message = conversion_message(
+                result.expect_err("ballot identity cannot resolve a caller-unchecked alias"),
+            );
+            assert!(message.starts_with(field), "{message}");
+            assert!(message.contains("canonical I105 literal"), "{message}");
+        } else {
+            let response = result.expect("canonical ballot handler");
+            assert!(response.0.drafted);
+            assert_eq!(response.0.tx_instructions.len(), 1);
+        }
+    }
 }
+
 #[tokio::test]
 async fn ballot_plain_rejects_authority_mismatch() {
     let (state, _queue, _chain_id) = mk_basic_context();
@@ -2583,16 +2618,24 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
     )
     .await
     .expect_err("incomplete active state must fail closed");
-    assert!(error.to_string().contains("incomplete code"));
+    assert!(
+        matches!(
+            &error,
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+                if message == "active contract has incomplete code, manifest, alias, or subject bindings"
+        ),
+        "expected incomplete active contract, got {error:?}"
+    );
 }
 #[tokio::test]
 async fn governed_contract_read_rejects_removed_manifest_provenance() {
     let harness = mk_governance_harness(true);
     let (contract_address, code_hash) = install_governed_contract_for_test(&harness);
-    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
-        contract_address.dataspace_id(),
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+        &contract_address,
         code_hash,
-    );
+    )
+    .expect("registered contract scope");
     let mut manifest = harness
         .state
         .view()
@@ -2619,7 +2662,14 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     )
     .await
     .expect_err("unsigned active manifest must fail closed");
-    assert!(error.to_string().contains("signed provenance"));
+    assert!(
+        matches!(
+            &error,
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+                if message == "active contract manifest has no signed provenance"
+        ),
+        "expected missing manifest provenance, got {error:?}"
+    );
 }
 #[tokio::test]
 async fn propose_deploy_rejected_without_permission() {

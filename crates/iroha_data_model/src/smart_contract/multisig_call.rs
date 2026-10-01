@@ -109,6 +109,10 @@ pub fn derive_multisig_contract_call_trigger_id(
 /// # Errors
 /// Rejects an empty, overlong, or whitespace-padded entrypoint, a payload that is
 /// not a JSON object, or a failure to derive the trigger ID or construct its action.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keep the independently reviewed signing inputs explicit at the canonical construction boundary"
+)]
 pub fn build_multisig_contract_call(
     authority: &AccountId,
     address: &ContractAddress,

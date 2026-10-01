@@ -324,6 +324,7 @@ fn pending_original_evidence_delays_reclamation_without_native_height_arithmetic
         EvidenceRecord {
             evidence: Evidence { native: vec![] },
             attribution: EvidenceAttribution {
+                scope: iroha_data_model::block::consensus::EvidenceScope::Root,
                 instance: row.instance,
                 height: u64::MAX,
                 epoch: 0,

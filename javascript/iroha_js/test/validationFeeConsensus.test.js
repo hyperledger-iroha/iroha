@@ -272,12 +272,14 @@ test("immutable ledger binding requires marked Iroha hashes and rejects aliases"
 test("request encoder delegates only full independently retained checkpoint bytes", () => {
   const bytes = Buffer.from([100, 3]);
   const checkpoint = normalizeValidationFeeCheckpointV1({ checkpointNorito: bytes });
+  let nativeCalls = 0;
   bytes.fill(0);
   checkpoint.checkpointNorito.fill(0);
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion: () => 25,
       validationFeeCurrentPolicyProofRequestV1(checkpointNorito) {
+        nativeCalls += 1;
         assert.deepEqual(checkpointNorito, Buffer.from([100, 3]));
         return Buffer.from([1, 2, 3]);
       },
@@ -285,13 +287,14 @@ test("request encoder delegates only full independently retained checkpoint byte
     },
     ({ encodeValidationFeeCurrentPolicyProofRequestV1: encode }) => {
       assert.deepEqual(encode(checkpoint), Buffer.from([1, 2, 3]));
-      for (const malformed of [
-        { height: 100, contextId: "03".repeat(32) },
-        { ...checkpoint, height: 100 },
-        { checkpointNorito: "0303" },
-        { checkpointNorito: Buffer.alloc(0) },
-        { checkpointNorito: new Uint8Array(68 * 1024 * 1024 + 1) },
-      ]) assert.throws(() => encode(malformed), /must contain exactly|must be an ArrayBuffer|must contain 1/u);
+      for (const [malformed, message] of [
+        [{ height: 100, contextId: "03".repeat(32) }, /must contain exactly/u],
+        [{ ...checkpoint, height: 100 }, /must contain exactly/u],
+        [{ checkpointNorito: "0303" }, /must be exact bytes backed by an ordinary ArrayBuffer/u],
+        [{ checkpointNorito: Buffer.alloc(0) }, /must contain 1/u],
+        [{ checkpointNorito: new Uint8Array(68 * 1024 * 1024 + 1) }, /must contain 1/u],
+      ]) assert.throws(() => encode(malformed), { name: "TypeError", message });
+      assert.equal(nativeCalls, 1, "malformed checkpoints must fail before native encoding");
       const sliced = new Uint8Array([0, 100, 3, 0]).subarray(1, 3);
       assert.deepEqual(encode({ checkpointNorito: sliced }), Buffer.from([1, 2, 3]));
     },
@@ -722,8 +725,8 @@ test("Torii validation-fee proof pages accept an exact-bound streamed response",
   const page = await fetchProofPage(client);
   assert.equal(verifiedLength, PROOF_RESPONSE_MAX_BYTES);
   assert.equal(page.proofNorito.length, PROOF_RESPONSE_MAX_BYTES);
-  assert.equal(page.projection.evaluated_block_height, 127n);
   assert.deepEqual(page.promotedCheckpoint.checkpointNorito, Buffer.from([127, 189]));
+  assert.equal(page.projection.evaluated_block_height, 127n);
   assert.equal(streamed.streamState.cancelled, false);
   assert.equal(streamed.streamState.released, true);
 });

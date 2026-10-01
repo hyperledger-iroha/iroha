@@ -470,6 +470,7 @@ fn ancestry(
         subject,
         window,
     )
+    .map_err(|(_, error)| error)
 }
 
 fn admitted_crypto(fixture: &Fixture) -> BlsCrypto {
@@ -500,6 +501,11 @@ fn anchored_lane_ancestry_walks_every_source_above_the_complete_native_interval(
         frames.push((fixture.body.clone(), fixture.qc.clone()));
     }
     let mut cursor = ancestry(&fixture, 3, 10).unwrap();
+    assert_eq!(
+        cursor.next_frontier().unwrap().height,
+        cursor.next_height().unwrap()
+    );
+    assert!(std::ptr::eq(cursor.configuration_owner(), cursor.config()));
     assert_eq!(cursor.parent_height(), 2);
     assert_eq!(cursor.demotion_interval(), Some((1, 1)));
     assert_eq!(cursor.config(), fixture.body.source().config());
@@ -614,7 +620,7 @@ fn anchored_lane_ancestry_distinguishes_native_coverage_and_independent_genesis(
             1,
             10
         ),
-        Err(LaneAncestryError::Authority)
+        Err((_, LaneAncestryError::Authority))
     ));
     let mut config = lane_height_config(&fixture.record).unwrap();
     config.epoch.authority_generation.0[0] ^= 1;
@@ -627,7 +633,7 @@ fn anchored_lane_ancestry_distinguishes_native_coverage_and_independent_genesis(
             1,
             10
         ),
-        Err(LaneAncestryError::Authority)
+        Err((_, LaneAncestryError::Authority))
     ));
 }
 

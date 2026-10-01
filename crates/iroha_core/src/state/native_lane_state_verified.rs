@@ -117,9 +117,9 @@ impl State {
                 if next == height && block.hash() != carrier {
                     return Err("native history differs from State tip".into());
                 }
-                let bytes = archive
-                    .read_exact(next, block.hash())
-                    .map_err(|error| error.to_string())?;
+                let bytes = archive.read_exact(next, block.hash()).map_err(|error| {
+                    format!("required historical native lane state source {next}: {error}")
+                })?;
                 verifier.push_shared_height(block, bytes.as_slice())?;
             }
             archive

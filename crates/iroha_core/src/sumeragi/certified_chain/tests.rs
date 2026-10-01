@@ -386,6 +386,9 @@ fn state_with_history(history: &[Arc<SignedBlock>]) -> State {
 #[path = "boundary_tests.rs"]
 mod boundaries;
 
+#[path = "state_certificate_tests.rs"]
+mod state_certificate;
+
 #[test]
 fn a_view_of_another_network_is_refused() {
     let (chain, _) = chain();
@@ -847,3 +850,60 @@ fn borrowed_native_frames_reject_changed_result_even_under_unchanged_header_hash
 
 #[path = "prefix_tests.rs"]
 mod prefix_tests;
+
+/// A warm decoded body never authorizes a changed on-disk certificate.
+#[test]
+fn durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    let original = frame(&chain, 2);
+    let original_wire = original.encode_wire().unwrap();
+    let view = chain.state().view();
+    let reader = CertifiedChain::new(&view).unwrap();
+    let hashes = view.block_hashes().iter().copied().collect::<Vec<_>>();
+    let pinned =
+        CertifiedChain::from_pinned(view.chain_id(), view.network_id(), &hashes, chain.kura())
+            .unwrap();
+    reader.certified(2).expect("original State certificate");
+    pinned.certified(2).expect("original pinned certificate");
+    let path = Kura::canonical_storage_path(&chain.kura().store_root()).join("blocks.data");
+    let original_file = std::fs::read(&path).unwrap();
+    let offsets = original_file
+        .windows(original_wire.len())
+        .enumerate()
+        .filter_map(|(at, bytes)| (bytes == original_wire.as_slice()).then_some(at))
+        .collect::<Vec<_>>();
+    assert_eq!(offsets.len(), 1, "one occupied original frame");
+    for wrong_height in [true, false] {
+        let changed = with_parts(&original, |_, qc, _| {
+            if wrong_height {
+                qc.height = 1;
+            } else {
+                qc.agg_sig.0[0] ^= 1;
+            }
+        });
+        let changed_wire = changed.encode_wire().unwrap();
+        assert_eq!(changed_wire.len(), original_wire.len());
+        let mut changed_file = original_file.clone();
+        changed_file[offsets[0]..offsets[0] + changed_wire.len()].copy_from_slice(&changed_wire);
+        std::fs::write(&path, changed_file).unwrap();
+        assert_eq!(
+            frame(&chain, 2).encode_wire().unwrap(),
+            original_wire,
+            "ordinary body cache remains warm, so the test exercises durable certificate reads"
+        );
+        assert!(
+            reader.certified(2).is_err(),
+            "State reader must recheck durable QC"
+        );
+        assert!(
+            pinned.certified(2).is_err(),
+            "restoration reader must recheck durable QC"
+        );
+        std::fs::write(&path, &original_file).unwrap();
+        reader.certified(2).expect("restored exact original source");
+        pinned
+            .certified(2)
+            .expect("restored pinned original source");
+    }
+}

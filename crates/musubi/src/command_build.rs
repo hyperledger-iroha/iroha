@@ -297,7 +297,8 @@ pub(super) fn build_runtime_package(
         )
         .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
         ensure_network_identity(config.network_id, registry.network_id())?;
-        let cache_root = platform_cache_root_v1().map_err(cache_maintenance_diagnostic_ref)?;
+        let cache_root =
+            platform_cache_root_v1().map_err(|error| cache_maintenance_diagnostic(&error))?;
         let resolver_cache = ResolverIndexCacheV1::open(&cache_root)
             .map_err(|error| Diagnostic::new(ErrorCode::CacheCorrupt, error.to_string()))?;
         let mut snapshot_mismatches = 0_u8;
@@ -351,10 +352,6 @@ pub(super) fn build_runtime_package(
     let artifact = deploy::select_artifact(&execution.artifacts, contract)?;
     crate::deployment_runtime::BuiltArtifact::from_bytes(deploy::read_selected_artifact(artifact)?)
         .map_err(|error| Diagnostic::new(ErrorCode::PackageInvalid, format!("{error:#}")))
-}
-
-fn cache_maintenance_diagnostic_ref(error: CacheError) -> Diagnostic {
-    cache_maintenance_diagnostic(&error)
 }
 
 fn artifact_json(artifact: &CompilerArtifactV1) -> Value {

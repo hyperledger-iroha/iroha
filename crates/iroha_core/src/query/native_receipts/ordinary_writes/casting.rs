@@ -111,9 +111,9 @@ pub(super) fn retain(
 fn fixed<const N: usize>(bytes: &[u8]) -> Result<[u8; N], Error> {
     bytes.try_into().map_err(|_| Error::LengthMismatch)
 }
-// Norito arrays encode each element with its canonical field-length prefix. They are not
-// the special raw Vec<u8> sequence layout, and governance IDs retain this nested array form.
-fn byte_array<const N: usize>(bytes: &[u8], flags: u8) -> Result<[u8; N], Error> {
+// Generic array values nested inside Option use one canonical prefix per element. Derived
+// named byte-array fields (including versioned governance-ID payloads) use their raw width.
+fn generic_byte_array<const N: usize>(bytes: &[u8], flags: u8) -> Result<[u8; N], Error> {
     let encoded = fields::<N>(bytes, flags)?;
     let mut output = [0; N];
     for (byte, encoded) in output.iter_mut().zip(encoded) {
@@ -135,7 +135,7 @@ fn id(bytes: &[u8], flags: u8) -> Result<[u8; 32], Error> {
     if u16_value(version)? != 1 || u16_value(length)? != 32 {
         return Err(Error::LengthMismatch);
     }
-    byte_array(value, flags)
+    fixed(value)
 }
 fn optional<T>(
     bytes: &[u8],
@@ -175,10 +175,10 @@ fn release(bytes: &[u8], flags: u8) -> Result<Release, Error> {
         governance_attempt_id: GovernanceAttemptId::new(id(governance, flags)?),
         body_instance_id: BodyInstanceId::new(id(body, flags)?),
         ballot_attempt_id: BallotAttemptId::new(id(ballot, flags)?),
-        survivor_corpus_root: byte_array(survivor, flags)?,
-        no_recovery_root: byte_array(recovery, flags)?,
+        survivor_corpus_root: fixed(survivor)?,
+        no_recovery_root: fixed(recovery)?,
         target_finalized_height: u64_value(target)?,
-        parameter_hash: byte_array(parameter, flags)?,
+        parameter_hash: fixed(parameter)?,
     })
 }
 fn binding(bytes: &[u8], flags: u8) -> Result<Binding, Error> {
@@ -215,15 +215,15 @@ fn binding(bytes: &[u8], flags: u8) -> Result<Binding, Error> {
         version: u16_value(version)?,
         evaluated_height: u64_value(evaluated)?,
         phase,
-        network_id: byte_array(network, flags)?,
+        network_id: fixed(network)?,
         proposal_content_id: ProposalContentId::new(id(proposal, flags)?),
         governance_attempt_id: GovernanceAttemptId::new(id(governance, flags)?),
         body_instance_id: BodyInstanceId::new(id(body, flags)?),
         ballot_attempt_id: BallotAttemptId::new(id(ballot, flags)?),
-        parameter_hash: byte_array(parameter, flags)?,
+        parameter_hash: fixed(parameter)?,
         tle_key_session_id: TleKeySessionId::new(id(key, flags)?),
-        tle_key_transcript_hash: byte_array(transcript, flags)?,
-        tle_master_public_key: byte_array(public_key, flags)?,
+        tle_key_transcript_hash: fixed(transcript)?,
+        tle_master_public_key: fixed(public_key)?,
         registration_opened_at_finalized_height: u64_value(opened)?,
         registration_close_height: u64_value(closed)?,
         survivor_freeze_height: u64_value(frozen)?,
@@ -231,7 +231,7 @@ fn binding(bytes: &[u8], flags: u8) -> Result<Binding, Error> {
         target_finalized_height: u64_value(target)?,
         registration_corpus: corpus(registration, flags)?,
         survivor_count: optional(survivors, flags, u32_value)?,
-        dropout_root: optional(dropout, flags, |bytes| byte_array(bytes, flags))?,
+        dropout_root: optional(dropout, flags, |bytes| generic_byte_array(bytes, flags))?,
         release_identity: optional(future_release, flags, |bytes| release(bytes, flags))?,
     })
 }

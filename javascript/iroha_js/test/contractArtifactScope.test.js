@@ -7,6 +7,10 @@ import { NetworkId } from "../src/networkId.js";
 import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { canonicalHashLiteral } from "../src/instructionBuilderPrimitives.js";
 import {
+  noritoEncodeInstruction, noritoDecodeInstruction,
+  noritoEncodeInstructionBoxArchive, noritoDecodeInstructionBoxArchive,
+} from "../src/norito.js";
+import {
   buildRegisterSmartContractCodeInstruction, buildRegisterSmartContractBytesInstruction,
   buildUploadSmartContractCodeChunkInstruction, buildFinalizeSmartContractCodeUploadInstruction,
   buildCancelSmartContractCodeUploadInstruction, buildRemoveSmartContractBytesInstruction,
@@ -43,7 +47,29 @@ test("six artifact instructions require one exact full-width dataspace", () => {
     [buildRemoveSmartContractBytesInstruction, {}],
   ];
   for (const [build, input] of inputs) {
-    assert.deepEqual(Object.values(build({ ...input, artifactId }))[0].artifact_id, wireId);
+    const instruction = build({ ...input, artifactId });
+    const [variant] = Object.keys(instruction);
+    assert.deepEqual(instruction[variant].artifact_id, wireId);
+    for (const [encode, decode] of [
+      [noritoEncodeInstruction, noritoDecodeInstruction],
+      [noritoEncodeInstructionBoxArchive, noritoDecodeInstructionBoxArchive],
+    ]) {
+      const bytes = encode(instruction, 753);
+      assert.deepEqual(decode(bytes, 753), instruction);
+      const universal = build({ ...input, artifactId: { ...artifactId, dataspaceId: "0" } });
+      assert.notDeepEqual(encode(universal, 753), bytes);
+      const retired = structuredClone(instruction);
+      delete retired[variant].artifact_id;
+      retired[variant].code_hash = wireId.code_hash;
+      assert.throws(() => encode(retired, 753));
+      assert.throws(() => encode({ ...instruction, Mint: null }, 753));
+      const extra = structuredClone(instruction);
+      extra[variant].artifact_id.unexpected = null;
+      assert.throws(() => encode(extra, 753));
+      const numeric = structuredClone(instruction);
+      numeric[variant].artifact_id.dataspace_id = 0;
+      assert.throws(() => encode(numeric, 753));
+    }
     assert.throws(() => build({ ...input, codeHash: hash }));
     for (const invalid of [-1, Number.MAX_SAFE_INTEGER + 1, "01", "18446744073709551616"]) {
       assert.throws(() => build({ ...input, artifactId: { ...artifactId, dataspaceId: invalid } }));

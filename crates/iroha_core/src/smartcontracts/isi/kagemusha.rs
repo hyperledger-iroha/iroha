@@ -1572,7 +1572,9 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         {
             return Err("stored mint proof names another native certificate or authority".into());
         }
-        verify_kagemusha_mint_finality_helper_v1(
+        // This read-side check authenticates the stored result; it does not execute a
+        // MintFold or export a fresh monetary capability to the caller.
+        let _verified_helper = verify_kagemusha_mint_finality_helper_v1(
             &runtime.verifier,
             runtime.artifacts.recursion_artifacts(),
             &result.mint_credit,

@@ -70,7 +70,7 @@ func musubiRequireName(_ value: String, field: String) throws {
                   && !musubiIsBidiControl(scalar)
                   && scalar != "@" && scalar != "#" && scalar != "$"
           }),
-          value.precomposedStringWithCanonicalMapping == value else {
+          value.utf8.elementsEqual(value.precomposedStringWithCanonicalMapping.utf8) else {
         throw MusubiV1Error.invalidValue("\(field) is not a canonical Iroha Name.")
     }
 }

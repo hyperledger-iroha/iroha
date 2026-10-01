@@ -25,6 +25,7 @@ pub const MAX_BITMAP_BYTES: usize = MAX_COMMITTEE_SIZE.div_ceil(8);
 
 pub use crate::bytes::ByteAdmissionError;
 mod attestation;
+mod evidence_witnesses;
 pub use attestation::{
     AttestationSignature, CommitAttestation, MAX_ATTESTATION_SIGNATURE_BYTES,
     MAX_RESULT_WITNESS_BYTES, ResultWitness,
@@ -785,7 +786,7 @@ impl WireMessage {
     /// # Errors
     /// Propagates a Norito serialization failure.
     pub fn encode(&self) -> Result<Vec<u8>, CodecError> {
-        norito::encode_canonical(self).map_err(|e| CodecError::Norito(e.to_string()))
+        norito::encode_canonical(self).map_err(CodecError::from)
     }
 
     /// Decode one canonical frame of at most `max_frame` bytes and check the size limits.
@@ -879,8 +880,7 @@ where
             max,
         });
     }
-    let value =
-        norito::decode_canonical(bytes).map_err(|error| CodecError::Norito(error.to_string()))?;
+    let value = norito::decode_canonical(bytes).map_err(CodecError::from)?;
     check(&value)?;
     Ok(value)
 }
@@ -985,8 +985,10 @@ pub enum CodecError {
         /// Limit.
         max: usize,
     },
-    /// Norito rejected the bytes (malformed, non-canonical, checksum, resource limits).
+    /// Norito rejected the bytes (malformed, non-canonical or checksum failure).
     Norito(String),
+    /// The current decode scope or allocator refused resources; bytes are not condemned.
+    Resource(norito::core::DecodeResourceError),
     /// A structural size limit was violated.
     Limit(&'static str),
 }
@@ -996,12 +998,33 @@ impl fmt::Display for CodecError {
         match self {
             Self::TooLarge { len, max } => write!(f, "frame of {len} bytes exceeds {max}"),
             Self::Norito(e) => write!(f, "norito: {e}"),
+            Self::Resource(e) => write!(f, "norito resource: {e}"),
             Self::Limit(what) => write!(f, "limit exceeded: {what}"),
         }
     }
 }
 
 impl std::error::Error for CodecError {}
+
+impl From<norito::Error> for CodecError {
+    fn from(error: norito::Error) -> Self {
+        if cfg!(all(test, sumeragi_mutation = "MS49")) {
+            return Self::Norito(error.to_string());
+        }
+        error
+            .decode_resource_error()
+            .map_or_else(|| Self::Norito(error.to_string()), Self::Resource)
+    }
+}
+
+impl From<CodecError> for norito::Error {
+    fn from(error: CodecError) -> Self {
+        match error {
+            CodecError::Resource(resource) => resource.into(),
+            other => Self::Message(other.to_string()),
+        }
+    }
+}
 
 /// What was wrong with a signed proposal (§6.2 steps 3, 5, 6). Only signed-content defects
 /// produce evidence; an `Invalid` execution never does (§3.6).
@@ -1079,15 +1102,14 @@ impl Evidence {
     /// Rejects oversized graphs, proposal payloads, or canonical serialization failure.
     pub fn encode(&self) -> Result<Vec<u8>, CodecError> {
         self.check_limits()?;
-        let len = norito::canonical_frame_len(self)
-            .map_err(|error| CodecError::Norito(error.to_string()))?;
+        let len = norito::canonical_frame_len(self).map_err(CodecError::from)?;
         if len > MAX_EVIDENCE_FRAME_BYTES {
             return Err(CodecError::TooLarge {
                 len,
                 max: MAX_EVIDENCE_FRAME_BYTES,
             });
         }
-        norito::encode_canonical(self).map_err(|error| CodecError::Norito(error.to_string()))
+        norito::encode_canonical(self).map_err(CodecError::from)
     }
 
     /// Decode exactly one bounded canonical native evidence frame. The frame's declared
@@ -1160,7 +1182,7 @@ mod tests {
         }
     }
 
-    fn sample_qc(kind: VoteKind, view: u64) -> Qc {
+    pub(super) fn sample_qc(kind: VoteKind, view: u64) -> Qc {
         Qc {
             attestation_witness: None,
             epoch: crate::testing::TEST_EPOCH.id,
@@ -1202,7 +1224,7 @@ mod tests {
         }
     }
 
-    fn sample_vote(kind: VoteKind) -> Vote {
+    pub(super) fn sample_vote(kind: VoteKind) -> Vote {
         Vote {
             epoch: crate::testing::TEST_EPOCH.id,
             kind,
@@ -1218,7 +1240,7 @@ mod tests {
         }
     }
 
-    fn sample_timeout() -> TimeoutVote {
+    pub(super) fn sample_timeout() -> TimeoutVote {
         TimeoutVote {
             epoch: crate::testing::TEST_EPOCH.id,
             instance: h(1),
@@ -1230,7 +1252,7 @@ mod tests {
         }
     }
 
-    fn sample_proposal() -> Proposal {
+    pub(super) fn sample_proposal() -> Proposal {
         Proposal {
             instance: h(1),
             height: 9,
@@ -1665,6 +1687,89 @@ mod tests {
             "frame of 2 bytes exceeds 1"
         );
         assert!(CodecError::Norito("e".into()).to_string().contains('e'));
+    }
+
+    #[test]
+    fn scoped_decode_refusal_is_not_malformed_native_evidence() {
+        let evidence = Evidence::VoteEquivocation(
+            sample_vote(VoteKind::Prepare),
+            sample_vote(VoteKind::Commit),
+        );
+        let frame = evidence.encode().unwrap();
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, usize::MAX),
+            || Evidence::decode(&frame),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CodecError::Resource(norito::core::DecodeResourceError::FieldLengthExceeded {
+                    length: 560,
+                    limit: 1
+                })
+            ),
+            "a scoped resource refusal must retain its typed category: {error:?}"
+        );
+        assert!(matches!(
+            norito::Error::from(error),
+            norito::Error::FieldLengthExceeded {
+                length: 560,
+                limit: 1
+            }
+        ));
+        assert_eq!(Evidence::decode(&frame).unwrap(), evidence);
+        let mut corrupt = frame.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            Evidence::decode(&corrupt),
+            Err(CodecError::Norito(_))
+        ));
+    }
+
+    #[test]
+    fn codec_resource_errors_survive_lossless_norito_conversion() {
+        use norito::core::DecodeResourceError as R;
+        for resource in [
+            R::ArchiveLengthExceeded {
+                length: 2,
+                limit: 1,
+            },
+            R::SequenceLengthExceeded {
+                length: 4,
+                limit: 3,
+            },
+            R::FieldLengthExceeded {
+                length: 6,
+                limit: 5,
+            },
+            R::TotalElementsExceeded {
+                attempted: 8,
+                limit: 7,
+            },
+            R::TotalAllocationExceeded {
+                attempted: 10,
+                limit: 9,
+            },
+            R::AllocationFailed { bytes: 11 },
+            R::NestingDepthExceeded {
+                depth: 13,
+                limit: 12,
+                context: "native proof",
+            },
+        ] {
+            let error = CodecError::from(norito::Error::from(resource));
+            assert_eq!(error, CodecError::Resource(resource));
+            assert_eq!(error.clone(), error);
+            assert_eq!(error.to_string(), format!("norito resource: {resource}"));
+            assert_eq!(
+                norito::Error::from(error).decode_resource_error(),
+                Some(resource)
+            );
+        }
+        let malformed = CodecError::from(norito::Error::NonCanonicalEncoding);
+        assert!(matches!(malformed, CodecError::Norito(_)));
+        assert!(!norito::Error::from(malformed).is_decode_resource_limit());
     }
 
     #[test]

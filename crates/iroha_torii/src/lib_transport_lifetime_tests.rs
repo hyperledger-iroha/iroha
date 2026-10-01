@@ -1495,7 +1495,7 @@ mod emergency_fast_surface_tests {
             assert!(compact_source.contains(disabled));
         }
         assert!(compact_source.contains(
-            "if!emergency_fast{letmutrx=self.events.subscribe();letcache=self.pipeline_status_cache.clone();",
+            "if!emergency_fast{critical_workers.push(ToriiCriticalWorker{name:\"pipeline_status_projection\",task:start_pipeline_status_projection_worker(self.pipeline_status_cache.clone(),",
         ));
         assert!(compact_source.contains(
             "ifself.kura.emergency_fast_startup_enabled(){iroha_logger::warn!(\"emergencyFastKuramodeleavesToriidetachedfromP2Prelayservices\");returnself;}self.p2p=Some(p2p);",

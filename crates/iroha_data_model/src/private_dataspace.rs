@@ -287,7 +287,7 @@ pub struct PrivateDataspaceAnchor {
     pub dataspace_id: DataSpaceId,
     /// Exact registered child genesis commitment.
     pub child_network_id: NetworkId,
-    /// Native header, CommitQC and canonical execution-result commitment only.
+    /// Native header, `CommitQC` and canonical execution-result commitment only.
     pub certificate: AmxCertifiedBlockV1,
 }
 

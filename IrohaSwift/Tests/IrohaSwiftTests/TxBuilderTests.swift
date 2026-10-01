@@ -315,7 +315,9 @@ final class TxBuilderTests: XCTestCase {
             line: line
         )
         XCTAssertEqual(domain.remaining(), 0, file: file, line: line)
-        for _ in 0..<9 {
+        // The network domain is followed by exactly eight payload fields:
+        // authority, creation time, executable, TTL, nonce, fees, metadata, and attachments.
+        for _ in 0..<8 {
             _ = try transaction.readCompactField()
         }
         XCTAssertEqual(transaction.remaining(), 0, file: file, line: line)

@@ -19,9 +19,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node20.19",
     // Norito-heavy validation, Kagemusha, and route governance stay behind the
-    // optional boundary. The eager path is 771,406 bytes with the native V1
-    // consensus observations, within the reviewed 806,184-byte baseline. The
-    // 788 KiB ceiling leaves 35,506 bytes; the optional closure includes exact Kagemusha release
+    // optional boundary. The eager path is 781,768 bytes with shared manifest
+    // validation, within the reviewed 806,184-byte baseline. The
+    // 788 KiB ceiling leaves 25,144 bytes; the optional closure includes exact Kagemusha release
     // governance schemas and remains independently inventoried below.
     limitKb: 788,
     reviewedEagerBytes: 806_184,
@@ -97,8 +97,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Final V1 nominal errors, Unit, qualified structs, and cursor/page schemas
-    // share validation across eight canonical modules: 56,385 bytes with pinned
-    // esbuild. The 56 KiB ceiling leaves 959 bytes; browser isolation is mandatory.
+    // share validation across eight canonical modules: 56,625 bytes with pinned
+    // esbuild. The 56 KiB ceiling leaves 719 bytes; browser isolation is mandatory.
     limitKb: 56,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -114,7 +114,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     // reviewed eager surface at 496,687 bytes (-3.96%). Adding canonical nominal
     // error catalogs, explicit Unit returns, and cursor/page schema validation to
     // the compact normalizers preserves the reviewed growth bound. The current
-    // eager closure is 447,993 bytes and leaves 54,791 bytes below the unchanged
+    // eager closure is 452,913 bytes and leaves 49,871 bytes below the unchanged
     // 491 KiB ceiling. The typed Sumeragi
     // parser and deployment-submit continuation remain separately inventoried so startup and deferred code cannot trade
     // against one another.

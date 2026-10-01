@@ -301,9 +301,7 @@ impl norito::json::FastJsonWrite for ToriiAssetDefinitionJsonSource<'_> {
             .balance_scope_policy
             .json_serialize_to(output)?;
         output.push_str(",\"confidential_policy\":")?;
-        self.definition
-            .confidential_policy
-            .json_serialize_to(output)?;
+        write_torii_asset_confidential_policy_json(&self.definition.confidential_policy, output)?;
         output.push_str(",\"description\":")?;
         self.definition.description.json_serialize_to(output)?;
         output.push_str(",\"id\":")?;
@@ -328,6 +326,43 @@ impl norito::json::FastJsonWrite for ToriiAssetDefinitionJsonSource<'_> {
         output.end_container();
         Ok(())
     }
+}
+/// Preserve the sorted nested projection without allocating an intermediate JSON graph.
+fn write_torii_asset_confidential_policy_json(
+    policy: &iroha_data_model::asset::definition::AssetConfidentialPolicy,
+    output: &mut dyn norito::json::JsonWriteSink,
+) -> Result<(), norito::json::BoundedJsonError> {
+    use norito::json::JsonSerialize as _;
+    output.begin_container()?;
+    output.push_str("{\"mode\":")?;
+    policy.mode.json_serialize_to(output)?;
+    output.push_str(",\"pedersen_params_id\":")?;
+    policy.pedersen_params_id.json_serialize_to(output)?;
+    output.push_str(",\"pending_transition\":")?;
+    if let Some(transition) = &policy.pending_transition {
+        output.begin_container()?;
+        output.push_str("{\"conversion_window\":")?;
+        transition.conversion_window.json_serialize_to(output)?;
+        output.push_str(",\"effective_height\":")?;
+        transition.effective_height.json_serialize_to(output)?;
+        output.push_str(",\"new_mode\":")?;
+        transition.new_mode.json_serialize_to(output)?;
+        output.push_str(",\"previous_mode\":")?;
+        transition.previous_mode.json_serialize_to(output)?;
+        output.push_str(",\"transition_id\":")?;
+        transition.transition_id.json_serialize_to(output)?;
+        output.push('}')?;
+        output.end_container();
+    } else {
+        output.push_str("null")?;
+    }
+    output.push_str(",\"poseidon_params_id\":")?;
+    policy.poseidon_params_id.json_serialize_to(output)?;
+    output.push_str(",\"vk_set_hash\":")?;
+    policy.vk_set_hash.json_serialize_to(output)?;
+    output.push('}')?;
+    output.end_container();
+    Ok(())
 }
 fn write_torii_asset_alias_binding_json(
     binding: &iroha_core::state::AssetDefinitionAliasBindingRecord,

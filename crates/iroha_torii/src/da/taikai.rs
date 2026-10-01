@@ -2643,9 +2643,14 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         };
+        // A canonical sentinel name is already close to NAME_MAX. Bind its
+        // complete identity with a digest instead of appending another digest
+        // to the original name and making recovery fail with ENAMETOOLONG.
+        let name_digest = hex::encode(blake3_hash(name.as_bytes()).as_bytes());
         let digest = hex::encode(blake3_hash(marker).as_bytes());
-        let quarantine_path =
-            path.with_file_name(format!("{name}{TAIKAI_ANCHOR_INVALID_SUFFIX}-{digest}"));
+        let quarantine_path = path.with_file_name(format!(
+            "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{name_digest}{TAIKAI_ANCHOR_INVALID_SUFFIX}-{digest}"
+        ));
         match fs::hard_link(path, &quarantine_path) {
             Ok(()) => sync_parent_dir(&quarantine_path)?,
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
@@ -3557,6 +3562,41 @@ pub(crate) mod taikai_ingest {
                  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             )
         }
+        #[test]
+        fn invalid_anchor_quarantine_bounds_names_and_preserves_exact_evidence() {
+            let directory = tempfile::tempdir().expect("quarantine fixture");
+            let source = directory.path().join(format!(
+                "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}",
+                "a".repeat(220),
+            ));
+            fs::write(&source, b"invalid-first").unwrap();
+            let first = quarantine_invalid_anchor_sentinel(&source, b"invalid-first").unwrap();
+            assert!(first.file_name().unwrap().len() < 255);
+            assert_eq!(fs::read(&first).unwrap(), b"invalid-first");
+            assert!(!source.exists());
+            fs::write(&source, b"invalid-first").unwrap();
+            assert_eq!(
+                quarantine_invalid_anchor_sentinel(&source, b"invalid-first").unwrap(),
+                first
+            );
+            fs::write(&source, b"invalid-second").unwrap();
+            let second = quarantine_invalid_anchor_sentinel(&source, b"invalid-second").unwrap();
+            assert_ne!(first, second);
+            assert_eq!(fs::read(&first).unwrap(), b"invalid-first");
+            assert_eq!(fs::read(&second).unwrap(), b"invalid-second");
+            let other = directory.path().join("taikai-anchor-other.ok");
+            fs::write(&other, b"invalid-first").unwrap();
+            assert_ne!(
+                quarantine_invalid_anchor_sentinel(&other, b"invalid-first").unwrap(),
+                first
+            );
+            fs::write(&first, b"conflicting evidence").unwrap();
+            fs::write(&source, b"invalid-first").unwrap();
+            quarantine_invalid_anchor_sentinel(&source, b"invalid-first")
+                .expect_err("conflicting evidence must not be overwritten or retire the source");
+            assert_eq!(fs::read(&source).unwrap(), b"invalid-first");
+            assert_eq!(fs::read(&first).unwrap(), b"conflicting evidence");
+        }
         #[tokio::test]
         async fn anchor_worker_startup_is_fallible_and_shutdown_owned() {
             let directory = tempfile::tempdir().expect("tempdir");
@@ -3857,7 +3897,7 @@ pub(crate) mod taikai_ingest {
                     .await
                     .expect_err("symlink replacement must reject");
             assert!(
-                err.contains("not a regular file"),
+                err.contains("Taikai artifact test") && err.contains("taikai-artifact.norito"),
                 "unexpected error: {err}"
             );
             assert!(

@@ -9573,6 +9573,11 @@ pub mod tests {
     impl IvmAdmissionFixture {
         fn new() -> Self {
             let (world, authority_id, keypair) = world_with_authority("wonderland");
+            let mut parameters = world.parameters.block();
+            parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ));
+            parameters.commit();
             let state = State::new_with_chain(
                 world,
                 Kura::blank_kura_for_testing(),
@@ -9594,7 +9599,8 @@ pub mod tests {
             metadata: Option<Metadata>,
             prepare_block: impl FnOnce(&mut StateBlock<'_>),
         ) -> Result<(), TransactionRejectionReason> {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            // Ordinary component execution follows genesis; height one requires signed genesis custody.
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
             let mut block = self.state.block(header);
             prepare_block(&mut block);
             let builder = TransactionBuilder::new(
@@ -9798,9 +9804,11 @@ pub mod tests {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut state_tx = block.transaction();
+        state_tx.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
         // Build minimal program with abi_version=1 (current baseline)
         let prog = minimal_ivm_contract_program();
         // Compute the canonical full-artifact contract hash.

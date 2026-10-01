@@ -2,6 +2,20 @@
 
 use super::*;
 
+fn is_non_regular_taikai_rejection(message: &str) -> bool {
+    if message.contains("is not a regular file") {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        message.contains(&std::io::Error::from_raw_os_error(libc::ELOOP).to_string())
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 #[derive(Default)]
 struct MockAnchorSender {
     calls: AsyncMutex<Vec<(Url, String, Option<String>)>>,
@@ -642,14 +656,14 @@ async fn taikai_anchor_restart_quarantines_legacy_timestamp_sentinel() {
         !sentinel.exists(),
         "legacy marker must leave the live namespace"
     );
-    let quarantine_prefix = format!(
-        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}{TAIKAI_ANCHOR_INVALID_SUFFIX}-"
-    );
+    let quarantine_suffix = format!("{TAIKAI_ANCHOR_INVALID_SUFFIX}-");
     let quarantined = fs::read_dir(&spool_dir)
         .expect("scan quarantine evidence")
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| name.starts_with(&quarantine_prefix))
+        .filter(|name| {
+            name.starts_with(TAIKAI_ANCHOR_SENTINEL_PREFIX) && name.contains(&quarantine_suffix)
+        })
         .count();
     assert_eq!(quarantined, 1, "legacy marker must be retained as evidence");
 }
@@ -681,14 +695,14 @@ async fn taikai_anchor_prune_quarantines_orphan_legacy_sentinel() {
         !sentinel.exists(),
         "orphan legacy marker must leave the live acknowledgement namespace"
     );
-    let quarantine_prefix = format!(
-        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{ANCHOR_BASE_ID}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}{TAIKAI_ANCHOR_INVALID_SUFFIX}-"
-    );
+    let quarantine_suffix = format!("{TAIKAI_ANCHOR_INVALID_SUFFIX}-");
     let quarantined = fs::read_dir(&spool_dir)
         .expect("scan orphan quarantine evidence")
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| name.starts_with(&quarantine_prefix))
+        .filter(|name| {
+            name.starts_with(TAIKAI_ANCHOR_SENTINEL_PREFIX) && name.contains(&quarantine_suffix)
+        })
         .count();
     assert_eq!(
         quarantined, 1,
@@ -1012,7 +1026,7 @@ async fn taikai_anchor_processing_continues_after_sentinel_persistence_failure()
         Err(err) => err,
     };
     assert!(
-        err.contains("is not a regular file"),
+        is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1063,7 +1077,7 @@ async fn taikai_anchor_processing_rejects_unpersistable_sentinel_after_upload() 
         Err(err) => err,
     };
     assert!(
-        err.contains("is not a regular file"),
+        is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1110,7 +1124,7 @@ async fn taikai_anchor_collection_rejects_non_file_sentinel() {
         Err(err) => err,
     };
     assert!(
-        err.contains("is not a regular file"),
+        is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1135,7 +1149,7 @@ async fn taikai_anchor_collection_rejects_symlinked_sentinel() {
         Err(err) => err,
     };
     assert!(
-        err.contains("Taikai anchor sentinel") && err.contains("is not a regular file"),
+        err.contains("Taikai anchor sentinel") && is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1160,7 +1174,7 @@ async fn taikai_anchor_collection_rejects_symlinked_spool_root() {
         Err(err) => err,
     };
     assert!(
-        err.contains("Taikai spool directory") && err.contains("not a directory"),
+        err.contains("Taikai spool directory") && err.contains("not a direct directory"),
         "unexpected anchor collection error: {err}"
     );
     assert_path_remains_symlink(&spool_dir, &target);
@@ -1180,7 +1194,7 @@ async fn taikai_anchor_collection_rejects_symlinked_envelope() {
         Err(err) => err,
     };
     assert!(
-        err.contains("Taikai envelope") && err.contains("is not a regular file"),
+        err.contains("Taikai envelope") && is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1204,7 +1218,7 @@ async fn taikai_anchor_collection_rejects_symlinked_required_companion() {
         Err(err) => err,
     };
     assert!(
-        err.contains("Taikai indexes JSON") && err.contains("is not a regular file"),
+        err.contains("Taikai indexes JSON") && is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1315,7 +1329,7 @@ async fn taikai_anchor_collection_rejects_symlinked_optional_trm() {
         Err(err) => err,
     };
     assert!(
-        err.contains("Taikai routing manifest") && err.contains("is not a regular file"),
+        err.contains("Taikai routing manifest") && is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1339,7 +1353,7 @@ async fn taikai_anchor_collection_rejects_symlinked_optional_lineage_hint() {
         Err(err) => err,
     };
     assert!(
-        err.contains("Taikai lineage hint JSON") && err.contains("is not a regular file"),
+        err.contains("Taikai lineage hint JSON") && is_non_regular_taikai_rejection(&err),
         "unexpected anchor collection error: {err}"
     );
     assert!(
@@ -1594,6 +1608,18 @@ fn staged_taikai_lineage_fixture(seed: u8) -> StagedTaikaiLineageFixture {
                 &fingerprint,
             )
             .expect("stage pending lineage");
+        let envelope = taikai_envelope_fixture();
+        taikai_ingest::persist_envelope(
+            &spool_dir,
+            lane_id,
+            epoch,
+            sequence,
+            &receipt.storage_ticket,
+            &fingerprint,
+            &envelope.envelope_bytes,
+        )
+        .expect("persist pending lineage envelope")
+        .expect("enabled pending lineage envelope path");
         taikai_ingest::persist_trm(
             &spool_dir,
             lane_id,
@@ -2449,8 +2475,7 @@ fn taikai_trm_lineage_guard_rejects_lock_symlink() {
     };
     assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
-        err.1
-            .contains("Taikai routing manifest lock is not a regular file"),
+        err.1.contains("Taikai routing manifest lock") && is_non_regular_taikai_rejection(&err.1),
         "unexpected lock symlink error: {:?}",
         err
     );

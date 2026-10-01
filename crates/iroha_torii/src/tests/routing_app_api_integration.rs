@@ -271,6 +271,7 @@ mod app_api_integration_tests {
         );
         let req_body = json_string(crate::json_object(vec![
             json_entry("filter", Value::Null),
+            json_entry("count_mode", "exact"),
             json_entry(
                 "pagination",
                 crate::json_object(vec![json_entry("limit", 10u64)]),
@@ -678,7 +679,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23centralbank/holders/query")
+            .uri("/v1/assets/rose%23wonderland.universal/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -956,7 +957,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23centralbank/holders/query")
+            .uri("/v1/assets/rose%23wonderland.universal/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -1004,7 +1005,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23centralbank/holders/query")
+            .uri("/v1/assets/rose%23wonderland.universal/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -1056,7 +1057,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23centralbank/holders/query")
+            .uri("/v1/assets/rose%23wonderland.universal/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -1380,7 +1381,7 @@ mod app_api_integration_tests {
         );
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23centralbank/holders?limit=1&count_mode=exact")
+            .uri("/v1/assets/rose%23wonderland.universal/holders?limit=1&count_mode=exact")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -1422,7 +1423,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v1/assets/rose%23centralbank/holders?account_id={}&count_mode=exact",
+                "/v1/assets/rose%23wonderland.universal/holders?account_id={}&count_mode=exact",
                 urlencoding::encode(&expected_account)
             ))
             .body(axum::body::Body::empty())
@@ -1446,9 +1447,12 @@ mod app_api_integration_tests {
         );
     }
     #[tokio::test]
-    async fn asset_holders_get_filters_by_account_alias() {
+    async fn asset_holders_get_filters_by_resolved_account_alias() {
         let _guard = app_query_limits_guard();
         let (state, alice_id, _) = build_asset_holder_fixture_state();
+        let resolved = resolve_exact_active_account_alias(&state, "treasury@universal")
+            .expect("resolve fixture alias separately from the account-id filter");
+        assert_eq!(resolved, alice_id);
         use axum::routing::get;
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
@@ -1472,9 +1476,13 @@ mod app_api_integration_tests {
                 }
             }),
         );
+        let resolved = resolved
+            .canonical_i105()
+            .expect("canonical resolved account");
+        let resolved = urlencoding::encode(&resolved);
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23centralbank/holders?account_id=treasury%40universal&count_mode=exact")
+            .uri(format!("/v1/assets/rose%23wonderland.universal/holders?account_id={resolved}&count_mode=exact"))
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -1510,7 +1518,7 @@ mod app_api_integration_tests {
         };
         let err = handle_v1_asset_holders(
             state,
-            axum::extract::Path("rose#centralbank".to_string()),
+            axum::extract::Path("rose#wonderland.universal".to_string()),
             crate::NoritoQuery(params),
             MaybeTelemetry::for_tests(),
         )
@@ -1574,7 +1582,7 @@ mod app_api_integration_tests {
         );
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23centralbank/holders?limit=4")
+            .uri("/v1/assets/rose%23wonderland.universal/holders?limit=4")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -1650,7 +1658,12 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &alice_id, &asset_def_id, "rose#centralbank");
+        bind_permanent_asset_alias_for_test(
+            &state,
+            &alice_id,
+            &asset_def_id,
+            "rose#wonderland.universal",
+        );
         let app = Router::new().route(
             "/v1/confidential/assets/{definition_id}/transitions",
             get({
@@ -1663,7 +1676,7 @@ mod app_api_integration_tests {
         );
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/confidential/assets/rose%23centralbank/transitions")
+            .uri("/v1/confidential/assets/rose%23wonderland.universal/transitions")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -1778,7 +1791,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23centralbank/holders/query")
+            .uri("/v1/assets/rose%23wonderland.universal/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -1807,10 +1820,13 @@ mod app_api_integration_tests {
         }
     }
     #[tokio::test]
-    async fn asset_holders_query_filter_accepts_account_alias() {
+    async fn asset_holders_query_filter_accepts_resolved_account_alias() {
         let _guard = app_query_limits_guard();
         use axum::routing::post;
         let (state, alice_id, _) = build_asset_holder_fixture_state();
+        let resolved = resolve_exact_active_account_alias(&state, "treasury@universal")
+            .expect("resolve fixture alias separately from the account-id filter");
+        assert_eq!(resolved, alice_id);
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
             "/v1/assets/{definition_id}/holders/query",
@@ -1842,7 +1858,7 @@ mod app_api_integration_tests {
                     ("op", val("eq")),
                     (
                         "args",
-                        arr(vec![val("account_id"), val("treasury@universal")]),
+                        arr(vec![val("account_id"), val(&resolved.to_string())]),
                     ),
                 ]),
             ),
@@ -1853,7 +1869,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23centralbank/holders/query")
+            .uri("/v1/assets/rose%23wonderland.universal/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -1874,31 +1890,18 @@ mod app_api_integration_tests {
         );
     }
     #[tokio::test]
-    async fn asset_holders_query_aggregate_groups_pkrs_by_primary_alias_domain() {
+    async fn asset_holders_query_aggregate_does_not_expose_alias_directory() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
         let parsed = run_asset_holder_alias_aggregate_query(None, state).await;
-        assert_eq!(parsed["total"].as_u64(), Some(2));
+        assert_eq!(parsed["total"].as_u64(), Some(0));
         assert_eq!(parsed["query_source"].as_str(), Some("live_debug"));
         assert!(parsed["indexed_height"].as_u64().is_some());
         assert!(parsed["indexed_block_hash"].is_string() || parsed["indexed_block_hash"].is_null());
-        let items = parsed["items"].as_array().expect("items array");
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            items[0]["primary_alias_domain"].as_str(),
-            Some("hbl.paynet")
-        );
-        assert_eq!(items[0]["user_count"].as_u64(), Some(2));
-        assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(
-            items[1]["primary_alias_domain"].as_str(),
-            Some("ubl.paynet")
-        );
-        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
-        assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
+        assert!(parsed["items"].as_array().expect("items array").is_empty());
     }
     #[tokio::test]
-    async fn asset_holders_query_aggregate_uses_cached_projection_shards_when_published() {
+    async fn asset_holders_query_aggregate_cached_projection_keeps_alias_directory_private() {
         let _guard = app_query_limits_guard();
         clear_query_projection_archive_cache_for_tests();
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
@@ -1907,21 +1910,79 @@ mod app_api_integration_tests {
             cache_query_projection_archive_for_query(archive.clone());
         }
         let parsed = run_asset_holder_alias_aggregate_query(None, state).await;
+        assert_eq!(parsed["total"].as_u64(), Some(0));
         assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
-        let items = parsed["items"].as_array().expect("items array");
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            items[0]["primary_alias_domain"].as_str(),
-            Some("hbl.paynet")
-        );
-        assert_eq!(items[0]["user_count"].as_u64(), Some(2));
-        assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(
-            items[1]["primary_alias_domain"].as_str(),
-            Some("ubl.paynet")
-        );
-        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
-        assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
+        assert!(parsed["items"].as_array().expect("items array").is_empty());
+        clear_query_projection_archive_cache_for_tests();
+    }
+    #[tokio::test]
+    async fn asset_holders_query_aggregate_sums_public_balances_without_alias_projection() {
+        let _guard = app_query_limits_guard();
+        for cached in [false, true] {
+            clear_query_projection_archive_cache_for_tests();
+            let (state, alice, bob) = build_asset_holder_aggregate_fixture_state();
+            let user = checked_app_api_account_id(0x8C, "derive UBL user asset holder key");
+            if cached {
+                for (archive, _) in
+                    publish_asset_holder_checkpoint_with_real_manifests(&state).await
+                {
+                    cache_query_projection_archive_for_query(archive);
+                }
+            }
+            let mut query = asset_holder_alias_aggregate_query();
+            query.filter = Some(crate::filter::FilterExpr::In(
+                crate::filter::FieldPath("account_id".into()),
+                [&alice, &bob, &user]
+                    .into_iter()
+                    .map(|account| norito::json::Value::from(account.to_string()))
+                    .collect(),
+            ));
+            query.aggregate.as_mut().unwrap().group_by =
+                vec![crate::filter::FieldPath("account_id".into())];
+            query.sort[0].key = crate::filter::FieldPath("account_id".into());
+            let response = handle_v1_asset_holders_query_with_app(
+                None,
+                state,
+                axum::extract::Path("pkr#paynet".to_owned()),
+                crate::utils::extractors::NoritoJson(query),
+                MaybeTelemetry::for_tests(),
+            )
+            .await
+            .expect("aggregate public account balances")
+            .into_response();
+            assert_eq!(response.status(), http::StatusCode::OK);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let parsed: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+            assert_eq!(parsed["total"].as_u64(), Some(3));
+            assert_eq!(
+                parsed["query_source"].as_str(),
+                Some(if cached {
+                    "projection_da_cache"
+                } else {
+                    "live_debug"
+                })
+            );
+            let items = parsed["items"].as_array().expect("aggregate items");
+            assert_eq!(items.len(), 3);
+            let totals = items
+                .iter()
+                .map(|item| {
+                    assert_eq!(item["user_count"].as_u64(), Some(1));
+                    (
+                        item["account_id"].as_str().unwrap().to_owned(),
+                        item["pkr_total"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(
+                totals,
+                std::collections::BTreeMap::from([
+                    (alice.to_string(), "13".to_owned()),
+                    (bob.to_string(), "2".to_owned()),
+                    (user.to_string(), "5".to_owned()),
+                ])
+            );
+        }
         clear_query_projection_archive_cache_for_tests();
     }
     #[tokio::test]
@@ -2024,8 +2085,8 @@ mod app_api_integration_tests {
         }
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            1,
-            "the first missing shard manifest may be verified before capability rejection",
+            0,
+            "missing request-bound capability must reject before any remote fetch",
         );
         let second_error = match invoke().await {
             Err(error) => error,
@@ -2040,9 +2101,18 @@ mod app_api_integration_tests {
         ));
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            2,
-            "a rejected remote payload must not populate the local cache",
+            0,
+            "a retry without capability must still perform no remote fetch",
         );
+        for (archive, _) in &published {
+            assert!(
+                query_projection_archive_from_hot_cache(&query_projection_archive_cache_key(
+                    archive
+                ))
+                .is_none(),
+                "capability rejection must not populate any shard cache entry",
+            );
+        }
         remote_server.abort();
         clear_query_projection_archive_cache_for_tests();
     }
@@ -2072,19 +2142,31 @@ mod app_api_integration_tests {
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let bob_account = Account::new(bob_id.clone()).build(&alice_id);
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [alice_account, bob_account],
             [rose_definition],
             assets,
             [],
         );
+        install_asset_holder_alias_parent_leases_for_test(
+            &mut world,
+            &alice_id,
+            "universal",
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            &[&domain_id],
+        );
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#centralbank");
+        bind_permanent_asset_alias_for_test(
+            &state,
+            &alice_id,
+            &rose_def,
+            "rose#wonderland.universal",
+        );
         bind_account_alias_for_test(&state, &alice_id, "treasury@universal");
         (state, alice_id, bob_id)
     }
@@ -2164,14 +2246,10 @@ mod app_api_integration_tests {
         install_asset_holder_alias_parent_leases_for_test(
             &mut world,
             &alice_id,
+            "paynet",
             paynet_dataspace_id,
             &[&hbl_domain_id, &ubl_domain_id],
         );
-        let mut state = Arc::new(iroha_core::state::State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
         let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
@@ -2196,14 +2274,17 @@ mod app_api_integration_tests {
             ],
         )
         .expect("paynet lane catalog");
-        Arc::get_mut(&mut state)
-            .expect("unique state")
-            .set_nexus(iroha_config::parameters::actual::Nexus {
-                lane_catalog,
-                dataspace_catalog,
-                ..iroha_config::parameters::actual::Nexus::default()
-            })
-            .expect("install paynet nexus config");
+        let state = Arc::new(
+            iroha_core::state::State::new_with_pre_genesis_nexus_for_testing(
+                world,
+                iroha_config::parameters::actual::Nexus {
+                    lane_catalog,
+                    dataspace_catalog,
+                    ..iroha_config::parameters::actual::Nexus::default()
+                },
+                LiveQueryStore::start_test(),
+            ),
+        );
         bind_permanent_asset_alias_for_test(&state, &alice_id, &pkr_def, "pkr#paynet");
         bind_account_alias_for_test(&state, &alice_id, "alice@hbl.paynet");
         bind_account_alias_for_test(&state, &bob_id, "bilal@hbl.paynet");
@@ -2215,6 +2296,7 @@ mod app_api_integration_tests {
     fn install_asset_holder_alias_parent_leases_for_test(
         world: &mut World,
         owner: &AccountId,
+        dataspace_alias: &str,
         dataspace_id: iroha_model_base::topology::DataSpaceId,
         domains: &[&DomainId],
     ) {
@@ -2222,8 +2304,8 @@ mod app_api_integration_tests {
             &iroha_data_model::account::AccountAddress::from_account_id(owner)
                 .expect("parent lease owner address"),
         );
-        let dataspace_selector =
-            iroha_core::sns::selector_for_dataspace_alias("paynet").expect("paynet selector");
+        let dataspace_selector = iroha_core::sns::selector_for_dataspace_alias(dataspace_alias)
+            .expect("dataspace selector");
         let mut dataspace_metadata = iroha_model_base::metadata::Metadata::default();
         dataspace_metadata.insert(
             iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
@@ -2362,7 +2444,13 @@ mod app_api_integration_tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let cfg = sorafs_node::config::StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(
+                temp_dir
+                    .path()
+                    .canonicalize()
+                    .expect("canonical storage parent")
+                    .join("storage"),
+            )
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
     }
@@ -2386,7 +2474,10 @@ mod app_api_integration_tests {
             )
             .expect("projection manifest must use a canonical root CID");
         let issuer = checked_app_api_account_id(0x8D, "derive projection registry issuer key");
-        let policy = iroha_data_model::sorafs::pin_registry::PinPolicy::default();
+        let policy = iroha_data_model::sorafs::pin_registry::PinPolicy {
+            retention_epoch: 24,
+            ..Default::default()
+        };
         let content_length = manifest.content_length;
         let amount = state
             .view()

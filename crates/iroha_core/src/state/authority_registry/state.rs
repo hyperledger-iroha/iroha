@@ -152,6 +152,8 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Physical publication/reader coordination and wakeup ownership; generation protects coherent reads but is not semantic State"));
     view_lock_contention_log: parking_lot::Mutex<ViewLockContentionLog> => ("state.view_lock_contention_log",
         Role::Local("Physical publication/reader coordination and wakeup ownership; generation protects coherent reads but is not semantic State"));
+    native_evidence_admission: parking_lot::Mutex<crate::sumeragi::evidence::admission::AdmissionCache> => ("state.native_evidence_admission",
+        Role::Local("Original-cut proof acquisition and capacity retry owner; only independently admitted records enter world.consensus_evidence"));
     native_pending_evidence: parking_lot::Mutex<crate::sumeragi::evidence::NativeEvidencePool> => ("state.native_pending_evidence",
         Role::Local("Private gossip-timing cache; only admitted canonical evidence records enter world.consensus_evidence"));
 });
