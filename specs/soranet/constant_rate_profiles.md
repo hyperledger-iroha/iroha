@@ -23,11 +23,10 @@ tick→bandwidth conversion table used by SDKs, and the CLI interface that opera
 generating configs or status reports.
 
 > **Current relay status:** all relay QUIC endpoint creation is deliberately unreachable in production
-> until quinn-proto 0.11.17 or later replaces vulnerable 0.11.15. Strict mode is implemented but remains
-> independently gated. The locked receive queue charges payload bytes but no fixed cost per
-> DATAGRAM entry, so an unauthenticated remote peer could enqueue unbounded zero-length entries without
-> consuming the configured byte budget. Configuration and live handshake preflight independently
-> reject strict mode until per-entry accounting is available and the complete end-to-end path is
+> pending complete qualification of locked quinn-proto 0.11.18. Strict mode is implemented but remains
+> independently gated. The patched receive queue charges payload plus fixed overhead per DATAGRAM entry,
+> including zero-length entries. Configuration and live handshake preflight independently
+> reject strict mode until scheduling, resource bounds and the complete end-to-end path are
 > requalified. The dormant mux carries application/exit, measurement, and VPN bytes with cover in
 > exact 1,024-byte cells and fails closed on transport or scheduling errors; its presence is not an
 > activation claim. Best-effort cover and the authenticated VPN stream remain dormant with the
@@ -195,9 +194,9 @@ not be activated until a future version binds the timing profile on the wire.
   result before responding; it never accepts strict as best-effort instead. Configuration also
   requires the shared `core` 5 ms profile before strict mode can reach dependency qualification.
 - Defaults keep the capability disabled. The current relay and Sora VPN helper reject all QUIC
-  endpoint creation before binding while the lockfile resolves vulnerable Quinn 0.11.9 /
-  quinn-proto 0.11.15, so neither best-effort nor strict constant-rate operation is a shipping path.
-  Upgrade to quinn-proto 0.11.17 or later and complete end-to-end requalification before activating
+  endpoint creation before binding pending qualification of locked Quinn 0.11.12 /
+  quinn-proto 0.11.18, so neither best-effort nor strict constant-rate operation is a shipping path.
+  Complete end-to-end requalification of the patched transport before activating
   either mode; `strict=true` remains an independent startup configuration error until that work is
   complete.
 

@@ -187,7 +187,7 @@ pub(crate) fn validate_restored_resources(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{fund_payout_fixture, header, key, payout_state};
+    use super::super::tests::{fund_payout_fixture, header, key, payout_state, payout_transaction};
     use super::*;
     use crate::smartcontracts::isi::nft_custody::reserve_nft_v1;
     use iroha_data_model::{
@@ -208,7 +208,7 @@ mod tests {
     fn reservation_preflight_is_atomic_for_wrong_metadata_and_cumulative_overflow() {
         let (state, mut session, _) = payout_state(Quantity::zero());
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         let owner = session.participants[0].account.clone();
         let first = register(&mut st, &owner, "equipment_a");
@@ -255,7 +255,7 @@ mod tests {
         session.stake = Quantity::zero();
         session.liability = Quantity::zero();
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         let clause = GameResourceReservationClauseV1 {
             nft_id: "unreserved$session.universal".parse().unwrap(),
@@ -293,7 +293,7 @@ mod tests {
         session.stake = Quantity::zero();
         session.liability = Quantity::zero();
         let mut block = state.block(header());
-        let mut st = block.transaction();
+        let mut st = payout_transaction(&mut block);
         fund_payout_fixture(&mut st, &mut session);
         // Directly exercise native custody primitives; no profile is qualified or public admission bypassed.
         for slot in 0..2 {

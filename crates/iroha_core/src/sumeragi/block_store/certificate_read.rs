@@ -17,7 +17,7 @@ use crate::sumeragi::{
 
 /// Corruption and source errors remain distinct from a recoverable local allocation refusal.
 #[derive(Debug)]
-pub(super) enum CertificateReadError {
+pub(in crate::sumeragi) enum CertificateReadError {
     ForeignBudget,
     MissingCertificate,
     Decode(norito::Error),
@@ -52,16 +52,16 @@ struct Layout {
 
 /// Exact source and decoded artifacts; decoding alone does not authorize a historical body.
 /// The caller checks independent height configuration, certificate relations and signatures.
-pub(super) struct DecodedCertificate {
-    pub(super) source: Arc<SignedBlock>,
-    pub(super) header: BlockHeader,
-    pub(super) availability: AvailabilityFrame,
-    pub(super) commit_qc: Qc,
+pub(in crate::sumeragi) struct DecodedCertificate {
+    pub(in crate::sumeragi) source: Arc<SignedBlock>,
+    pub(in crate::sumeragi) header: BlockHeader,
+    pub(in crate::sumeragi) availability: AvailabilityFrame,
+    pub(in crate::sumeragi) commit_qc: Qc,
 }
 
 /// One bounded read owner retains its immutable source and every partial funded destination.
 /// No generic witness or availability decoding allocates a temporary bulk Vec.
-pub(super) struct CertificateRead {
+pub(in crate::sumeragi) struct CertificateRead {
     source: Arc<SignedBlock>,
     budget: AllocationBudget,
     layout: Option<Layout>,
@@ -71,7 +71,7 @@ pub(super) struct CertificateRead {
     witness: Option<ResultWitness>,
 }
 impl CertificateRead {
-    pub(super) fn new(source: Arc<SignedBlock>, budget: AllocationBudget) -> Self {
+    pub(in crate::sumeragi) fn new(source: Arc<SignedBlock>, budget: AllocationBudget) -> Self {
         Self {
             source,
             budget,
@@ -83,13 +83,14 @@ impl CertificateRead {
         }
     }
 
-    pub(super) fn source(&self) -> &Arc<SignedBlock> {
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn source(&self) -> &Arc<SignedBlock> {
         &self.source
     }
 
     /// Observe original owners without acquiring, replacing or advancing any decode phase.
     #[cfg(test)]
-    pub(super) fn retained_owners_for_test(
+    pub(in crate::sumeragi) fn retained_owners_for_test(
         &self,
     ) -> (*const SignedBlock, Option<*const u8>, Option<*const u8>) {
         let table = self
@@ -117,7 +118,7 @@ impl CertificateRead {
         clippy::result_large_err,
         reason = "retain every original source and allocation owner"
     )]
-    pub(super) fn complete(
+    pub(in crate::sumeragi) fn complete(
         mut self,
         budget: &AllocationBudget,
     ) -> Result<DecodedCertificate, (Self, CertificateReadError)> {

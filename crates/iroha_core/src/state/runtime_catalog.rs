@@ -362,9 +362,13 @@ impl StateTransaction<'_, '_> {
             .map_err(runtime_catalog_invalid)?;
         crate::sumeragi::private_dataspace::ensure_parent_execution_separate(
             &self.world,
-            payload.dataspace_additions.iter().map(|entry| entry.descriptor.id)
+            payload
+                .dataspace_additions
+                .iter()
+                .map(|entry| entry.descriptor.id)
                 .chain(payload.lane_additions.iter().map(|lane| lane.dataspace_id)),
-        ).map_err(runtime_catalog_invalid)?;
+        )
+        .map_err(runtime_catalog_invalid)?;
         let block_height = self.block_height();
         if block_height <= 1 {
             return Err(runtime_catalog_invalid(
@@ -591,7 +595,7 @@ impl StateTransaction<'_, '_> {
 }
 
 #[cfg(test)]
-mod runtime_catalog_tests {
+pub(crate) mod runtime_catalog_tests {
     use super::*;
     include!("runtime_catalog_tests.rs");
 }

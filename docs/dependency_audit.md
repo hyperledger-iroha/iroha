@@ -13,12 +13,15 @@ Current incident-response status:
   2026-08-20 `arrayref` incident list. It retains the legitimate
   `arrayref 0.3.9`, now exact-pinned in `iroha_crypto`, and does not contain the
   named malicious releases or `proc-macro1` family.
-- The lockfile resolves `quinn 0.11.9` / `quinn-proto 0.11.15`. The latter's
-  remote-memory exposures in stream reassembly, connection-ID retirement, and
-  zero-length DATAGRAM accounting are contained by rejecting shipping P2P,
-  streaming, SoraNet relay, and VPN-helper QUIC endpoint creation pending an
-  upgrade to released `quinn-proto 0.11.17` or later (GHSA-qfwj-vfxf-92j2,
-  GHSA-hmxj-32vh-65vr, and GHSA-2hv7-gw8g-gpq5). Remediations are applied in
+- The lockfile resolves `quinn 0.11.12` / `quinn-proto 0.11.18`. Version
+  0.11.17 fixed stream reassembly, connection-ID retirement and zero-length
+  DATAGRAM memory accounting; 0.11.18 additionally fixes unordered-read,
+  outgoing-DATAGRAM eviction and ACK-frequency panics. See the
+  [upstream release](https://github.com/quinn-rs/quinn/releases/tag/quinn-proto-0.11.18).
+  Shipping P2P, streaming, SoraNet relay and VPN-helper QUIC endpoint creation
+  remains rejected pending authenticated transport, resource and interoperability
+  qualification. The patched dependency permits genuine bounded local DATAGRAM
+  requalification tests; it does not by itself qualify shipping transport. Remediations are applied in
   the working tree for
   `h2 0.4.16`, `crossbeam-epoch 0.9.20`, `webbrowser 1.2.2`, and
   `zbus_xml 5.2.1`; the vulnerable `quick-xml 0.39.4` resolution and Norito's
@@ -84,9 +87,10 @@ Historical testing performed for the 2025 audit:
 Current validation status:
 - `cargo metadata --locked --format-version 1 --no-deps` passed.
 - `cargo iroha-fast -- check -p norito --lib --locked` passed.
-- `cargo iroha-fast -- check -p soranet-relay -p sora-vpn-helper --locked`
-  passed with the production pre-endpoint dependency gate compiled against
-  `quinn-proto 0.11.15`; this is not runtime qualification of that release.
+- Earlier `soranet-relay` / `sora-vpn-helper` checks compiled the
+  pre-endpoint rejection against predecessor quinn-proto 0.11.15. Current
+  0.11.18 transport qualification remains open; predecessor checks do not
+  establish the current dependency's runtime behavior.
 - `cargo iroha-fast -- check -p iroha_torii --lib --locked` compiled the
   patched `h2 0.4.16` dependency, then stopped on unrelated concurrent
   `iroha_core` source errors in `block.rs` and `state.rs`.

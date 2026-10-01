@@ -12603,7 +12603,7 @@ seiyaku Privacy {
         .signed(&signing_key);
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                DataSpaceId::new(u64::MAX),
                 manifest.code_hash.expect("fixture manifest hash"),
             ),
             manifest: manifest.clone(),
@@ -13291,7 +13291,7 @@ seiyaku Privacy {
         let code_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let instruction: InstructionBox = Box::new(RegisterSmartContractBytes {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                DataSpaceId::new(u64::MAX),
                 Hash::prehashed(sample_hash(0xCC)),
             ),
             code: code_bytes.clone(),
@@ -13316,6 +13316,7 @@ seiyaku Privacy {
             artifact.get("dataspace_id"),
             Some(&json::Value::String(u64::MAX.to_string())),
         );
+        assert!(payload.get("code_hash").is_none());
         assert_eq!(
             payload.get("code"),
             Some(&json::Value::String(STANDARD.encode(&code_bytes))),

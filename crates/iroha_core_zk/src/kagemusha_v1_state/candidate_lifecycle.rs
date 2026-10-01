@@ -2298,6 +2298,47 @@ impl KagemushaOutgoingCandidateJournalV1 {
         self.finalized_outbox.get(&reservation_id)
     }
 
+    // Only the native receipt-owning kernel calls this after independently authenticating
+    // the original peer ACK or full finalized redemption receipt and signed device release.
+    // An arbitrary digest is never an external release capability.
+    pub(super) fn release_verified_terminal(
+        &mut self,
+        outbox: &mut KagemushaSenderOutboxCapacityV1,
+        reservation_id: DigestV1,
+        envelope_digest: DigestV1,
+        receipt_digest: DigestV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let next_index = self
+            .operation_index
+            .release_successor(reservation_id, envelope_digest, receipt_digest)
+            .map_err(map_operation_index_error)?;
+        if self.released_envelopes.get(&reservation_id) == Some(&envelope_digest) {
+            if next_index != self.operation_index {
+                return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+            }
+            return Ok(());
+        }
+        if self
+            .finalized_outbox
+            .get(&reservation_id)
+            .map(|record| record.envelope_digest)
+            != Some(envelope_digest)
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let mut next = self.clone();
+        let mut next_outbox = outbox.clone();
+        next_outbox.mark_terminal_released(reservation_id, envelope_digest)?;
+        next.finalized_outbox.remove(&reservation_id);
+        next.released_envelopes
+            .insert(reservation_id, envelope_digest);
+        next.operation_index = next_index;
+        next_outbox.reconcile_capacity_meters(&next)?;
+        *self = next;
+        *outbox = next_outbox;
+        Ok(())
+    }
+
     pub(crate) fn validate_recovered<R>(
         &self,
         state: &KagemushaStateV1,
@@ -2600,7 +2641,6 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     fn mark_terminal_released(
         &mut self,
         reservation_id: DigestV1,

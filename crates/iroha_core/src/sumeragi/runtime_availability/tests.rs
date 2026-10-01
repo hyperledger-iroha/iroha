@@ -60,10 +60,25 @@ fn historical_schedule_comes_from_native_execution_ancestry_without_rechecking_l
     );
 }
 
-fn fixed_lane_chain() -> (
+pub(super) fn fixed_lane_chain() -> (
     CertifiedTestChain,
     iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
+    crossbeam_epoch::Guard,
 ) {
+    fixed_lane_chain_at(4)
+}
+
+pub(super) fn fixed_lane_chain_at(
+    height: u64,
+) -> (
+    CertifiedTestChain,
+    iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,
+    crossbeam_epoch::Guard,
+) {
+    // Fixture publications retire charged State generations into the shared collector.
+    // Retain their real EBR lifetime through each exact baseline assertion, including when
+    // unrelated Rayon work collects epochs. Reader buffers/shared controls reclaim directly.
+    let epoch = crossbeam_epoch::pin();
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         parameter::Parameter,
@@ -99,9 +114,9 @@ fn fixed_lane_chain() -> (
         .genesis_parameters
         .push(Parameter::Custom(policy.into_custom_parameter()));
     let mut chain = CertifiedTestChain::start(config).unwrap();
-    chain.commit(Vec::new());
-    chain.commit(Vec::new());
-    chain.commit(Vec::new());
+    for _ in 1..height {
+        chain.commit(Vec::new());
+    }
     let record = chain
         .state()
         .view()
@@ -110,12 +125,12 @@ fn fixed_lane_chain() -> (
         .lane(LaneId::new(7))
         .unwrap()
         .clone();
-    (chain, record)
+    (chain, record, epoch)
 }
 
 #[test]
 fn historical_lane_authority_retains_original_creation_bytes_and_prepaid_config_until_drop() {
-    let (chain, record) = fixed_lane_chain();
+    let (chain, record, _epoch) = fixed_lane_chain();
     let budget = chain.state().ivm_execution_budget();
     let before = budget.reserved_bytes();
     let crypto = Arc::new(BlsCrypto::new());
@@ -146,7 +161,7 @@ fn historical_lane_authority_retains_original_creation_bytes_and_prepaid_config_
 
 #[test]
 fn historical_lane_authority_refusal_keeps_original_file_and_rejects_a_fresh_replacement() {
-    let (chain, record) = fixed_lane_chain();
+    let (chain, record, _epoch) = fixed_lane_chain();
     let budget = chain.state().ivm_execution_budget();
     let before = budget.reserved_bytes();
     let limit = budget.limit_bytes();
@@ -199,7 +214,7 @@ fn historical_lane_authority_refusal_keeps_original_file_and_rejects_a_fresh_rep
 
 #[test]
 fn historical_lane_authority_progresses_cancelled_original_scan_before_new_request() {
-    let (chain, record) = fixed_lane_chain();
+    let (chain, record, _epoch) = fixed_lane_chain();
     let budget = chain.state().ivm_execution_budget();
     let before = budget.reserved_bytes();
     let limit = budget.limit_bytes();
@@ -239,7 +254,7 @@ fn historical_lane_authority_progresses_cancelled_original_scan_before_new_reque
 
 #[test]
 fn historical_lane_authority_rejects_changed_complete_creation_write_root() {
-    let (chain, record) = fixed_lane_chain();
+    let (chain, record, _epoch) = fixed_lane_chain();
     let budget = chain.state().ivm_execution_budget();
     let before = budget.reserved_bytes();
     let creation = chain.committed(record.created_at);
@@ -283,7 +298,7 @@ fn historical_lane_authority_rejects_changed_complete_creation_write_root() {
 
 #[test]
 fn historical_lane_authority_rechecks_original_publication_after_refused_scan() {
-    let (mut chain, record) = fixed_lane_chain();
+    let (mut chain, record, _epoch) = fixed_lane_chain();
     let budget = chain.state().ivm_execution_budget();
     let limit = budget.limit_bytes();
     let provider =
@@ -315,4 +330,33 @@ fn historical_lane_authority_rechecks_original_publication_after_refused_scan() 
             .is_some()
     );
     assert_eq!(budget.reserved_bytes(), before);
+}
+
+#[test]
+fn creation_tip_is_pending_until_the_authenticated_activation_height() {
+    let (mut chain, record, _epoch) = fixed_lane_chain_at(1);
+    assert_eq!(record.created_at, 1);
+    assert_eq!(record.active_from, 3);
+    let provider =
+        NativeLaneStoreAuthorities::new(Arc::clone(chain.state()), Arc::new(BlsCrypto::new()));
+    assert!(
+        provider
+            .historical_record(record.lane, record.incarnation)
+            .unwrap()
+            .is_none()
+    );
+    chain.commit(Vec::new());
+    assert!(
+        provider
+            .historical_record(record.lane, record.incarnation)
+            .unwrap()
+            .is_none()
+    );
+    chain.commit(Vec::new());
+    assert!(
+        provider
+            .historical_record(record.lane, record.incarnation)
+            .unwrap()
+            .is_some()
+    );
 }

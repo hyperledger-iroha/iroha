@@ -193,9 +193,9 @@ captures the key points so implementers can line them up with the codec spec.
 
 - Shipping streaming QUIC is temporarily fail-closed before endpoint creation.
   `StreamingServer::bind` and `StreamingClient::connect` return a transport
-  configuration error while the lockfile resolves quinn-proto 0.11.15;
-  released 0.11.17 fixes three unauthenticated remote-memory exhaustion paths.
-  The implementation below remains dormant requalification material.
+  configuration error pending complete qualification of locked quinn-proto
+  0.11.18. This dependency fixes the known memory and panic paths; local
+  DATAGRAM and stream tests remain component requalification evidence.
 - Streaming QUIC is fail-closed on server identity. `StreamingServer` exposes
   the fingerprint of its self-signed leaf certificate, and callers must
   distribute that value through an authenticated manifest, directory, or
@@ -258,13 +258,13 @@ captures the key points so implementers can line them up with the codec spec.
   lock, so frames cannot cross the policy transition under a stale limit. A
   continuously drained, count-and-byte-bounded application inbox bounds frames
   once the pump receives them. That implementation and its DATAGRAM-on tests
-  remain dormant for requalification. Locked `quinn-proto` 0.11.15 accounts its
-  dependency-owned receive queue by payload bytes rather than entries, so the
-  dormant requalification transport sets the receive buffer to `None` and the
-  send buffer to zero. This omits DATAGRAM support from transport parameters and makes an
-  unexpected raw frame a transport violation before enqueue. Re-enable only
-  after locking and requalifying quinn-proto 0.11.17 or later, whose
-  `DatagramBuffer::memory_used()` includes fixed per-entry overhead.
+  exercise private requalification. Locked `quinn-proto` 0.11.18 charges
+  the dependency-owned queues by payload plus fixed per-entry overhead. Private
+  DATAGRAM transport requires receive and send buffers large enough for a
+  maximum payload plus one entry; incomplete or out-of-range geometry fails.
+  Zero defaults still omit DATAGRAM support from transport parameters and
+  reserve no send queue. Public endpoints remain rejected until the complete
+  transport is qualified, regardless of these private settings.
 - The restricted-environment QUIC fallback muxes chunk payloads over one
   publisher-to-viewer unidirectional stream per segment. It uses a fixed
   `NSM/1` window preface and little-endian `(segment_number, frame_count)` header,

@@ -54,7 +54,7 @@ class KagemushaHardwareQualificationV1(
     /** Return the authenticated release identity selected by native core. */
     fun releaseId(): ByteArray = releaseIdValue.copyOf()
 
-    /** Return the authenticated policy-registry root independently bound to aggregate state. */
+    /** Return the release's hardware-policy digest bound to the qualification transcript. */
     fun hardwarePolicyDigest(): ByteArray = hardwarePolicy.copyOf()
 
     /** Return the governed Core-to-hardware authorization verifier-key reference. */
@@ -76,6 +76,33 @@ class KagemushaHardwareQualificationV1(
         require(profile.policyEpoch == credential.policyEpoch)
         require(capabilityValues == EnumSet.allOf(KagemushaHardwareCapabilityV1::class.java)) {
             "KAGEMUSHA V1 requires the complete non-forking hardware capability set"
+        }
+    }
+}
+
+/** Actual installed release and provider registry root read from the original native Core owner. */
+class KagemushaAuthenticatedHardwarePolicyV1(
+    releaseId: ByteArray,
+    hardwarePolicyDigest: ByteArray,
+    providerPolicyRoot: ByteArray,
+) {
+    private fun digest(bytes: ByteArray): ByteArray = bytes.copyOf().also {
+        require(it.size == 32 && it.any { byte -> byte != 0.toByte() }) {
+            "authenticated hardware policy fields must be nonzero 32-byte values"
+        }
+    }
+    private val release = digest(releaseId)
+    private val policyDigest = digest(hardwarePolicyDigest)
+    private val providerRoot = digest(providerPolicyRoot)
+
+    fun releaseId(): ByteArray = release.copyOf()
+    fun hardwarePolicyDigest(): ByteArray = policyDigest.copyOf()
+    fun providerPolicyRoot(): ByteArray = providerRoot.copyOf()
+
+    fun requireQualification(qualification: KagemushaHardwareQualificationV1) {
+        require(release.contentEquals(qualification.releaseId())) { "native hardware-policy release differs from qualification" }
+        require(policyDigest.contentEquals(qualification.hardwarePolicyDigest())) {
+            "native hardware-policy digest differs from qualification"
         }
     }
 }
@@ -189,6 +216,9 @@ class KagemushaStagedPaymentV1(
 interface KagemushaHardwareProviderV1 {
     /** Return the currently authenticated release/profile/credential tuple. */
     fun qualification(): KagemushaHardwareQualificationV1
+
+    /** Fresh read of the installed policy from the same original native Core owner. */
+    fun authenticatedPolicy(): KagemushaAuthenticatedHardwarePolicyV1
 
     /** Resolve interrupted transitions and recover authoritative durable state. */
     fun recover(): KagemushaHardwareRecoveryV1
@@ -335,6 +365,11 @@ class KagemushaWalletV1 private constructor(
     /** Return the qualification admitted with the latest complete native-authoritative snapshot.
      * A provider-side change becomes visible only after wallet recovery or a validated transition. */
     fun qualification(): KagemushaHardwareQualificationV1 = currentQualification
+
+    /** Native owner reads the registry root independently of the host aggregate projection. */
+    fun authenticatedPolicy(): KagemushaAuthenticatedHardwarePolicyV1 = transitionLock.withLock {
+        provider.authenticatedPolicy().also { it.requireQualification(currentQualification) }
+    }
 
     /** Return the latest native-authoritative aggregate-state commitment. */
     fun aggregateState(): KagemushaAggregateStateCommitmentV1 = currentAggregateState
@@ -704,7 +739,7 @@ class KagemushaWalletV1 private constructor(
         val credential = qualification.credential
         val revision = readJournalRevision(provider)
         requireSameAsset(previousState, state)
-        requireStateQualification(state, qualification)
+        requireStateQualification(state, qualification, provider.authenticatedPolicy())
         require(credential.networkId == previousCredential.networkId)
         require(credential.laneCommitment().contentEquals(previousCredential.laneCommitment()))
         require(credential.hardwareEpochGeneration == previousCredential.hardwareEpochGeneration + 1L)
@@ -728,7 +763,7 @@ class KagemushaWalletV1 private constructor(
         require(hardwareFold.selector.creditId().contentEquals(selector.creditId()))
         val successor = KagemushaNoritoV1.decodeAggregateStateShapeExact(hardwareFold.aggregateState())
         requireSameAsset(previousState, successor)
-        requireStateQualification(successor, currentQualification)
+        requireStateQualification(successor, currentQualification, provider.authenticatedPolicy())
         require(successor.sequence == previousState.sequence + BigInteger.ONE) {
             "receive fold did not consume exactly one logical sequence"
         }
@@ -774,7 +809,7 @@ class KagemushaWalletV1 private constructor(
     private fun installAuthoritativeState(bytes: ByteArray) {
         val state = KagemushaNoritoV1.decodeAggregateStateShapeExact(bytes)
         requireSameAsset(currentAggregateState, state)
-        requireStateQualification(state, currentQualification)
+        requireStateQualification(state, currentQualification, provider.authenticatedPolicy())
         val revision = readJournalRevision(provider)
         currentSnapshot = HostSnapshot(currentQualification, state, revision)
     }
@@ -816,7 +851,7 @@ class KagemushaWalletV1 private constructor(
                 }
             }
             val state = KagemushaNoritoV1.decodeAggregateStateShapeExact(stateBytes)
-            requireStateQualification(state, qualification)
+            requireStateQualification(state, qualification, provider.authenticatedPolicy())
             require(readJournalRevision(provider) == recovery.journalRevision)
             return RecoverySnapshot(
                 HostSnapshot(qualification, state, recovery.journalRevision),
@@ -837,12 +872,14 @@ class KagemushaWalletV1 private constructor(
         private fun requireStateQualification(
             state: KagemushaAggregateStateCommitmentV1,
             qualification: KagemushaHardwareQualificationV1,
+            policy: KagemushaAuthenticatedHardwarePolicyV1,
         ) {
+            policy.requireQualification(qualification)
             require(state.releaseId().contentEquals(qualification.releaseId()))
             require(state.networkId == qualification.credential.networkId)
             require(state.hardwareEpochId().contentEquals(qualification.credential.hardwareEpochId()))
             require(state.keyReference().contentEquals(qualification.credential.deviceKeyReference()))
-            require(state.hardwarePolicyId().contentEquals(qualification.hardwarePolicyDigest()))
+            require(state.hardwarePolicyId().contentEquals(policy.providerPolicyRoot()))
         }
 
         private fun requireStateRequestBinding(

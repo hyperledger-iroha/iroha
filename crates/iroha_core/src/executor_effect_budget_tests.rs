@@ -6,10 +6,21 @@ mod effect_budget {
     const GAS: u64 = 50_000_000;
 
     fn fixture() -> State {
-        state_for_testing(World::with(
+        state_after_genesis(World::with(
             [],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
+        ))
+    }
+
+    fn next_block(state: &State) -> crate::state::StateBlock<'_> {
+        state.block(BlockHeader::new(
+            core::num::NonZeroU64::new(state.committed_height() as u64 + 1)
+                .expect("post-genesis fixture height"),
+            state.view().latest_block_hash(),
+            None,
+            0,
+            0,
         ))
     }
 
@@ -45,7 +56,7 @@ mod effect_budget {
         for cap in [0, 2, 1] {
             let state = fixture();
             let source = signed(&state, Executable::Instructions(writes().into()));
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
@@ -112,7 +123,7 @@ mod effect_budget {
                 &state,
                 Executable::Instructions(instructions.clone().into()),
             );
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             let fragments = block.committed_fragment_count();
             let mut tx =
                 block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
@@ -178,30 +189,50 @@ seiyaku ActualEffectGroups {
 }
 "#).expect("compile genuine effect-producing contract");
         let hash = ivm::contract_code_hash(&program);
-        let address = ContractAddress::derive(
-            &executor_test_network_id(b"actual-effect-admission-161"),
-            &ALICE_ID,
-            161,
-            DataSpaceId::UNIVERSAL,
-        )
-        .unwrap();
-        let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-        world.contract_code.insert(
+        let state = fixture();
+        let address =
+            ContractAddress::derive(&state.network_id, &ALICE_ID, 161, DataSpaceId::UNIVERSAL)
+                .unwrap();
+        let mut block = next_block(&state);
+        let mut setup = block.transaction();
+        setup.world.contract_code.insert(
             iroha_data_model::smart_contract::ContractArtifactId::new(
                 address.dataspace_id().unwrap(),
                 hash,
             ),
             program.clone(),
         );
-        world.contract_manifests.insert(
+        setup.world.contract_manifests.insert(
             iroha_data_model::smart_contract::ContractArtifactId::new(
                 address.dataspace_id().unwrap(),
                 hash,
             ),
             manifest.signed(&ALICE_KEYPAIR),
         );
-        bind_executor_test_contract(&mut world, &address, &ALICE_ID, hash);
-        (state_for_testing(world), program, address, hash)
+        setup.world.accounts.insert(
+            address.subject_id(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        setup.world.contract_instances.insert(address.clone(), hash);
+        setup
+            .world
+            .contract_subject_addresses
+            .insert(address.subject_id(), address.clone());
+        setup.world.contract_subject_bindings.insert(
+            address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &address,
+                ALICE_ID.clone(),
+            )
+            .with_active_code_hash(hash),
+        );
+        setup.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("bound contract fixture World setup");
+        (state, program, address, hash)
     }
 
     fn grant_entrypoints(block: &mut crate::state::StateBlock<'_>, address: &ContractAddress) {
@@ -241,7 +272,7 @@ seiyaku ActualEffectGroups {
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(ALICE_KEYPAIR.private_key());
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
             let mut tx =
@@ -319,7 +350,7 @@ seiyaku ActualEffectGroups {
                 })
             }));
             let source = signed(&state, Executable::Batch(items.into()));
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
             let mut tx =
@@ -444,7 +475,7 @@ seiyaku ActualEffectGroups {
             .with_metadata(metadata)
             .with_executable(executable)
             .sign(ALICE_KEYPAIR.private_key());
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut block = next_block(&state);
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
             let mut tx =

@@ -880,7 +880,7 @@ fn aggregate(
         lane_id: wallet.lane_id,
         hardware_epoch_id: qualification.credential.hardware_epoch_id,
         key_reference: qualification.credential.device_key_reference,
-        hardware_policy_id: qualification.hardware_policy_digest,
+        hardware_policy_id: [24; 32],
         sequence: 2,
         state_commitment: [43; 32],
     }
@@ -952,6 +952,152 @@ fn signed_snapshot_cannot_choose_another_wallet_or_qualification_context() {
             "altered selector {altered}"
         );
     }
+}
+
+fn accept_enrolled_snapshot(
+    owner: &mut NativeStartupQualificationOwnerV1,
+    qualification: &QualificationProjectionV1,
+    aggregate: Option<Vec<u8>>,
+) -> Vec<u8> {
+    let command = command(21);
+    let nonce = owner.begin(21, &command).unwrap();
+    let reply = norito::encode_canonical(&SnapshotReply {
+        version: 1,
+        operation: 21,
+        canonical_aggregate_state: aggregate,
+        journal_revision: 5,
+        pending_credit_count: 3,
+        retry_outbox_count: 2,
+    })
+    .unwrap();
+    let signature = sign_reply(21, nonce, &reply, qualification);
+    owner
+        .accept(
+            21,
+            nonce,
+            &command,
+            &reply,
+            &signature,
+            &fields(qualification),
+        )
+        .unwrap();
+    reply
+}
+
+#[test]
+fn authenticated_wallet_snapshot_requires_exact_accepted_original_and_preserves_counts() {
+    let qualification = qualification(1);
+    let mut owner = owner(&qualification);
+    qualify(&mut owner, &qualification);
+    let aggregate = norito::encode_canonical(&aggregate(&qualification)).unwrap();
+    let reply = accept_enrolled_snapshot(&mut owner, &qualification, Some(aggregate.clone()));
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply).unwrap(),
+        (aggregate, 5, 3, 2)
+    );
+    let mut changed = reply.clone();
+    changed.push(0);
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&changed),
+        Err(ObservationErrorV1::Conflict)
+    );
+    assert_eq!(owner.authenticated_wallet_snapshot(&reply).unwrap().1, 5);
+    owner.pending.get_mut(&21).unwrap().accepted = None;
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::Authentication)
+    );
+}
+
+#[test]
+fn authenticated_wallet_snapshot_never_renews_original_deadline_or_survives_invalidation() {
+    let qualification = qualification(1);
+    let mut owner = owner(&qualification);
+    qualify(&mut owner, &qualification);
+    let aggregate = norito::encode_canonical(&aggregate(&qualification)).unwrap();
+    let reply = accept_enrolled_snapshot(&mut owner, &qualification, Some(aggregate));
+    owner.pending.get_mut(&21).unwrap().deadline = NativeDeadlineV1::expired_for_test();
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::Expired)
+    );
+    let accepted = owner.pending[&21].accepted.as_ref().unwrap().clone();
+    assert_eq!(
+        owner
+            .accept(
+                21,
+                accepted.nonce,
+                &accepted.canonical_command.clone(),
+                &reply,
+                &accepted.authenticator.clone(),
+                &fields(&qualification)
+            )
+            .unwrap()
+            .0,
+        ObservationDispositionV1::AlreadyAccepted
+    );
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::Expired)
+    );
+    owner.invalidate();
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::MissingChallenge)
+    );
+}
+
+#[test]
+fn authenticated_wallet_snapshot_rejects_absence_and_changed_qualification_or_signature() {
+    let qualification = qualification(1);
+    let mut owner = owner(&qualification);
+    qualify(&mut owner, &qualification);
+    let reply = accept_enrolled_snapshot(&mut owner, &qualification, None);
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::Authentication)
+    );
+    let aggregate = norito::encode_canonical(&aggregate(&qualification)).unwrap();
+    let reply = accept_enrolled_snapshot(&mut owner, &qualification, Some(aggregate));
+    owner.current = None;
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::Conflict)
+    );
+    owner.current = Some(qualification);
+    owner
+        .pending
+        .get_mut(&21)
+        .unwrap()
+        .accepted
+        .as_mut()
+        .unwrap()
+        .authenticator[1] ^= 1;
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::Authentication)
+    );
+}
+
+#[test]
+fn signed_snapshot_uses_independent_catalog_provider_root_not_qualification_digest() {
+    let qualification = qualification(1);
+    assert_ne!(qualification.hardware_policy_digest, [24; 32]);
+    let mut owner = owner(&qualification);
+    qualify(&mut owner, &qualification);
+    let aggregate = norito::encode_canonical(&aggregate(&qualification)).unwrap();
+    let reply = accept_enrolled_snapshot(&mut owner, &qualification, Some(aggregate));
+    assert!(owner.authenticated_wallet_snapshot(&reply).is_ok());
+    owner.catalog.provider_policy_root = qualification.hardware_policy_digest;
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::Authentication)
+    );
+    owner.catalog.provider_policy_root = [0; 32];
+    assert_eq!(
+        owner.authenticated_wallet_snapshot(&reply),
+        Err(ObservationErrorV1::InvalidQualification)
+    );
 }
 
 #[derive(Encode, norito::NoritoSchema)]

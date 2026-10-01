@@ -2445,7 +2445,9 @@ impl<'tx> AcceptedTransaction<'tx> {
             .entrypoint_hash
             .get_or_init(|| self.entrypoint().hash())
     }
-    /// Return the exact encoded size used by queue and transaction-size budgeting.
+    /// Return the framed size of the signed transaction or sealed variant for admission limits.
+    /// The canonical entrypoint frame includes its enum envelope; queue retention accounts
+    /// for those complete bytes through `entrypoint_bytes`.
     #[must_use]
     pub fn encoded_len(&self) -> usize {
         *self
@@ -9574,6 +9576,11 @@ pub mod tests {
     impl IvmAdmissionFixture {
         fn new() -> Self {
             let (world, authority_id, keypair) = world_with_authority("wonderland");
+            let mut parameters = world.parameters.block();
+            parameters.set_parameter(crate::sumeragi::lanes::routing::test_support::metadata(
+                iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            ));
+            parameters.commit();
             let state = State::new_with_chain(
                 world,
                 Kura::blank_kura_for_testing(),
@@ -9595,7 +9602,8 @@ pub mod tests {
             metadata: Option<Metadata>,
             prepare_block: impl FnOnce(&mut StateBlock<'_>),
         ) -> Result<(), TransactionRejectionReason> {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            // Ordinary component execution follows genesis; height one requires signed genesis custody.
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
             let mut block = self.state.block(header);
             prepare_block(&mut block);
             let builder = TransactionBuilder::new(
@@ -9786,9 +9794,11 @@ pub mod tests {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut state_tx = block.transaction();
+        state_tx.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
         // Build minimal program with abi_version=1 (current baseline)
         let prog = minimal_ivm_contract_program();
         // Compute the canonical full-artifact contract hash.
@@ -10131,18 +10141,18 @@ pub mod tests {
             provenance: None,
         }
         .signed(&fixture.keypair);
-        tx1.world
-            .contract_manifests
-            .insert(
-                ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
-                manifest.clone(),
-            );
+        tx1.world.contract_manifests.insert(
+            ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+            manifest.clone(),
+        );
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept
         let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block2 = fixture.state.block(header2);
         let mut state_tx = block2.transaction();
+        state_tx.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
+        state_tx.world.current_dataspace_id = Some(TestDataSpaceId::UNIVERSAL);
         let mut ivm_cache = IvmCache::new();
         let result = StateBlock::validate_ivm(
             fixture.authority_id.clone(),
@@ -10152,7 +10162,10 @@ pub mod tests {
             None,
             &mut ivm_cache,
         );
-        assert!(result.is_ok(), "lookup manifest should allow validation");
+        assert!(
+            result.is_ok(),
+            "lookup manifest should allow validation: {result:?}"
+        );
     }
     #[test]
     fn validate_ivm_unknown_syscall_rejected_at_admission() {
@@ -11938,7 +11951,10 @@ pub mod tests {
             total_size,
             chunk_count: 1,
         };
-        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash);
+        let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            DataSpaceId::UNIVERSAL,
+            code_hash,
+        );
         let missing_upload_metadata = validate_instruction!(
             UploadSmartContractCodeChunk {
                 artifact_id,
@@ -12038,7 +12054,9 @@ pub mod tests {
             "successful finalization must clear staging"
         );
         let cancelled_artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
-            DataSpaceId::UNIVERSAL, Hash::new(b"owner-scoped cleanup"));
+            DataSpaceId::UNIVERSAL,
+            Hash::new(b"owner-scoped cleanup"),
+        );
         let accepted_cancel_stage = validate_instruction!(
             UploadSmartContractCodeChunk {
                 artifact_id: cancelled_artifact_id,

@@ -3505,14 +3505,25 @@ fn has_one_exact_inrou_header(
         .is_some_and(|value| value == expected)
         && values.next().is_none()
 }
+fn inrou_request_budget(deadline: Instant) -> Result<Duration> {
+    // One status, one health and four discovery requests share the original clock.
+    let budget =
+        (deadline.saturating_duration_since(Instant::now()) / 6).min(Duration::from_secs(5));
+    if budget.is_zero() {
+        eyre::bail!("Taira Inrou verification deadline elapsed");
+    }
+    Ok(budget)
+}
 fn fetch_inrou_public_discovery_authority(
     http: &HttpClient,
     url: Url,
     expected: &InrouPublicDiscoveryResponseV1,
     context: &str,
+    deadline: Instant,
 ) -> Result<Vec<u8>> {
     let response = http
         .get(url.clone())
+        .timeout(inrou_request_budget(deadline)?)
         .header(reqwest::header::ACCEPT, INROU_PUBLIC_DISCOVERY_CONTENT_TYPE)
         .send()
         .wrap_err_with(|| format!("{context} request failed for {url}"))?;
@@ -3543,6 +3554,7 @@ fn fetch_exact_inrou_public_discovery_document(
     expected_document_hash: &Hash,
     expected_bytes: &[u8],
     context: &str,
+    deadline: Instant,
 ) -> Result<()> {
     let published = Url::parse(published_url)
         .wrap_err_with(|| format!("{context} has an invalid published URL"))?;
@@ -3561,6 +3573,7 @@ fn fetch_exact_inrou_public_discovery_document(
     request_url.set_fragment(None);
     let response = http
         .get(request_url.clone())
+        .timeout(inrou_request_budget(deadline)?)
         .header(reqwest::header::ACCEPT, INROU_PUBLIC_DISCOVERY_CONTENT_TYPE)
         .header(reqwest::header::HOST, expected_host)
         .send()
@@ -3604,6 +3617,7 @@ fn verify_inrou_public_discovery(
     http: &HttpClient,
     public_root: &str,
     deployment: &InrouProbeIdentity,
+    deadline: Instant,
 ) -> Result<u16> {
     let expected = expected_inrou_public_discovery(deployment)?;
     if deployment.discovery_payload_dir != "payloads/discovery" {
@@ -3636,12 +3650,14 @@ fn verify_inrou_public_discovery(
         current_url,
         &expected.response,
         "current Taira Inrou public-discovery authority",
+        deadline,
     )?;
     let revision_bytes = fetch_inrou_public_discovery_authority(
         http,
         revision_url,
         &expected.response,
         "revision Taira Inrou public-discovery authority",
+        deadline,
     )?;
     if current_bytes != revision_bytes {
         eyre::bail!("current and revision Taira Inrou discovery authority bytes differ");
@@ -3655,6 +3671,7 @@ fn verify_inrou_public_discovery(
         &expected.response.discovery.document_hash,
         &expected.document_bytes,
         "Taira Inrou path-gateway discovery document",
+        deadline,
     )?;
     fetch_exact_inrou_public_discovery_document(
         http,
@@ -3665,6 +3682,7 @@ fn verify_inrou_public_discovery(
         &expected.response.discovery.document_hash,
         &expected.document_bytes,
         "Taira Inrou CID-host discovery document",
+        deadline,
     )?;
     Ok(200)
 }
@@ -3688,6 +3706,14 @@ fn probe_inrou_service(
     let health_path =
         inrou_canary_health_path(&deployment.route_path_prefix, &deployment.healthcheck_path);
     let health_base = join_url(public_root, &health_path)?;
+    // Keep one connection pool for the entire observation. Each dispatch below
+    // derives its own timeout from the same absolute deadline.
+    let http = HttpClient::builder()
+        .no_proxy()
+        .user_agent("iroha-taira-inrou-probe/1")
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .wrap_err("failed to build Taira Inrou verification HTTP client")?;
     let mut nonce = 0_u64;
     let mut status_ready = false;
     let mut active_adverts = 0_u64;
@@ -3706,22 +3732,12 @@ fn probe_inrou_service(
     while Instant::now() < deadline
         && (!status_ready || !current_route_ready || identities.len() < 4 || !discovery_ready)
     {
-        // At most one signed status, one health, and four exact discovery reads.
-        let request_budget =
-            (deadline.saturating_duration_since(Instant::now()) / 6).min(Duration::from_secs(5));
-        if request_budget.is_zero() {
+        let Ok(request_budget) = inrou_request_budget(deadline) else {
             break;
-        }
+        };
         let mut bounded_status = status_client.to_builder();
         bounded_status.torii_request_timeout = request_budget;
-        let bounded_status = bounded_status.build()?;
-        let http = HttpClient::builder()
-            .no_proxy()
-            .timeout(request_budget)
-            .user_agent("iroha-taira-inrou-probe/1")
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .wrap_err("failed to build Taira Inrou verification HTTP client")?;
+        let bounded_status = bounded_status.build()?.with_request_deadline(deadline);
         status_ready = false;
         current_route_ready = false;
         active_adverts = 0;
@@ -3754,8 +3770,12 @@ fn probe_inrou_service(
             .query_pairs_mut()
             .append_pair("taira_inrou_probe", &nonce.to_string());
         nonce = nonce.saturating_add(1);
+        let Ok(request_budget) = inrou_request_budget(deadline) else {
+            break;
+        };
         let route_response = http
             .get(health_url)
+            .timeout(request_budget)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::HOST, deployment.route_host.as_str())
             .send();
@@ -3814,7 +3834,7 @@ fn probe_inrou_service(
             && identities.len() == 4
             && !health_identity_conflict
         {
-            match verify_inrou_public_discovery(&http, public_root, deployment) {
+            match verify_inrou_public_discovery(&http, public_root, deployment, deadline) {
                 Ok(status) => {
                     discovery_ready = true;
                     last_discovery_code = status;
@@ -5555,6 +5575,18 @@ fn prepare_faucet_operation(
     Ok(envelope)
 }
 
+struct PreparedCanaryClient {
+    signer: CanarySigner,
+    client: IrohaClient,
+}
+
+fn prepare_canary_client(config: &Config, public_root: &str) -> Result<PreparedCanaryClient> {
+    let signer = resolve_canary_signer(config)?;
+    let client =
+        IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?;
+    Ok(PreparedCanaryClient { signer, client })
+}
+
 fn submit_exact_prepared_operation(
     config: &Config,
     args: &WriteCanary,
@@ -5563,10 +5595,26 @@ fn submit_exact_prepared_operation(
     expected_fee_payment: &FeePaymentIntent,
     deadline: Instant,
 ) -> Result<PreparedRecoveryClassification> {
-    let signer = resolve_canary_signer(config)?;
-    let client = IrohaClient::builder(write_canary_config(config, public_root, &signer)?)
-        .build()?
-        .with_request_deadline(deadline);
+    // Production preparation consumes the caller's original end-to-end budget.
+    let prepared_client = prepare_canary_client(config, public_root)?;
+    submit_exact_prepared_operation_with_client(
+        &prepared_client,
+        args,
+        validated,
+        expected_fee_payment,
+        deadline,
+    )
+}
+
+fn submit_exact_prepared_operation_with_client(
+    prepared_client: &PreparedCanaryClient,
+    args: &WriteCanary,
+    validated: &ValidatedPreparedOperation,
+    expected_fee_payment: &FeePaymentIntent,
+    deadline: Instant,
+) -> Result<PreparedRecoveryClassification> {
+    let signer = &prepared_client.signer;
+    let client = prepared_client.client.with_request_deadline(deadline);
     let classification = classify_exact_prepared_operation(&client, validated)?;
     if !submit_required_after_classification(&validated.envelope.binding, &classification)? {
         return await_exact_prepared_operation(
@@ -10615,6 +10663,7 @@ mod tests {
                 &expected.response.discovery.document_hash,
                 &expected.document_bytes,
                 "test Taira Inrou discovery document",
+                Instant::now() + Duration::from_secs(12),
             )
             .expect_err("non-exact ETag must fail closed");
             assert!(
@@ -10649,6 +10698,7 @@ mod tests {
             &expected.response.discovery.document_hash,
             &expected.document_bytes,
             "test Taira Inrou discovery document",
+            Instant::now() + Duration::from_secs(12),
         )
         .expect_err("public discovery redirects must fail closed");
         assert!(
@@ -10656,6 +10706,72 @@ mod tests {
             "unexpected redirect error: {error:#}"
         );
         assert_eq!(finish_mock(server).len(), 1);
+    }
+
+    #[test]
+    fn inrou_public_discovery_expired_deadline_never_dispatches() {
+        let _fixture = mock_http_fixture_guard();
+        let service_version = inrou_canary_artifact_version(0x2B);
+        let deployment = inrou_canary_deployment("deploy", &service_version);
+        let expected = expected_inrou_public_discovery(&deployment).unwrap();
+        let server = spawn_mock_http(1, |_| panic!("expired discovery must not reach HTTP"));
+        let http = inrou_public_discovery_http_client();
+        let deadline = Instant::now();
+        let authority_url =
+            inrou_public_discovery_authority_url(&server.base_url, &deployment.service_name, None)
+                .unwrap();
+        let error = fetch_inrou_public_discovery_authority(
+            &http,
+            authority_url,
+            &expected.response,
+            "expired authority",
+            deadline,
+        )
+        .expect_err("expired authority must fail before dispatch");
+        assert!(error.to_string().contains("verification deadline elapsed"));
+        let error = fetch_exact_inrou_public_discovery_document(
+            &http,
+            &server.base_url,
+            &deployment.public_discovery_url,
+            &deployment.route_host,
+            &deployment.discovery_content_cid,
+            &expected.response.discovery.document_hash,
+            &expected.document_bytes,
+            "expired document",
+            deadline,
+        )
+        .expect_err("expired document must fail before dispatch");
+        assert!(error.to_string().contains("verification deadline elapsed"));
+        assert!(finish_mock(server).is_empty());
+    }
+
+    #[test]
+    fn inrou_probe_expired_deadline_never_dispatches() {
+        let _fixture = mock_http_fixture_guard();
+        let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let service_version = inrou_canary_artifact_version(0x2B);
+        let deployment = inrou_canary_deployment("deploy", &service_version);
+        let server = spawn_mock_http(1, |_| panic!("expired probe must not reach HTTP"));
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let status_client = IrohaClient::builder(config).build().unwrap();
+        let observation = probe_inrou_service(
+            &server.base_url,
+            &status_client,
+            &deployment,
+            Instant::now(),
+            InrouProbeScope::Candidate,
+        )
+        .unwrap();
+        assert!(!observation.failures.is_empty());
+        assert_eq!(observation.replica_identities.as_array().unwrap().len(), 0);
+        assert!(
+            observation
+                .checks
+                .iter()
+                .all(|check| check.get("ok").and_then(Value::as_bool) == Some(false))
+        );
+        assert!(finish_mock(server).is_empty());
     }
 
     #[test]

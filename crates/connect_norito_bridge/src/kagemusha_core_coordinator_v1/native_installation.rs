@@ -132,6 +132,77 @@ impl KagemushaNativeEnrollmentProvisioningV1 {
             },
         })
     }
+    /// Retain an actual original already signed outgoing commit under independently installed native custody.
+    /// The opaque capability and original journals are mandatory; public frames cannot select it.
+    /// # Errors
+    /// Rejects stale originals, changed hardware, invalid native paths or unavailable physical owners.
+    pub fn from_recovered_outgoing_commit(
+        native_storage_path: String,
+        original: iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOutgoingCommitV1,
+        native_key: KagemushaDevicePublicKeyV1,
+        signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
+    ) -> Result<Self, Error> {
+        let backend = Arc::new(
+            super::KagemushaAuthenticatedRecoveredCoordinatorV1::from_native_pending_commit(
+                native_storage_path.clone(),
+                original,
+                native_key,
+                signer,
+            )?,
+        );
+        Ok(Self {
+            selection: ProvisioningSelection::Recovered {
+                path: native_storage_path,
+                backend,
+            },
+        })
+    }
+
+    /// Retain an actual original prepared incoming fold and retained paired proof under independently installed native custody.
+    /// The opaque capability and original journals are mandatory; public frames cannot select it.
+    /// # Errors
+    /// Rejects stale originals, changed hardware, invalid native paths or unavailable physical owners.
+    pub fn from_recovered_incoming_fold(
+        native_storage_path: String,
+        original: iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedIncomingFoldV1,
+        native_key: KagemushaDevicePublicKeyV1,
+        signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
+    ) -> Result<Self, Error> {
+        let backend = Arc::new(
+            super::KagemushaAuthenticatedRecoveredCoordinatorV1::from_native_pending_incoming(
+                native_storage_path.clone(),
+                original,
+                native_key,
+                signer,
+            )?,
+        );
+        Ok(Self {
+            selection: ProvisioningSelection::Recovered {
+                path: native_storage_path,
+                backend,
+            },
+        })
+    }
+
+    /// Retain an actual original already signed outbox release under independently installed native custody.
+    /// The opaque capability and original journals are mandatory; public frames cannot select it.
+    /// # Errors
+    /// Rejects stale originals, changed hardware, invalid native paths or unavailable physical owners.
+    pub fn from_recovered_outbox_release(
+        native_storage_path: String,
+        original: iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOutboxReleaseV1,
+        native_key: KagemushaDevicePublicKeyV1,
+        signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
+    ) -> Result<Self, Error> {
+        let backend=Arc::new(super::KagemushaAuthenticatedRecoveredCoordinatorV1::from_native_pending_outbox_release(
+            native_storage_path.clone(),original,native_key,signer)?);
+        Ok(Self {
+            selection: ProvisioningSelection::Recovered {
+                path: native_storage_path,
+                backend,
+            },
+        })
+    }
 }
 
 /// Trusted Rust-only platform intake; the C/JNI application cannot register or replace it.

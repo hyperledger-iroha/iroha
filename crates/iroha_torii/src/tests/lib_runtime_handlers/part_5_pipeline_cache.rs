@@ -92,12 +92,8 @@ fn pipeline_status_cache_stops_serving_hints_after_lag() {
 }
 #[tokio::test]
 async fn pipeline_status_cache_records_block_event() {
-    let app = mk_app_state_for_tests();
-    let (block, _) = make_signed_block(1, None);
-    let header = block.header();
-    let tx = block.external_transactions().next().expect("tx");
-    let tx_hash = tx.hash();
-    store_block(&app, block);
+    let (app, tx_hash, chain) = canonical_outcome_test_fixture(false);
+    let header = chain.committed(2).block().header();
     let event = BlockEvent {
         header,
         status: BlockStatus::Applied,
@@ -106,26 +102,45 @@ async fn pipeline_status_cache_records_block_event() {
         .record_block_event(&event, &app.state);
     let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
     assert_eq!(stored.kind, PipelineStatusKind::Applied);
-    let height = NonZeroU64::new(1).expect("height");
-    assert_eq!(stored.block_height, Some(height));
+    assert_eq!(stored.block_height, NonZeroU64::new(2));
 }
 #[tokio::test]
 async fn pipeline_status_cache_refreshes_pending_block() {
+    let unavailable = mk_app_state_for_tests();
+    let (app, tx_hash, chain) = canonical_outcome_test_fixture(false);
+    let event = BlockEvent {
+        header: chain.committed(2).block().header(),
+        status: BlockStatus::Committed,
+    };
+    // The original event remains pending until its exact certified native
+    // carrier is visible to the reader; raw custody is insufficient.
+    app.pipeline_status_cache
+        .record_block_event(&event, &unavailable.state);
+    assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
+    assert_eq!(app.pipeline_status_cache.pending_blocks.len(), 1);
+    app.pipeline_status_cache.refresh_pending_blocks(&app.state);
+    let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
+    assert_eq!(stored.kind, PipelineStatusKind::Committed);
+    assert_eq!(stored.block_height, NonZeroU64::new(2));
+    assert!(app.pipeline_status_cache.pending_blocks.is_empty());
+}
+#[tokio::test]
+async fn pipeline_status_cache_rejects_uncertified_block_custody() {
     let app = mk_app_state_for_tests();
     let (block, _) = make_signed_block(1, None);
     let header = block.header();
     let tx_hash = block.external_transactions().next().expect("tx").hash();
+    let block_hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let event = BlockEvent {
         header,
-        status: BlockStatus::Committed,
+        status: BlockStatus::Applied,
     };
     app.pipeline_status_cache
         .record_block_event(&event, &app.state);
-    assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
-    store_block(&app, block);
     app.pipeline_status_cache.refresh_pending_blocks(&app.state);
-    let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
-    assert_eq!(stored.kind, PipelineStatusKind::Committed);
+    assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
+    assert_eq!(app.pipeline_status_cache.pending_blocks.len(), 1);
 }
 #[test]
 fn pipeline_status_cache_prunes_stale_entries() {

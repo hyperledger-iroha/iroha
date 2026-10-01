@@ -726,6 +726,21 @@ fn activated_chain() -> ActivatedChain {
     };
     store_lane_block(&chain, &stores, &keys, &record, activation_tx);
     merge_lane(&mut chain, &stores);
+    let committed = chain.committed(ACTIVATION_HEIGHT);
+    let input_index = committed
+        .block()
+        .network_input_hashes()
+        .position(|entry| entry == activation_entry)
+        .expect("original activation was merged into the certified block");
+    let (_, output) = committed
+        .block()
+        .network_output_at(u32::try_from(input_index).expect("bounded activation input index"))
+        .expect("original activation has its exact typed Network output");
+    assert!(
+        output.result.as_ref().is_ok(),
+        "original merged activation failed native execution: {:?}",
+        output.result
+    );
     ActivatedChain {
         chain,
         owner,

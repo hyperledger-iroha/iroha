@@ -215,7 +215,9 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     let network = NetworkId::from_genesis_hash(genesis.hash());
     let instance = root_instance(&genesis, "sumeragi-certified-test-chain").unwrap();
     let world = State::new_with_chain_and_network_id_for_testing(
-        World::new(),
+        crate::sumeragi::lanes::routing::test_support::world(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        ),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
         "sumeragi-certified-test-chain".parse().unwrap(),

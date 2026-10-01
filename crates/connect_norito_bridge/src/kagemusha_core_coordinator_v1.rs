@@ -19,11 +19,14 @@ mod exclusive_backend;
 mod native_core_work;
 mod native_installation;
 pub use native_core_work::{
-    KagemushaNativeCorePublicationDestinationV1, KagemushaNativeCoreWorkSourceV1,
-    KagemushaNativeIncomingEvidenceSourceV1, KagemushaNativeIncomingFoldOriginalsV1,
-    KagemushaNativeIncomingStageOriginalsV1, KagemushaNativeOutgoingCompletionOriginalsV1,
-    KagemushaNativeSenderPreparationV1, register_kagemusha_native_core_work_source_v1,
+    KagemushaNativeCompletedOutboxReleaseLocatorV1, KagemushaNativeCorePublicationDestinationV1,
+    KagemushaNativeCoreWorkSourceV1, KagemushaNativeIncomingEvidenceSourceV1,
+    KagemushaNativeIncomingFoldOriginalsV1, KagemushaNativeIncomingStageOriginalsV1,
+    KagemushaNativeOutboxReleaseOriginalsV1, KagemushaNativeOutgoingCompletionOriginalsV1,
+    KagemushaNativeRedemptionFinalitySourceV1, KagemushaNativeSenderPreparationV1,
+    register_kagemusha_native_core_work_source_v1,
     register_kagemusha_native_incoming_evidence_source_v1,
+    register_kagemusha_native_redemption_finality_source_v1,
 };
 mod recovered_backend;
 #[cfg(test)]
@@ -209,11 +212,13 @@ pub enum KagemushaCoreCoordinatorMethodV1 {
     CompleteIncomingFold = 16,
     /// Stage independently selected raw mint/peer originals under actual native authority.
     StageIncomingOriginal = 17,
+    /// Read the authenticated installed release and distinct provider policy root.
+    AuthenticatedHardwarePolicy = 18,
 }
 
 impl KagemushaCoreCoordinatorMethodV1 {
     /// All coordinator methods in canonical code order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::ReserveOperationId,
         Self::AcceptQualification,
         Self::AcceptAuthenticatedReply,
@@ -231,6 +236,7 @@ impl KagemushaCoreCoordinatorMethodV1 {
         Self::PrepareIncomingFold,
         Self::CompleteIncomingFold,
         Self::StageIncomingOriginal,
+        Self::AuthenticatedHardwarePolicy,
     ];
 
     /// Parse one closed coordinator method code.
@@ -254,6 +260,7 @@ impl KagemushaCoreCoordinatorMethodV1 {
             15 => Some(Self::PrepareIncomingFold),
             16 => Some(Self::CompleteIncomingFold),
             17 => Some(Self::StageIncomingOriginal),
+            18 => Some(Self::AuthenticatedHardwarePolicy),
             _ => None,
         }
     }
@@ -509,6 +516,9 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
 ) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
     let fields = kagemusha_core_coordinator_decode_request_v1(frame)?;
     match method {
+        KagemushaCoreCoordinatorMethodV1::AuthenticatedHardwarePolicy => {
+            require_field_count(&fields, 0)
+        }
         KagemushaCoreCoordinatorMethodV1::ReserveOperationId => {
             require_field_count(&fields, 3)?;
             require_device_operation_field(fields.first())?;
@@ -535,13 +545,29 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
             require_nonzero_digest_field(fields.get(5))
         }
         KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply => {
-            require_field_count(&fields, 10)?;
             require_device_operation_field(fields.first())?;
+            let operation = require_u32_field(fields.first())?;
+            require_field_count(&fields, if operation == 12 { 11 } else { 10 })?;
             require_nonzero_digest_field(fields.get(1))?;
             require_nonempty_field(fields.get(2))?;
             require_nonempty_field(fields.get(3))?;
             require_device_signature_field(fields.get(4))?;
-            require_qualification_fields(&fields, 5)
+            require_qualification_fields(&fields, 5)?;
+            if operation == 12 {
+                let request_id = fields[1]
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+                sender_observation::require_original_response(
+                    12,
+                    request_id,
+                    &fields[3],
+                    &fields[4],
+                    &fields[10],
+                )
+                .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+            }
+            Ok(())
         }
         KagemushaCoreCoordinatorMethodV1::BeginSenderTransition => {
             require_nonzero_digest_field(fields.first())?;
@@ -588,6 +614,7 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
                     return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
                 }
             }
+            require_canonical_paired_proof(&fields[1])?;
             if fields[3].len() != 64
                 || iroha_data_model::kagemusha::KagemushaDeviceSignatureV1::from_raw_bytes(
                     &fields[3],
@@ -961,6 +988,23 @@ fn require_device_signature_field(
         .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)
 }
 
+// This is data-only canonical framing. Genuine proof verification remains
+// compulsory inside the concrete native incoming owner before retention/CAS.
+fn require_canonical_paired_proof(
+    bytes: &[u8],
+) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
+    use iroha_data_model::kagemusha::KagemushaPairedProofV1;
+    if bytes.is_empty() || bytes.len() > 8192 {
+        return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+    }
+    let proof: KagemushaPairedProofV1 =
+        norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(8192))
+            .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+    proof
+        .validate_shape_for_semantic_digest(proof.semantic_digest)
+        .map_err(|_| KagemushaCoreCoordinatorFrameErrorV1::Field)
+}
+
 /// Encode qualified-provider response fields into the exact bounded frame.
 pub fn kagemusha_core_coordinator_encode_response_v1(
     fields: &[Vec<u8>],
@@ -988,6 +1032,13 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
     let request = kagemusha_core_coordinator_decode_request_v1(request_frame)?;
     let response = kagemusha_core_coordinator_decode_response_v1(response_frame)?;
     match method {
+        KagemushaCoreCoordinatorMethodV1::AuthenticatedHardwarePolicy => {
+            require_field_count(&response, 3)?;
+            for field in &response {
+                require_nonzero_digest_field(Some(field))?;
+            }
+            Ok(())
+        }
         KagemushaCoreCoordinatorMethodV1::ReserveOperationId => {
             require_field_count(&response, 1)?;
             require_nonzero_digest_field(response.first())?;
@@ -1040,6 +1091,7 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
                     return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
                 }
             }
+            require_canonical_paired_proof(&response[9])?;
             Ok(())
         }
         KagemushaCoreCoordinatorMethodV1::CompleteIncomingFold
@@ -1296,6 +1348,60 @@ mod tests {
         )
     }
 
+    // Structural codec specimen only. Native monetary authority still requires real recursive
+    // verification; a canonical archive must never be confused with an accepted proof.
+    fn mobile_paired_proof_archive() -> Vec<u8> {
+        use iroha_data_model::kagemusha::{
+            KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+            KagemushaPairedProofV1,
+        };
+        let proof = KagemushaPairedProofV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            eq_protocol_digest: [0x41; 32],
+            ep_protocol_digest: [0x42; 32],
+            semantic_digest: [0x43; 32],
+            guard_eq_credential_audit: [0x44; 32],
+            guard_ep_credential_audit: [0x45; 32],
+            eq_deferred_audit: [0x46; 32],
+            ep_deferred_audit: [0x47; 32],
+            eq_proof: vec![0x48; 16],
+            ep_proof: vec![0x49; 16],
+            eq_history: vec![0x4a; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+            ep_history: vec![0x4b; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+        };
+        proof
+            .validate_shape_for_semantic_digest(proof.semantic_digest)
+            .expect("canonical structural paired proof");
+        norito::encode_canonical(&proof).expect("model-owned paired proof archive")
+    }
+
+    #[test]
+    fn mobile_paired_proof_specimen_uses_exact_model_archive_and_shape() {
+        use iroha_data_model::kagemusha::KagemushaPairedProofV1;
+        let bytes = mobile_paired_proof_archive();
+        assert_eq!(require_canonical_paired_proof(&bytes), Ok(()));
+        assert!(require_canonical_paired_proof(b"unqualified-structural-pair").is_err());
+        let proof = norito::decode_from_bytes::<KagemushaPairedProofV1>(&bytes)
+            .expect("exact canonical paired proof archive");
+        proof
+            .validate_shape_for_semantic_digest([0x43; 32])
+            .expect("fixed structural specimen");
+        assert_eq!(norito::encode_canonical(&proof).unwrap(), bytes);
+        assert!(
+            proof
+                .validate_shape_for_semantic_digest([0x50; 32])
+                .is_err()
+        );
+        assert!(
+            norito::decode_from_bytes::<KagemushaPairedProofV1>(b"unqualified-structural-pair")
+                .is_err()
+        );
+        let mut tail = bytes;
+        tail.push(0);
+        assert!(require_canonical_paired_proof(&tail).is_err());
+        assert!(norito::decode_from_bytes::<KagemushaPairedProofV1>(&tail).is_err());
+    }
+
     fn mobile_request_cases() -> Vec<(KagemushaCoreCoordinatorMethodV1, &'static str, Vec<Vec<u8>>)>
     {
         let mut qualification = qualification_fields();
@@ -1431,6 +1537,31 @@ mod tests {
                 KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof,
                 "outgoing-state-proof-export",
                 vec![digest(0x66)],
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::PrepareIncomingFold,
+                "incoming-prepare",
+                vec![u32_field(1), digest(0x76)],
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::CompleteIncomingFold,
+                "incoming-complete",
+                vec![
+                    digest(0x71),
+                    mobile_paired_proof_archive(),
+                    b"unqualified-original-guard".to_vec(),
+                    vec![1; 64],
+                ],
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::StageIncomingOriginal,
+                "incoming-stage",
+                vec![u32_field(2), digest(0x76)],
+            ),
+            (
+                KagemushaCoreCoordinatorMethodV1::AuthenticatedHardwarePolicy,
+                "authenticated-hardware-policy",
+                Vec::new(),
             ),
         ]
     }
@@ -1593,8 +1724,8 @@ mod tests {
                 "candidate output directory must be canonical"
             );
             assert!(
-                output.starts_with(repository.join("target")),
-                "candidate output directory must be under ignored target"
+                output.starts_with(repository.join("output")),
+                "candidate output directory must be under ignored output"
             );
             assert!(
                 output.is_dir(),
@@ -1628,10 +1759,34 @@ mod tests {
                         hex::encode(&request),
                         hex::encode(&response)
                     ));
-                } else {
+                } else if ![
+                    "incoming-prepare\t",
+                    "incoming-complete\t",
+                    "incoming-stage\t",
+                    "authenticated-hardware-policy\t",
+                ]
+                .iter()
+                .any(|name| line.starts_with(name))
+                {
                     new.push_str(line);
                     new.push('\n');
                 }
+            }
+            for (method, name, fields) in mobile_request_cases()
+                .into_iter()
+                .filter(|(m, _, _)| m.code() >= 15)
+            {
+                let response = mobile_response_fields(method, &fields);
+                let request = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
+                let response = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
+                kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+                    .unwrap();
+                new.push_str(&format!(
+                    "{name}\t{}\t{}\t{}\n",
+                    method.code(),
+                    hex::encode(request),
+                    hex::encode(response)
+                ));
             }
             std::fs::write(output.join("kagemusha_core_coordinator_frame_v1.tsv"), new).unwrap();
         } else {
@@ -1716,6 +1871,9 @@ mod tests {
         request: &[Vec<u8>],
     ) -> Vec<Vec<u8>> {
         match method {
+            KagemushaCoreCoordinatorMethodV1::AuthenticatedHardwarePolicy => {
+                vec![vec![1; 32], vec![2; 32], vec![3; 32]]
+            }
             KagemushaCoreCoordinatorMethodV1::PrepareIncomingFold => vec![
                 digest(0x71),
                 request[1].clone(),
@@ -1726,7 +1884,7 @@ mod tests {
                 digest(0x74),
                 1_u128.to_le_bytes().to_vec(),
                 digest(0x75),
-                b"unqualified-structural-pair".to_vec(),
+                mobile_paired_proof_archive(),
             ],
             KagemushaCoreCoordinatorMethodV1::CompleteIncomingFold => vec![request[0].clone()],
             KagemushaCoreCoordinatorMethodV1::StageIncomingOriginal => vec![request[1].clone()],
@@ -1816,7 +1974,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert_eq!(fixtures.len(), 21);
+        assert_eq!(fixtures.len(), 25);
         for (method, name, request_fields) in mobile_request_cases() {
             let (actual_method, request, response) =
                 fixtures.get(name).expect("shared method case");
@@ -1855,6 +2013,76 @@ mod tests {
             terminal_fields[0],
             [KAGEMUSHA_CORE_COORDINATOR_RECOVER_BY_TERMINAL_ID_V1]
         );
+    }
+
+    #[test]
+    fn incoming_and_catalog_frames_reject_selector_substitution_and_incomplete_originals() {
+        let cases = mobile_request_cases();
+        for (method, _, fields) in cases
+            .into_iter()
+            .filter(|(method, _, _)| method.code() >= 15)
+        {
+            let request = kagemusha_core_coordinator_encode_request_v1(&fields).unwrap();
+            let response = mobile_response_fields(method, &fields);
+            let frame = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
+            kagemusha_core_coordinator_validate_method_response_v1(method, &request, &frame)
+                .unwrap();
+            let mut extra = fields.clone();
+            extra.push(vec![1]);
+            assert!(
+                kagemusha_core_coordinator_validate_method_request_v1(
+                    method,
+                    &kagemusha_core_coordinator_encode_request_v1(&extra).unwrap()
+                )
+                .is_err()
+            );
+            for index in 0..response.len() {
+                let mut changed = response.clone();
+                changed[index] = Vec::new();
+                assert!(
+                    kagemusha_core_coordinator_validate_method_response_v1(
+                        method,
+                        &request,
+                        &kagemusha_core_coordinator_encode_response_v1(&changed).unwrap()
+                    )
+                    .is_err()
+                );
+            }
+            if method == KagemushaCoreCoordinatorMethodV1::PrepareIncomingFold {
+                for index in [0, 1, 3, 4, 6, 8] {
+                    let mut changed = response.clone();
+                    changed[index] = vec![0; 32];
+                    assert!(
+                        kagemusha_core_coordinator_validate_method_response_v1(
+                            method,
+                            &request,
+                            &kagemusha_core_coordinator_encode_response_v1(&changed).unwrap()
+                        )
+                        .is_err()
+                    );
+                }
+                let mut changed = response.clone();
+                changed[1] = vec![9; 32];
+                assert!(
+                    kagemusha_core_coordinator_validate_method_response_v1(
+                        method,
+                        &request,
+                        &kagemusha_core_coordinator_encode_response_v1(&changed).unwrap()
+                    )
+                    .is_err()
+                );
+                let mut changed = response.clone();
+                changed[7] = 0_u128.to_le_bytes().to_vec();
+                assert!(
+                    kagemusha_core_coordinator_validate_method_response_v1(
+                        method,
+                        &request,
+                        &kagemusha_core_coordinator_encode_response_v1(&changed).unwrap()
+                    )
+                    .is_err()
+                );
+            }
+        }
     }
 
     fn canonical_sender_reservation_binding() -> Vec<u8> {
@@ -1943,11 +2171,13 @@ mod tests {
     fn coordinator_contract_and_methods_are_exact() {
         assert_eq!(
             KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-            [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 17]
+            [2, 25, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 18]
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18
+            ]
         );
         for method in KagemushaCoreCoordinatorMethodV1::ALL {
             assert_eq!(
@@ -1955,7 +2185,7 @@ mod tests {
                 Some(method)
             );
         }
-        for unknown in [0, 15, u8::MAX] {
+        for unknown in [0, 19, u8::MAX] {
             assert_eq!(KagemushaCoreCoordinatorMethodV1::from_code(unknown), None);
         }
     }
@@ -2342,8 +2572,65 @@ mod tests {
     }
 
     #[test]
+    fn release_acceptance_requires_exact_original_frame_and_rejects_retired_layout() {
+        // Public framing specimen only; no device or monetary authority is admitted.
+        let payload = b"original-release-payload".to_vec();
+        let mut signature = vec![0; 64];
+        signature[31] = 1;
+        signature[63] = 1;
+        let id = [7; 32];
+        let mut original = b"IKGMJRS1".to_vec();
+        original.extend_from_slice(&1_u16.to_le_bytes());
+        original.extend_from_slice(&[12, 0]);
+        original.extend_from_slice(&id);
+        original.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        original.extend_from_slice(&64_u32.to_le_bytes());
+        original.extend_from_slice(&Sha256::digest(&payload));
+        original.extend_from_slice(&Sha256::digest(&signature));
+        original.extend_from_slice(&payload);
+        original.extend_from_slice(&signature);
+        let mut fields = append_fields(
+            vec![
+                u32_field(12),
+                id.to_vec(),
+                b"command".to_vec(),
+                payload,
+                signature,
+            ],
+            qualification_fields(),
+        );
+        let method = KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply;
+        let check = |fields: &[Vec<u8>]| {
+            let frame = kagemusha_core_coordinator_encode_request_v1(fields).unwrap();
+            kagemusha_core_coordinator_validate_method_request_v1(method, &frame)
+        };
+        assert!(check(&fields).is_err());
+        fields.push(original.clone());
+        assert_eq!(check(&fields), Ok(()));
+        for (index, replacement) in [
+            (1, vec![8; 32]),
+            (3, b"changed-reply".to_vec()),
+            (4, {
+                let mut value = fields[4].clone();
+                value[31] = 2;
+                value
+            }),
+            (10, original[..original.len() - 1].to_vec()),
+        ] {
+            let mut changed = fields.clone();
+            changed[index] = replacement;
+            assert!(check(&changed).is_err());
+        }
+        let mut changed = fields;
+        changed[10][10] = 7;
+        assert!(check(&changed).is_err());
+    }
+
+    #[test]
     fn signed_android_and_ios_requests_have_one_exact_method_matrix() {
-        let expected_counts = [3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2, 2, 7, 1];
+        let expected_counts = [
+            3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2, 2, 7, 1, 2, 4, 2, 0,
+        ];
         let cases = mobile_request_cases();
         assert_eq!(
             cases
@@ -2360,15 +2647,16 @@ mod tests {
                 "valid signed-app shape for {method:?}/{label}"
             );
 
-            let missing = kagemusha_core_coordinator_encode_request_v1(
-                &fields[..fields.len().saturating_sub(1)],
-            )
-            .expect("missing-field frame");
-            assert_eq!(
-                kagemusha_core_coordinator_validate_method_request_v1(method, &missing),
-                Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
-                "missing field for {method:?}/{label}"
-            );
+            if !fields.is_empty() {
+                let missing =
+                    kagemusha_core_coordinator_encode_request_v1(&fields[..fields.len() - 1])
+                        .expect("missing-field frame");
+                assert_eq!(
+                    kagemusha_core_coordinator_validate_method_request_v1(method, &missing),
+                    Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+                    "missing field for {method:?}/{label}"
+                );
+            }
 
             let mut trailing_fields = fields;
             trailing_fields.push(b"trailing".to_vec());

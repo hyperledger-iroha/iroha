@@ -231,6 +231,9 @@ enum class KagemushaNativeSenderKindV1 { PAYMENT, REDEMPTION }
  * neither a software backend nor a stock factory; an absent qualified backend fails closed.
  */
 interface KagemushaNativeCoreCoordinatorV1 {
+    /** Read only actual installed native release policy under the original selected owner's lease. */
+    fun authenticatedHardwarePolicy(): KagemushaAuthenticatedHardwarePolicyV1
+
     /** Select and publish only the actual native source's original staged credit material. */
     fun stageIncomingOriginal(kind: KagemushaIncomingStageKindV1, creditId: ByteArray): ByteArray
 
@@ -261,6 +264,7 @@ interface KagemushaNativeCoreCoordinatorV1 {
         canonicalReply: ByteArray,
         responseAuthenticator: ByteArray,
         qualification: KagemushaHardwareQualificationV1,
+        originalResponse: ByteArray? = null,
     )
 
     fun beginSenderTransition(
@@ -450,6 +454,7 @@ class KagemushaAuthenticatedDeviceClientV1(
             reply.canonicalArchive(),
             response.authenticator(),
             qualification,
+            response.canonicalResponseFrame(),
         )
         return Session(qualification, responseKey).also { session = it }
     }
@@ -508,10 +513,11 @@ class KagemushaAuthenticatedDeviceClientV1(
             archive,
             response.authenticator(),
             replyQualification,
+            originalResponse,
         )
         if (!isObservation) intents.accepted(operation, requestId, archive, response.authenticator(),
             KagemushaOperationIntentCodecV1.encodeQualification(replyQualification),
-            if (operation == 7) originalResponse else null)
+            if (operation in setOf(7, 12)) originalResponse else null)
         return AuthenticatedCall(operation, response.status, command, reply, archive,
             requestId, response.authenticator(), replyQualification, originalResponse)
     }
@@ -567,6 +573,16 @@ class KagemushaAuthenticatedHardwareProviderV1(
 
     override fun qualification(): KagemushaHardwareQualificationV1 = client.qualification()
 
+    override fun authenticatedPolicy(): KagemushaAuthenticatedHardwarePolicyV1 = lock.withLock {
+        client.intents.requireCurrentScope()
+        val qualified = qualification()
+        client.intents.requireCurrentScope()
+        client.core.authenticatedHardwarePolicy().also {
+            client.intents.requireCurrentScope()
+            it.requireQualification(qualified)
+        }
+    }
+
     override fun recover(): KagemushaHardwareRecoveryV1 = lock.withLock {
         resumeInternalOperations()
         readFreshWalletSnapshot()
@@ -582,7 +598,14 @@ class KagemushaAuthenticatedHardwareProviderV1(
         val pending = reader.u128Field()
         val retry = reader.u128Field()
         reader.finish()
-        aggregate?.let(KagemushaNoritoV1::decodeAggregateStateShapeExact)
+        aggregate?.let { bytes ->
+            val state = KagemushaNoritoV1.decodeAggregateStateShapeExact(bytes)
+            val policy = authenticatedPolicy()
+            require(state.releaseId().contentEquals(policy.releaseId())) { "snapshot native release mismatch" }
+            require(state.hardwarePolicyId().contentEquals(policy.providerPolicyRoot())) {
+                "snapshot provider policy registry root mismatch"
+            }
+        }
         return Pair(KagemushaHardwareRecoveryV1(aggregate, journal, pending, retry), call)
     }
 
@@ -745,8 +768,10 @@ class KagemushaAuthenticatedHardwareProviderV1(
             prepared.hardwareEpochGeneration == BigInteger(java.lang.Long.toUnsignedString(credential.hardwareEpochGeneration))) {
             "incoming native preparation substituted the selected physical credential"
         }
+        physical.recheckOriginals(prepared)
         val original = physical.obtainOrRecoverOriginal(prepared)
         prepared.requireEvidence(original)
+        physical.recheckOriginals(prepared)
         val completed = client.core.completeIncomingFold(prepared, original)
         require(completed.contentEquals(prepared.historyOperationId())) { "incoming completion substituted history operation" }
         // Native method 16 has published the selected checkpoint. Only a fresh independently
@@ -1057,7 +1082,7 @@ class KagemushaAuthenticatedHardwareProviderV1(
         }
         require(
             preparation.context.devicePolicyBinding.hardwarePolicyId()
-                .contentEquals(qualified.hardwarePolicyDigest()),
+                .contentEquals(authenticatedPolicy().providerPolicyRoot()),
         ) { "sender preparation hardware-policy scope mismatch" }
         require(
             preparation.context.coreAuthorizationKeyReference()
@@ -1073,16 +1098,9 @@ class KagemushaAuthenticatedHardwareProviderV1(
         if (prepared.status == KagemushaAuthenticatedDeviceStatusV1.RECOVERY_REQUIRED ||
             prepared.status == KagemushaAuthenticatedDeviceStatusV1.STALE_OR_CONCURRENT
         ) {
-            prepared = client.sender(
-                KagemushaDeviceSenderCommandV1(
-                    operation = 6,
-                    operationId = operationId,
-                    context = preparation.context,
-                    body = KagemushaDeviceSenderCommandBodyV1.RecoverPrepared(
-                        preparation.inputsDigest(),
-                    ),
-                ),
-            )
+            // Native proof admission requires the original signed op5 and its exact
+            // reservation/input binding. An op6 lookup cannot replace that original.
+            prepared = client.sender(preparedCommand)
         }
         requireSuccess(prepared)
         return client.core.provePreparedSenderTransition(
@@ -1188,6 +1206,9 @@ class KagemushaAuthenticatedHardwareProviderV1(
         val id = intent.operationId()
         val canonical = intent.publicBinding()
         val command = KagemushaDeviceOperationCodecV1.decodeControlCommand(intent.operation, id, canonical)
+        require(command !is KagemushaDeviceControlCommandV1.FoldReceiveCredit) {
+            "aggregate-only incoming fold cannot authorize funds"
+        }
         val needsBootstrapAdmission = intent.operation == 20 && readFreshWalletSnapshot().aggregateState() == null
         if (needsBootstrapAdmission) authorizeBootstrap()
         client.reserveOperationId(intent.operation, id, canonical)
@@ -1196,9 +1217,6 @@ class KagemushaAuthenticatedHardwareProviderV1(
             if (needsBootstrapAdmission) authorizeBootstrap()
         })
         val reader = payloadReader(call, intent.operation)
-        require(command !is KagemushaDeviceControlCommandV1.FoldReceiveCredit) {
-            "aggregate-only incoming fold cannot authorize funds"
-        }
         val aggregate = reader.vectorField(768)
         reader.finish()
         KagemushaNoritoV1.decodeAggregateStateShapeExact(aggregate)

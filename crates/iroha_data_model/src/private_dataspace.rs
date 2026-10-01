@@ -19,8 +19,8 @@ use iroha_schema::IntoSchema;
 use iroha_sumeragi::message::{BlockHeader as CoreHeader, Qc};
 use norito::codec::{Decode, Encode};
 
-mod registry;
 mod proof;
+mod registry;
 pub use proof::{MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES, PrivateDataspaceRecordProof};
 pub use registry::{
     MAX_PRIVATE_DATASPACE_ROOTS, PrivateDataspaceAdmissionPolicy, PrivateDataspaceRecord,
@@ -287,7 +287,7 @@ pub struct PrivateDataspaceAnchor {
     pub dataspace_id: DataSpaceId,
     /// Exact registered child genesis commitment.
     pub child_network_id: NetworkId,
-    /// Native header, CommitQC and canonical execution-result commitment only.
+    /// Native header, `CommitQC` and canonical execution-result commitment only.
     pub certificate: AmxCertifiedBlockV1,
 }
 

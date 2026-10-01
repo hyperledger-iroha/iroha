@@ -117,6 +117,30 @@ pub trait KagemushaNativeCoreWorkSourceV1: Send + Sync + 'static {
         &self,
         original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedIncomingFoldV1,
     ) -> Result<KagemushaNativeCorePublicationDestinationV1>;
+    /// Read native physical one-use nonce and original durable paths for an exact verified ACK.
+    fn payment_release_originals(
+        &self,
+        selection: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedPaymentReleaseSelectionV1<'_>,
+    ) -> Result<KagemushaNativeOutboxReleaseOriginalsV1>;
+    /// Re-select the same publication destination for a restored exclusive outbox release.
+    /// This must also work after its completion is fsynced: current-recovery/dispatch accessors
+    /// are then intentionally closed, so only retained original completion custody is used.
+    fn outbox_release_recovery_destination(
+        &self,
+        original: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOutboxReleaseV1,
+    ) -> Result<KagemushaNativeCorePublicationDestinationV1>;
+    /// Locate original completed release storage after process recovery or locator retirement.
+    /// Paths are only lookup hints; the installed native Core reopens and verifies exact private
+    /// WAL bytes, current Released state and the original signature before accepting a retry.
+    /// No mobile frame chooses either directory or the checkpoint identity.
+    /// TODO: physical sources must implement durable lookup for evicted or process-recovered IDs.
+    fn completed_outbox_release_locator(
+        &self,
+        _owner: &KagemushaAuthenticatedCoreOwnerV1,
+        _operation_id: [u8; 32],
+    ) -> Result<KagemushaNativeCompletedOutboxReleaseLocatorV1> {
+        Err(Error::Unavailable)
+    }
     /// Read original hardware evidence only for this exclusive retained native command.
     fn outgoing_completion_originals(
         &self,
@@ -139,6 +163,14 @@ mod incoming_work;
 pub use incoming_work::{
     KagemushaNativeIncomingEvidenceSourceV1, KagemushaNativeIncomingFoldOriginalsV1,
     KagemushaNativeIncomingStageOriginalsV1, register_kagemusha_native_incoming_evidence_source_v1,
+};
+
+#[path = "native_payment_release.rs"]
+mod payment_release;
+pub use payment_release::{
+    KagemushaNativeCompletedOutboxReleaseLocatorV1, KagemushaNativeOutboxReleaseOriginalsV1,
+    KagemushaNativeRedemptionFinalitySourceV1,
+    register_kagemusha_native_redemption_finality_source_v1,
 };
 
 static SOURCE: OnceLock<Arc<dyn KagemushaNativeCoreWorkSourceV1>> = OnceLock::new();
@@ -177,6 +209,7 @@ enum Stage {
         candidate: KagemushaCoreSenderCandidateArchiveV1,
         canonical_command: Vec<u8>,
     },
+    OutboxRelease(Box<iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOutboxReleaseV1>),
     Incoming(Box<iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedIncomingFoldV1>),
     Frozen,
 }
@@ -200,16 +233,34 @@ pub(super) struct NativeCoreWorkOwnerV1 {
     terminal_attempt: Option<TerminalAttempt>,
     incoming_attempt: Option<incoming_work::IncomingAttempt>,
     stage_request: Option<Vec<Vec<u8>>>,
+    release_attempt: Option<payment_release::ReleaseAttempt>,
+    // Bounded actual-origin path hints only. Every use requires original native WAL proof.
+    completed_release_locators:
+        std::collections::BTreeMap<[u8; 32], KagemushaNativeCompletedOutboxReleaseLocatorV1>,
 }
 impl NativeCoreWorkOwnerV1 {
     pub(super) fn new(path: String, owner: KagemushaAuthenticatedCoreOwnerV1) -> Result<Self> {
-        let selected = owner
-            .current_recovery_selection()
-            .map_err(|_| Error::Rejected)?;
-        let original_enrollment = selected.enrollment_binding().clone();
-        let selected_source = super::enrolled_open::authenticated_recovery_source(&selected)
-            .map_err(|_| Error::Rejected)?;
-        let release = owner.authenticated_release().map_err(|_| Error::Rejected)?;
+        Self::new_or_retain(path, owner).map_err(|(_, error)| error)
+    }
+    // All fallible admission happens while the original actual owner remains retained.
+    pub(super) fn new_or_retain(
+        path: String,
+        owner: KagemushaAuthenticatedCoreOwnerV1,
+    ) -> std::result::Result<Self, (KagemushaAuthenticatedCoreOwnerV1, Error)> {
+        let admitted = (|| {
+            let selected = owner
+                .current_recovery_selection()
+                .map_err(|_| Error::Rejected)?;
+            let binding = selected.enrollment_binding().clone();
+            let source = super::enrolled_open::authenticated_recovery_source(&selected)
+                .map_err(|_| Error::Rejected)?;
+            let release = owner.authenticated_release().map_err(|_| Error::Rejected)?;
+            Ok((binding, source, release))
+        })();
+        let (original_enrollment, selected_source, release) = match admitted {
+            Ok(value) => value,
+            Err(error) => return Err((owner, error)),
+        };
         Ok(Self {
             path,
             stage: Stage::Selected(Box::new(owner)),
@@ -219,6 +270,8 @@ impl NativeCoreWorkOwnerV1 {
             terminal_attempt: None,
             incoming_attempt: None,
             stage_request: None,
+            release_attempt: None,
+            completed_release_locators: std::collections::BTreeMap::new(),
         })
     }
     /// Recover only a genuine original native cap and its already fsynced Core command.
@@ -280,6 +333,8 @@ impl NativeCoreWorkOwnerV1 {
             terminal_attempt: None,
             incoming_attempt: None,
             stage_request: None,
+            release_attempt: None,
+            completed_release_locators: std::collections::BTreeMap::new(),
         })
     }
     pub(super) fn current_recovery_selection(
@@ -297,6 +352,16 @@ impl NativeCoreWorkOwnerV1 {
                     .incoming_attempt
                     .as_ref()
                     .is_none_or(|attempt| attempt.completion.is_none()) =>
+            {
+                original
+                    .current_recovery_selection()
+                    .map_err(|_| Error::Rejected)
+            }
+            Stage::OutboxRelease(original)
+                if self
+                    .release_attempt
+                    .as_ref()
+                    .is_none_or(|a| a.completion.is_none()) =>
             {
                 original
                     .current_recovery_selection()
@@ -322,7 +387,7 @@ impl NativeCoreWorkOwnerV1 {
             // The exclusive cap retains the original lease solely for exact completion retry.
             // It cannot yield a usable owner or authorize a new observation/operation.
             Stage::Commit { .. } => None,
-            Stage::Publication(_) | Stage::Incoming(_) => None,
+            Stage::Publication(_) | Stage::Incoming(_) | Stage::OutboxRelease(_) => None,
             Stage::Frozen => return Err(Error::Rejected),
         };
         if let Some(selected) = selected {
@@ -360,6 +425,9 @@ impl NativeCoreWorkOwnerV1 {
             Stage::Incoming(original) => original
                 .recheck_retry_originals()
                 .map_err(|_| Error::Rejected),
+            Stage::OutboxRelease(original) => {
+                original.recheck_originals().map_err(|_| Error::Rejected)
+            }
             Stage::Frozen => Err(Error::Rejected),
         }
     }
@@ -434,11 +502,17 @@ impl NativeCoreWorkOwnerV1 {
             request, candidate, ..
         } = &self.stage
         {
-            if request != fields {
+            if (!request.is_empty() && request != fields) || candidate.preparation != preparation {
                 return Err(Error::Rejected);
             }
+            let result = candidate.clone();
             self.recheck_originals()?;
-            return Ok(candidate.clone());
+            if let Stage::Commit { request, .. } = &mut self.stage {
+                if request.is_empty() {
+                    *request = fields.to_vec();
+                }
+            }
+            return Ok(result);
         }
         let source = SOURCE.get().ok_or(Error::Unavailable)?.clone();
         source.recheck_originals()?;
@@ -571,7 +645,12 @@ impl NativeCoreWorkOwnerV1 {
     pub(super) fn sender_observation_selection(
         &self,
         operation: [u8; 32],
-    ) -> Result<(SenderWalletContextV1, [u8; 32], [u8; 32])> {
+    ) -> Result<(
+        SenderWalletContextV1,
+        SenderWalletContextV1,
+        [u8; 32],
+        [u8; 32],
+    )> {
         self.recheck_originals()?;
         let (context, digest) = match &self.stage {
             Stage::Selected(owner) => match owner.recover_coordinator_sender_intent(operation).map_err(|_| Error::Rejected)? {
@@ -584,9 +663,27 @@ impl NativeCoreWorkOwnerV1 {
             },
             Stage::Commit { candidate, .. } if candidate.preparation.operation_id == operation && self.terminal_attempt.is_none() =>
                 (candidate.preparation.context.clone(), candidate.preparation.inputs_digest),
+            Stage::OutboxRelease(cap) if cap.operation_id().map_err(|_| Error::Rejected)? == operation => {
+                let command = SenderCommandV1::decode_canonical_exact(12, operation, cap.original_command().map_err(|_| Error::Rejected)?)
+                    .map_err(|_| Error::Rejected)?;
+                let digest = command.expected_inputs_digest().map_err(|_| Error::Rejected)?.ok_or(Error::Rejected)?;
+                (command.context, digest)
+            }
             _ => return Err(Error::Rejected),
         };
-        Ok((context, digest, self.release.provider_policy_root()))
+        let current = match &self.stage {
+            Stage::Selected(owner) => owner.sender_context().map_err(|_| Error::Rejected)?,
+            Stage::Commit { candidate, .. } => candidate.preparation.context.clone(),
+            Stage::OutboxRelease(cap) => cap.sender_context().map_err(|_| Error::Rejected)?,
+            _ => return Err(Error::Rejected),
+        };
+        self.recheck_originals()?;
+        Ok((
+            current,
+            context,
+            digest,
+            self.release.provider_policy_root(),
+        ))
     }
 
     /// Require the full original signed op7 before consuming native funds, then produce and
@@ -822,7 +919,7 @@ fn signed_record(signed: &AuthenticatedSenderReplyV1) -> Result<&SenderRecordV1>
         _ => Err(Error::Rejected),
     }
 }
-fn require_record_match(
+pub(super) fn require_record_match(
     native: &KagemushaOutgoingOperationRecordV1,
     signed: &SenderRecordV1,
 ) -> Result<()> {

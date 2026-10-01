@@ -291,6 +291,7 @@ fn bind_fee_context(
     signed: &iroha_data_model::transaction::SignedTransaction,
 ) {
     transaction.current_entrypoint_index = Some(0);
+    transaction.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
     transaction.tx_call_hash = Some(Hash::from(signed.hash_as_entrypoint()));
     transaction.current_tx_hash = Some(signed.hash());
     transaction.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);

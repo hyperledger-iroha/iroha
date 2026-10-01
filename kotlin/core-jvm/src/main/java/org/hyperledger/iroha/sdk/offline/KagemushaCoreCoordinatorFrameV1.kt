@@ -18,6 +18,7 @@ enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
     ACKNOWLEDGE_COMMITTED_APP_ATTEST(13),
     EXPORT_OUTGOING_STATE_PROOF(14),
     PREPARE_INCOMING_FOLD(15), COMPLETE_INCOMING_FOLD(16), STAGE_INCOMING_ORIGINAL(17),
+    AUTHENTICATED_HARDWARE_POLICY(18),
 }
 
 /**
@@ -116,11 +117,12 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun validateRequestFields(method: KagemushaCoreCoordinatorMethodV1, fields: List<ByteArray>) {
         when (method) {
+            KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY -> count(fields, 0)
             KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD -> {
                 count(fields, 2); kind(fields, 0); digest(fields, 1)
             }
             KagemushaCoreCoordinatorMethodV1.COMPLETE_INCOMING_FOLD -> {
-                count(fields, 4); digest(fields, 0); bounded(fields, 1, 8192)
+                count(fields, 4); digest(fields, 0); bounded(fields, 1, 6_528)
                 KagemushaNoritoV1.decodePairedProofShapeExact(field(fields, 1))
                 bounded(fields, 2, 96 * 1024)
                 KagemushaP256Codec.requireRawLowSSignature(field(fields, 3))
@@ -142,10 +144,16 @@ object KagemushaCoreCoordinatorFrameV1 {
                 count(fields, 6); qualification(fields, 0); digest(fields, 5)
             }
             KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY -> {
-                count(fields, 10); operation(fields, 0); digest(fields, 1)
+                operation(fields, 0)
+                val deviceOperation = number(fields, 0)
+                count(fields, if (deviceOperation == 12) 11 else 10); digest(fields, 1)
                 nonempty(fields, 2); nonempty(fields, 3)
                 KagemushaP256Codec.requireRawLowSSignature(field(fields, 4))
                 qualification(fields, 5)
+                if (deviceOperation == 12) {
+                    KagemushaDeviceResponseFrameV1.requireTuple(field(fields, 10), 12,
+                        KagemushaAuthenticatedDeviceStatusV1.SUCCESS, field(fields, 3), field(fields, 4), field(fields, 1))
+                }
             }
             KagemushaCoreCoordinatorMethodV1.BEGIN_SENDER_TRANSITION -> {
                 digest(fields, 0)
@@ -224,12 +232,15 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun validateResponseFields(method: KagemushaCoreCoordinatorMethodV1, request: List<ByteArray>, response: List<ByteArray>) {
         when (method) {
+            KagemushaCoreCoordinatorMethodV1.AUTHENTICATED_HARDWARE_POLICY -> {
+                count(response, 3); (0..2).forEach { digest(response, it) }
+            }
             KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD -> {
                 count(response, 10); equal(response, 1, request, 1)
                 listOf(0, 1, 3, 4, 6, 8).forEach { digest(response, it) }
                 bounded(response, 2, 8192); bounded(response, 5, 32768)
                 require(field(response, 7).size == 16 && field(response, 7).any { it != 0.toByte() })
-                bounded(response, 9, 8192)
+                bounded(response, 9, 6_528)
                 KagemushaNoritoV1.decodePairedProofShapeExact(field(response, 9))
             }
             KagemushaCoreCoordinatorMethodV1.COMPLETE_INCOMING_FOLD -> {

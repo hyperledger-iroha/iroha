@@ -199,10 +199,10 @@ impl KagemushaEnrollmentPhaseOneBackendV1 {
             .fresh_admission
             .take()
             .ok_or(KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
-        owner.admission_transferred = true;
         admission
             .require_live()
             .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        owner.admission_transferred = true;
         Ok(admission)
     }
 }
@@ -214,8 +214,9 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
             .lock()
             .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
         if owner.attempted_open {
-            // A second open can represent an account switch. Revoke the old UI handle and
-            // original enrollment ticket even though this process cannot open another one.
+            // A second open cannot start another initial attempt. Revoke the old UI
+            // handle; a successfully transferred native admission retains sole custody
+            // of its original ticket and continuous deadline.
             if let Some(handle) = owner.handle.take() {
                 let _selected = owner.selection.take();
                 owner.selection_response = None;
@@ -226,7 +227,9 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
                 let _admission = owner.fresh_admission.take();
                 owner.challenge_id = None;
                 owner.cancelled_ticket = None;
-                let _ = self.journal.revoke_all();
+                if !owner.admission_transferred {
+                    let _ = self.journal.revoke_all();
+                }
                 let _ = self.inner.close(handle);
             }
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
@@ -668,7 +671,14 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaEnrollmentPhaseOneBackendV1 
         let _admission = owner.fresh_admission.take();
         owner.challenge_id = None;
         owner.cancelled_ticket = None;
-        let journal_result = self.journal.revoke_all();
+        // Closing a UI handle after phase-5 handoff does not cancel the sole
+        // native bootstrap owner. Explicit cancellation still revokes its original
+        // ticket, and its original continuous deadline is never renewed here.
+        let journal_result = if owner.admission_transferred {
+            Ok(())
+        } else {
+            self.journal.revoke_all()
+        };
         let close_result = self.inner.close(handle);
         journal_result.map_err(map_journal_error)?;
         close_result

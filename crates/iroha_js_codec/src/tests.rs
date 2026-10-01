@@ -475,13 +475,7 @@ fn all_browser_contract_deployment_instructions_roundtrip_exact_native_bytes() {
         "CancelSmartContractCodeUpload",
         object([(
             "artifact_id",
-            object([
-                (
-                    "dataspace_id",
-                    Value::String(artifact_id.dataspace_id.as_u64().to_string()),
-                ),
-                ("code_hash", json::to_value(&code_hash).expect("hash JSON")),
-            ]),
+            lifecycle_instructions::render_artifact_id(&artifact_id).expect("artifact JSON"),
         )]),
     )]);
     let proposed = custom_json_value(object([(
@@ -1110,13 +1104,11 @@ fn register_code_payload() -> Value {
     object([
         (
             "artifact_id",
-            object([
-                ("dataspace_id", Value::String("0".to_owned())),
-                (
-                    "code_hash",
-                    json::to_value(&code_hash).expect("artifact hash JSON"),
-                ),
-            ]),
+            lifecycle_instructions::render_artifact_id(&ContractArtifactId::new(
+                DataSpaceId::UNIVERSAL,
+                manifest.code_hash.expect("fixture code hash"),
+            ))
+            .expect("artifact JSON"),
         ),
         (
             "manifest",
@@ -1126,7 +1118,7 @@ fn register_code_payload() -> Value {
 }
 
 #[test]
-fn envelope_parsers_keep_key_precedence_and_consume_probed_keys() {
+fn artifact_envelopes_reject_extra_keys_before_any_parser_consumes_them() {
     // An earlier strict key sees every later key as an unexpected envelope field.
     let error = value_to_instruction(object([
         ("CancelAssetLock", cancel_payload()),
@@ -1137,26 +1129,16 @@ fn envelope_parsers_keep_key_precedence_and_consume_probed_keys() {
         error.reason(),
         "CancelAssetLock instruction envelope contains unexpected field(s): Mint"
     );
-    // A probed earlier key whose payload is not an object is consumed, so the
-    // later strict envelope check no longer sees it.
-    let instruction = value_to_instruction(object([
-        ("Mint", Value::Null),
-        ("RegisterSmartContractCode", register_code_payload()),
-    ]))
-    .expect("consumed non-object key");
-    assert!(instruction.as_any().is::<RegisterSmartContractCode>());
-    // An earlier object key wins even when a later key would be admitted.
-    let error = value_to_instruction(object([
-        ("Mint", object([])),
-        ("RegisterSmartContractCode", register_code_payload()),
-    ]))
-    .unwrap_err();
-    assert!(
-        error
-            .reason()
-            .starts_with("unsupported Mint instruction variant"),
-        "{error}"
-    );
+    // Even a null earlier key must remain visible when admitting an artifact.
+    // Previously the Mint parser silently removed it before the strict check.
+    for mint in [Value::Null, object([])] {
+        let error = value_to_instruction(object([
+            ("Mint", mint),
+            ("RegisterSmartContractCode", register_code_payload()),
+        ]))
+        .unwrap_err();
+        assert!(error.reason().contains("unexpected [Mint]"), "{error}");
+    }
     // A later key that was never probed remains visible to the strict check.
     let error = value_to_instruction(object([
         ("RegisterSmartContractCode", register_code_payload()),
@@ -1346,4 +1328,150 @@ fn alias_and_zk_ballot_instructions_roundtrip_through_infallible_renderers() {
             ]),
         )])
     );
+}
+
+#[test]
+fn artifact_instruction_codecs_preserve_exact_dataspace_and_reject_alternate_envelopes() {
+    let code_hash = Hash::new(b"dataspace-scoped-codec-artifact");
+    let mut frames_by_variant = std::collections::BTreeMap::<String, Vec<Vec<u8>>>::new();
+    for dataspace in [0, (1_u64 << 53) + 1, u64::MAX] {
+        let artifact_id = ContractArtifactId::new(DataSpaceId::new(dataspace), code_hash);
+        let manifest = ContractManifest {
+            seiyaku_name: None,
+            code_hash: Some(code_hash),
+            abi_hash: Some(Hash::new(b"dataspace-scoped-codec-abi")),
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            error_messages: None,
+            error_types: None,
+            provenance: None,
+        };
+        let instructions: [InstructionBox; 6] = [
+            RegisterSmartContractCode {
+                artifact_id,
+                manifest,
+            }
+            .into(),
+            RegisterSmartContractBytes {
+                artifact_id,
+                code: vec![1, 2, 3, 4],
+            }
+            .into(),
+            UploadSmartContractCodeChunk {
+                artifact_id,
+                total_size: 4,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![1, 2, 3, 4],
+            }
+            .into(),
+            FinalizeSmartContractCodeUpload {
+                artifact_id,
+                total_size: 4,
+                chunk_count: 1,
+            }
+            .into(),
+            CancelSmartContractCodeUpload { artifact_id }.into(),
+            RemoveSmartContractBytes {
+                artifact_id,
+                reason: None,
+            }
+            .into(),
+        ];
+        for instruction in instructions {
+            let value = instruction_to_json_value(&instruction).expect("scoped artifact JSON");
+            let (variant, payload) = value.as_object().unwrap().first_key_value().unwrap();
+            assert_eq!(
+                payload["artifact_id"]["dataspace_id"],
+                Value::String(dataspace.to_string())
+            );
+            assert_eq!(
+                payload["artifact_id"]["code_hash"],
+                json::to_value(&code_hash).unwrap()
+            );
+            assert_typed_instruction_roundtrip(&instruction, &value);
+            for extra in ["Mint", "Zk", "UploadSmartContractCodeChunk"] {
+                if extra != variant {
+                    let mut malformed = value.clone();
+                    malformed
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(extra.into(), Value::Null);
+                    assert_strict_rejection(&malformed);
+                }
+            }
+            let frame = norito::encode_canonical(&instruction).unwrap();
+            let previous = frames_by_variant.entry(variant.clone()).or_default();
+            assert!(
+                !previous.contains(&frame),
+                "different dataspaces must have different signed bytes"
+            );
+            assert_strict_rejection(&Value::String(STANDARD.encode(&frame)));
+            assert_strict_rejection(&json::to_value(&instruction).unwrap());
+            previous.push(frame);
+
+            // Removing scope must never recover the retired code-hash-only grammar.
+            let mut retired = payload.as_object().unwrap().clone();
+            retired.remove("artifact_id");
+            retired.insert("code_hash".into(), json::to_value(&code_hash).unwrap());
+            assert_strict_rejection(&object([(variant.as_str(), Value::Object(retired))]));
+            for invalid_scope in [
+                Value::Null,
+                Value::from(dataspace),
+                Value::String("01".into()),
+                Value::String("18446744073709551616".into()),
+            ] {
+                let mut malformed = value.clone();
+                malformed
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut(variant)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("artifact_id")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("dataspace_id".into(), invalid_scope);
+                assert_strict_rejection(&malformed);
+            }
+            for missing in ["dataspace_id", "code_hash"] {
+                let mut malformed = value.clone();
+                malformed
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut(variant)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .get_mut("artifact_id")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(missing);
+                assert_strict_rejection(&malformed);
+            }
+            let mut extra = value.clone();
+            extra
+                .as_object_mut()
+                .unwrap()
+                .get_mut(variant)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .get_mut("artifact_id")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("unknown".into(), Value::Null);
+            assert_strict_rejection(&extra);
+        }
+    }
+    assert_eq!(frames_by_variant.len(), 6);
+    assert!(frames_by_variant.values().all(|frames| frames.len() == 3));
 }

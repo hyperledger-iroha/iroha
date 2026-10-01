@@ -35,7 +35,8 @@ public protocol KagemushaOutgoingStateProofExportingCoreV1: KagemushaNativeCoreC
 /// capabilities. Opening this adapter does not qualify a hardware provider or supply a
 /// software monetary backend. Missing native authority continues to fail closed.
 public final class KagemushaNativeCoreCoordinatorAdapterV1:
-  KagemushaOutgoingStateProofExportingCoreV1, KagemushaNativeIncomingCoreCoordinatorV1, @unchecked Sendable {
+  KagemushaOutgoingStateProofExportingCoreV1, KagemushaNativeIncomingCoreCoordinatorV1,
+  KagemushaNativeHardwarePolicyProvidingCoreV1, @unchecked Sendable {
   private let bridge: KagemushaCoreCoordinatorBridgeV1
 
   init(bridge: KagemushaCoreCoordinatorBridgeV1) { self.bridge = bridge }
@@ -106,6 +107,12 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
     _ = try bridge.invoke(.stageIncomingOriginal, fields: [u32(kind.rawValue), creditID])
   }
 
+  public func authenticatedHardwarePolicy() throws -> KagemushaHardwarePolicyV1 {
+    let fields = try bridge.invoke(.authenticatedHardwarePolicy, fields: [])
+    return try KagemushaHardwarePolicyV1(releaseID: fields[0], hardwarePolicyDigest: fields[1],
+      providerPolicyRoot: fields[2])
+  }
+
   public func acceptQualification(
     _ qualification: KagemushaHardwareQualificationV1, hardwarePolicyDigest: Data
   ) throws {
@@ -115,10 +122,15 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
 
   public func acceptAuthenticatedDeviceReply(
     operation: UInt8, requestID: Data, canonicalCommand: Data, canonicalReply: Data, responseAuthenticator: Data,
-    qualification: KagemushaHardwareQualificationV1
+    originalResponse: Data?, qualification: KagemushaHardwareQualificationV1
   ) throws {
-    _ = try bridge.invoke(.acceptAuthenticatedReply,
-      fields: [u32(UInt32(operation)), requestID, canonicalCommand, canonicalReply, responseAuthenticator] + qualificationFields(qualification))
+    var fields = try [u32(UInt32(operation)), requestID, canonicalCommand, canonicalReply, responseAuthenticator]
+      + qualificationFields(qualification)
+    if operation == 12 {
+      guard let originalResponse else { throw KagemushaCoreCoordinatorErrorV1.invalidFrame("release acceptance requires its original signed response") }
+      fields.append(originalResponse)
+    }
+    _ = try bridge.invoke(.acceptAuthenticatedReply, fields: fields)
   }
 
   public func beginSenderTransition(
@@ -286,6 +298,8 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
   private func requireCurrentContext(
     _ context: KagemushaDeviceSenderWalletContextV1, _ qualification: KagemushaHardwareQualificationV1
   ) throws {
+    let policy = try authenticatedHardwarePolicy()
+    try require(policy.matches(qualification: qualification), "native policy qualification mismatch")
     let credential = qualification.credential
     try require(context.release.protocolVersion == qualification.profile.protocolVersion
       && context.release.releaseID == qualification.releaseID
@@ -298,7 +312,7 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
       && context.hardwareEpoch.epochID == credential.hardwareEpochID
       && context.hardwareEpoch.generation == KagemushaUInt128V1(credential.hardwareEpochGeneration)
       && context.devicePolicyBinding.deviceKeyReference == credential.deviceKeyReference
-      && context.devicePolicyBinding.hardwarePolicyID == qualification.hardwarePolicyDigest
+      && context.devicePolicyBinding.hardwarePolicyID == policy.providerPolicyRoot
       && context.coreAuthorizationKeyReference == qualification.coreAuthorizationKeyReference,
       "preparation qualification mismatch")
   }

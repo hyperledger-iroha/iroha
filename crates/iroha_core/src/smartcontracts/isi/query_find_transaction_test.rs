@@ -2,9 +2,9 @@
 #[tokio::test]
 async fn find_transaction() -> Result<()> {
     let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-    let state_view = fixture.sandbox.state.view();
+    let state_view = fixture.state.view();
     let unapplied_tx = TransactionBuilder::new(
-        fixture.sandbox.state.network_id,
+        fixture.state.network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

@@ -33,6 +33,40 @@ final class KagemushaOperationIntentV1Tests: XCTestCase {
   private func bootstrap(_ id: Data) throws -> Data {
     try KagemushaDeviceOperationCodecV1.encodeControlCommand(.bootstrapAggregateState(operationID: id))
   }
+  func testReleaseOriginalSurvivesLostSaveAndRestartWithoutReplacement() throws {
+    // This opaque command specimen tests storage only, never native release acceptance.
+    let store = TestOperationIntentStore()
+    let owner = KagemushaOperationIntentOwnerV1(store: store, generateID: { Data(repeating: 12, count: 32) })
+    let command: (Data) throws -> Data = { Data([12]) + $0 }
+    let intent = try owner.begin(operation: 12, purpose: "release-original", arguments: Data([1]),
+      qualificationScope: scope, command: command)
+    let reply = Data([0x12]), signature = Data(repeating: 1, count: 64)
+    let original = try testSignedDeviceResponseFrame(operation: 12, status: .success,
+      requestID: intent.operationID, payload: reply, authenticator: signature)
+    store.failAfterSave = true
+    XCTAssertThrowsError(try owner.accepted(operation: 12, operationID: intent.operationID,
+      command: command(intent.operationID), reply: reply, authenticator: signature,
+      originalResponse: original, qualificationScope: scope))
+    store.failAfterSave = false
+    let saved = store.records
+    let restarted = KagemushaOperationIntentOwnerV1(store: store, generateID: {
+      XCTFail("An original release retry must not replace its operation ID"); return Data()
+    })
+    let retained = try restarted.begin(operation: 12, purpose: "release-original", arguments: Data([1]),
+      qualificationScope: scope, command: command)
+    XCTAssertEqual(retained.operationID, intent.operationID)
+    XCTAssertEqual(retained.originalResponse, original)
+    XCTAssertEqual(try JSONDecoder().decode(KagemushaOperationIntentV1.self,
+      from: JSONEncoder().encode(retained)).originalResponse, original)
+    var substituted = original; substituted[12] ^= 1
+    XCTAssertThrowsError(try restarted.accepted(operation: 12, operationID: intent.operationID,
+      command: command(intent.operationID), reply: reply, authenticator: signature,
+      originalResponse: substituted, qualificationScope: scope))
+    XCTAssertEqual(store.records, saved)
+    try restarted.accepted(operation: 12, operationID: intent.operationID, command: command(intent.operationID),
+      reply: reply, authenticator: signature, originalResponse: original, qualificationScope: scope)
+    XCTAssertEqual(store.records, saved)
+  }
   func testExpandedDurableIntentUsesOnlyFirstReleaseVersionOne() throws {
     let value = try KagemushaOperationIntentV1(applicationScope: Data([1]),
       qualificationScope: scope, operation: 20, operationID: Data(repeating: 1, count: 32),

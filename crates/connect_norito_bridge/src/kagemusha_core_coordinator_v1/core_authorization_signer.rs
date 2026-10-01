@@ -97,6 +97,147 @@ impl RetainedCoreAuthorizationSignerV1 {
         self.recheck()?;
         Ok(bytes)
     }
+    // Only this borrowed actual installed payment can supply release signing claims.
+    pub(super) fn sign_payment_release(
+        &self,
+        selection: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedPaymentReleaseSelectionV1<'_>,
+        original_nonce: [u8; 32],
+    ) -> Result<Vec<u8>, Error> {
+        use crate::kagemusha_device_bridge_v1::sender_payload::SenderHardwareAuthorizationPurposeV1;
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+        self.recheck()?;
+        selection.recheck().map_err(|_| Error::Rejected)?;
+        let record = selection.record().map_err(|_| Error::Rejected)?;
+        let prepared = selection.prepared().map_err(|_| Error::Rejected)?;
+        let terminal = selection
+            .hardware_terminal_body()
+            .map_err(|_| Error::Rejected)?;
+        let receipt_digest = selection
+            .terminal_receipt_digest()
+            .map_err(|_| Error::Rejected)?;
+        let envelope_digest = record.envelope_digest.ok_or(Error::Rejected)?;
+        if original_nonce == [0;32] || record.context.core_authorization_key_reference !=
+            crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_key_reference_v1(&self.key)
+        { return Err(Error::Rejected); }
+        let unsigned = SenderHardwareAuthorizationPreimageV1 {
+            version: 1,
+            purpose: SenderHardwareAuthorizationPurposeV1::Release,
+            operation_id: record.operation_id,
+            inputs_digest: record.inputs_digest,
+            preparation_id: prepared.preparation_id,
+            candidate_digest: terminal.candidate_envelope_digest,
+            release_id: record.context.release.release_id,
+            hardware_transition_statement: prepared.hardware_statement(),
+            prepared_one_use_authorization_digest: prepared.prepared_one_use_authorization_digest,
+            outbox_reservation_commitment: terminal.outbox_reservation_commitment,
+            outcome_id: record.outcome_id,
+            transition_nullifier: terminal.transition_nullifier,
+            envelope_digest: Some(envelope_digest),
+            terminal_receipt_digest: Some(receipt_digest),
+            hardware_one_use_nonce: original_nonce,
+            authorization_public_key: self.key,
+        };
+        let id = unsigned.authorization_id().map_err(|_| Error::Rejected)?;
+        let signature = self.source.sign_authorization_id(id)?;
+        self.recheck()?;
+        let signature =
+            KagemushaDeviceSignatureV1::from_raw_bytes(&signature).map_err(|_| Error::Rejected)?;
+        signature
+            .verify(&self.key, &id)
+            .map_err(|_| Error::Rejected)?;
+        let authorization = unsigned
+            .with_signature(signature)
+            .map_err(|_| Error::Rejected)?;
+        let bytes = SenderHardwareAuthorizationPreimageV1::encode_verified(&authorization)
+            .map_err(|_| Error::Rejected)?;
+        // The selector supplies original inputs/ACK; command construction is performed by the
+        // native work owner, then the consuming release intake independently re-verifies it.
+        if !matches!(
+            record.inputs,
+            Some(KagemushaOutgoingPublicInputsV1::SendSplit { .. })
+        ) {
+            return Err(Error::Rejected);
+        }
+        selection.recheck().map_err(|_| Error::Rejected)?;
+        if selection.record().map_err(|_| Error::Rejected)? != record {
+            return Err(Error::Rejected);
+        }
+        self.recheck()?;
+        Ok(bytes)
+    }
+    // Only a full native-finality admission for an actual installed voucher reaches signing.
+    pub(super) fn sign_redemption_release(
+        &self,
+        selection: &iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedRedemptionFinalitySelectionV1<'_>,
+        original_nonce: [u8; 32],
+        source: &dyn super::native_core_work::KagemushaNativeRedemptionFinalitySourceV1,
+    ) -> Result<Vec<u8>, Error> {
+        use crate::kagemusha_device_bridge_v1::sender_payload::SenderHardwareAuthorizationPurposeV1;
+        use iroha_core_zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
+        self.recheck()?;
+        source.recheck_originals()?;
+        let now = source.current_trusted_native_time_ms()?;
+        let record = selection
+            .record_at_trusted_time(now)
+            .map_err(|_| Error::Rejected)?;
+        let prepared = selection
+            .prepared_at_trusted_time(now)
+            .map_err(|_| Error::Rejected)?;
+        let terminal = selection
+            .hardware_terminal_body_at_trusted_time(now)
+            .map_err(|_| Error::Rejected)?;
+        let receipt = selection
+            .terminal_receipt_at_trusted_time(now)
+            .map_err(|_| Error::Rejected)?;
+        if original_nonce == [0; 32] || !matches!(record.inputs, Some(KagemushaOutgoingPublicInputsV1::RedeemSplit { .. }))
+            || record.context.core_authorization_key_reference != crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_key_reference_v1(&self.key) {
+            return Err(Error::Rejected);
+        }
+        let unsigned = SenderHardwareAuthorizationPreimageV1 {
+            version: 1,
+            purpose: SenderHardwareAuthorizationPurposeV1::Release,
+            operation_id: record.operation_id,
+            inputs_digest: record.inputs_digest,
+            preparation_id: prepared.preparation_id,
+            candidate_digest: terminal.candidate_envelope_digest,
+            release_id: record.context.release.release_id,
+            hardware_transition_statement: prepared.hardware_statement(),
+            prepared_one_use_authorization_digest: prepared.prepared_one_use_authorization_digest,
+            outbox_reservation_commitment: terminal.outbox_reservation_commitment,
+            outcome_id: record.outcome_id,
+            transition_nullifier: terminal.transition_nullifier,
+            envelope_digest: Some(record.envelope_digest.ok_or(Error::Rejected)?),
+            terminal_receipt_digest: Some(receipt.canonical_digest().map_err(|_| Error::Rejected)?),
+            hardware_one_use_nonce: original_nonce,
+            authorization_public_key: self.key,
+        };
+        let id = unsigned.authorization_id().map_err(|_| Error::Rejected)?;
+        let signature = self.source.sign_authorization_id(id)?;
+        self.recheck()?;
+        let signature =
+            KagemushaDeviceSignatureV1::from_raw_bytes(&signature).map_err(|_| Error::Rejected)?;
+        signature
+            .verify(&self.key, &id)
+            .map_err(|_| Error::Rejected)?;
+        let bytes = SenderHardwareAuthorizationPreimageV1::encode_verified(
+            &unsigned
+                .with_signature(signature)
+                .map_err(|_| Error::Rejected)?,
+        )
+        .map_err(|_| Error::Rejected)?;
+        let after = source.current_trusted_native_time_ms()?;
+        if after < now
+            || selection
+                .record_at_trusted_time(after)
+                .map_err(|_| Error::Rejected)?
+                != record
+        {
+            return Err(Error::Rejected);
+        }
+        source.recheck_originals()?;
+        self.recheck()?;
+        Ok(bytes)
+    }
     // Only the native coordinator can call this after consuming the actual verified candidate.
     // Public preimage fields and a cryptographic signature alone are never candidate admission.
     pub(super) fn sign_command7(

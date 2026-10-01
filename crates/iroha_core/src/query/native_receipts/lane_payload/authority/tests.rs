@@ -194,3 +194,168 @@ fn selected_authority_rejects_noncreation_or_changed_geometry_before_reserving_g
     drop(read);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+fn custody_source(
+    network: NetworkId,
+    record: &SumeragiLaneRecord,
+    row: Option<iroha_data_model::sumeragi_lanes::SumeragiLaneCustody>,
+    height: u64,
+    budget: &AllocationBudget,
+) -> LanePayload {
+    let state = SumeragiLaneState {
+        lanes: (height == record.created_at)
+            .then(|| record.clone())
+            .into_iter()
+            .collect(),
+        custody: row.into_iter().collect(),
+        ..SumeragiLaneState::default()
+    };
+    let encoded = state.encode();
+    let mut bytes = ChargedBuffer::new(encoded.len(), budget).unwrap();
+    bytes.append(&encoded).unwrap();
+    LanePayload {
+        bytes,
+        range: 0..encoded.len(),
+        network,
+        height,
+        carrier: HashOf::from_untyped_unchecked(Hash::new(height.to_le_bytes())),
+    }
+}
+
+#[test]
+fn original_custody_binding_survives_retirement_and_rejects_later_tenure_or_policy_substitution() {
+    use iroha_data_model::sumeragi_lanes::{
+        SumeragiLaneCustody, SumeragiLaneSignerCustody, SumeragiLaneStakeBinding,
+    };
+    let (network, record) = record();
+    let instance = Hash32([9; 32]);
+    let original = SumeragiLaneCustody {
+        lane: record.lane,
+        incarnation: record.incarnation,
+        instance: instance.0,
+        created_at: record.created_at,
+        merged: record.merged,
+        signer_count: 4,
+        signers: vec![SumeragiLaneSignerCustody {
+            signer: 2,
+            binding: SumeragiLaneStakeBinding {
+                owner_lane: LaneId::SINGLE,
+                validator: Hash::new(b"original account"),
+                activation_height: 17,
+                tenure: Hash::new(b"original registration and escrow"),
+            },
+        }]
+        .try_into()
+        .unwrap(),
+        evidence_horizon: 7,
+        slashing_delay: 3,
+        retired_at: None,
+    };
+    let budget = AllocationBudget::new(1 << 20);
+    let creation = custody_source(
+        network,
+        &record,
+        Some(original.clone()),
+        record.created_at,
+        &budget,
+    );
+    let owner = LaneAuthorityRead::new(creation, record.incarnation)
+        .complete(&budget)
+        .unwrap_or_else(|(_, error)| panic!("original custody creation: {error}"));
+    for case in 0..9 {
+        let mut row = original.clone();
+        row.retired_at = Some(30);
+        row.merged = SumeragiLaneFrontier {
+            height: 9_999,
+            block_hash: [31; 32],
+            result: [32; 32],
+        };
+        match case {
+            0 => {}
+            1 => row.instance[0] ^= 1,
+            2 => row.created_at += 1,
+            3 => row.signer_count = 7,
+            4 => row.evidence_horizon += 1,
+            5 => row.slashing_delay += 1,
+            6 => row.retired_at = Some(41),
+            7 => {
+                let mut signer = row.signers.as_slice()[0];
+                signer.binding.tenure = Hash::new(b"later registration and escrow");
+                row.signers = vec![signer].try_into().unwrap();
+            }
+            8 => row.signers = Default::default(),
+            _ => unreachable!(),
+        }
+        let source = custody_source(network, &record, Some(row), 40, &budget);
+        let held = budget.reserved_bytes();
+        let result = owner.validate_custody(&source, instance, Some((7, 3)), &budget);
+        assert_eq!(result.is_ok(), case == 0, "case {case}");
+        assert_eq!(
+            budget.reserved_bytes(),
+            held,
+            "borrowed comparison allocates no graph"
+        );
+    }
+    let foreign = AllocationBudget::new(1 << 20);
+    let foreign_source = custody_source(network, &record, Some(original), 40, &foreign);
+    let original_held = budget.reserved_bytes();
+    let foreign_held = foreign.reserved_bytes();
+    assert!(matches!(
+        owner.validate_custody(&foreign_source, instance, Some((7, 3)), &budget),
+        Err(LanePayloadError::Source)
+    ));
+    assert!(matches!(
+        owner.validate_custody(&foreign_source, instance, Some((7, 3)), &foreign),
+        Err(LanePayloadError::Source)
+    ));
+    assert_eq!(budget.reserved_bytes(), original_held);
+    assert_eq!(foreign.reserved_bytes(), foreign_held);
+    drop(foreign_source);
+    assert_eq!(foreign.reserved_bytes(), 0);
+    let reclaimed = custody_source(network, &record, None, 40, &budget);
+    assert!(
+        owner
+            .validate_custody(&reclaimed, instance, Some((7, 3)), &budget)
+            .is_ok(),
+        "reclaimed original custody grants only historical storage authority"
+    );
+    assert!(
+        reclaimed
+            .custody_record(&record.incarnation)
+            .unwrap()
+            .is_none()
+    );
+    drop(reclaimed);
+    drop(owner);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn native_ancestry_returns_the_exact_funded_authority_on_uncovered_subject_without_cloning() {
+    use crate::sumeragi::lanes::evidence::{LaneAncestry, LaneAncestryError};
+    let (network, record) = record();
+    let budget = AllocationBudget::new(1 << 20);
+    let input = source(network, &record, &budget);
+    let pointer = input.bytes.as_slice().as_ptr();
+    let authority = LaneAuthorityRead::new(input, record.incarnation)
+        .complete(&budget)
+        .unwrap_or_else(|(_, error)| panic!("original authority: {error}"));
+    let held = budget.reserved_bytes();
+    let genesis = authority.genesis();
+    let window = record.params.demotion_window.get();
+    budget.set_limit_bytes(0);
+    let (authority, error) =
+        LaneAncestry::new(Hash32([2; 32]), authority, genesis, genesis, 2, window)
+            .err()
+            .expect("an uncovered native parent retains its original owner");
+    assert_eq!(error, LaneAncestryError::Uncovered);
+    assert_eq!(authority.source.bytes.as_slice().as_ptr(), pointer);
+    assert_eq!(budget.reserved_bytes(), held);
+    let cursor = LaneAncestry::new(Hash32([2; 32]), authority, genesis, genesis, 1, window)
+        .unwrap_or_else(|(_, error)| panic!("original genesis selection: {error}"));
+    assert_eq!(cursor.config().committee.n(), 4);
+    assert_eq!(cursor.next_height(), None);
+    assert_eq!(budget.reserved_bytes(), held);
+    drop(cursor);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

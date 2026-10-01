@@ -13,10 +13,10 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 pub mod account_capabilities;
 /// Public faucet identity and exact issuance policy.
 pub mod account_faucet_policy;
-/// Scoped canonical account/fee authority originals for an existing native ledger-wide reader.
-pub mod authority_originals;
 /// Typed account-alias absence selectors and planning error codes.
 pub mod aliases;
+/// Scoped canonical account/fee authority originals for an existing native ledger-wide reader.
+pub mod authority_originals;
 /// Typed non-success observations for challenge-bound bridge finality.
 pub mod bridge_attestation;
 /// Exact progress bindings for challenge-bound finality attestation reads.
@@ -37,8 +37,6 @@ pub mod governance_proposal_api;
 pub mod kagemusha_api;
 /// Native complete World snapshots and original KAGEMUSHA authority values.
 pub mod kagemusha_state;
-/// Complete native alias/SNS originals for an existing signed ledger-wide reader.
-pub mod resource_names_state;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
@@ -49,6 +47,8 @@ pub mod prepared_transaction;
 pub mod private_settlement_api;
 /// Shared QR Code encoder used by Torii and CLI device-handoff flows.
 pub mod qr;
+/// Complete native alias/SNS originals for an existing signed ledger-wide reader.
+pub mod resource_names_state;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
 /// Typed absence response for authoritative SNS registration lookups.

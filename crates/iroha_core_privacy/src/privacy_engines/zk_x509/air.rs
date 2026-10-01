@@ -333,7 +333,7 @@ mod tests {
             "one-shared-deep-point-current+next",
             "all-four-terminal-families-algebraically-bound",
             "typed-outer-binding=public-root+channel+ordered-sha13+rfc91",
-            "shared-X5S1-pre-aux-after-six-main-plus-one-ca-base-roots",
+            "shared-X5S1-pre-aux-after-one-joined-main-plus-one-ca-base-roots",
             "checked-native-lde-scratch-resident-and-work-ceilings",
             "producer-self-verifies",
         ] {

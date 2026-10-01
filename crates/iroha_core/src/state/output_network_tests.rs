@@ -915,3 +915,6 @@ fn local_refusal_after_native_work_restores_direct_transaction_and_witness() {
         Repeats::Exactly(1)
     );
 }
+
+#[path = "output_network_nexus_receipt_tests.rs"]
+mod nexus_receipts;

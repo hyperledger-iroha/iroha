@@ -96,12 +96,27 @@ mod tests {
 
     #[test]
     fn artifact_identity_uses_the_complete_address_dataspace() {
-        let pair = iroha_crypto::KeyPair::try_from_seed(b"scoped artifact address".to_vec(), iroha_crypto::Algorithm::Ed25519).unwrap();
+        let pair = iroha_crypto::KeyPair::try_from_seed(
+            b"scoped artifact address".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .unwrap();
         let account = crate::account::AccountId::new(pair.public_key().clone());
-        let network = crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"scoped artifact network")));
-        let address = super::super::ContractAddress::derive(&network, &account, 1, DataSpaceId::new(u64::MAX)).unwrap();
+        let network = crate::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"scoped artifact network")),
+        );
+        let address = super::super::ContractAddress::derive(
+            &network,
+            &account,
+            1,
+            DataSpaceId::new(u64::MAX),
+        )
+        .unwrap();
         let hash = Hash::new(b"exact artifact");
-        assert_eq!(ContractArtifactId::for_address(&address, hash).unwrap(), ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash));
+        assert_eq!(
+            ContractArtifactId::for_address(&address, hash).unwrap(),
+            ContractArtifactId::new(DataSpaceId::new(u64::MAX), hash)
+        );
     }
     #[test]
     fn artifact_identity_preserves_full_scope_in_every_codec() {

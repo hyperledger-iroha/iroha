@@ -32,9 +32,11 @@ pub use authenticated_core_owner::{
     KagemushaAuthenticatedCommittedOutgoingProvingSelectionV1, KagemushaAuthenticatedCoreOwnerV1,
     KagemushaAuthenticatedCorePublicationV1, KagemushaAuthenticatedCoreRecoveryInputsV1,
     KagemushaAuthenticatedCoreRecoveryV1, KagemushaAuthenticatedIncomingFoldV1,
-    KagemushaAuthenticatedIncomingProvingSelectionV1,
+    KagemushaAuthenticatedIncomingProvingSelectionV1, KagemushaAuthenticatedOutboxReleaseV1,
     KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,
     KagemushaAuthenticatedOutgoingProvingSelectionV1,
+    KagemushaAuthenticatedPaymentReleaseSelectionV1,
+    KagemushaAuthenticatedRedemptionFinalitySelectionV1, KagemushaAuthenticatedWalletObservationV1,
     KagemushaOriginalOutgoingHardwareCommitV1,
 };
 mod candidate_lifecycle;

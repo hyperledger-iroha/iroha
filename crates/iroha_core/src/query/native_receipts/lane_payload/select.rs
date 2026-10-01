@@ -79,6 +79,19 @@ pub(super) fn lane<'a>(
         iroha_data_model::nexus::MAX_ACTIVE_EXECUTION_LANES,
     )
 }
+/// Select a retained original incarnation, including after its live lane record is removed.
+pub(super) fn custody<'a>(
+    payload: &'a [u8],
+    incarnation: &[u8; 32],
+) -> Result<Option<&'a [u8]>, norito::Error> {
+    let state = fields::<5>(payload)?;
+    selected::<10>(
+        state[1],
+        1,
+        incarnation,
+        iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_OBLIGATIONS,
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;

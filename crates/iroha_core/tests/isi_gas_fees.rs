@@ -9,7 +9,7 @@ use iroha_core::{
     kura::Kura,
     query,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{State, StateReadOnly, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;
@@ -55,6 +55,9 @@ fn default_fee_sponsor_program_id(sponsor: &AccountId) -> FeeSponsorProgramId {
         "default".parse().expect("default fee sponsor program"),
     )
 }
+fn fee_sponsor_setup_hash(program_id: &FeeSponsorProgramId) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new(format!("iroha:test:fee-sponsor-program-setup:{program_id}").as_bytes())
+}
 fn provision_fee_sponsor_program(
     state_transaction: &mut iroha_core::state::StateTransaction<'_, '_>,
     sponsor: &AccountId,
@@ -65,9 +68,7 @@ fn provision_fee_sponsor_program(
     allocation: u128,
     activate_at_height: u64,
 ) {
-    let setup_call_hash = iroha_crypto::Hash::new(
-        format!("iroha:test:fee-sponsor-program-setup:{program_id}").as_bytes(),
-    );
+    let setup_call_hash = fee_sponsor_setup_hash(program_id);
     let previous_call_hash = state_transaction.tx_call_hash.replace(setup_call_hash);
     let selector = FeeSponsorRuleSelector::NativeInstruction(
         iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
@@ -171,6 +172,8 @@ fn non_vm_instructions_charge_fees() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
+    let native_chain = crate::block::tests::component_chain(state);
+    let state = native_chain.state();
     // 3) Build a simple native ISI transaction (SetKeyValue<Account>)
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
@@ -201,7 +204,13 @@ fn non_vm_instructions_charge_fees() {
     .sign(alice_kp.private_key());
     // 4) Execute after genesis so the production fee exemption does not apply.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let block_header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -280,6 +289,8 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
+    let native_chain = crate::block::tests::component_chain(state);
+    let state = native_chain.state();
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
         "k".parse().unwrap(),
@@ -308,7 +319,13 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let block_header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.current_dataspace_id = Some(route);
@@ -402,6 +419,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
+    let native_chain = crate::block::tests::component_chain(state);
+    let state = native_chain.state();
 
     // 3) Build a simple native ISI transaction (SetKeyValue<Account>)
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
@@ -436,9 +455,16 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     .sign(alice_kp.private_key());
     // 4) Execute after genesis and verify sponsored fee transfer.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let block_header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(block_header);
-    let mut state_tx = block.transaction();
+    // Setup is a bounded direct component invocation, separate from the signed fee intent.
+    let mut state_tx = block.transaction_for_fastpq_testing(fee_sponsor_setup_hash(&program_id));
     provision_fee_sponsor_program(
         &mut state_tx,
         &sponsor_id,
@@ -560,7 +586,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     // first block, so setup transfers cannot become unowned finalized sources.
     let mut setup_state_block = state.block(setup_block.header());
     {
-        let mut setup_state_tx = setup_state_block.transaction();
+        let mut setup_state_tx =
+            setup_state_block.transaction_for_fastpq_testing(fee_sponsor_setup_hash(&program_id));
 
         provision_fee_sponsor_program(
             &mut setup_state_tx,
@@ -741,10 +768,25 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         [payer_balance, tech_balance],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-    let mut state = new_state(world, kura, query_handle, chain.clone());
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::from(1_u32);
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::from(1_u32);
+    nexus.fees.fee_asset_id = asset_def_id.canonical_address();
+    nexus.fees.fee_sink_account_id = gas_id.to_string();
+    let (mut state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        world,
+        nexus.clone(),
+        query_handle,
+        chain,
+        test_network_id(b"fee-free-configured-genesis"),
+    );
+    state
+        .set_nexus_from_config(nexus)
+        .expect("original configured fee asset");
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
     pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
@@ -756,15 +798,6 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
-    {
-        let nexus = state.nexus.get_mut();
-        nexus.fees.base_fee = Quantity::from(1_u32);
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::from(1_u32);
-        nexus.fees.fee_asset_id = asset_def_id.canonical_address();
-        nexus.fees.fee_sink_account_id = gas_id.to_string();
-    }
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
         alice_id.clone(),
         "k".parse().unwrap(),
@@ -929,6 +962,8 @@ fn ivm_syscall_charges_fees() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
+    let native_chain = crate::block::tests::component_chain(state);
+    let state = native_chain.state();
     let scall = encoding::wide::encode_sys(
         instruction::wide::system::SCALL,
         u8::try_from(ivm_sys::SYSCALL_DEBUG_PRINT).expect("syscall id fits in u8"),
@@ -957,7 +992,13 @@ fn ivm_syscall_charges_fees() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let block_header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let contract_route = iroha_model_base::topology::DataSpaceId::new(10);
@@ -1104,6 +1145,8 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
         volatility: GasVolatility::Stable,
     }];
     state.set_pipeline(pipeline);
+    let native_chain = crate::block::tests::component_chain(state);
+    let state = native_chain.state();
     // 3) Build a minimal IVM program that consumes gas
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -1137,7 +1180,13 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
     .sign(alice_kp.private_key());
     // 4) Execute after genesis and verify exact actual asset effects.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let block_header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();

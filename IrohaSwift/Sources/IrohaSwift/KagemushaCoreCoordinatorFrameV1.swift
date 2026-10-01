@@ -11,6 +11,7 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case acknowledgeCommittedAppAttest
   case exportOutgoingStateProof
   case prepareIncomingFold, completeIncomingFold, stageIncomingOriginal
+  case authenticatedHardwarePolicy
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -118,10 +119,19 @@ public enum KagemushaCoreCoordinatorFrameV1 {
     case .acceptQualification:
       try count(fields, 6); try qualification(fields, 0); try digest(fields, 5)
     case .acceptAuthenticatedReply:
-      try count(fields, 10); try operation(fields, 0); try digest(fields, 1)
+      try operation(fields, 0)
+      let deviceOperation = try number(fields, 0)
+      try count(fields, deviceOperation == 12 ? 11 : 10); try digest(fields, 1)
       try nonempty(fields, 2); try nonempty(fields, 3)
       _ = try KagemushaDeviceSignatureV1(rawBytes: fields[4])
       try qualification(fields, 5)
+      if deviceOperation == 12 {
+        try bounded(fields, 10, 65_716)
+        let original = try KagemushaDeviceLifecycleBridgeV1.decodeUnverifiedResponse(fields[10],
+          expectedOperation: .releaseOutboxEntry, expectedRequestID: fields[1])
+        try require(original.status == .success && original.payload == fields[3]
+          && original.authenticator == fields[4], "original release response mismatch")
+      }
     case .beginSenderTransition:
       try digest(fields, 0)
       let end = try senderInputs(fields, 1)
@@ -188,19 +198,24 @@ public enum KagemushaCoreCoordinatorFrameV1 {
         && String(data: keyID, encoding: .utf8) != nil, "invalid App Attest key ID")
       _ = try KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: field(fields, 2))
       try bounded(fields, 3, 8 * 1024)
-      try require(number(fields, 4) != UInt32.max, "App Attest counter exhausted")
+      let floor = try number(fields, 4)
+      let signedCounter = try KagemushaAppAttestAssertionEvidenceV1.originalSignCount(field(fields, 3))
+      try require(signedCounter > floor, "App Attest counter did not advance")
       try digest(fields, 5); try digest(fields, 6)
     case .exportOutgoingStateProof:
       try count(fields, 1); try digest(fields, 0)
     case .prepareIncomingFold:
       try count(fields, 2); _ = try kind(fields, 0); try digest(fields, 1)
     case .completeIncomingFold:
-      try count(fields, 4); try digest(fields, 0); try bounded(fields, 1, 8192)
+      try count(fields, 4); try digest(fields, 0); try bounded(fields, 1, KagemushaWireV1.maximumPairedProofBytes)
+      _ = try KagemushaNoritoV1.decodePairedProofShapeExact(fields[1])
       try bounded(fields, 2, 96 * 1024)
       _ = try KagemushaDeviceSignatureV1(rawBytes: fields[3])
     case .stageIncomingOriginal:
       try count(fields, 2); try require(number(fields, 0) <= 2, "invalid incoming stage kind")
       try digest(fields, 1)
+    case .authenticatedHardwarePolicy:
+      try count(fields, 0)
     }
   }
 
@@ -269,8 +284,9 @@ public enum KagemushaCoreCoordinatorFrameV1 {
         try require(response[index] == Data(SHA256.hash(data: request[index])),
           "App Attest acknowledgment substituted original bytes")
       }
-      try require(number(response, 4) == number(request, 4) + 1,
-        "App Attest acknowledgment skipped the committed counter")
+      let signedCounter = try KagemushaAppAttestAssertionEvidenceV1.originalSignCount(request[3])
+      try require(number(response, 4) == signedCounter && signedCounter > number(request, 4),
+        "App Attest acknowledgment substituted the signed counter")
       try equal(response, 5, request, 5); try equal(response, 6, request, 6)
     case .exportOutgoingStateProof:
       try count(response, 3); try equal(response, 0, request, 0)
@@ -282,11 +298,15 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try digest(response, 6)
       let generation = try field(response, 7)
       try require(generation.count == 16 && generation.contains { $0 != 0 }, "invalid incoming epoch generation")
-      try digest(response, 8); try bounded(response, 9, 8192)
+      try digest(response, 8); try bounded(response, 9, KagemushaWireV1.maximumPairedProofBytes)
+      _ = try KagemushaNoritoV1.decodePairedProofShapeExact(response[9])
     case .completeIncomingFold:
       try count(response, 1); try equal(response, 0, request, 0)
     case .stageIncomingOriginal:
       try count(response, 1); try equal(response, 0, request, 1)
+    case .authenticatedHardwarePolicy:
+      try count(response, 3)
+      for index in response.indices { try digest(response, index) }
     }
   }
 

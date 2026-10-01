@@ -15,10 +15,36 @@ import kotlin.test.assertFailsWith
 
 class KagemushaCoreCoordinatorFrameV1Test {
     @Test
+    fun `release acceptance requires its exact original frame and retires ten fields`() {
+        // Public framing specimen; this is not hardware or monetary qualification.
+        val id = ByteArray(32) { 7 }
+        val signature = ByteArray(64).also { it[31] = 1; it[63] = 1 }
+        val reply = byteArrayOf(0x12)
+        fun u32(value: Int) = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+        val original = ByteBuffer.allocate(116 + reply.size + signature.size).order(ByteOrder.LITTLE_ENDIAN)
+            .put("IKGMJRS1".toByteArray(Charsets.US_ASCII)).putShort(1).put(12).put(0).put(id)
+            .putInt(reply.size).putInt(signature.size).put(MessageDigest.getInstance("SHA-256").digest(reply))
+            .put(MessageDigest.getInstance("SHA-256").digest(signature)).put(reply).put(signature).array()
+        val retired = listOf(u32(12), id, byteArrayOf(1), reply, signature,
+            u32(1), id, byteArrayOf(3), byteArrayOf(4), u32(0xffff))
+        val method = KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY
+        assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(method, retired) }
+        val fields = retired + listOf(original)
+        val frame = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields)
+        assertContentEquals(original, KagemushaCoreCoordinatorFrameV1.decodeRequest(method, frame)[10])
+        listOf(1, 3, 4, 10).forEach { index ->
+            val changed = fields.map { it.copyOf() }.toMutableList()
+            changed[index] = if (index == 10) changed[index].copyOf(changed[index].size - 1)
+                else changed[index].also { it[0] = (it[0].toInt() xor 1).toByte() }
+            assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed) }
+        }
+    }
+
+    @Test
     fun `coordinator methods agree with the shared current schema vectors`() {
         val cases = fixtures()
-        assertEquals((1..14).toSet(), cases.map { it.method.code }.toSet())
-        assertEquals(21, cases.size)
+        assertEquals((1..18).toSet(), cases.map { it.method.code }.toSet())
+        assertEquals(25, cases.size)
         cases.forEach { case ->
             val request = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
             val response = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
@@ -59,8 +85,10 @@ class KagemushaCoreCoordinatorFrameV1Test {
                 case.request + byteArrayOf(0),
                 case.request.copyOf().apply { this[8] = 1 },
                 case.request.copyOf().apply { this[12] = 1 },
-                case.request.copyOf().apply { this[10] = 17 },
-                case.request.copyOf().apply { fill(-1, 16, 20) },
+                case.request.copyOf().apply { this[10] = 19 },
+                case.request.copyOf().apply {
+                    if (size >= 20) fill(-1, 16, 20) else this[10] = 1
+                },
             ).forEach { malformed ->
                 assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, malformed) }
             }
@@ -76,7 +104,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
     fun `every closed field inventory rejects extra or missing fields`() {
         fixtures().forEach { case ->
             val fields = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
-            assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method, fields.dropLast(1)) }
+            if (fields.isNotEmpty()) assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method, fields.dropLast(1)) }
             assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method, fields + listOf(byteArrayOf(1))) }
             val response = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
             assertFailsWith<IllegalArgumentException> { KagemushaCoreCoordinatorFrameV1.encodeResponse(case.method, case.request, response + listOf(byteArrayOf(1))) }
@@ -89,9 +117,15 @@ class KagemushaCoreCoordinatorFrameV1Test {
             "installed-terminal" to 0, "recover-sender" to 0, "recover-terminal" to 1,
             "release-send" to 3, "release-redeem" to 3, "app-attest-ack" to 0,
             "outgoing-state-proof-export" to 0)
-        fixtures().filter { it.name in indexes }.forEach { case ->
+        fixtures().forEach { case ->
+            val index = when (case.method) {
+                KagemushaCoreCoordinatorMethodV1.PREPARE_INCOMING_FOLD -> 1
+                KagemushaCoreCoordinatorMethodV1.COMPLETE_INCOMING_FOLD,
+                KagemushaCoreCoordinatorMethodV1.STAGE_INCOMING_ORIGINAL -> 0
+                else -> indexes[case.name] ?: return@forEach
+            }
             val fields = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
-            fields[indexes.getValue(case.name)][0] = 0x7f
+            fields[index][0] = (fields[index][0].toInt() xor 1).toByte()
             assertFailsWith<IllegalArgumentException>(case.name) {
                 KagemushaCoreCoordinatorFrameV1.encodeResponse(case.method, case.request, fields)
             }

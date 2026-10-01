@@ -1142,6 +1142,18 @@ pub(super) fn apply_mutation_original(
             let original = incoming::decode_incoming_original_v1(canonical_original)?;
             incoming::apply_incoming_original_v1(owner, &original, true)?;
         }
+        Mutation::OutboxRelease {
+            canonical_command,
+            original_response,
+            canonical_terminal_original,
+        } => {
+            payment_release::apply_original(
+                owner,
+                canonical_command,
+                original_response,
+                canonical_terminal_original,
+            )?;
+        }
     }
     owner.journals.validate_pair(&owner.machine)?;
     owner

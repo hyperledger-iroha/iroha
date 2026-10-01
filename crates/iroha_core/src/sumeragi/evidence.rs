@@ -541,12 +541,11 @@ pub(crate) fn observe(
 }
 
 /// Proposer-only bounded selection. Follower verification never consults this private pool.
-pub(crate) fn pending_evidence_admissions_from_world(
+pub(crate) fn pending_evidence_admissions_from_view(
     state: &State,
     height: u64,
-    _: &impl WorldReadOnly,
+    view: &StateView<'_>,
 ) -> Vec<Evidence> {
-    let view = state.view();
     let mut pending = state.native_pending_evidence.lock();
     pending.prune(view.world(), height);
     let mut selected = Vec::new();
@@ -561,7 +560,7 @@ pub(crate) fn pending_evidence_admissions_from_world(
             selected.push(Evidence {
                 native: entry.frame.as_slice().to_vec(),
             });
-            if validate_admissions(&view, height, &selected).is_err() {
+            if validate_admissions(view, height, &selected).is_err() {
                 selected.pop();
             }
         }

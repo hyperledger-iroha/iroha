@@ -826,6 +826,7 @@ impl FreshIssuerAdmissionV1 {
     pub fn enrollment_binding(&self) -> &KagemushaRecoveryEnrollmentBindingV1 {
         &self.pending.enrollment
     }
+    /// Retain the journal's original deadline when handing admission to device possession.
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.pending.deadline()
     }

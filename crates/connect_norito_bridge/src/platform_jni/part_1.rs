@@ -313,42 +313,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
         request_norito,
     )
 }
-/// Report the exact native ABI required by the Java Hijiri quote bridge.
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeBridgeAbiVersion(
-    _env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-) -> jni::sys::jint {
-    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
-}
-/// Java SDK projection of [`connect_norito_validation_fee_hijiri_quote_request_v1`].
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeEncodeRequestV1(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    account_id_utf8: jni::objects::JByteArray<'_>,
-    qualifying_transfer_count: jni::sys::jint,
-) -> jni::sys::jbyteArray {
-    java_native_validation_fee_hijiri_quote_request_v1(
-        &mut env,
-        account_id_utf8,
-        qualifying_transfer_count,
-    )
-}
-/// Java SDK projection of [`connect_norito_validation_fee_hijiri_quote_response_verify_v1`].
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_validationfee_ValidationFeeHijiriQuoteBridge_nativeVerifyResponseV1(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    response_norito: jni::objects::JByteArray<'_>,
-    request_norito: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_validation_fee_hijiri_quote_response_verify_v1(
-        &mut env,
-        response_norito,
-        request_norito,
-    )
-}
 pub(super) fn java_sorafs_reference_generated_at(
     generated_at: jni::sys::jlong,
 ) -> Result<u64, String> {

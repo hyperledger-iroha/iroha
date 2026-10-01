@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, StateBlock, World},
+    state::{State, StateBlock, StateReadOnly, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -36,7 +36,14 @@ fn owner(index: u16) -> AccountId {
     )
 }
 
-fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, AccountId) {
+fn fixture(
+    count: usize,
+    final_scope_mismatch: bool,
+) -> (
+    crate::sumeragi::test_chain::CertifiedTestChain,
+    SettleAtomic,
+    AccountId,
+) {
     let sponsor = owner(u16::MAX);
     let domain_id = DomainId::try_new("atomic_overlay", "universal").expect("domain");
     let definition =
@@ -98,14 +105,29 @@ fn fixture(count: usize, final_scope_mismatch: bool) -> (State, SettleAtomic, Ac
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    let chain = crate::block::tests::component_chain(state);
     let instruction = SettleAtomic::new(
-        state.network_id.clone(),
+        chain.network_id(),
         "overlay_atomic_business".parse().expect("id"),
         AtomicSettlementMovements::try_from(movements).expect("canonical full vector"),
         nonzero!(100_u64),
         Metadata::default(),
     );
-    (state, instruction, sponsor)
+    (chain, instruction, sponsor)
+}
+
+fn next_block(state: &State) -> StateBlock<'_> {
+    assert!(
+        crate::sumeragi::lanes::routing::committed_root_scope(state.view().world()).is_some(),
+        "settlement permission cases require the actual signed genesis root",
+    );
+    state.block(BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ))
 }
 
 fn permission(instruction: &SettleAtomic, source: &AssetId) -> Permission {
@@ -130,7 +152,7 @@ fn grant_consents(
         if Some(index) == omit {
             continue;
         }
-        let mut grant_tx = block.transaction();
+        let mut grant_tx = block.transaction_for_fastpq_testing(Hash::new(index.to_le_bytes()));
         assert!(matches!(
             grant_tx.world.executor.clone(),
             crate::executor::Executor::Initial
@@ -139,7 +161,7 @@ fn grant_consents(
             !crate::executor::is_initial_genesis_context(&grant_tx),
             "actual issuer policy must execute without genesis exceptions"
         );
-        grant_tx.tx_call_hash = Some(Hash::new(index.to_le_bytes()));
+
         let permission: Permission = CanExecuteSettlement {
             debited_asset: movement.source.clone(),
             settlement_id: instruction.settlement_id().clone(),
@@ -213,11 +235,12 @@ fn observable(state_tx: &StateTransaction<'_, '_>) -> (Vec<Vec<u8>>, usize) {
 fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
     for direct in [false, true] {
         for count in [3, 255] {
-            let (state, instruction, sponsor) = fixture(count, false);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+            let (chain, instruction, sponsor) = fixture(count, false);
+            let state = chain.state();
+            let mut block = next_block(state);
             grant_consents(&mut block, &instruction, &sponsor, None);
-            let mut state_tx = block.transaction();
-            state_tx.tx_call_hash = Some(Hash::new(b"atomic-overlay-carrier"));
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::new(b"atomic-overlay-carrier"));
             assert_eq!(state_tx.pending_transfer_transcript_count_for_testing(), 0);
             let event_count = state_tx.world.internal_event_buf.len();
             overlay(instruction.clone(), direct)
@@ -280,11 +303,12 @@ fn atomic_overlay_direct_and_boxed_execute_exact_owner_consents() {
 #[test]
 fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
     for direct in [false, true] {
-        let (state, instruction, sponsor) = fixture(255, false);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let (chain, instruction, sponsor) = fixture(255, false);
+        let state = chain.state();
+        let mut block = next_block(state);
         grant_consents(&mut block, &instruction, &sponsor, Some(254));
-        let mut state_tx = block.transaction();
-        state_tx.tx_call_hash = Some(Hash::new(b"missing-final-consent"));
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::new(b"missing-final-consent"));
         let before = observable(&state_tx);
         assert_eq!(
             before.1, 0,
@@ -304,11 +328,11 @@ fn atomic_overlay_final_missing_consent_rejects_before_any_movement() {
 #[test]
 fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution() {
     for direct in [false, true] {
-        let (state, instruction, sponsor) = fixture(255, true);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
+        let (chain, instruction, sponsor) = fixture(255, true);
+        let state = chain.state();
+        let mut block = next_block(state);
         grant_consents(&mut block, &instruction, &sponsor, None);
-        let mut state_tx = block.transaction();
-        state_tx.tx_call_hash = Some(Hash::new(b"final-scope-policy"));
+        let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"final-scope-policy"));
         let before = observable(&state_tx);
         assert_eq!(before.1, 0);
         let error = overlay(instruction, direct)
@@ -324,9 +348,10 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
 
 #[test]
 fn atomic_overlay_nonowner_cannot_issue_the_final_owner_consent() {
-    let (state, instruction, sponsor) = fixture(3, false);
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-    let mut state_tx = block.transaction();
+    let (chain, instruction, sponsor) = fixture(3, false);
+    let state = chain.state();
+    let mut block = next_block(state);
+    let mut state_tx = block.transaction_for_fastpq_testing(Hash::new(b"nonowner-final-consent"));
     assert!(!crate::executor::is_initial_genesis_context(&state_tx));
     let source = &instruction.movements().as_slice()[2].source;
     let grant = TxOverlay::from_instructions(vec![

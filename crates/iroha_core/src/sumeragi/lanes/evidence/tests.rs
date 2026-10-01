@@ -470,6 +470,7 @@ fn ancestry(
         subject,
         window,
     )
+    .map_err(|(_, error)| error)
 }
 
 fn admitted_crypto(fixture: &Fixture) -> BlsCrypto {
@@ -614,7 +615,7 @@ fn anchored_lane_ancestry_distinguishes_native_coverage_and_independent_genesis(
             1,
             10
         ),
-        Err(LaneAncestryError::Authority)
+        Err((_, LaneAncestryError::Authority))
     ));
     let mut config = lane_height_config(&fixture.record).unwrap();
     config.epoch.authority_generation.0[0] ^= 1;
@@ -627,7 +628,7 @@ fn anchored_lane_ancestry_distinguishes_native_coverage_and_independent_genesis(
             1,
             10
         ),
-        Err(LaneAncestryError::Authority)
+        Err((_, LaneAncestryError::Authority))
     ));
 }
 

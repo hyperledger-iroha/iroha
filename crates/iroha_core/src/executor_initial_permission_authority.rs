@@ -1389,6 +1389,15 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
+    // Citizenship is a self-owned bonded lifecycle. Core binds the owner to the
+    // signer and enforces the minimum bond, monotonic top-ups, and retained-bond
+    // restrictions before allowing registration or release.
+    if is_any!(
+        iroha_data_model::isi::governance::RegisterCitizen,
+        iroha_data_model::isi::governance::UnregisterCitizen,
+    ) {
+        return true;
+    }
     // Retail identifier policies and claims are bound to their signed policy and
     // RAM-LFE proof state by Core.
     if is_any!(
@@ -1457,7 +1466,6 @@ fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionB
     is_any!(
         iroha_data_model::isi::verifying_keys::RegisterVerifyingKey,
         iroha_data_model::isi::verifying_keys::UpdateVerifyingKey,
-        iroha_data_model::isi::governance::RegisterCitizen,
         iroha_data_model::isi::soradns::PublishDirectory,
         iroha_data_model::isi::soradns::RevokeResolver,
         iroha_data_model::isi::soradns::UnrevokeResolver,
@@ -1595,6 +1603,16 @@ fn validate_initial_native_instruction_authority(
         return deny("authority cannot mutate another account's multisig controller");
     }
     if let Some(set_parameter) = any.downcast_ref::<iroha_data_model::isi::SetParameter>() {
+        if matches!(
+            set_parameter.inner(),
+            iroha_data_model::parameter::Parameter::Custom(parameter)
+                if parameter.id() == &iroha_data_model::nexus::ValidatorCommitteeOperationV1::parameter_id()
+        ) {
+            // This reserved envelope is a native preparation command. Its Core
+            // handler checks the exact staked owner, generation, frozen attempt
+            // and possession/readiness proofs; it never writes a generic parameter.
+            return Ok(());
+        }
         if matches!(
             set_parameter.inner(),
             iroha_data_model::parameter::Parameter::Custom(parameter)

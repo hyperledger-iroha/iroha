@@ -505,10 +505,10 @@ impl<'a> PenaltyApplier<'a> {
             )
             .and_then(|snapshot| {
                 let admissions = if include_admissions {
-                    super::evidence::pending_evidence_admissions_from_world(
+                    super::evidence::pending_evidence_admissions_from_view(
                         self.state,
                         block_header.height().get(),
-                        view.world(),
+                        &view,
                     )
                 } else {
                     Vec::new()

@@ -17,6 +17,20 @@ import kotlin.test.assertTrue
 
 class HttpTransportScopeTest {
     @Test
+    fun owningClientCancelsPendingCallsAndClosesTransferredBackendExactlyOnce() {
+        val backend = DeferredBackend()
+        val client = HttpClientTransport.createOwned(backend, ClientConfig.builder().setBaseUri(URI("https://example.test/")).build())
+        val pending = client.getBridgeFinalityBundleJson(1)
+        client.close()
+        client.close()
+        assertTrue(pending.isCompletedExceptionally)
+        assertTrue(backend.responses.single().isCancelled)
+        assertEquals(1, backend.closes)
+        assertFailsWith<java.util.concurrent.ExecutionException> { client.getBridgeFinalityBundleJson(1).get(1, TimeUnit.SECONDS) }
+        assertEquals(1, backend.responses.size)
+    }
+
+    @Test
     fun clientsCancelOnlyTheirOwnCallsOnASharedBackend() {
         val backend = DeferredBackend()
         val first = HttpTransportScope.create(backend)

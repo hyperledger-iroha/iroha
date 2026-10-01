@@ -336,8 +336,8 @@ pub const KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1: u32 = 1 << 17;
 /// Apple App Attest signs an increasing assertion counter. This does not claim a
 /// rollback-resistant monetary journal or one-use hardware key.
 pub const KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1: u32 = 1 << 18;
-/// Android `KeyMint` attests rollback resistance and a hardware-enforced one-use
-/// key limit for each transition key.
+/// A separately qualified hardware one-use protocol capability.
+/// Ordinary Android app key enrollment does not assert this property.
 pub const KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1: u32 = 1 << 19;
 /// Exact ordinary iPhone App Attest guarantee set.
 pub const KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1: u32 =
@@ -346,9 +346,7 @@ pub const KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1: u32 =
         | KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1;
 /// Exact ordinary Android `KeyMint` guarantee set.
 pub const KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1: u32 =
-    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_IDENTITY_V1
-        | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1
-        | KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1;
+    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_IDENTITY_V1 | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1;
 
 const DEVICE_KEY_REFERENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:device-key-reference";
 const ASSET_IDENTITY_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:asset-identity";
@@ -986,7 +984,7 @@ pub enum KagemushaHardwarePlatformClassV1 {
     OtherQualified,
     /// Ordinary iPhone app using governed App Attest enrollment and assertions.
     AppleAppAttest,
-    /// Ordinary Android app using governed `KeyMint` enrollment and one-use keys.
+    /// Ordinary Android app using a policy-admitted attested TEE or StrongBox approval key.
     AndroidKeyMint,
 }
 

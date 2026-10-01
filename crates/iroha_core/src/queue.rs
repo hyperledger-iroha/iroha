@@ -5846,6 +5846,7 @@ pub mod tests {
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness},
     };
     use iroha_data_model::{
+        IntoKeyValue,
         account::{AccountDetails, AccountValue},
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
@@ -6178,35 +6179,78 @@ pub mod tests {
             topology.commit();
         }
         let nexus = state.nexus_snapshot();
-        let statuses = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                (
-                    lane.id,
-                    LaneManifestStatus {
-                        lane: lane.id,
-                        alias: lane.alias.clone(),
-                        dataspace: lane.dataspace_id,
-                        visibility: lane.visibility.clone(),
-                        storage: lane.storage.clone(),
-                        governance: None,
-                        manifest_path: Some(PathBuf::from(format!(
-                            "/test/queue-lane-{}.json",
-                            lane.id.as_u32()
-                        ))),
-                        governance_rules: Some(GovernanceRules {
-                            validators: validator_accounts.clone(),
-                            ..GovernanceRules::default()
-                        }),
-                        privacy_commitments: Vec::new(),
-                    },
-                )
-            })
-            .collect();
-        Arc::new(LaneManifestRegistry::from_statuses(statuses))
+        // Queue persistence rebinds the source authority. Keep actual canonical
+        // source bytes in the frozen registry instead of telemetry-only statuses.
+        let directory = tempfile::tempdir().expect("queue manifest source directory");
+        for lane in nexus.lane_catalog.lanes() {
+            let manifest = iroha_data_model::nexus::NativeLaneManifestV1 {
+                lane: Some(lane.alias.clone()),
+                governance: lane.governance.clone(),
+                version: Some(iroha_data_model::nexus::NativeLaneManifestV1::VERSION),
+                validators: Some(
+                    validator_accounts
+                        .iter()
+                        .zip(validator_keys)
+                        .map(|(account, key)| {
+                            iroha_data_model::nexus::NativeLaneValidatorBindingV1 {
+                                validator: Some(account.to_string()),
+                                peer_id: Some(PeerId::new(key.public_key().clone()).to_string()),
+                                torii_url: None,
+                            }
+                        })
+                        .collect(),
+                ),
+                ..iroha_data_model::nexus::NativeLaneManifestV1::default()
+            };
+            std::fs::write(
+                directory
+                    .path()
+                    .join(format!("{}.manifest.json", lane.alias)),
+                norito::json::to_vec(&manifest).expect("encode canonical queue manifest"),
+            )
+            .expect("write canonical queue manifest source");
+        }
+        let mut registry_config = nexus.registry.clone();
+        registry_config.manifest_directory = Some(directory.path().to_path_buf());
+        Arc::new(LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &registry_config,
+        ))
     }
+    #[test]
+    fn queue_lane_authority_retains_frozen_source_and_exact_committee() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let manifests = exact_f1_lane_authority_for_queue_test(&mut state, 0x71);
+        let nexus = state.nexus_snapshot();
+        let rebound = manifests.rebind(&nexus.lane_catalog, &nexus.governance);
+        assert_eq!(
+            rebound.consensus_policy_digest(),
+            manifests.consensus_policy_digest()
+        );
+        let rules = rebound
+            .lane_rules(LaneId::SINGLE)
+            .expect("frozen lane rules");
+        assert_eq!(rules.validators.len(), 4);
+        assert_eq!(rules.validator_bindings.len(), 4);
+        assert_eq!(rules.version, 1);
+        let status = rebound.status(LaneId::SINGLE).expect("lane source status");
+        assert!(
+            !status
+                .manifest_path
+                .as_ref()
+                .expect("original source path")
+                .exists(),
+            "rebinding retains the frozen original after temporary files are removed"
+        );
+        state.install_lane_manifests_for_testing(&Arc::new(rebound));
+        assert_eq!(state.view().commit_topology().len(), 4);
+    }
+
     fn exact_lane_authority_for_queue_test(
         state: &mut State,
         validator_keys: &[iroha_crypto::KeyPair],
@@ -6751,12 +6795,12 @@ pub mod tests {
         );
     }
     #[test]
-    fn apply_lane_lifecycle_repair_retire_clears_queue_limits() {
-        let retired_lane = LaneId::new(1);
-        let stale_teu_capacity = 321;
+    fn apply_lane_lifecycle_physical_retirement_refusal_preserves_queue_limits() {
+        let target_lane = LaneId::new(1);
+        let teu_capacity = 321;
         let mut state = state_with_future_created_autoscale_lane(7, 0);
         assert!(
-            state.lane_incarnation(retired_lane).is_some(),
+            state.lane_incarnation(target_lane).is_some(),
             "repair fixture must keep exact incarnation coverage for every catalog lane"
         );
         let mut nexus = state.nexus_snapshot();
@@ -6764,10 +6808,10 @@ pub mod tests {
             let mut lanes = nexus.lane_catalog.lanes().to_vec();
             lanes
                 .iter_mut()
-                .find(|lane| lane.id == retired_lane)
+                .find(|lane| lane.id == target_lane)
                 .expect("future-created autoscale lane exists")
                 .scheduler = Some(LaneSchedulerPolicy::new(
-                Some(NonZeroU64::new(stale_teu_capacity).expect("positive TEU capacity")),
+                Some(NonZeroU64::new(teu_capacity).expect("positive TEU capacity")),
                 None,
             ));
             nexus.lane_catalog =
@@ -6798,49 +6842,39 @@ pub mod tests {
         );
         queue.time_source = time_source;
         assert_eq!(
-            queue.queue_limits().for_lane(retired_lane).teu_capacity,
-            stale_teu_capacity,
-            "test setup must expose the stale lane-specific TEU override"
+            queue.queue_limits().for_lane(target_lane).teu_capacity,
+            teu_capacity,
+            "test setup must expose the lane-specific TEU override"
         );
         assert!(
-            queue.queue_limits().per_lane.contains_key(&retired_lane),
-            "test setup must cache a lane-specific queue limit before repair"
+            queue.queue_limits().per_lane.contains_key(&target_lane),
+            "test setup must cache its lane-specific queue limit"
         );
         let plan = LaneLifecyclePlan {
             additions: Vec::new(),
-            retire: vec![retired_lane],
+            retire: vec![target_lane],
         };
-        queue
+        let state_catalog_before = state.nexus_snapshot().lane_catalog;
+        let queue_catalog_before = queue.lane_catalog.read().as_ref().clone();
+        let limits_before = queue.queue_limits();
+        let incarnation_before = state.lane_incarnation(target_lane);
+        let error = queue
             .apply_lane_lifecycle(&mut state, &plan)
-            .expect("future-created autoscale lane should be explicitly repair-retirable");
+            .expect_err("physical retirement must retain catalog data and limits");
         assert!(
-            state
-                .nexus_snapshot()
-                .lane_catalog
-                .lanes()
-                .iter()
-                .all(|lane| lane.id != retired_lane),
-            "repair retire must remove the future-created autoscale lane from state"
+            matches!(error, LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == target_lane && reason ==
+                "physical catalog retirement is unsupported; native lane closure retains its data")
         );
-        assert!(
-            queue
-                .lane_catalog
-                .read()
-                .lanes()
-                .iter()
-                .all(|lane| lane.id != retired_lane),
-            "repair retire must refresh queue catalogs from accepted state"
-        );
-        let limits = queue.queue_limits();
-        assert!(
-            !limits.per_lane.contains_key(&retired_lane),
-            "repair retire must remove the stale lane-specific queue limit"
-        );
+        assert_eq!(state.nexus_snapshot().lane_catalog, state_catalog_before);
+        assert_eq!(queue.lane_catalog.read().as_ref(), &queue_catalog_before);
+        assert_eq!(state.lane_incarnation(target_lane), incarnation_before);
+        assert_eq!(queue.queue_limits(), limits_before);
         assert_eq!(
-            limits.for_lane(retired_lane),
-            limits.fallback,
-            "retired lane capacity must fall back after queue reconfiguration"
+            queue.queue_limits().for_lane(target_lane).teu_capacity,
+            teu_capacity
         );
+        assert!(queue.queue_limits().per_lane.contains_key(&target_lane));
     }
     #[test]
     fn reconfiguration_retains_ordinary_input_when_its_admission_lane_is_removed() {
@@ -7272,7 +7306,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn forced_scale_in_reassigns_ordinary_input_without_global_fault() {
+    fn physical_scale_in_refusal_retains_ordinary_input_without_global_fault() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -7345,7 +7379,7 @@ pub mod tests {
                     &time_source,
                     vec![InstructionBox::from(Log::new(
                         Level::INFO,
-                        format!("autoscale scale-in survivor {idx}").into(),
+                        format!("physical scale-in candidate {idx}").into(),
                     ))],
                     Metadata::default(),
                 )
@@ -7355,7 +7389,7 @@ pub mod tests {
                     .route_with_state(tx, &state)
                     .is_ok_and(|routing| routing.lane_id == LaneId::new(1))
             })
-            .expect("fixture should find a transaction hashing to the lane that will retire");
+            .expect("fixture finds input hashing to the requested physical scale-in lane");
         let tx_hash = tx.as_ref().hash_as_entrypoint();
         queue
             .push(tx.clone(), state.view())
@@ -7368,14 +7402,21 @@ pub mod tests {
                 .coordinator_route(),
             RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
         );
-        state
+        let original_incarnation = state.lane_incarnation(LaneId::new(1));
+        let error = state
             .apply_autoscale_lane_lifecycle_for_tests(&LaneLifecyclePlan {
                 additions: Vec::new(),
                 retire: vec![LaneId::new(1)],
             })
-            .expect("publish the exact retired incarnation through lifecycle ownership");
+            .expect_err("physical scale-in must refuse instead of deleting retained data");
+        assert!(
+            matches!(error, LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == LaneId::new(1) && reason ==
+                "physical catalog retirement is unsupported; native lane closure retains its data")
+        );
         let committed_nexus = state.nexus_snapshot();
-        assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
+        assert_eq!(committed_nexus.lane_catalog, initial_nexus.lane_catalog);
+        assert_eq!(state.lane_incarnation(LaneId::new(1)), original_incarnation);
         assert_eq!(queue.active_len(), 1);
         assert_eq!(queue.queued_len(), 1);
         assert_eq!(
@@ -7387,9 +7428,9 @@ pub mod tests {
         );
         let current_route = queue
             .route_plan_with_state(&tx, &state)
-            .expect("Ordinary input must route through current committed lanes")
+            .expect("ordinary input retains its route after rejected physical scale-in")
             .coordinator_route();
-        assert_ne!(current_route.lane_id, LaneId::new(1));
+        assert_eq!(current_route.lane_id, LaneId::new(1));
         assert!(
             committed_nexus
                 .lane_catalog
@@ -7399,14 +7440,11 @@ pub mod tests {
         );
         assert!(!queue.accepted_work_validation_faulted());
         assert!(!queue.admission_faulted());
-        assert!(
-            queue
-                .lane_catalog
-                .read()
-                .lanes()
-                .iter()
-                .all(|lane| lane.id != LaneId::new(1))
+        assert_eq!(
+            queue.lane_catalog.read().as_ref(),
+            &initial_nexus.lane_catalog
         );
+        assert!(queue.contains_entrypoint_hash(tx_hash));
     }
     impl LaneRouter for StaticRouter {
         fn try_route(
@@ -8794,13 +8832,21 @@ pub mod tests {
         let artifact_operations = [
             (
                 "register bytes",
-                InstructionBox::from(RegisterSmartContractBytes { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+                InstructionBox::from(RegisterSmartContractBytes {
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        code_hash,
+                    ),
                     code: code.clone(),
                 }),
             ),
             (
                 "upload chunk",
-                InstructionBox::from(UploadSmartContractCodeChunk { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+                InstructionBox::from(UploadSmartContractCodeChunk {
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        code_hash,
+                    ),
                     total_size,
                     chunk_index: 0,
                     chunk_count: 1,
@@ -8809,7 +8855,11 @@ pub mod tests {
             ),
             (
                 "finalize upload",
-                InstructionBox::from(FinalizeSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash),
+                InstructionBox::from(FinalizeSmartContractCodeUpload {
+                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                        code_hash,
+                    ),
                     total_size,
                     chunk_count: 1,
                 }),
@@ -8847,7 +8897,12 @@ pub mod tests {
                 .unwrap_or_else(|error| panic!("{label} metadata should be satisfied: {error:?}"));
         }
         let cancel = InstructionBox::from(
-            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload { artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash)},
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
+                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    code_hash,
+                ),
+            },
         );
         let tx = accepted_tx_with(
             validator,
@@ -9544,51 +9599,127 @@ pub mod tests {
     }
     #[test]
     fn bounded_pending_snapshot_caps_fee_exempt_sccp_transactions() {
-        use crate::smartcontracts::isi::sccp::{
-            admission::{self, SccpExemptClassV1},
-            test_support::SampleInstructions,
+        use crate::{
+            smartcontracts::isi::sccp::{
+                admission::{self, SccpExemptClassV1},
+                bridge_keys, roster, subjects,
+                test_support::sample_bridge_key_state,
+            },
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig, fixture_validators},
         };
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        use iroha_data_model::{
+            IntoKeyValue, isi::sccp::SubmitSccpAttestationsV1,
+            sccp::attestation::SccpAttestationSignatureV1,
+        };
+        use iroha_sccp::v1::key_file::SccpBridgeKeyFileV1;
+
+        let bridge_keys = (1_u8..=4)
+            .map(|seed| SccpBridgeKeyFileV1::new([seed; 32], 0).expect("bridge key"))
+            .collect::<Vec<_>>();
+        let mut world = world_with_test_domains();
+        for key in &bridge_keys {
+            let account = bridge_keys::account_of(&key.public_key().expect("bridge public key"))
+                .expect("bridge account");
+            let (id, value) = Account::new(account.clone())
+                .build(&account)
+                .into_key_value();
+            world.accounts.insert(id, value);
+        }
+        let alice = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let (id, value) = Account::new(alice.clone()).build(&alice).into_key_value();
+        world.accounts.insert(id, value);
         {
-            // A one-transaction cap written directly; real parameters are validated by
-            // `InitializeSccpV1` and `SetParameters`.
             let mut parameters = iroha_data_model::sccp::params::SccpParametersV1::taira_default();
             parameters.max_exempt_transactions_per_block = 1;
-            let mut world = state.world.block();
+            let mut world = world.block();
             *world.sccp_parameters.get_mut() = Some(parameters);
+            for ((peer, _), key) in fixture_validators().into_iter().zip(&bridge_keys) {
+                let mut binding = sample_bridge_key_state(1);
+                let active = binding.active.as_mut().expect("active bridge key");
+                active.public_key = key.public_key().expect("bridge public key");
+                active.address = key.address().expect("bridge address");
+                world.sccp_bridge_keys.insert(peer, binding);
+            }
             world.commit();
         }
+        // The original signed genesis derives the real roster and height-one subject.
+        let chain =
+            CertifiedTestChain::start(TestChainConfig::new(world, 0)).expect("signed SCCP genesis");
+        let state = chain.state();
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
-        let attestation = |height| {
-            let mut instruction = SampleInstructions::attestations();
-            instruction.entries[0].height = height;
-            accepted_tx_with(
-                AccountId::new(ALICE_KEYPAIR.public_key().clone()),
-                &ALICE_KEYPAIR,
+        let accepted = |keypair: &KeyPair, instructions: Vec<InstructionBox>| {
+            let transaction = TransactionBuilder::new_with_time_source(
+                state.network_id,
+                AccountId::new(keypair.public_key().clone()),
                 &time_source,
-                vec![instruction.into()],
-                Metadata::default(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
+            .with_instructions(instructions)
+            .sign(keypair.private_key());
+            let view = state.view();
+            AcceptedTransaction::accept_with_time_source(
+                transaction,
+                state.network_id_ref(),
+                view.world().parameters().sumeragi().max_clock_drift(),
+                view.world().parameters().transaction(),
+                &state.crypto(),
+                &time_source,
+            )
+            .expect("signed queue input accepted")
         };
+        let attestation = |key: &SccpBridgeKeyFileV1| {
+            let view = state.view();
+            let (_, roster) = roster::current(view.world()).expect("committed SCCP roster");
+            assert_eq!(roster.members.len(), 4);
+            assert!(!roster.is_inert());
+            let address = key.address().expect("bridge address");
+            let signer_index = u8::try_from(
+                roster
+                    .members
+                    .iter()
+                    .position(|member| member.address == address)
+                    .expect("original bridge key is a roster member"),
+            )
+            .expect("four-member index fits u8");
+            let digest = subjects::statement_digest_of(&view, 1)
+                .expect("original committed genesis statement digest");
+            let instruction = SubmitSccpAttestationsV1 {
+                entries: vec![SccpAttestationSignatureV1 {
+                    height: 1,
+                    signer_index,
+                    signature: key.sign_digest(&digest).expect("sign committed statement"),
+                }],
+            };
+            drop(view);
+            let signer = KeyPair::from_private_key(
+                iroha_crypto::PrivateKey::from_bytes(Algorithm::Secp256k1, key.secret())
+                    .expect("bridge signing scalar"),
+            )
+            .expect("bridge signing keypair");
+            accepted(&signer, vec![instruction.into()])
+        };
+        // Concurrent claims use distinct actual bridge accounts; an account may retain
+        // only one pending attestation batch under the SCCP admission contract.
         let transactions = vec![
-            attestation(9),
-            attestation(10),
-            accepted_tx_by_someone(&time_source),
+            attestation(&bridge_keys[0]),
+            attestation(&bridge_keys[1]),
+            accepted(
+                &ALICE_KEYPAIR,
+                vec![Log::new(Level::INFO, "ordinary".into()).into()],
+            ),
         ];
         let hashes = transactions
             .iter()
             .map(AcceptedTransaction::hash_as_entrypoint)
             .collect::<Vec<_>>();
         for transaction in transactions {
-            register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
             queue.push(transaction, state.view()).expect("push");
         }
-        assert!(
-            queue.pending_sccp_exempt.lock().is_empty(),
-            "no admission-time claim exists, so the proposer cannot depend on one"
+        assert_eq!(
+            queue.pending_sccp_exempt.lock().len(),
+            2,
+            "both authenticated admission claims remain resident before bounded selection"
         );
         let snapshot = queue
             .bounded_pending_snapshot(&state.view(), nonzero!(16_usize))
@@ -9614,6 +9745,12 @@ pub mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(classes, vec![SccpExemptClassV1::Attestation]);
+        assert_eq!(queue.pending_sccp_exempt.lock().len(), 2);
+        assert_eq!(
+            queue.pending_sccp_exempt.lock().class_of(&hashes[1]),
+            Some(SccpExemptClassV1::Attestation),
+            "selection preserves the capped input's original admission ownership"
+        );
         assert!(
             admission::block_exempt_cap_ok(view.world(), &classes),
             "block validation accepts exactly what the proposer selected"
@@ -9779,13 +9916,20 @@ pub mod tests {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.hash_as_entrypoint();
-        let encoded_len = tx.entrypoint_bytes().len();
+        let signed_len = tx.encoded_len();
+        let original_frame = tx.entrypoint_bytes();
+        let encoded_len = original_frame.len();
         let expected_gas = Queue::compute_proposal_gas_cost(&tx).unwrap();
         queue.push(tx, state.view()).unwrap();
         let snapshot = queue
             .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
             .unwrap();
-        assert_eq!(snapshot[0].encoded_len(), encoded_len);
+        assert_eq!(snapshot[0].entrypoint_bytes().len(), encoded_len);
+        assert_eq!(snapshot[0].encoded_len(), signed_len);
+        assert_eq!(
+            snapshot[0].entrypoint_bytes().as_slice(),
+            original_frame.as_slice()
+        );
         assert_eq!(
             Queue::compute_proposal_gas_cost(&snapshot[0]),
             Ok(expected_gas)

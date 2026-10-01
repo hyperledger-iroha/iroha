@@ -6,7 +6,9 @@
 
 mod authority;
 pub(crate) use authority::{LaneAuthority, LaneAuthorityRead};
+mod custody;
 mod select;
+pub(crate) use custody::LaneCustodyView;
 
 use std::ops::Range;
 
@@ -186,6 +188,16 @@ impl LanePayload {
         incarnation: &[u8; 32],
     ) -> Result<Option<&[u8]>, LanePayloadError> {
         select::lane(self.payload(), incarnation).map_err(LanePayloadError::Codec)
+    }
+    /// Borrow original sparse signer custody without decoding or copying its vector.
+    pub(crate) fn custody_record(
+        &self,
+        incarnation: &[u8; 32],
+    ) -> Result<Option<LaneCustodyView<'_>>, LanePayloadError> {
+        select::custody(self.payload(), incarnation)?
+            .map(LaneCustodyView::parse)
+            .transpose()
+            .map_err(LanePayloadError::Codec)
     }
     /// Exact authenticated network and global carrier selection.
     pub(crate) fn carrier(&self) -> (NetworkId, u64, HashOf<BlockHeader>) {

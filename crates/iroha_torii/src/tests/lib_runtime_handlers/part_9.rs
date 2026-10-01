@@ -1200,7 +1200,8 @@ async fn app_api_get_by_id_not_found_returns_404() {
     // Authenticated artifact reads still pass through the finite route limiter.
     Arc::get_mut(&mut app)
         .expect("read fixture retains the sole app reference")
-        .rate_limiter = limits::RateLimiter::new_without_refill_for_tests(std::num::NonZeroU32::MIN);
+        .rate_limiter =
+        limits::RateLimiter::new_without_refill_for_tests(std::num::NonZeroU32::MIN);
     for expected in [
         axum::http::StatusCode::NOT_FOUND,
         axum::http::StatusCode::TOO_MANY_REQUESTS,

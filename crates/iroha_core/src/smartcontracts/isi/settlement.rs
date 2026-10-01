@@ -1885,7 +1885,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xF1; iroha_crypto::Hash::LENGTH],
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -1975,7 +1977,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xF2; iroha_crypto::Hash::LENGTH],
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2023,7 +2027,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+            b"fx_corridor_recipient_alias_domain_is_required_and_unambiguous",
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2063,7 +2069,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+            b"fx_corridor_rejects_recipient_bound_only_to_non_allowed_destination_domain",
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2095,7 +2103,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+            b"fx_corridor_rejects_policy_and_signed_intent_mismatches",
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2213,7 +2223,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xF3; iroha_crypto::Hash::LENGTH],
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2289,7 +2301,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 60_001, 60_001);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xF4; iroha_crypto::Hash::LENGTH],
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2308,7 +2322,9 @@ mod tests {
         policy.max_settlements_per_window = 1;
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xF4; iroha_crypto::Hash::LENGTH],
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2365,7 +2381,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+            b"fx_corridor_preflight_preserves_source_on_non_exact_or_unfunded_payout",
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2414,7 +2432,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+            b"fx_corridor_rejects_wrong_dataspace_and_frozen_reserve_without_partial_effects",
+        ));
         configure_fx_catalog(&mut stx, &policy);
         let mut wrong_scope = policy.clone();
         wrong_scope.source_dataspace = DataSpaceId::new(11);
@@ -2440,7 +2460,9 @@ mod tests {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::new(
+            b"fx_corridor_rejects_wrong_dataspace_and_frozen_reserve_without_partial_effects",
+        ));
         configure_fx_catalog(&mut stx, &policy);
         SetFxCorridorPolicy {
             policy: policy.clone(),
@@ -2765,7 +2787,9 @@ mod tests {
             settlement_state_with_balances(Quantity::from(20_u32), Quantity::from(2_000_u32));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xD7; iroha_crypto::Hash::LENGTH],
+        ));
         let instruction = DvpIsi::new(
             "dvp_exact_consent".parse().expect("settlement id"),
             SettlementLeg::new(
@@ -2877,7 +2901,9 @@ mod tests {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xD7; iroha_crypto::Hash::LENGTH],
+        ));
         let settlement_id: SettlementId = "dvp_trade".parse().unwrap();
         let delivery_leg = SettlementLeg::new(
             delivery_def_id.clone(),
@@ -2989,7 +3015,9 @@ mod tests {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xD7; iroha_crypto::Hash::LENGTH],
+        ));
         let dataspace = DataSpaceId::UNIVERSAL;
         stx.current_dataspace_id = Some(dataspace);
         stx.world.current_dataspace_id = Some(dataspace);
@@ -3060,7 +3088,9 @@ mod tests {
             settlement_state_with_balances(Quantity::from(100u32), Quantity::from(200u32));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xD7; iroha_crypto::Hash::LENGTH],
+        ));
         stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let instruction = DvpIsi {
@@ -3698,7 +3728,9 @@ mod tests {
         let (state, primary_def_id, counter_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+            [0xD8; iroha_crypto::Hash::LENGTH],
+        ));
         let settlement_id: SettlementId = "pvp_fx".parse().unwrap();
         let primary_leg = SettlementLeg::new(
             primary_def_id.clone(),
@@ -3794,6 +3826,59 @@ mod tests {
             "PvP replay must not replace or append to the committed receipt"
         );
     }
+    #[test]
+    fn pvp_component_refuses_unretained_invocation_before_balance_changes() {
+        let (state, primary, counter) = settlement_state();
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut transaction = block.transaction();
+        let instruction = PvpIsi::new(
+            "pvp_unretained_source".parse().unwrap(),
+            SettlementLeg::new(
+                primary.clone(),
+                Quantity::from(10_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementLeg::new(
+                counter.clone(),
+                Quantity::from(100_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementPlan::default(),
+        );
+        grant_pvp_consent(&mut transaction, &ALICE_ID, &instruction);
+        let transcripts = transaction.pending_transfer_transcript_count_for_testing();
+        let error = instruction
+            .clone()
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("a hash alone cannot mint the retained finite source owner");
+        assert!(
+            error
+                .to_string()
+                .contains("FASTPQ source has no retained producer invocation")
+        );
+        assert_eq!(
+            asset_balance_or_zero(&transaction, &AssetId::new(primary, ALICE_ID.clone())),
+            Quantity::from(10_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&transaction, &AssetId::new(counter, BOB_ID.clone())),
+            Quantity::from(1_000_u32)
+        );
+        assert_eq!(
+            transaction.pending_transfer_transcript_count_for_testing(),
+            transcripts
+        );
+        assert!(
+            transaction
+                .world
+                .settlement_receipts
+                .get(instruction.settlement_id())
+                .is_none()
+        );
+    }
+
     #[test]
     fn pvp_failure_preserves_balances() {
         let (state, primary_def_id, counter_def_id) = settlement_state();

@@ -2797,6 +2797,7 @@ fn world_with_root_scope_for_token_test(world: World, private: bool) -> World {
         let mut transaction = block.transaction_without_telemetry(Default::default(), 0);
         transaction
             .parameters_mut_for_testing()
+            .get_mut()
             .set_parameter(Parameter::Custom(CustomParameter::new(
                 consensus_metadata::handshake_meta_id(),
                 Json::new(metadata),

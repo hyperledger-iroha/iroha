@@ -28,6 +28,7 @@ use crate::kagemusha_device_bridge_v1::{
     ObservationWalletContextV1, QualificationProjectionV1, qualification_projection_v1,
     sender_payload::hardware_authorization_key_reference_v1,
     validate_coordinator_observation_binding_v1, verify_observation_reply_v1,
+    wallet_recovery_snapshot_projection_v1,
 };
 
 /// Closed native observation failures; none grants an empty-wallet or bootstrap decision.
@@ -595,6 +596,7 @@ impl NativeStartupQualificationOwnerV1 {
             authenticator,
             &qualification,
             &self.catalog.wallet,
+            &self.catalog.provider_policy_root,
         ) {
             return Err(ObservationErrorV1::Authentication);
         }
@@ -649,6 +651,57 @@ impl NativeStartupQualificationOwnerV1 {
     pub(crate) fn invalidate(&mut self) {
         self.pending.clear();
         self.current = None;
+    }
+
+    /// Lend only the already accepted original operation-21 result under its original
+    /// suspend-inclusive deadline and current qualification. This cannot begin a new
+    /// read, refresh a lease or admit an absent enrolled aggregate.
+    pub(super) fn authenticated_wallet_snapshot(
+        &self,
+        exact_canonical_reply: &[u8],
+    ) -> Result<(Vec<u8>, u128, u128, u128)> {
+        let pending = self
+            .pending
+            .get(&21)
+            .ok_or(ObservationErrorV1::MissingChallenge)?;
+        pending
+            .deadline
+            .check()
+            .map_err(|_| ObservationErrorV1::Expired)?;
+        let original = pending
+            .accepted
+            .as_ref()
+            .ok_or(ObservationErrorV1::Authentication)?;
+        if original.operation != 21
+            || original.nonce != pending.nonce
+            || original.canonical_command != pending.command
+            || original.canonical_reply != exact_canonical_reply
+            || self.current.as_ref() != Some(&original.qualification)
+        {
+            return Err(ObservationErrorV1::Conflict);
+        }
+        self.catalog.validate(&original.qualification)?;
+        if !verify_observation_reply_v1(
+            21,
+            original.nonce,
+            &original.canonical_command,
+            &original.canonical_reply,
+            &original.authenticator,
+            &original.qualification,
+            &self.catalog.wallet,
+            &self.catalog.provider_policy_root,
+        ) {
+            return Err(ObservationErrorV1::Authentication);
+        }
+        let (aggregate, revision, pending_count, retry_count) =
+            wallet_recovery_snapshot_projection_v1(&original.canonical_reply)
+                .ok_or(ObservationErrorV1::Authentication)?;
+        let aggregate = aggregate.ok_or(ObservationErrorV1::Authentication)?;
+        pending
+            .deadline
+            .check()
+            .map_err(|_| ObservationErrorV1::Expired)?;
+        Ok((aggregate, revision, pending_count, retry_count))
     }
 
     fn decode_qualification_fields(&self, fields: &[Vec<u8>]) -> Result<QualificationProjectionV1> {

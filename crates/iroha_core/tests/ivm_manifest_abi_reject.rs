@@ -9,7 +9,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     executor::{IvmAdmissionError, ValidationFail},
     prelude::*,
-    smart_contract::manifest,
+    smart_contract::{ContractArtifactId, manifest},
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
@@ -191,9 +191,10 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     // Register manifest with wrong abi_hash
     manifest.abi_hash = Some(iroha_crypto::Hash::prehashed(wrong_abi));
     let manifest = manifest.signed(&kp);
-    stx1.world
-        .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+    stx1.world.contract_manifests_mut_for_testing().insert(
+        ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+        manifest,
+    );
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the IVM program; admission should reject due to abi_hash mismatch
@@ -376,9 +377,10 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     // Register manifest with code_hash only
     manifest.abi_hash = None;
     let manifest = manifest.signed(&kp);
-    stx1.world
-        .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+    stx1.world.contract_manifests_mut_for_testing().insert(
+        ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+        manifest,
+    );
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: a present V1 manifest is incomplete without its ABI binding.
@@ -556,9 +558,10 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     manifest.code_hash = Some(code_hash);
     manifest.abi_hash = Some(iroha_crypto::Hash::prehashed(abi_hash));
     let manifest = manifest.signed(&kp);
-    stx1.world
-        .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+    stx1.world.contract_manifests_mut_for_testing().insert(
+        ContractArtifactId::new(DataSpaceId::UNIVERSAL, code_hash),
+        manifest,
+    );
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the program with an unknown syscall; admission should reject before execution.

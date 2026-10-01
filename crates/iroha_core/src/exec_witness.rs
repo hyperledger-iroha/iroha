@@ -1085,7 +1085,7 @@ mod tests {
     };
     use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
     use nonzero_ext::nonzero;
     use std::{collections::BTreeMap, time::Duration};
     struct AccessKeyFixture {
@@ -1115,6 +1115,7 @@ mod tests {
     fn access_key_fixture() -> AccessKeyFixture {
         let account = (*ALICE_ID).clone();
         let missing_account = (*BOB_ID).clone();
+        let supply_account = (*CARPENTER_ID).clone();
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
         let missing_domain = DomainId::try_new("looking_glass", "universal").expect("domain");
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -1163,8 +1164,14 @@ mod tests {
         asset_definition_record
             .metadata_mut()
             .insert("issuer".parse::<Name>().expect("metadata key"), "alice");
-        asset_definition_record.total_quantity = Quantity::from(37_u32);
         let asset_record = Asset::new(asset.clone(), 11_u32);
+        // World derives canonical supply from every real balance. Keep the total
+        // distinct from the queried account while the missing account stays absent.
+        let supply_account_record = Account::new(supply_account.clone()).build(&supply_account);
+        let remaining_supply = Asset::new(
+            AssetId::new(asset_definition.clone(), supply_account),
+            26_u32,
+        );
         let nft_record = Nft::new(nft.clone(), metadata_entry("artist", "carroll")).build(&account);
         let role_record = Role::new(role.clone(), account.clone())
             .add_permission(Permission::new(role_perm.into(), Json::new(true)))
@@ -1174,9 +1181,9 @@ mod tests {
             .build(&account);
         let mut world = World::with_assets_and_roles(
             [domain_record],
-            [account_record],
+            [account_record, supply_account_record],
             [asset_definition_record],
-            [asset_record],
+            [asset_record, remaining_supply],
             [nft_record],
             [role_record, unicode_role_record],
         );

@@ -10,7 +10,7 @@
 //! `R_g` through its signed `parent_result`; a genesis-only result requires local deterministic
 //! execution trust or a separately authenticated replay anchor.
 //!
-//! The reader offers two reads with different trust models:
+//! The reader offers three reads with explicit authority sources:
 //!
 //! - [`committed_block`]: **consensus-visible data only**, authenticated by the
 //!   original native execution tip captured in the same State publication generation.
@@ -28,6 +28,12 @@
 //!   default verifier checks both the exact BLS quorum and source-complete native paired-Pasta
 //!   attestations. A caller may explicitly supply an application verifier; there is no
 //!   signature-only finality fallback. Off-chain consumers use this read.
+//! - [`CertifiedChain::certified_from_execution`]: the same full certificate checks
+//!   anchored through the captured original native execution tip. A bounded reverse
+//!   walk authenticates the target and its parent; the parent's executed schedule
+//!   supplies the target authority. This State-only read refuses genesis and
+//!   unanchored/offline sources. It charges each frame before I/O under one retained
+//!   allocation scope, avoiding repeated genesis-prefix decoding for recent queries.
 //!
 //! **Epoch authority.** Every result retains its complete native epoch and schedule graph.
 //! The reader verifies the prefix iteratively from the signed genesis context, checks both
@@ -83,6 +89,13 @@ use crate::{
 };
 use iroha_data_model::NetworkId;
 use iroha_model_base::chain::ChainId;
+
+// Independent ceiling shared by portable verification and funded proposal acquisition.
+const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
+
+mod artifacts;
+pub(crate) use artifacts::PrefixArtifacts;
+pub(super) use artifacts::PrefixArtifactsRead;
 
 /// Domain tag of a certified block id: `H(tag ‖ block_hash ‖ R)`.
 pub const CERTIFIED_BLOCK_ID_TAG: &[u8] = b"iroha/sumeragi/certified-block/v1";
@@ -574,6 +587,7 @@ impl PrefixVerifierContext<'_> {
         &self,
         prefix: &mut VerifiedPrefix,
         committed: CommittedBlock,
+        artifacts: Option<PrefixArtifacts>,
     ) -> Result<CertifiedBlock, ChainReadError> {
         let height = committed.height;
         if !committed.extends(&prefix.tip) {
@@ -597,40 +611,8 @@ impl PrefixVerifierContext<'_> {
         let config = scheduled
             .height_config()
             .map_err(|error| malformed(error.to_string()))?;
-        let certified = self.verify_certificate(committed, &authority, Some(&config))?;
-        if let Some(boundary) = &certified.commitment.schedule.boundary {
-            if boundary.selection_anchor != prefix.tip.block_hash() {
-                return Err(malformed(
-                    "boundary selection anchor differs from certified parent".into(),
-                ));
-            }
-            let pulse = prefix.tip.commitment.beacon.as_ref().ok_or_else(|| {
-                malformed("boundary predecessor omits its certified selection pulse".into())
-            })?;
-            let expected_seed = crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
-                pulse,
-                height,
-                boundary.next.authorization.epoch,
-            );
-            if boundary.next.leader_seed != expected_seed {
-                return Err(malformed(
-                    "boundary leader seed differs from certified fresh pulse".into(),
-                ));
-            }
-            if let Some(preparation) = &boundary.preparation {
-                let expected = super::epoch_election::election_seed(
-                    authority.material.network_id,
-                    authority.material.authorization.epoch,
-                    pulse,
-                )
-                .map_err(malformed)?;
-                if preparation.election_seed != expected {
-                    return Err(malformed(
-                        "frozen election seed differs from certified fresh pulse".into(),
-                    ));
-                }
-            }
-        }
+        let certified = self.verify_certificate(committed, &authority, Some(&config), artifacts)?;
+        verify_boundary_source(&certified, &prefix.tip, &authority)?;
         let schedule = prefix
             .schedule
             .advanced(&certified.commitment.schedule)
@@ -646,6 +628,7 @@ impl PrefixVerifierContext<'_> {
         committed: CommittedBlock,
         authority: &VerifiedAuthority,
         config: Option<&iroha_sumeragi::types::HeightConfig>,
+        artifacts: Option<PrefixArtifacts>,
     ) -> Result<CertifiedBlock, ChainReadError> {
         let height = committed.height;
         let malformed = |reason: String| ChainReadError::Malformed { height, reason };
@@ -663,8 +646,14 @@ impl PrefixVerifierContext<'_> {
                 certificate_len,
             });
         };
-        let commit_qc: Qc = norito::decode_canonical(certificate.commit_qc())
-            .map_err(|error| malformed(error.to_string()))?;
+        let (commit_qc, availability) = if let Some(artifacts) = artifacts {
+            let (qc, table, payload) = artifacts.into_parts(&committed.block, header)?;
+            (qc, Some((table, payload)))
+        } else {
+            let qc = norito::decode_canonical(certificate.commit_qc())
+                .map_err(|error| malformed(error.to_string()))?;
+            (qc, None)
+        };
         if header.epoch != authority.epoch
             || commit_qc.epoch != authority.epoch
             || height < authority.material.authorization.first_height
@@ -702,7 +691,7 @@ impl PrefixVerifierContext<'_> {
         let config = config.ok_or_else(|| {
             malformed("non-genesis certificate lacks parent-authenticated configuration".into())
         })?;
-        verify_availability(&committed, config, &authority.crypto)?;
+        verify_availability(&committed, config, &authority.crypto, availability)?;
         Ok(CertifiedBlock {
             committed,
             commit_qc: Some(commit_qc),
@@ -712,10 +701,57 @@ impl PrefixVerifierContext<'_> {
     }
 }
 
+fn verify_boundary_source(
+    certified: &CertifiedBlock,
+    parent: &CommittedBlock,
+    authority: &VerifiedAuthority,
+) -> Result<(), ChainReadError> {
+    let height = certified.height();
+    let malformed = |reason: String| ChainReadError::Committee { height, reason };
+    if let Some(boundary) = &certified.commitment.schedule.boundary {
+        if boundary.selection_anchor != parent.block_hash() {
+            return Err(malformed(
+                "boundary selection anchor differs from certified parent".into(),
+            ));
+        }
+        let pulse = parent.commitment.beacon.as_ref().ok_or_else(|| {
+            malformed("boundary predecessor omits its certified selection pulse".into())
+        })?;
+        let expected_seed = crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
+            pulse,
+            height,
+            boundary.next.authorization.epoch,
+        );
+        if boundary.next.leader_seed != expected_seed {
+            return Err(malformed(
+                "boundary leader seed differs from certified fresh pulse".into(),
+            ));
+        }
+        if let Some(preparation) = &boundary.preparation {
+            let expected = super::epoch_election::election_seed(
+                authority.material.network_id,
+                authority.material.authorization.epoch,
+                pulse,
+            )
+            .map_err(malformed)?;
+            if preparation.election_seed != expected {
+                return Err(malformed(
+                    "frozen election seed differs from certified fresh pulse".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn verify_availability(
     committed: &CommittedBlock,
     config: &iroha_sumeragi::types::HeightConfig,
     crypto: &BlsCrypto,
+    prepared: Option<(
+        iroha_sumeragi::availability::AvailabilityFrame,
+        iroha_sumeragi::availability::PayloadBytes,
+    )>,
 ) -> Result<(), ChainReadError> {
     use iroha_sumeragi::availability::{AvailabilityFrame, MAX_AVAILABILITY_FRAME_BYTES};
     let height = committed.height;
@@ -728,13 +764,25 @@ fn verify_availability(
         .block
         .commit_certificate()
         .ok_or(ChainReadError::MissingCertificate { height })?;
-    // Bounded read-only verification has no native allocation or custody authority.
+    // Both preparation paths enforce the same independent portable-reader bounds.
+    // RS16 verification scratch remains separately bounded; it is not funded by artifact bytes.
     if certificate.availability().len() > MAX_AVAILABILITY_FRAME_BYTES.saturating_add(128)
-        || header.payload_len as usize > 64 * 1024 * 1024
+        || header.payload_len as usize > MAX_PROPOSAL_BYTES
     {
         return Err(malformed(
             "availability exceeds certified reader bound".into(),
         ));
+    }
+    if let Some((table, payload)) = prepared {
+        return iroha_data_model::sumeragi_finality::verify_payload_availability(
+            header.instance,
+            config,
+            header,
+            &table,
+            payload.as_slice(),
+            crypto,
+        )
+        .map_err(|error| malformed(error.to_string()));
     }
     let table: AvailabilityFrame = norito::decode_canonical(certificate.availability())
         .map_err(|error| malformed(error.to_string()))?;
@@ -867,6 +915,23 @@ impl CertifiedPrefix {
     /// invalid signatures, incomplete authority, boundary decisions or beacon source links.
     /// A rejected frame does not advance the original verified cursor.
     pub fn push(&mut self, block: Arc<SignedBlock>) -> Result<CertifiedPrefixStep, ChainReadError> {
+        self.push_inner(block, None)
+    }
+
+    /// Consume only artifacts prepared from the exact original carrier. Their allocation
+    /// custody follows the same verification predicates as portable reads.
+    pub(crate) fn push_prepared(
+        &mut self,
+        artifacts: PrefixArtifacts,
+    ) -> Result<CertifiedPrefixStep, ChainReadError> {
+        self.push_inner(Arc::clone(artifacts.source()), Some(artifacts))
+    }
+
+    fn push_inner(
+        &mut self,
+        block: Arc<SignedBlock>,
+        artifacts: Option<PrefixArtifacts>,
+    ) -> Result<CertifiedPrefixStep, ChainReadError> {
         let height = block.header().height().get();
         if self.prefix.tip.height.checked_add(1) != Some(height) {
             return Err(ChainReadError::Discontinuous { height });
@@ -878,7 +943,7 @@ impl CertifiedPrefix {
             network: self.network,
             attestations: None,
         }
-        .advance_prefix(&mut self.prefix, committed)?;
+        .advance_prefix(&mut self.prefix, committed, artifacts)?;
         let genesis = genesis.map(|committed| GenesisExecutionAnchor {
             committed,
             successor: current.core_hash,
@@ -1006,6 +1071,13 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
 
     fn from_source(source: ChainSource<'v, V>) -> Result<Self, ChainReadError> {
         let genesis = source.block(GENESIS_HEIGHT)?;
+        Self::from_genesis(source, genesis)
+    }
+
+    fn from_genesis(
+        source: ChainSource<'v, V>,
+        genesis: Arc<SignedBlock>,
+    ) -> Result<Self, ChainReadError> {
         let (genesis_epoch, instance) =
             authenticate_genesis(&genesis, source.network_id(), source.chain_id())?;
         Ok(Self {
@@ -1160,6 +1232,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
                 committed,
                 &prefix.authority,
                 None,
+                None,
             );
         }
         while prefix
@@ -1170,10 +1243,11 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         {
             let next_height = prefix.tip.height + 1;
             let next = read_frame(self.source.block(next_height)?, next_height)?;
-            self.verification_context().advance_prefix(prefix, next)?;
+            self.verification_context()
+                .advance_prefix(prefix, next, None)?;
         }
         self.verification_context()
-            .advance_prefix(prefix, committed)
+            .advance_prefix(prefix, committed, None)
     }
 }
 
@@ -1329,6 +1403,7 @@ fn schedule_source_projection_preserves_every_recovery_variant() {
 }
 
 mod execution_read;
+mod state_certificate;
 pub use execution_read::{
     AuthenticatedExecutionBlock, NativeExecutionRead, NativeExecutionReadError,
     NativeExecutionReadLimits, NativeExecutionReadResource, read_authenticated_execution,

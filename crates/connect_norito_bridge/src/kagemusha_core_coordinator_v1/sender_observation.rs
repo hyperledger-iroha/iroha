@@ -19,6 +19,7 @@ pub(super) struct AuthenticatedSenderReplyV1 {
     original_command: Vec<u8>,
     original_reply: Vec<u8>,
     original_authenticator: Vec<u8>,
+    original_response: Option<Vec<u8>>,
     reply: SenderReplyV1,
 }
 
@@ -90,15 +91,38 @@ impl AuthenticatedSenderReplyV1 {
             original_command: command.to_vec(),
             original_reply: reply.to_vec(),
             original_authenticator: authenticator.to_vec(),
+            original_response: None,
             reply: decoded_reply,
         })
     }
 
+    // Retain only the complete original response already authenticated by this token.
+    // Exact framing equality supplies no additional signature or release authority.
+    pub(super) fn retain_original_response(mut self, original: &[u8]) -> Result<Self, Error> {
+        if self.command.operation != 12 {
+            return Err(Error::Rejected);
+        }
+        require_original_response(
+            self.command.operation,
+            self.command.operation_id,
+            &self.original_reply,
+            &self.original_authenticator,
+            original,
+        )?;
+        self.original_response = Some(original.to_vec());
+        Ok(self)
+    }
+    pub(super) fn original_response(&self) -> Result<&[u8], Error> {
+        self.original_response.as_deref().ok_or(Error::Rejected)
+    }
     pub(super) fn original_command(&self) -> &[u8] {
         &self.original_command
     }
     pub(super) fn original_reply(&self) -> &[u8] {
         &self.original_reply
+    }
+    pub(super) fn original_authenticator(&self) -> &[u8] {
+        &self.original_authenticator
     }
     pub(super) fn command(&self) -> &SenderCommandV1 {
         &self.command
@@ -113,6 +137,25 @@ impl AuthenticatedSenderReplyV1 {
             Err(Error::Rejected)
         }
     }
+}
+
+// Pure original-frame correlation; native response authentication and consuming release
+// admission remain mandatory. Never rebuild a frame from its projected fields.
+pub(super) fn require_original_response(
+    operation: u8,
+    request_id: [u8; 32],
+    reply: &[u8],
+    authenticator: &[u8],
+    original: &[u8],
+) -> Result<(), Error> {
+    let decoded = iroha_data_model::kagemusha::kagemusha_decode_device_success_response_v1(
+        original, operation, request_id,
+    )
+    .map_err(|_| Error::Rejected)?;
+    if decoded.payload != reply || decoded.authenticator != authenticator {
+        return Err(Error::Rejected);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

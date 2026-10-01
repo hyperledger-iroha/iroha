@@ -2,17 +2,14 @@
 use super::*;
 #[test]
 fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_with_chain(
+    let state = runtime_state(
         World::new(),
-        kura,
-        query_handle,
         ChainId::from("multisig-cancel-prunes-target"),
+        None,
     );
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let block_header = runtime_header(&state, 0);
     let mut block = state.block(block_header);
-    let mut state_transaction = block.transaction();
+    let mut state_transaction = block.transaction_for_callback_testing();
     let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("cancel", "universal").unwrap();
     let owner_key = checked_keypair();

@@ -1143,7 +1143,7 @@ pub(crate) fn visit_committed_transactions(
     filter: &CompoundPredicate<CommittedTransaction>,
     anchor: TransactionHistoryAnchor,
     resume: Option<TransactionHistoryCursor>,
-    mut before_project: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+    before_project: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     mut visitor: impl FnMut(
         CommittedTransaction,
         bool,
@@ -1154,59 +1154,81 @@ pub(crate) fn visit_committed_transactions(
     let (predicate_json, candidate_heights) = transaction_query_plan(filter, state_ro);
     reject_unbounded_emergency_fast_transaction_history(state_ro, candidate_heights.as_ref())?;
     let maximum_height = resume.map_or(anchor.height, |cursor| cursor.height.min(anchor.height));
-    let heights: Box<dyn Iterator<Item = NonZeroUsize>> = match candidate_heights {
-        Some(heights) => Box::new(
-            heights
-                .into_iter()
-                .rev()
-                .filter(move |height| height.get() <= maximum_height),
-        ),
-        None => Box::new((1..=maximum_height).rev().filter_map(NonZeroUsize::new)),
+    let candidates = candidate_heights.map(|mut heights| {
+        heights.retain(|height| height.get() <= maximum_height);
+        heights
+    });
+    let (first, last) = if let Some(heights) = &candidates {
+        let (Some(first), Some(last)) = (heights.first(), heights.last()) else {
+            return Ok(true);
+        };
+        (*first, *last)
+    } else {
+        let Some(last) = NonZeroUsize::new(maximum_height) else {
+            return Ok(true);
+        };
+        (NonZeroUsize::MIN, last)
     };
-    for height in heights {
-        let block = state_ro
-            .canonical_history()
-            .executed_block(height, |source_blocks, wire_len| {
-                before_project(source_blocks, wire_len)
-            })?;
-        let work = block
-            .network_entrypoint_count()
-            .max(block.execution_outputs().len())
-            .max(1);
-        before_project(
-            u64::try_from(work - 1).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
-            0,
-        )?;
-        let projection = NetworkCarrierProjection::new(block)?;
-        let transaction_offset = resume
-            .filter(|cursor| cursor.height == height.get())
-            .map_or(0, |cursor| cursor.transaction_offset);
-        let transaction_count = projection.count as usize;
-        if transaction_offset > transaction_count {
-            return Err(QueryExecutionFail::CursorMismatch);
-        }
-        for index in transaction_offset..transaction_count {
-            let input_index = projection.count - 1 - index as u32;
-            let transaction =
-                projection.transaction_at(input_index, |bytes| before_project(0, bytes))?;
-            let matches = transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
-            let next_cursor = if index + 1 < transaction_count {
-                TransactionHistoryCursor {
-                    height: height.get(),
-                    transaction_offset: index + 1,
-                }
-            } else {
-                TransactionHistoryCursor {
-                    height: height.get() - 1,
-                    transaction_offset: 0,
-                }
-            };
-            if visitor(transaction, matches, next_cursor)?.is_break() {
-                return Ok(false);
+    // Both callbacks use the same admission owner sequentially; no charge borrow
+    // survives either callback or the walker's subsequent source operation.
+    let before_project = std::cell::RefCell::new(before_project);
+    state_ro.canonical_history().visit_executed_backwards_until(
+        first,
+        last,
+        |source_blocks, wire_len| before_project.borrow_mut()(source_blocks, wire_len),
+        |receipt| {
+            let height = NonZeroUsize::new(
+                usize::try_from(receipt.height())
+                    .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+            )
+            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            if candidates
+                .as_ref()
+                .is_some_and(|heights| !heights.contains(&height))
+            {
+                return Ok(ControlFlow::Continue(()));
             }
-        }
-    }
-    Ok(true)
+            let block = std::sync::Arc::clone(receipt.block());
+            let work = block
+                .network_entrypoint_count()
+                .max(block.execution_outputs().len())
+                .max(1);
+            before_project.borrow_mut()(
+                u64::try_from(work - 1).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+                0,
+            )?;
+            let projection = NetworkCarrierProjection::new(block)?;
+            let transaction_offset = resume
+                .filter(|cursor| cursor.height == height.get())
+                .map_or(0, |cursor| cursor.transaction_offset);
+            let transaction_count = projection.count as usize;
+            if transaction_offset > transaction_count {
+                return Err(QueryExecutionFail::CursorMismatch);
+            }
+            for index in transaction_offset..transaction_count {
+                let input_index = projection.count - 1 - index as u32;
+                let transaction = projection
+                    .transaction_at(input_index, |bytes| before_project.borrow_mut()(0, bytes))?;
+                let matches =
+                    transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
+                let next_cursor = if index + 1 < transaction_count {
+                    TransactionHistoryCursor {
+                        height: height.get(),
+                        transaction_offset: index + 1,
+                    }
+                } else {
+                    TransactionHistoryCursor {
+                        height: height.get() - 1,
+                        transaction_offset: 0,
+                    }
+                };
+                if visitor(transaction, matches, next_cursor)?.is_break() {
+                    return Ok(ControlFlow::Break(()));
+                }
+            }
+            Ok(ControlFlow::Continue(()))
+        },
+    )
 }
 /// Visit history within cumulative source/output work and byte limits.
 ///
@@ -1656,8 +1678,8 @@ pub(crate) mod tests {
     /// Physical finality-backed Network history shared by pagination/index regressions.
     pub(crate) struct CanonicalQueryFixture {
         /// Query authority and canonical State history.
-        pub(crate) sandbox: Sandbox,
-        /// Keep physical custody alive, also after State moves into Arc.
+        pub(crate) state: Arc<crate::state::State>,
+        /// Retain original execution and physical custody for every query continuation.
         pub(crate) store: crate::kura::tests::CanonicalQueryStore,
         /// Carrier selected by index tests.
         pub(crate) target_block_hash: HashOf<BlockHeader>,
@@ -1675,6 +1697,13 @@ pub(crate) mod tests {
     fn native_query_chain(
         carriers: u64,
         metadata_bytes: usize,
+    ) -> crate::sumeragi::test_chain::CertifiedTestChain {
+        native_query_chain_with_query_gas(carriers, metadata_bytes, None)
+    }
+    fn native_query_chain_with_query_gas(
+        carriers: u64,
+        metadata_bytes: usize,
+        query_stored_min_gas_units: Option<u64>,
     ) -> crate::sumeragi::test_chain::CertifiedTestChain {
         use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::{
@@ -1708,7 +1737,11 @@ pub(crate) mod tests {
                 .into_key_value();
             world.accounts.insert(id, value);
         }
-        let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1000)).unwrap();
+        let mut config = TestChainConfig::new(world, 1000);
+        if let Some(units) = query_stored_min_gas_units {
+            config.pipeline.query_stored_min_gas_units = units;
+        }
+        let mut chain = CertifiedTestChain::start(config).unwrap();
         for epoch in 1..=carriers {
             let transactions = (0..2)
                 .map(|index| {
@@ -1756,32 +1789,34 @@ pub(crate) mod tests {
 
     /// Sixteen actual two-input native carriers above their authentic genesis.
     pub(crate) fn canonical_query_fixture() -> CanonicalQueryFixture {
-        let store = crate::kura::tests::CanonicalQueryStore::from_chain(native_query_chain(16, 0));
+        canonical_query_fixture_with_optional_query_gas(None)
+    }
+    /// The same original history with a finite query configuration fixed before execution.
+    pub(crate) fn canonical_query_fixture_with_query_gas(units: u64) -> CanonicalQueryFixture {
+        canonical_query_fixture_with_optional_query_gas(Some(units))
+    }
+    fn canonical_query_fixture_with_optional_query_gas(
+        units: Option<u64>,
+    ) -> CanonicalQueryFixture {
+        let store = crate::kura::tests::CanonicalQueryStore::from_chain(
+            native_query_chain_with_query_gas(16, 0, units),
+        );
         let target = Arc::clone(&store.blocks[9]);
         let input = target.network_entrypoint_at(0).unwrap();
         let target_entrypoint_hash = input.hash();
         let target_authority = input.authority_opt().unwrap().clone();
         let target_timestamp_ms = input.creation_time_ms().unwrap();
-        let mut world = crate::state::World::with(
-            [],
-            [
-                iroha_data_model::account::Account::new(iroha_test_samples::ALICE_ID.clone())
-                    .build(&iroha_test_samples::ALICE_ID),
-            ],
-            [],
-        );
-        world.account_permissions.insert(
-            iroha_test_samples::ALICE_ID.clone(),
-            BTreeSet::from([
-                iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
-            ]),
-        );
-        let state = store.reader_state(world);
+        let state = Arc::clone(&store.state);
+        let view = state.view();
+        let tip = view
+            .native_execution_tip()
+            .expect("original executed native tip");
+        assert_eq!(tip.height(), 17);
+        assert_eq!(tip.iroha_hash(), store.blocks[16].hash());
+        assert_eq!(view.height(), 17);
+        drop(view);
         CanonicalQueryFixture {
-            sandbox: Sandbox {
-                state,
-                transactions: Vec::new(),
-            },
+            state,
             store,
             target_block_hash: target.hash(),
             target_entrypoint_hash,
@@ -1798,7 +1833,7 @@ pub(crate) mod tests {
             max_bytes: TRANSACTION_HISTORY_MAX_BYTES,
         }
     }
-    fn execute_single_carrier_query(
+    fn execute_indexed_carrier_query(
         state_ro: &impl StateReadOnly,
         filter: CompoundPredicate<CommittedTransaction>,
     ) -> Vec<CommittedTransaction> {
@@ -1809,16 +1844,16 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>();
         assert_eq!(
             state_ro.kura().canonical_query_reads_for_test().0,
-            1,
-            "indexed query must resolve exactly one physical canonical body"
+            8,
+            "one selected carrier requires its exact height-17 through height-10 ancestry"
         );
         transactions
     }
     #[test]
     fn indexed_network_queries_read_only_selected_canonical_carriers() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
-        let by_block = execute_single_carrier_query(
+        let state_view = fixture.state.view();
+        let by_block = execute_indexed_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals("block_hash", fixture.target_block_hash.to_string())
@@ -1830,7 +1865,7 @@ pub(crate) mod tests {
                 .iter()
                 .all(|transaction| transaction.block_hash == fixture.target_block_hash)
         );
-        let by_hash = execute_single_carrier_query(
+        let by_hash = execute_indexed_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals(
@@ -1841,7 +1876,7 @@ pub(crate) mod tests {
         );
         assert_eq!(by_hash.len(), 1);
         assert_eq!(by_hash[0].entrypoint_hash, fixture.target_entrypoint_hash);
-        let by_authority = execute_single_carrier_query(
+        let by_authority = execute_indexed_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals("authority", fixture.target_authority.to_string())
@@ -1852,7 +1887,7 @@ pub(crate) mod tests {
             by_authority[0].entrypoint.authority_opt(),
             Some(&fixture.target_authority)
         );
-        let by_timestamp = execute_single_carrier_query(
+        let by_timestamp = execute_indexed_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals("timestamp_ms", fixture.target_timestamp_ms)
@@ -1863,7 +1898,7 @@ pub(crate) mod tests {
             by_timestamp[0].entrypoint.creation_time_ms(),
             Some(fixture.target_timestamp_ms)
         );
-        let by_timestamp_range = execute_single_carrier_query(
+        let by_timestamp_range = execute_indexed_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
                 ts_ge: Some(fixture.target_timestamp_ms),
@@ -1872,7 +1907,7 @@ pub(crate) mod tests {
             }),
         );
         assert_eq!(by_timestamp_range.len(), 1);
-        let by_result = execute_single_carrier_query(
+        let by_result = execute_indexed_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| p.equals("result_ok", false)),
         );
@@ -2017,7 +2052,7 @@ pub(crate) mod tests {
     #[test]
     fn indexed_snapshot_uses_entrypoint_index_and_rejects_unbounded_filters() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         state_view.kura().reset_canonical_query_reads_for_test();
         let selected = committed_transactions_indexed_snapshot(
             &state_view,
@@ -2034,8 +2069,8 @@ pub(crate) mod tests {
         assert_eq!(selected[0].entrypoint_hash, fixture.target_entrypoint_hash);
         assert_eq!(
             state_view.kura().canonical_query_reads_for_test().0,
-            1,
-            "indexed materialization must resolve only the selected carrier"
+            8,
+            "indexed materialization authenticates the selected carrier through its original tip"
         );
         state_view.kura().reset_canonical_query_reads_for_test();
         let missing_hash = HashOf::from_untyped_unchecked(Hash::new(b"missing-query-entrypoint"));
@@ -2085,7 +2120,7 @@ pub(crate) mod tests {
             .kura()
             .corrupt_canonical_body_for_testing(target_height)
             .expect("convert target transaction carrier to hash-only form");
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         for height in 1..target_height.get() {
             state_view
                 .canonical_block_by_height(NonZeroUsize::new(height).expect("positive height"))
@@ -2133,8 +2168,8 @@ pub(crate) mod tests {
     fn indexed_network_query_ignores_unselected_corruption_and_fails_on_selected_corruption() {
         let unrelated = canonical_query_fixture();
         unrelated.store.corrupt_body(unrelated.unrelated_height);
-        let unrelated_view = unrelated.sandbox.state.view();
-        let selected = execute_single_carrier_query(
+        let unrelated_view = unrelated.state.view();
+        let selected = execute_indexed_carrier_query(
             &unrelated_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
                 p.equals(
@@ -2160,7 +2195,7 @@ pub(crate) mod tests {
         );
         let selected = canonical_query_fixture();
         selected.store.corrupt_body(selected.target_height);
-        let selected_view = selected.sandbox.state.view();
+        let selected_view = selected.state.view();
         selected_view.kura().reset_canonical_query_reads_for_test();
         assert!(
             crate::smartcontracts::isi::tx::execute_transactions_fixture(
@@ -2175,7 +2210,7 @@ pub(crate) mod tests {
             .is_err(),
             "selected corrupt canonical body must fail closed before returning an iterator"
         );
-        assert_eq!(selected_view.kura().canonical_query_reads_for_test().0, 1);
+        assert_eq!(selected_view.kura().canonical_query_reads_for_test().0, 8);
     }
     #[test]
     fn canonical_query_reader_rejects_changed_outputs_under_original_finality() {
@@ -2213,7 +2248,7 @@ pub(crate) mod tests {
                 entry_eq: Some(fixture.target_entrypoint_hash),
                 ..Default::default()
             }),
-            &fixture.sandbox.state.view(),
+            &fixture.state.view(),
         )
         .err()
         .expect("original QC must reject self-consistent changed output");
@@ -2224,7 +2259,7 @@ pub(crate) mod tests {
     #[test]
     fn fallible_transaction_visitor_reads_only_carriers_needed_by_bounded_page() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         state_view.kura().reset_canonical_query_reads_for_test();
         let mut visited = Vec::new();
         let exhausted = visit_committed_transactions(
@@ -2264,7 +2299,7 @@ pub(crate) mod tests {
     #[test]
     fn bounded_transaction_snapshot_rejects_count_and_byte_amplification() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         assert_eq!(
             committed_transactions_bounded_snapshot(
                 &state_view,
@@ -2291,7 +2326,7 @@ pub(crate) mod tests {
     #[test]
     fn bounded_transaction_visitor_does_not_charge_chain_age_as_retained_memory() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
             prototype.equals("field_that_does_not_exist", true)
         });
@@ -2315,7 +2350,7 @@ pub(crate) mod tests {
     #[test]
     fn cumulative_transaction_visitor_bounds_chain_age_and_projection_work() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         state_view.kura().reset_canonical_query_reads_for_test();
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
             prototype.equals("field_that_does_not_exist", true)
@@ -2342,6 +2377,67 @@ pub(crate) mod tests {
             "the complete row work is charged after its admitted body read, before proof projection",
         );
     }
+    #[test]
+    fn authenticated_history_walk_stops_before_unreached_corruption_and_prepays_io() {
+        let store = crate::kura::tests::CanonicalQueryStore::from_chain(native_query_chain(3, 0));
+        store.corrupt_body(NonZeroUsize::new(2).unwrap());
+        let view = store.state.view();
+        let source = view.canonical_history();
+        let first = NonZeroUsize::MIN;
+        let last = NonZeroUsize::new(4).unwrap();
+        store.kura.reset_canonical_query_reads_for_test();
+        let mut source_charges = Vec::new();
+        let mut visited = Vec::new();
+        let exhausted = source
+            .visit_executed_backwards_until(
+                first,
+                last,
+                |frames, bytes| {
+                    source_charges.push((frames, bytes));
+                    Ok(())
+                },
+                |receipt| {
+                    visited.push(receipt.height());
+                    Ok(if receipt.height() == 3 {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    })
+                },
+            )
+            .expect("exact original ancestry above the corruption remains readable");
+        assert!(!exhausted);
+        assert_eq!(visited, [4, 3]);
+        assert_eq!(
+            source_charges,
+            [(1, store.wire_bytes([4])), (1, store.wire_bytes([3])),]
+        );
+        assert_eq!(
+            store.kura.canonical_query_reads_for_test(),
+            (2, store.wire_bytes([4, 3]))
+        );
+        let err = source
+            .visit_executed_backwards_until(
+                first,
+                last,
+                |_, _| Ok(()),
+                |_| Ok(ControlFlow::Continue(())),
+            )
+            .expect_err("a complete walk must authenticate the corrupt older source");
+        assert!(matches!(err, QueryExecutionFail::Conversion(_)));
+        store.kura.reset_canonical_query_reads_for_test();
+        let err = source
+            .visit_executed_backwards_until(
+                first,
+                last,
+                |_, _| Err(QueryExecutionFail::GasBudgetExceeded),
+                |_| panic!("unpaid source cannot reach a receipt visitor"),
+            )
+            .expect_err("source work and bytes are admitted before physical I/O");
+        assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(store.kura.canonical_query_reads_for_test(), (0, 0));
+    }
+
     #[test]
     fn cumulative_transaction_visitor_charges_nonmatching_native_carriers() {
         let store = crate::kura::tests::CanonicalQueryStore::from_chain(native_query_chain(3, 0));
@@ -2397,7 +2493,7 @@ pub(crate) mod tests {
     #[test]
     fn fallible_transaction_visitor_exact_scan_is_point_indexed_and_ordered() {
         let fixture = canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let expected = committed_transactions_snapshot(&state_view).expect("eager exact baseline");
         state_view.kura().reset_canonical_query_reads_for_test();
         let mut visited = Vec::new();
@@ -2426,7 +2522,7 @@ pub(crate) mod tests {
     fn fallible_transaction_visitor_defers_unreached_corruption_but_exact_fails() {
         let fixture = canonical_query_fixture();
         fixture.store.corrupt_body(fixture.unrelated_height);
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let mut visited = 0_usize;
         let exhausted = visit_committed_transactions(
             &state_view,

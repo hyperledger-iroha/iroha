@@ -62,8 +62,8 @@ class KagemushaOperationIntentV1(
         require(result == null || (operation == 10 && reply != null))
         require(candidate == null || (operation == 7 && candidate.size in 1..KagemushaCoreCoordinatorArchiveV1.MAXIMUM_ARCHIVE_BYTES))
         require(operation != 7 || command == null || candidate != null) { "operation 7 requires its retained native candidate before dispatch" }
-        require(responseFrame == null || (operation == 7 && reply != null))
-        require(operation != 7 || reply == null || responseFrame != null) { "operation 7 requires its complete original signed response" }
+        require(responseFrame == null || (operation in setOf(7, 12) && reply != null))
+        require(operation !in setOf(7, 12) || reply == null || responseFrame != null) { "operations 7 and 12 require their complete original signed response" }
         responseFrame?.let {
             KagemushaDeviceResponseFrameV1.requireTuple(it, operation, KagemushaAuthenticatedDeviceStatusV1.SUCCESS,
                 checkNotNull(reply), checkNotNull(authenticator), id)

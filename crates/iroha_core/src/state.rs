@@ -3987,7 +3987,8 @@ pub struct WorldData {
     /// The global chain's AMX two-phase-commit state (`specs/sumeragi.md` §11).
     pub(crate) sumeragi_amx: Cell<iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: Storage<String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -4662,7 +4663,8 @@ pub struct WorldBlockFields<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellField<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellField<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageField<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -6335,7 +6337,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) sumeragi_amx:
         CellTransaction<'block, 'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellTransaction<'block, 'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces: CellTransaction<
+        'block,
+        'world,
+        iroha_data_model::private_dataspace::PrivateDataspaceRegistry,
+    >,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -8856,7 +8862,8 @@ pub struct WorldView<'world> {
     /// The global chain's AMX two-phase-commit state.
     pub(crate) sumeragi_amx: CellView<'world, iroha_data_model::sumeragi_amx::SumeragiAmxState>,
     /// Parent-authorized independent private roots and their contiguous certified cursors.
-    pub(crate) private_dataspaces: CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
+    pub(crate) private_dataspaces:
+        CellView<'world, iroha_data_model::private_dataspace::PrivateDataspaceRegistry>,
     /// Domain endorsement committees keyed by committee identifier.
     pub(crate) domain_committees: StorageView<'world, String, DomainCommittee>,
     /// Endorsement policy per domain.
@@ -13846,6 +13853,9 @@ pub struct StateTransaction<'block, 'state> {
     pub network_id: iroha_data_model::NetworkId,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::status::NexusFeeEvent>,
+    /// Actual charge awaiting its bounded, source-owned consensus result leaf.
+    pub(crate) pending_nexus_fee_receipt:
+        Option<iroha_data_model::block::consensus::NexusFeeReceipt>,
     /// Parent block's slash-observability buffer.
     block_pending_public_lane_slash_observability:
         &'block mut Vec<PendingPublicLaneSlashObservability>,
@@ -26612,6 +26622,10 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -26708,6 +26722,10 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -37063,6 +37081,62 @@ impl<'state> StateBlock<'state> {
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.try_transaction().expect("test State child admission")
     }
+    /// Open a native bootstrap component child for one exact authenticated genesis input.
+    ///
+    /// The caller must have captured this same signed carrier before any start effects.
+    /// This retains the production source/index/header/signature and physical-route checks;
+    /// it does not authenticate substituted instructions or grant publication authority.
+    #[cfg(test)]
+    pub(crate) fn transaction_for_original_genesis_testing(
+        &mut self,
+        source: &SignedBlock,
+        index: usize,
+        configured_account: &AccountId,
+        tested_instruction: &InstructionBox,
+    ) -> Result<StateTransaction<'_, 'state>, String> {
+        let authenticated =
+            crate::block::authenticate_genesis_block_intents(source, configured_account)
+                .map_err(|error| error.to_string())?;
+        let original = authenticated.transaction_for(source, index)?;
+        if self.network_id != NetworkId::from_genesis_hash(source.hash()) {
+            return Err("original genesis component belongs to another State network".into());
+        }
+        if self._curr_block != source.header() {
+            return Err("original genesis component belongs to another block header".into());
+        }
+        if !self.block_hashes.is_empty() {
+            return Err("committed history cannot regain original genesis component scope".into());
+        }
+        let (_, route) = self
+            .network_policy_routes
+            .as_ref()
+            .ok_or("original genesis has no captured physical policy owner")?
+            .get(source, index)
+            .map_err(str::to_owned)?;
+        let Some(TransactionEntrypoint::External(signed)) = source.network_entrypoint_at(index)
+        else {
+            return Err("original genesis input is not an external signed transaction".into());
+        };
+        let Executable::Instructions(instructions) = signed.instructions() else {
+            return Err("original genesis component input is not native instructions".into());
+        };
+        if !instructions.iter().eq(core::iter::once(tested_instruction)) {
+            return Err(
+                "component instruction differs from its exact original genesis input".into(),
+            );
+        }
+        let mut transaction = self.try_transaction().map_err(|error| error.to_string())?;
+        transaction.current_network_entrypoint_hash = Some(signed.hash_as_entrypoint());
+        transaction.current_entrypoint_index =
+            Some(u64::try_from(index).map_err(|_| "original genesis input index exceeds u64")?);
+        transaction.genesis_execution_scope = Some(
+            route
+                .genesis_execution_scope(signed, &transaction, Some(&original))
+                .map_err(|error| error.to_string())?
+                .ok_or("original input has no authenticated genesis execution scope")?,
+        );
+        Ok(transaction)
+    }
     /// Open an isolated callback component fixture with an explicit root owner.
     ///
     /// The root identifies this block's direct execution slot. This does not
@@ -37230,6 +37304,7 @@ impl<'state> StateBlock<'state> {
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,
             pending_nexus_fee_event: None,
+            pending_nexus_fee_receipt: None,
             block_pending_public_lane_slash_observability: &mut fields
                 .pending_public_lane_slash_observability,
             pending_public_lane_slash_observability: Vec::new(),
@@ -41277,6 +41352,7 @@ impl StateTransaction<'_, '_> {
             execution_effects: _,
             execution_deferral: _,
             pending_nexus_fee_event,
+            pending_nexus_fee_receipt: _,
             block_pending_public_lane_slash_observability,
             mut pending_public_lane_slash_observability,
             #[cfg(feature = "telemetry")]
@@ -42474,7 +42550,11 @@ impl StateTransaction<'_, '_> {
                     } else {
                         crate::smartcontracts::code::with_code_bytes(
                             self,
-                            &ContractArtifactId::for_address(&identity.contract_address, identity.code_hash).map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
+                            &ContractArtifactId::for_address(
+                                &identity.contract_address,
+                                identity.code_hash,
+                            )
+                            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?,
                             |bytecode| {
                                 cache.summarize_program_with_hash(identity.code_hash, bytecode)
                             },
@@ -43472,3 +43552,6 @@ pub(crate) fn run_empty_network_owner_fixture(
         .unwrap()
         .to_vec()
 }
+
+#[path = "state/nexus_fee_receipt.rs"]
+mod nexus_fee_receipt;

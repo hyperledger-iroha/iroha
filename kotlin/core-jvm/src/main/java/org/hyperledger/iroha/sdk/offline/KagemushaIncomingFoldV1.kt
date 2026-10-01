@@ -27,7 +27,7 @@ class KagemushaNativeIncomingFoldPreparationV1 constructor(
     private val signing = incomingBytes(rootSelectionSigningBytes, 32768)
     private val key = incomingDigest(deviceKeyReference)
     private val epoch = incomingDigest(hardwareEpochId)
-    private val proof = incomingBytes(canonicalPairedProof, 8192)
+    private val proof = incomingBytes(canonicalPairedProof, 6_528)
 
     init {
         require(hardwareEpochGeneration.signum() > 0 && hardwareEpochGeneration.bitLength() <= 128)
@@ -58,7 +58,7 @@ class KagemushaIncomingFoldEvidenceV1(
     canonicalHardwareTransitionCertificate: ByteArray, deviceRootSelectionSignature: ByteArray,
 ) {
     private val history = incomingDigest(historyOperationId)
-    private val proof = incomingBytes(canonicalPairedProof, 8192)
+    private val proof = incomingBytes(canonicalPairedProof, 6_528)
     private val certificate = incomingBytes(canonicalHardwareTransitionCertificate, 96 * 1024)
     private val signature = deviceRootSelectionSignature.copyOf()
 
@@ -81,7 +81,10 @@ class KagemushaIncomingFoldEvidenceV1(
  * work must fail. An aggregate device reply, Core signature or software usage counter supplies
  * neither original. Native completion independently verifies every returned byte before funds.
  */
-fun interface KagemushaIncomingFoldEvidenceProviderV1 {
+interface KagemushaIncomingFoldEvidenceProviderV1 {
+    /** Recheck the original physical custody, key, epoch and durable work before and after use. */
+    fun recheckOriginals(preparation: KagemushaNativeIncomingFoldPreparationV1)
+
     fun obtainOrRecoverOriginal(preparation: KagemushaNativeIncomingFoldPreparationV1): KagemushaIncomingFoldEvidenceV1
 }
 

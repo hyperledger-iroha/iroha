@@ -2185,7 +2185,10 @@ mod tests {
     #[test]
     fn contract_code_reader_rejects_mutated_and_omitted_bytes() {
         let mut state = state();
-        let id = iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::new(u64::MAX), Hash::new(b"captured-contract-code"));
+        let id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+            Hash::new(b"captured-contract-code"),
+        );
         state.world.contract_code.insert(id, vec![1, 2, 3]);
         let before = capture_contract_code_once(&state, limits())
             .expect("bounded code table")
@@ -2315,7 +2318,10 @@ mod tests {
             .expect("ceiling-sized CNTR artifact is production-admitted");
         assert_eq!(admitted.code_offset, executable_offset);
         assert_eq!((admitted.code_offset - ivm::HEADER_SIZE) % 4, 0);
-        let id = iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::new(u64::MAX), ivm::contract_code_hash(&artifact));
+        let id = iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+            ivm::contract_code_hash(&artifact),
+        );
         let limits = LeafLimits {
             max_tables: 1,
             max_rows: 1,

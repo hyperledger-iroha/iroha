@@ -83,7 +83,7 @@ See the [JVM inventory](specs/jvm_consolidation_inventory.md),
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
 | S1 | Python delivery | Python/native SDK | One typed credential/session, cohesive routes and bounded import/response/codec; native vectors, wheel/install/typing and four-validator corridor. |
-| S2 | JS codec/package | JS/native host | Exact options/exports/context, one `dist/` authority and bundle/RSS ceilings; installed source custody, native/portable lanes and four-validator parity. |
+| S2 | JS codec/package | JS/native host | Exact options/exports/context, one `dist/` authority, exact module graphs, browser isolation and runtime-memory bounds; installed source custody, native/portable lanes and four-validator parity. |
 | S3 | C# API/package | C#/native bridge | Canonical prepared operations, faucet metadata, immutable parsing, documented API/allocation checks and real Windows/native packaging. |
 | S4 | Shared wire/activity | SDKs/Torii | Canonical signing/executable/account fixtures, multisig witnesses and snapshot-bound activity with bounded cursors and expiry. |
 | S5 | Kotlin closure | Kotlin/Android | Finish Java/JNI/publication retirement; release transport/attestation/Nearby and CUDA hardware qualification with separate host/device evidence. |

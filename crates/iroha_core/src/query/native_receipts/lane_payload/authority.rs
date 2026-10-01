@@ -95,6 +95,7 @@ impl LaneAuthorityRead {
         Ok(AuthorityConfig {
             config,
             lane: raw.lane,
+            genesis,
         })
     }
 
@@ -122,6 +123,7 @@ impl LaneAuthorityRead {
 struct AuthorityConfig {
     config: RetainedPayload<HeightConfig>,
     lane: LaneId,
+    genesis: SumeragiLaneFrontier,
 }
 
 /// Exact prepaid selected configuration and original immutable creation/proof bytes.
@@ -131,17 +133,78 @@ pub(crate) struct LaneAuthority {
     incarnation: [u8; 32],
     authority: AuthorityConfig,
 }
+impl std::borrow::Borrow<HeightConfig> for LaneAuthority {
+    fn borrow(&self) -> &HeightConfig {
+        self.config()
+    }
+}
 impl LaneAuthority {
+    pub(crate) fn genesis(&self) -> SumeragiLaneFrontier {
+        self.authority.genesis
+    }
     pub(crate) fn config(&self) -> &HeightConfig {
         self.authority.config.get()
     }
     pub(crate) fn lane(&self) -> LaneId {
         self.authority.lane
     }
-    #[cfg(test)]
     pub(crate) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
         self.source.belongs_to(budget) && self.authority.config.belongs_to(budget)
     }
+    /// Verify the latest retained custody against this exact original creation. Historical
+    /// store reads may outlive custody reclamation; absence grants no stake authority. Every
+    /// present row must retain its creation-time signer bindings and immutable signed policy.
+    pub(crate) fn validate_custody(
+        &self,
+        current: &LanePayload,
+        instance: Hash32,
+        policy: Option<(u64, u64)>,
+        budget: &AllocationBudget,
+    ) -> Result<(), LanePayloadError> {
+        if !self.belongs_to(budget) || !current.belongs_to(budget) {
+            return Err(LanePayloadError::Source);
+        }
+        if current.carrier().0 != self.source.carrier().0
+            || current.carrier().1 < self.source.carrier().1
+        {
+            return Err(LanePayloadError::Source);
+        }
+        let Some(current_row) = current.custody_record(&self.incarnation)? else {
+            return Ok(());
+        };
+        let original = self
+            .source
+            .custody_record(&self.incarnation)?
+            .ok_or(LanePayloadError::Source)?;
+        let identity = (
+            self.lane(),
+            self.incarnation,
+            instance.0,
+            self.source.carrier().1,
+        );
+        let (count, horizon, delay, retired) = original.policy();
+        let (current_count, current_horizon, current_delay, current_retired) = current_row.policy();
+        if original.identity() != identity
+            || current_row.identity() != identity
+            || usize::try_from(count).ok() != Some(self.config().committee.n())
+            || current_count != count
+            || retired.is_some()
+            || policy != Some((horizon, delay))
+            || (current_horizon, current_delay) != (horizon, delay)
+            || current_retired.is_some_and(|retired| retired > current.carrier().1)
+            || original.frontier() != self.genesis()
+            || (current_row.frontier().height == 0 && current_row.frontier() != original.frontier())
+        {
+            return Err(LanePayloadError::Source);
+        }
+        for signer in 0..count {
+            if original.binding(signer)? != current_row.binding(signer)? {
+                return Err(LanePayloadError::Source);
+            }
+        }
+        Ok(())
+    }
+
     /// Inspect exact original key/proof bytes without allocating a second credential graph.
     /// The key borrow lasts only for this callback; its canonical compact encoding is scanned
     /// into bounded stack storage. PoPs borrow the original retained creation record.

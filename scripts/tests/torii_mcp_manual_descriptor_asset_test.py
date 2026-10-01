@@ -13,8 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 146_844
-EXPECTED_ASSET_SHA256 = "cd3b270475903372c4c44f8df24eb7edc7becc7fd97e6d136285866241c910a6"
+EXPECTED_ASSET_LENGTH = 65_533
+EXPECTED_ASSET_SHA256 = "8aeb2a5f09c39bfe7ff75353ba05b1c1f8a06a64e20ce64a5f50deea2e2ae159"
 EXPECTED_SEMANTIC_SHA256 = "f546351a80bd7d7d3ed4d0437068b9ca4845fde56b12cbfe909b4e1f7c9a748d"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
@@ -23,7 +23,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "e80a0361708afeae35261c4e765e80c3814e7be50be9ae81699ba729d7a83c89"
+    "86a2209e7adee5e4e150b00c852d4ebcafc0a056d870783d5c2ddc061babc438"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -609,11 +609,12 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
         mutations = (
             self.asset[:-1],
             self.asset.replace(b'"schema_version": 1', b'"schema_version": 2', 1),
-            self.asset.replace(b'"effect": "read"', b'"effect": "write"', 1),
-            self.asset.replace(b'"type": "object"', b'"type": "array" ', 1),
+            self.asset.replace(b'"effect":"read"', b'"effect":"write"', 1),
+            self.asset.replace(b'"type":"object"', b'"type":"array" ', 1),
         )
         for mutated in mutations:
             with self.subTest(digest=hashlib.sha256(mutated).hexdigest()):
+                self.assertNotEqual(mutated, self.asset)
                 with self.assertRaises(GuardError):
                     validate(self.source, mutated)
 

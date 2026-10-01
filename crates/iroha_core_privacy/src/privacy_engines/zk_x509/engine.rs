@@ -872,15 +872,18 @@ mod tests {
     #[test]
     fn credential_prover_has_one_preflighted_joint_root_path_and_no_subproof_escape() {
         let source = include_str!("engine.rs");
-        let prover_start = source
-            .find("pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng")
+        let production_end = source
+            .find("#[cfg(test)]\nmod tests {")
+            .expect("inline test module");
+        let production_source = &source[..production_end];
+        let prover_start = production_source
+            .find("pub fn prove_zk_x509_credential_proof_v1_with_rng")
             .expect("sole credential prover");
-        let prover_end = source[prover_start..]
+        let prover_end = production_source[prover_start..]
             .find("fn compiled_profile_fields_v1")
             .map(|offset| prover_start + offset)
             .expect("sole credential prover end");
-        let prover = &source[prover_start..prover_end];
-        let production_source = &source[..source.find("#[cfg(test)]").expect("test module")];
+        let prover = &production_source[prover_start..prover_end];
         let profile_gate = prover
             .find("construct_zk_x509_compiled_profile_v1()")
             .expect("pinned profile validation");

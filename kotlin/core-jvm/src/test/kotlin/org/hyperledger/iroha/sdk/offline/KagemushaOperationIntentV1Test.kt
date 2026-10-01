@@ -7,6 +7,49 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
 class KagemushaOperationIntentV1Test {
+    @Test fun `operation12 retains original signed response across durable recreation and refuses substitution`() {
+        // Public structural specimen only; native signature/proof admission is independent.
+        val store = TestOperationIntentStoreV1()
+        val owner = KagemushaOperationIntentOwnerV1(store)
+        val id = ByteArray(32) { 12 }
+        val command = byteArrayOf(3)
+        val qualification = byteArrayOf(5)
+        val reply = byteArrayOf(6)
+        val signature = ByteArray(64).also { it[31] = 1; it[63] = 1 }
+        owner.dispatched(12, id, command, qualification)
+        val pending = KagemushaOperationIntentCodecV1.encode(store.load(12, id)!!)
+        val original = structuralDeviceResponseFrame(12, id, reply, signature)
+        assertFailsWith<IllegalArgumentException> {
+            owner.accepted(12, id, reply, signature, qualification)
+        }
+        for (substituted in listOf(
+            structuralDeviceResponseFrame(7, id, reply, signature),
+            structuralDeviceResponseFrame(12, ByteArray(32) { 13 }, reply, signature),
+            structuralDeviceResponseFrame(12, id, byteArrayOf(9), signature),
+            structuralDeviceResponseFrame(12, id, reply, signature.copyOf().also { it[63] = 2 }),
+            original.copyOf(original.size - 1),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                owner.accepted(12, id, reply, signature, qualification, substituted)
+            }
+            assertContentEquals(pending, KagemushaOperationIntentCodecV1.encode(store.load(12, id)!!))
+        }
+        owner.accepted(12, id, reply, signature, qualification, original)
+        val accepted = KagemushaOperationIntentCodecV1.encode(store.load(12, id)!!)
+        val decoded = KagemushaOperationIntentCodecV1.decodeExact(accepted)
+        assertContentEquals(original, decoded.canonicalResponseFrame())
+        decoded.canonicalResponseFrame()!!.fill(0)
+        val resumed = KagemushaOperationIntentOwnerV1(store)
+        assertContentEquals(original, resumed.load(12, id)!!.canonicalResponseFrame())
+        resumed.accepted(12, id, reply, signature, qualification, original)
+        assertContentEquals(accepted, KagemushaOperationIntentCodecV1.encode(store.load(12, id)!!))
+        original.fill(0)
+        assertFailsWith<IllegalArgumentException> {
+            resumed.accepted(12, id, reply, signature, qualification, original)
+        }
+        assertContentEquals(accepted, KagemushaOperationIntentCodecV1.encode(store.load(12, id)!!))
+    }
+
     @Test fun `operation7 retains exact candidate and full original through durable recreation`() {
         val store = TestOperationIntentStoreV1()
         val owner = KagemushaOperationIntentOwnerV1(store)

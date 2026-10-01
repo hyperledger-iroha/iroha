@@ -181,6 +181,17 @@ class output with `--classes MODULE=DIR`, where MODULE is `core-jvm`,
 `--library PATH`. `--report PATH` writes the inspected class/library hashes and
 method descriptors after a successful check. `--help` describes the arguments.
 
+For Android release inputs, add `--platform android --android-abi arm64-v8a`
+(or `x86_64`), `--symbol-tool PATH`, `--symbol-tool-sha256 SHA256`,
+`--symbol-tool-size-bytes SIZE`, and `--inspection-output NEW_DIRECTORY`.
+The tool path must be the canonical absolute reviewed NDK `llvm-nm` executable;
+the checker verifies its exact hash, size and file identity around the fixed
+dynamic-export inspection. The library must be an ELF64 shared object for the
+selected ABI. The fresh output directory retains the actual argv, clean
+environment, stdout, stderr and result before file-drift checks, including
+failed attempts. Host mode discovers platform tooling and reports that
+inspection as unpinned. Neither mode executes native code.
+
 The check reads class files without reflection or class loading. It requires
 JDK 8 bytecode and Kotlin-owned native declarations, checks explicit signing
 context and the closed privacy surface, and rejects missing or undeclared JNI
@@ -428,7 +439,7 @@ immutable account/runtime scope, operation identity, exact typed command, and cr
 qualification before dispatch; after Core accepts the response it retains the exact reply,
 original authenticator, and reply qualification. Its shared reentrant lock and durable storage
 must exclude multiple owners across providers and processes. There is no in-memory default.
-The SDK resumes unfinished bootstrap, fold, and rotation commands before another transition.
+The SDK resumes unfinished bootstrap and rotation commands before another transition.
 Rotation retries use their retained original response key, while fresh qualification and state
 reads use the current epoch. Coordinator method 11 begins each transient native observation
 for operations 1, 13, 18, and 21; those reads never enter the operation intent store or durable
@@ -453,6 +464,22 @@ It checks the complete ABI-25 inventory and rejects substituted response binding
 missing JNI or an absent qualified native coordinator fails closed.
 Any failure after dispatch revokes the process-local handle before another JNI
 call. Uncertain monetary state remains the qualified backend's responsibility.
+Incoming staging uses native method 17 to select original reserve-mint, staged-mint or
+staged-peer material; the managed caller supplies only the kind and credit identity.
+Method 15 durably retains the native fold intent and its genuine original paired proof,
+then returns the bounded public hardware work. The authenticated provider requires an
+explicit `KagemushaIncomingFoldEvidenceProviderV1` before preparation or device work.
+That source rechecks its original physical custody before and after obtaining the exact
+State Guard and distinct device root-selection signature. Method 16 receives the held
+proof unchanged and independently verifies those originals before publishing funds.
+Exact retries recover the same history identity, proof and physical evidence; host
+operation storage, generic device operation 17 and Core/software signatures cannot
+substitute. A fresh authenticated wallet observation follows native completion.
+The current closed schema-2 inventory contains all 18 coordinator methods.
+Method 18 reads the installed native release ID, hardware-policy digest and provider
+policy registry root from the original selected Core owner under its observation
+lease. The policy digest remains bound to qualification signatures; aggregate state
+is checked against the separately authenticated provider root.
 `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
 wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
 codec handles bounded canonical preparation, candidate, recovery, and redemption

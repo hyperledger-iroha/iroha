@@ -290,10 +290,14 @@ impl<'block, 'state> OutputTransaction<'block, 'state> {
         if self.witness.is_none() {
             return Err("output transaction witness owner is absent".into());
         }
-        self.transaction
+        let transaction = self
+            .transaction
             .as_mut()
-            .ok_or("output transaction State owner is absent")?
-            .prepare_apply()?;
+            .ok_or("output transaction State owner is absent")?;
+        if transaction.pending_nexus_fee_receipt.is_some() {
+            return Err("actual Nexus charge has no retained consensus receipt".into());
+        }
+        transaction.prepare_apply()?;
         self.transaction
             .take()
             .expect("checked output transaction State owner")
@@ -423,6 +427,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             };
             transaction.current_entrypoint_index = Some(u64::from(input_index));
             transaction.tx_call_hash = Some(call);
+            transaction.current_network_entrypoint_hash = Some(input.hash());
             transaction.current_tx_hash = signed_hash;
             let executed = execute(input, transaction);
             if let Some(reason) = transaction.execution_deferral() {
@@ -450,6 +455,12 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     "callback completions must come from their transaction-owned journal".into(),
                 );
             }
+            if actual.result.nexus_fee_receipt().is_some() {
+                return Err("Nexus receipt must come from actual settlement owner".into());
+            }
+            actual
+                .result
+                .set_nexus_fee_receipt(transaction.pending_nexus_fee_receipt.take());
             if !actual.result.batch_transfer_outcomes().is_empty() {
                 return Err("Network receipts must come from the actual transaction owner".into());
             }

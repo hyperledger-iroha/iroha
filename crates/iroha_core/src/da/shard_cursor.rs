@@ -252,6 +252,10 @@ impl DaShardCursorIndex {
     ///
     /// Returns [`DaShardCursorError::Regression`] if any commitment attempts to regress an existing
     /// cursor or [`DaShardCursorError::UnknownLane`] when a commitment references an unmapped lane.
+    #[expect(
+        single_use_lifetimes,
+        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
+    )]
     pub fn record_records<'a>(
         &mut self,
         lane_config: &LaneConfig,

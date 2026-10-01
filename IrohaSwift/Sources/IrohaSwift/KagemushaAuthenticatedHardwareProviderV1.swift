@@ -324,6 +324,7 @@ public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
     canonicalCommand: Data,
     canonicalReply: Data,
     responseAuthenticator: Data,
+    originalResponse: Data?,
     qualification: KagemushaHardwareQualificationV1
   ) throws
 
@@ -427,6 +428,15 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
     }
   }
 
+  public func authenticatedPolicy() throws -> KagemushaHardwarePolicyV1 {
+    try locked {
+      guard let core = self.core as? any KagemushaNativeHardwarePolicyProvidingCoreV1 else {
+        throw KagemushaCoreCoordinatorErrorV1.unavailable
+      }
+      return try core.authenticatedHardwarePolicy()
+    }
+  }
+
   fileprivate func invalidateQualification() {
     locked {
       if var key = session?.responseKey {
@@ -447,7 +457,8 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
     if !pending.coreAccepted {
       try core.acceptAuthenticatedDeviceReply(operation: pending.operation, requestID: pending.requestID,
         canonicalCommand: pending.command, canonicalReply: pending.response.canonicalReply,
-        responseAuthenticator: pending.response.authenticator, qualification: pending.qualification)
+        responseAuthenticator: pending.response.authenticator,
+        originalResponse: pending.response.canonicalResponseFrame, qualification: pending.qualification)
       pendingCoreAcceptance?.coreAccepted = true
     }
     try intentOwner.accepted(operation: pending.operation, operationID: pending.requestID,
@@ -613,7 +624,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       let original = try historicalSession(intent.qualificationScope)
       try core.acceptAuthenticatedDeviceReply(operation: intent.operation, requestID: intent.operationID,
         canonicalCommand: command, canonicalReply: reply, responseAuthenticator: authenticator,
-        qualification: original.qualification)
+        originalResponse: intent.originalResponse, qualification: original.qualification)
     }
   }
 
@@ -718,6 +729,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       canonicalCommand: command,
       canonicalReply: reply.canonicalArchive,
       responseAuthenticator: response.authenticator,
+      originalResponse: response.canonicalResponseFrame,
       qualification: qualification
     )
     let accepted = Session(qualification: qualification, responseKey: responseKey)
@@ -795,7 +807,8 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
     if observation {
       try core.acceptAuthenticatedDeviceReply(operation: rawOperation, requestID: requestID,
         canonicalCommand: command, canonicalReply: response.canonicalReply,
-        responseAuthenticator: response.authenticator, qualification: accepted.qualification)
+        responseAuthenticator: response.authenticator,
+        originalResponse: response.canonicalResponseFrame, qualification: accepted.qualification)
     } else {
       guard pendingCoreAcceptance == nil else { throw authenticatedProviderInvalid("pending Core acceptance was not resolved") }
       pendingCoreAcceptance = PendingCoreAcceptance(operation: rawOperation, requestID: Data(requestID),
@@ -875,6 +888,10 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
 
   public func qualification() throws -> KagemushaHardwareQualificationV1 {
     try client.qualification()
+  }
+
+  public func authenticatedPolicy() throws -> KagemushaHardwarePolicyV1 {
+    try locked { try client.authenticatedPolicy() }
   }
 
   public var operationLock: NSRecursiveLock { client.intentOwner.exclusiveLock }
@@ -1529,6 +1546,7 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     _ = try client.reserveOperationID(operation: 5, operationID: operationID,
       publicBinding: KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(inputs))
     let qualified = try qualification()
+    let policy = try authenticatedPolicy()
     let preparation = try client.core.beginSenderTransition(
       operationID: operationID,
       inputs: inputs,
@@ -1536,29 +1554,24 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
     )
     guard preparation.operationID == operationID,
       preparation.context.devicePolicyBinding.hardwarePolicyID
-        == qualified.hardwarePolicyDigest,
+        == policy.providerPolicyRoot,
+      policy.matches(qualification: qualified),
       preparation.context.coreAuthorizationKeyReference
         == qualified.coreAuthorizationKeyReference
     else {
       throw authenticatedProviderInvalid("native Core substituted sender operation ID")
     }
-    var prepared = try client.sender(
-      KagemushaDeviceSenderCommandV1(
-        operation: 5,
-        operationID: operationID,
-        context: preparation.context,
-        body: .prepare(inputs: inputs)
-      )
+    let prepareCommand = try KagemushaDeviceSenderCommandV1(
+      operation: 5,
+      operationID: operationID,
+      context: preparation.context,
+      body: .prepare(inputs: inputs)
     )
+    var prepared = try client.sender(prepareCommand)
     if prepared.status == .recoveryRequired || prepared.status == .staleOrConcurrent {
-      prepared = try client.sender(
-        KagemushaDeviceSenderCommandV1(
-          operation: 6,
-          operationID: operationID,
-          context: preparation.context,
-          body: .recoverPrepared(inputsDigest: preparation.inputsDigest)
-        )
-      )
+      // Native proof admission requires the original signed op5, including its exact
+      // reservation and input binding. An op6 lookup cannot replace that original.
+      prepared = try client.sender(prepareCommand)
     }
     try requireSuccess(prepared)
     guard let preparedReply = prepared.canonicalReply else {

@@ -125,6 +125,7 @@ fn transfer_accepts_any_matching_allowed_domain_membership() {
     let state = State::new(world, kura, query_store);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
+    block.admit_fastpq_source_for_testing(Hash::prehashed([0xB4; Hash::LENGTH]));
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB4);
     seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);

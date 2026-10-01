@@ -989,6 +989,10 @@ pub fn encode_execute_payload(
 ///
 /// Only canonical public objects and an opaque handle cross this IPC boundary;
 /// spending secrets and membership paths remain in the owner-only credential.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the encoder preserves every independent public binding of the fixed proving request"
+)]
 pub fn encode_private_settlement_prove_payload(
     handle: WitnessHandle,
     binding: &WitnessBinding,

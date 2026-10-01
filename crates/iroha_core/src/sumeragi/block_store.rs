@@ -26,7 +26,7 @@ use std::{io, num::NonZeroUsize, sync::Arc};
 #[path = "block_store/body_read.rs"]
 mod body_read;
 #[path = "block_store/certificate_read.rs"]
-mod certificate_read;
+pub(super) mod certificate_read;
 #[path = "block_store/committed_read.rs"]
 mod committed_read;
 #[path = "block_store/execution.rs"]

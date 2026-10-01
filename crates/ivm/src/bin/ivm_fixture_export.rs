@@ -91,6 +91,8 @@ struct ContractManifestFixtureDocument<'a> {
     event_filter_frame_hex: String,
     manifest: &'a ContractManifest,
     manifest_compact_hex: String,
+    registration_manifest: &'a ContractManifest,
+    registration_manifest_compact_hex: String,
     signed_manifest: &'a ContractManifest,
     signed_manifest_compact_hex: String,
 }
@@ -124,6 +126,14 @@ impl FastJsonWrite for ContractManifestFixtureDocument<'_> {
         norito::json::write_json_string("manifest_compact_hex", out);
         out.push(':');
         self.manifest_compact_hex.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("registration_manifest", out);
+        out.push(':');
+        self.registration_manifest.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("registration_manifest_compact_hex", out);
+        out.push(':');
+        self.registration_manifest_compact_hex.json_serialize(out);
         out.push(',');
         norito::json::write_json_string("signed_provenance", out);
         out.push(':');
@@ -205,12 +215,20 @@ fn contract_manifest_fixture_types()
 }
 fn render_contract_manifest_v1_fixture() -> Result<String, String> {
     let (event_filter, manifest, signed_manifest) = contract_manifest_fixture_types()?;
+    // Keep the schema-only null-hash fixture, and independently encode the complete
+    // hash-bound manifest accepted by public artifact-registration builders.
+    let mut registration_manifest = manifest.clone();
+    registration_manifest.code_hash = Some(iroha_crypto::Hash::prehashed([0x11; 32]));
     let event_filter_frame = norito::encode_canonical(&event_filter)
         .map_err(|error| format!("encode canonical event-filter fixture frame: {error}"))?;
     let document = ContractManifestFixtureDocument {
         event_filter_frame_hex: hex::encode(event_filter_frame),
         manifest: &manifest,
         manifest_compact_hex: hex::encode(norito::codec::Encode::encode(&manifest)),
+        registration_manifest: &registration_manifest,
+        registration_manifest_compact_hex: hex::encode(norito::codec::Encode::encode(
+            &registration_manifest,
+        )),
         signed_manifest: &signed_manifest,
         signed_manifest_compact_hex: hex::encode(norito::codec::Encode::encode(&signed_manifest)),
     };
@@ -461,6 +479,21 @@ mod tests {
         }
         assert!(rendered.ends_with('\n'));
         assert!(rendered.contains(&hex::encode(norito::codec::Encode::encode(&manifest))));
+        assert!(manifest.code_hash.is_none());
+        let mut registration_manifest = manifest.clone();
+        registration_manifest.code_hash = Some(iroha_crypto::Hash::prehashed([0x11; 32]));
+        let parsed: norito::json::Value =
+            norito::json::from_str(&rendered).expect("fixture document");
+        assert_eq!(
+            parsed
+                .get("registration_manifest_compact_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(hex::encode(norito::codec::Encode::encode(&registration_manifest)).as_str()),
+        );
+        assert_eq!(
+            parsed.get("registration_manifest"),
+            Some(&norito::json::to_value(&registration_manifest).expect("registration manifest")),
+        );
         assert!(
             rendered.contains(&hex::encode(norito::codec::Encode::encode(
                 &signed_manifest

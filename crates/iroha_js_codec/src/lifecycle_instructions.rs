@@ -72,17 +72,40 @@ fn render_model<T: JsonSerialize>(value: &T) -> CodecResult<Value> {
 }
 
 /// Parse the SDK's exact decimal dataspace projection without narrowing u64.
-pub(crate) fn parse_artifact_id(value: Value, context: &str) -> CodecResult<iroha_data_model::smart_contract::ContractArtifactId> {
+///
+/// # Errors
+/// Rejects missing/extra fields, noncanonical u64 decimal strings and noncanonical hashes.
+pub fn parse_artifact_id(
+    value: Value,
+    context: &str,
+) -> CodecResult<iroha_data_model::smart_contract::ContractArtifactId> {
     let mut fields = object(value, &["dataspace_id", "code_hash"], context)?;
-    let dataspace_id = parse_u64_text(take(&mut fields, "dataspace_id", context)?, &format!("{context}.dataspace_id"))?;
-    let code_hash = parse_model(take(&mut fields, "code_hash", context)?, &format!("{context}.code_hash"))?;
-    Ok(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::new(dataspace_id), code_hash))
+    let dataspace_id = parse_u64_text(
+        take(&mut fields, "dataspace_id", context)?,
+        &format!("{context}.dataspace_id"),
+    )?;
+    let code_hash = parse_model(
+        take(&mut fields, "code_hash", context)?,
+        &format!("{context}.code_hash"),
+    )?;
+    Ok(iroha_data_model::smart_contract::ContractArtifactId::new(
+        iroha_model_base::topology::DataSpaceId::new(dataspace_id),
+        code_hash,
+    ))
 }
 
 /// Render the SDK's exact decimal dataspace projection.
-pub(crate) fn render_artifact_id(value: &iroha_data_model::smart_contract::ContractArtifactId) -> CodecResult<Value> {
+///
+/// # Errors
+/// Returns an error if the model-owned code hash cannot be serialized to JSON.
+pub fn render_artifact_id(
+    value: &iroha_data_model::smart_contract::ContractArtifactId,
+) -> CodecResult<Value> {
     let mut fields = json::Map::new();
-    fields.insert("dataspace_id".into(), Value::String(value.dataspace_id.as_u64().to_string()));
+    fields.insert(
+        "dataspace_id".into(),
+        Value::String(value.dataspace_id.as_u64().to_string()),
+    );
     fields.insert("code_hash".into(), render_model(&value.code_hash)?);
     Ok(Value::Object(fields))
 }

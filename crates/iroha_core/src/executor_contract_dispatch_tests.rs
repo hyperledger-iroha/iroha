@@ -350,6 +350,13 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
 #[test]
 fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     const GAS_LIMIT: u64 = 10_000;
+    // Retention assertions own the default cache configuration for this scope;
+    // concurrent State fixtures may otherwise legitimately disable retention.
+    let _cache_limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+        capacity: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+        max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+        max_decoded_ops: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+    });
     fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
         let mut runtime = loaded
             .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
@@ -368,6 +375,14 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     }
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
+    // Keep the bounded validation baseline and its VM within the actual
+    // retention budget instead of retaining the maximum-stack default too.
+    loaded.runtime_pool.lock().unwrap().clear_storage();
+    drop(
+        loaded
+            .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+            .expect("warm bounded-stack executor runtime"),
+    );
     let (before, _) = loaded.runtime_pool_snapshot();
     let allocation = dirty_then_fail(&loaded).expect_err("synthetic validation failure");
     let (after_error, _) = loaded.runtime_pool_snapshot();

@@ -44,6 +44,7 @@ fn privacy_public_reserve_refuses_owner_delegate_general_bridge_and_burn() {
     let (state, definition_id, reserve_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(definition_id.clone(), BOB_ID.clone());
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    block.admit_fastpq_source_for_testing(Hash::prehashed([0xD1; Hash::LENGTH]));
     let mut transaction = block.transaction();
     seed_test_call_hash(&mut transaction, 0xD1);
     seed_test_orchard_public_reserve(&mut transaction, &reserve_asset_id);
@@ -116,6 +117,7 @@ fn privacy_reserve_rejection_is_leg_local_in_independent_batch() {
     let (state, definition_id, reserve_asset_id) = build_asset_transfer_control_test_state(10);
     let bob_asset_id = AssetId::new(definition_id.clone(), BOB_ID.clone());
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    block.admit_fastpq_source_for_testing(Hash::prehashed([0xD7; Hash::LENGTH]));
     let mut transaction = block.transaction();
     seed_test_call_hash(&mut transaction, 0xD7);
     seed_test_orchard_public_reserve(&mut transaction, &reserve_asset_id);
@@ -164,6 +166,7 @@ fn privacy_pool_bridge_requires_exact_owner_and_direction_before_reserve_debit()
     let (state, definition_id, reserve_asset_id) = build_asset_transfer_control_test_state(10);
     let destination_asset_id = AssetId::new(definition_id.clone(), BOB_ID.clone());
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    block.admit_fastpq_source_for_testing(Hash::prehashed([0xD4; Hash::LENGTH]));
     let mut transaction = block.transaction();
     seed_test_call_hash(&mut transaction, 0xD4);
     let owner = seed_test_orchard_public_reserve(&mut transaction, &reserve_asset_id);

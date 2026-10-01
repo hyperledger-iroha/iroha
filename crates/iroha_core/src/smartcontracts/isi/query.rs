@@ -7197,7 +7197,7 @@ mod tests {
     fn find_transactions_bounded_ephemeral_scans_only_the_page_carriers() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
             pagination: Pagination::default(),
@@ -7234,7 +7234,7 @@ mod tests {
     fn find_transactions_bounded_replay_ignores_blocks_appended_after_start() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let mut fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state = Arc::new(fixture.sandbox.state);
+        let state = Arc::clone(&fixture.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
         let expected = crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
@@ -7264,7 +7264,7 @@ mod tests {
         };
         let mut collected = transactions_from_batch(first.batch);
         let mut cursor = first.continue_cursor;
-        // Durable custody extends through original execution; the captured WSV prefix stays fixed.
+        // Durable custody extends through original execution; the captured query anchor stays fixed.
         fixture.store.append_next();
         while let Some(current) = cursor {
             let next = query_handle
@@ -7279,7 +7279,7 @@ mod tests {
     fn find_transactions_exact_ephemeral_counts_without_complete_carrier_snapshot() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
             pagination: Pagination::default(),
@@ -7332,7 +7332,7 @@ mod tests {
     fn find_transactions_exact_budget_charges_matches_outside_pagination_window() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Exact);
         for offset in [0, 31] {
@@ -7364,7 +7364,7 @@ mod tests {
     fn find_transactions_false_predicate_cannot_force_uncharged_projection() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
             prototype.equals("field_that_does_not_exist", true)
@@ -7420,9 +7420,9 @@ mod tests {
     #[test]
     fn find_transactions_stored_start_precharges_before_false_predicate_or_sorted_projection() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let mut fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        fixture.sandbox.state.pipeline.query_stored_min_gas_units = 1;
-        let state = Arc::new(fixture.sandbox.state);
+        let fixture =
+            crate::smartcontracts::isi::tx::tests::canonical_query_fixture_with_query_gas(1);
+        let state = Arc::clone(&fixture.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
@@ -7509,11 +7509,11 @@ mod tests {
     #[test]
     fn find_transactions_stored_continue_precharges_and_underfunded_retry_does_not_advance() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        let mut fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
+        let fixture =
+            crate::smartcontracts::isi::tx::tests::canonical_query_fixture_with_query_gas(4);
         // A one-item continuation replays its current two-entry carrier and
         // probes the next two-entry carrier to establish `has_more`.
-        fixture.sandbox.state.pipeline.query_stored_min_gas_units = 4;
-        let state = Arc::new(fixture.sandbox.state);
+        let state = Arc::clone(&fixture.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
@@ -7572,7 +7572,7 @@ mod tests {
     fn find_transactions_exact_stored_replay_preserves_count_cursor_and_order() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state = Arc::new(fixture.sandbox.state);
+        let state = Arc::clone(&fixture.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
         let expected = crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
@@ -7621,21 +7621,27 @@ mod tests {
         assert_eq!(expected_remaining, 0);
         let (body_reads, body_bytes) = state_view.kura().canonical_query_reads_for_test();
         assert_eq!(
-            body_reads, 33,
-            "the count scan reads 17 bodies; six continuation pages read 16 bodies, repeating only split carriers"
+            body_reads, 84,
+            "each continuation pays for the original tip ancestry before its page carriers"
         );
         assert_eq!(
             body_bytes,
             fixture.store.wire_bytes(1..=17)
                 + fixture.store.wire_bytes(2..=15)
                 + fixture.store.wire_bytes([10, 5])
+                + fixture.store.wire_bytes(16..=17)
+                + fixture.store.wire_bytes(13..=17)
+                + fixture.store.wire_bytes(11..=17)
+                + fixture.store.wire_bytes(8..=17)
+                + fixture.store.wire_bytes(6..=17)
+                + fixture.store.wire_bytes(3..=17)
         );
     }
     #[test]
     fn find_transactions_sorted_prefix_matches_deterministic_full_order_across_pages() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state = Arc::new(fixture.sandbox.state);
+        let state = Arc::clone(&fixture.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
         let mut expected =
@@ -7704,7 +7710,7 @@ mod tests {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         let target_height = fixture.target_height;
-        let state = Arc::new(fixture.sandbox.state);
+        let state = Arc::clone(&fixture.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
@@ -7752,7 +7758,7 @@ mod tests {
     fn find_transactions_stored_without_replay_rejects_required_continuation() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let params = QueryParams {
@@ -7797,7 +7803,7 @@ mod tests {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
         fixture.store.corrupt_body(fixture.unrelated_height);
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let params = QueryParams {
             pagination: Pagination::default(),
@@ -7836,7 +7842,7 @@ mod tests {
     fn find_transactions_rejects_unbounded_or_oversized_sorted_prefix() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
         let fixture = crate::smartcontracts::isi::tx::tests::canonical_query_fixture();
-        let state_view = fixture.sandbox.state.view();
+        let state_view = fixture.state.view();
         let query_handle = state_view.query_handle().clone();
         let sorted = Sorting {
             sort_by_metadata_key: Some("rank".parse().expect("metadata key")),
@@ -8156,7 +8162,14 @@ mod tests {
         )?
         .collect::<Vec<_>>();
         assert!(impossible_range.is_empty());
-        assert_eq!(expected_heights.len() as u64, num_blocks);
+        assert_eq!(state_view.height() as u64, num_blocks);
+        assert_eq!(
+            expected_heights,
+            std::collections::BTreeSet::from([
+                std::num::NonZeroUsize::new(num_blocks as usize).unwrap(),
+            ]),
+            "distinct source timestamps select only the latest matching carrier"
+        );
         Ok(())
     }
     #[tokio::test]
@@ -8328,7 +8341,7 @@ mod tests {
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
         let a = Account::new(a_id.clone()).build(&a_id);
         let b = Account::new(b_id.clone()).build(&b_id);
-        let world = World::with([w], [a.clone(), b.clone()], []);
+        let world = with_global_reader(World::with([w], [a.clone(), b.clone()], []), &a_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle.clone());
@@ -8345,13 +8358,13 @@ mod tests {
         };
         let req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(qwp),
-            &ALICE_ID,
+            &a_id,
             &state_view,
             QueryLimits::default(),
         )
         .unwrap();
         let QueryResponse::Iterable(first) =
-            req.execute(&query_handle, &state_view, &ALICE_ID).unwrap()
+            req.execute(&query_handle, &state_view, &a_id).unwrap()
         else {
             panic!("expected iterable")
         };
@@ -8449,7 +8462,11 @@ mod tests {
         let world = World::with_assets([domain], [account], [], [], [nft1.clone(), nft2.clone()]);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle.clone());
+        let state = State::new(
+            with_global_reader(world, &ALICE_ID),
+            kura,
+            query_handle.clone(),
+        );
         let state_view = state.view();
         let qwf: QueryWithFilter<_> = QueryWithFilter::new(
             (),
@@ -8506,7 +8523,11 @@ mod tests {
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle.clone());
+        let state = State::new(
+            with_global_reader(world, &ALICE_ID),
+            kura,
+            query_handle.clone(),
+        );
         let state_view = state.view();
         let qwf: QueryWithFilter<_> = QueryWithFilter::new(
             (),
@@ -8574,7 +8595,11 @@ mod tests {
         }
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle.clone());
+        let state = State::new(
+            with_global_reader(world, &ALICE_ID),
+            kura,
+            query_handle.clone(),
+        );
         let state_view = state.view();
         let qwf: QueryWithFilter<_> = QueryWithFilter::new(
             (),

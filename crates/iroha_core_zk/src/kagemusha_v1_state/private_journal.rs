@@ -184,6 +184,13 @@ impl PrivateJournal {
         Ok(store)
     }
 
+    /// Return the original native path only while this descriptor still owns that exact inode.
+    /// A path projection is a locator, not authenticated state or monetary authority.
+    pub(crate) fn original_directory(&self) -> Result<PathBuf, PrivateJournalError> {
+        self.check_owned()?;
+        Ok(self.directory_path.clone())
+    }
+
     /// Return the next exact payload and its sequence while replaying the acknowledged prefix.
     /// The caller validates its schema and semantics; no append is allowed before full replay.
     pub(crate) fn replay_next(&mut self) -> Result<Option<(u64, Vec<u8>)>, PrivateJournalError> {

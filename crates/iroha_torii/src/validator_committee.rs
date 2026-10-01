@@ -7,7 +7,7 @@ use iroha_core::{
         validate_global_threshold_beacon_session_v1,
     },
     state::{StateReadOnly, WorldReadOnly},
-    sumeragi::{attestation::NativePastaVerifier, certified_chain::CertifiedChain},
+    sumeragi::certified_chain::CertifiedChain,
     validator_committee_evidence::validate_validator_committee_selection_binding_v1,
 };
 use iroha_data_model::{
@@ -47,15 +47,43 @@ fn load(
 ) -> Result<ValidatorCommitteeStatusV1, Error> {
     let height = u64::try_from(state.height()).map_err(|_| invalid("committee height overflow"))?;
     limits.validate().map_err(invalid)?;
-    if height < 2 || height > limits.block_count as u64 {
+    if height < 2 {
         return Err(unavailable());
     }
-    let reader = CertifiedChain::new(state).map_err(|error| invalid(error.to_string()))?;
-    let verifier = NativePastaVerifier::new(reader.instance(), *state.network_id());
-    let reader = reader.with_attestation_verifier(&verifier);
-    let latest = reader
-        .certified(height)
-        .map_err(|error| invalid(error.to_string()))?;
+    // The independently captured original execution tip authenticates recent
+    // ancestry. Rechecking the entire genesis prefix for every status read makes
+    // valid boundaries eventually exhaust even an otherwise idle request pool.
+    // Keep one cumulative decode scope and source allowance for both attachments.
+    let mut source_blocks_left = limits.block_count as u64;
+    let mut source_bytes_left = limits.journal_bytes as u64;
+    use iroha_data_model::query::error::QueryExecutionFail;
+    let query_error = |error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error));
+    let mut admit = |work, bytes| {
+        if bytes > limits.block_bytes as u64 {
+            return Err(QueryExecutionFail::GasBudgetExceeded);
+        }
+        let remaining_blocks = source_blocks_left
+            .checked_sub(work)
+            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        let remaining_bytes = source_bytes_left
+            .checked_sub(bytes)
+            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        source_blocks_left = remaining_blocks;
+        source_bytes_left = remaining_bytes;
+        Ok(())
+    };
+    let reader =
+        CertifiedChain::new_with_source_admission(state, &mut admit).map_err(query_error)?;
+    let mut read = |height: u64| {
+        let height = usize::try_from(height)
+            .ok()
+            .and_then(std::num::NonZeroUsize::new)
+            .ok_or_else(unavailable)?;
+        reader
+            .certified_from_execution(height, &mut admit)
+            .map_err(query_error)
+    };
+    let latest = read(height)?;
     let latest_finality =
         NativeFinalityArtifact::from_block(latest.block(), limits).map_err(invalid)?;
     let outcome = &latest.commitment().schedule;
@@ -77,12 +105,13 @@ fn load(
         .get(&target_epoch)
         .cloned()
         .map(|transition| {
-            let selecting = reader
-                .certified(transition.preparation.selection_height)
-                .map_err(|error| invalid(error.to_string()))?;
+            let historical = (transition.preparation.selection_height != height)
+                .then(|| read(transition.preparation.selection_height))
+                .transpose()?;
+            let selecting = historical.as_ref().unwrap_or(&latest);
             validate_validator_committee_selection_binding_v1(
                 &transition,
-                &selecting,
+                selecting,
                 &latest,
                 target_epoch,
             )
@@ -222,23 +251,39 @@ pub(super) async fn handler_validator_committee_status(
     );
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
-    let query_limits = app.ordinary_query_policy.limits;
-    let response_limit = usize::try_from(query_limits.max_response_bytes())
-        .map_err(|_| invalid("configured committee response bound is not representable"))?;
+    let reservation = match try_acquire_query_fanout_memory(&app) {
+        Ok(reservation) => reservation,
+        Err(response) => return Ok(response),
+    };
+    // Committee evidence reads complete certified blocks. The ordinary name/ID
+    // query source bound is only 1 KiB and cannot describe this workload. Reserve
+    // a complete working set before reading State and retain it through egress.
+    let envelope = match QueryFanoutMemoryEnvelope::new(app.query_fanout_working_set_bytes, 0) {
+        Ok(envelope) => envelope,
+        Err(response) => {
+            return Ok(hold_query_fanout_memory_in_response_body(
+                response,
+                reservation,
+            ));
+        }
+    };
+    let response_limit = envelope.final_body_bytes;
     let limits = NativeFinalityLimits {
-        block_bytes: usize::try_from(query_limits.max_source_item_bytes())
-            .map_err(|_| invalid("configured committee source bound is not representable"))?
+        block_bytes: envelope
+            .route_body_bytes
             .min(NATIVE_FINALITY_MAX_BLOCK_BYTES)
             .min(response_limit),
         journal_bytes: response_limit.min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
         block_count: NATIVE_FINALITY_MAX_BLOCK_COUNT,
-        allocated_bytes: usize::try_from(query_limits.execution_headroom_bytes())
-            .map_err(|_| invalid("configured committee decode bound is not representable"))?,
+        allocated_bytes: envelope.decode_allocated_bytes,
     };
     limits.validate().map_err(invalid)?;
     let state = app.state.clone();
+    let worker_reservation = reservation.clone();
     let response =
         routing::run_admitted_blocking(admission, "committee status worker failed", move || {
+            // A dropped HTTP future does not cancel a running blocking worker.
+            let _reservation = worker_reservation;
             let view = state.view();
             let payload = norito::core::with_decode_limits_scope(
                 limits.decode_limits().map_err(invalid)?,
@@ -253,7 +298,7 @@ pub(super) async fn handler_validator_committee_status(
             )
         })
         .await?;
-    proof_response_with_exact_egress(
+    let response = proof_response_with_exact_egress(
         app.as_ref(),
         &headers,
         Some(remote.ip()),
@@ -261,5 +306,57 @@ pub(super) async fn handler_validator_committee_status(
         response,
         true,
     )
-    .await
+    .await?;
+    Ok(hold_query_fanout_memory_in_response_body(
+        response,
+        reservation,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::query::error::QueryExecutionFail;
+
+    #[test]
+    fn validator_committee_status_charges_genesis_to_the_shared_source_limits() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
+                .unwrap();
+        while chain.height() < 4 {
+            chain.commit(Vec::new());
+        }
+        let lengths =
+            [1, 3, 4].map(|height| chain.committed(height).block().encode_wire().unwrap().len());
+        let limits = NativeFinalityLimits {
+            block_bytes: *lengths.iter().max().unwrap(),
+            journal_bytes: lengths.iter().sum(),
+            block_count: 3,
+            allocated_bytes: 128 * 1024 * 1024,
+        };
+        let view = chain.state().view();
+        assert!(load(&view, None, limits).is_ok());
+        for refused in [
+            NativeFinalityLimits {
+                block_count: 2,
+                ..limits
+            },
+            NativeFinalityLimits {
+                journal_bytes: limits.journal_bytes - 1,
+                ..limits
+            },
+        ] {
+            assert!(matches!(
+                load(&view, None, refused),
+                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    QueryExecutionFail::GasBudgetExceeded
+                )))
+            ));
+        }
+        assert!(
+            load(&view, None, limits).is_ok(),
+            "capacity refusal must preserve canonical storage for retry"
+        );
+    }
 }

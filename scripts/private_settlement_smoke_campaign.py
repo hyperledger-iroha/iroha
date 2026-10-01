@@ -335,7 +335,11 @@ def validate_states(evidence: dict[str, Any], finalized_height: int,
     for phase in phases:
         name = f"state-{phase}.json"
         snapshot = fields(evidence[name], {"label", "validators"}, name)
-        expected_label = "smoke-restarted" if phase.startswith("restarted-") else f"smoke-{phase}"
+        # The shared exact-carrier retry observer retains this label when its
+        # immutable snapshot is written as state-replay.json by either campaign.
+        expected_label = ("smoke-restarted" if phase.startswith("restarted-")
+                          else "after-finalized-retry" if phase == "replay"
+                          else f"smoke-{phase}")
         require(snapshot["label"] == expected_label and isinstance(snapshot["validators"], list)
                 and len(snapshot["validators"]) == 16, f"{name} omits/relabels validators")
         vectors[phase] = [state_identity(row, peer, name) for peer, row in enumerate(snapshot["validators"])]

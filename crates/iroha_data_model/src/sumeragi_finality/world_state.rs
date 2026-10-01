@@ -1,7 +1,7 @@
 //! Bounded complete World-element snapshots authenticated against certified execution.
 //!
 //! Every element includes its field/key/value hash preimage. An opaque remainder of
-//! LtHash lanes is never a membership proof: it can be algebraically manufactured.
+//! `LtHash` lanes is never a membership proof: it can be algebraically manufactured.
 //! Native publication must capture all canonical elements at the same applied cut.
 //! Target values additionally require their real canonical typed preimages.
 
@@ -166,7 +166,7 @@ pub fn world_state_path_hash_v1(
     ]))
 }
 
-/// Expand a complete canonical element preimage using the existing LtHash context.
+/// Expand a complete canonical element preimage using the existing `LtHash` context.
 /// This arithmetic helper supplies no membership or finality authority.
 #[must_use]
 pub fn world_state_element_v1(

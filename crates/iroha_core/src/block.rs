@@ -6931,6 +6931,47 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             (state, topology, time_source, new_block.into())
         }
+        /// Build an ordinary successor from original genesis before removing its routing context.
+        fn signed_contextless_routing_fixture(
+            label: &str,
+            workers: usize,
+        ) -> (crate::sumeragi::test_chain::CertifiedTestChain, SignedBlock) {
+            use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
+            let (authority, signer) = gen_account_in(label);
+            let account = Account::new(authority.clone()).build(&authority);
+            let mut key_pairs = (0..4)
+                .map(|_| crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+                .collect::<Vec<_>>();
+            key_pairs.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+            let mut config = TestChainConfig::new(World::with([], [account], []), 0);
+            config.chain_id = label.parse().expect("canonical routing fixture chain label");
+            config.pipeline.workers = workers;
+            config.validator_keys = Some(key_pairs.clone());
+            let chain =
+                CertifiedTestChain::start(config).expect("original routing fixture genesis");
+            let state = chain.state();
+            let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let transaction = TransactionBuilder::new_with_time_source(
+                chain.network_id(),
+                authority,
+                &time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, format!("{label}-0"))])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+            let previous = state
+                .view()
+                .latest_block()
+                .expect("original genesis parent");
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source)
+                .chain(0, Some(&previous));
+            let block = with_current_state_da_sidecars(builder, state)
+                .sign(key_pairs[0].private_key())
+                .unpack(|_| {});
+            (chain, block.into())
+        }
         fn assert_contextless_unknown_default_route_is_pristine(
             state: &State,
             block: &mut SignedBlock,
@@ -6990,21 +7031,10 @@ pub(crate) mod valid {
         }
         #[test]
         fn contextless_parallel_validation_fails_before_routing_metadata_or_index_mutation() {
-            let (mut state, _, _, mut block) = signed_default_lane_block_with_execution_context(
-                "contextless-parallel-routing-failure",
-                1,
-                |transactions, _, _| {
-                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-                        transactions[0].hash_as_entrypoint(),
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                    )])
-                },
-            );
+            let (chain, mut block) =
+                signed_contextless_routing_fixture("contextless-parallel-routing-failure", 2);
+            let state = chain.state();
             let unknown_dataspace = DataSpaceId::new(4_242);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.workers = 2;
-            state.set_pipeline(pipeline);
             block.set_execution_context(None);
 
             assert_contextless_unknown_default_route_is_pristine(
@@ -7015,17 +7045,9 @@ pub(crate) mod valid {
         }
         #[test]
         fn contextless_sealed_source_fails_before_routing_metadata_or_index_mutation() {
-            let (state, _, _, mut block) = signed_default_lane_block_with_execution_context(
-                "contextless-sequential-routing-failure",
-                1,
-                |transactions, _, _| {
-                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-                        transactions[0].hash_as_entrypoint(),
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                    )])
-                },
-            );
+            let (chain, mut block) =
+                signed_contextless_routing_fixture("contextless-sequential-routing-failure", 1);
+            let state = chain.state();
             let unknown_dataspace = DataSpaceId::new(4_243);
             let signed = block
                 .external_transactions()

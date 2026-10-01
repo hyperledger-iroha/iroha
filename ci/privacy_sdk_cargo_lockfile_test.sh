@@ -2341,7 +2341,7 @@ export INTEGRATION_CARGO_LOG INTEGRATION_PYTHON_LOG
 # authenticated fake dependency imports, and an inert extension loader. No
 # real native extension or compiler is involved.
 VERIFIER_FIXTURE_ROOT="${TEST_ROOT}/wheel-verifier"
-"${TEST_PYTHON}" -I -B - \
+"${TEST_PYTHON}" -I -S -B - \
   "${SOURCE_ROOT}/ci/verify_privacy_python_wheel.py" \
   "${VERIFIER_FIXTURE_ROOT}" <<'PY'
 import base64
@@ -5043,6 +5043,10 @@ for name in artifact:
         must_reject(workflow.replace(step, "".join(lines), 1), f"{name} use before same-step graph owner initialization")
 PY
 ! grep -Eq '(^|[[:space:]])cp[[:space:]].*Cargo\.lock' "${WORKFLOW_PATH}" || { echo "privacy SDK workflow copies Cargo.lock into the tracked root" >&2; exit 1; }
+assert_canonical_source_lock() (
+  local SOURCE_ROOT="$1"
+  local WORKFLOW_PATH="$2"
+  local CANONICAL_SOURCE_LOCK_EXPECTED_SHA256="$3"
 # BEGIN canonical source lock assertion.
 # Bash 3.2 does not reliably apply errexit to a false compound [[ ... && ... ]].
 # Every failed conjunction must explicitly terminate before the success marker.
@@ -5068,11 +5072,111 @@ else
 fi
 if ! [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" &&
         "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" &&
-        "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]; then
+        "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "${CANONICAL_SOURCE_LOCK_EXPECTED_SHA256}" ]]; then
   echo "privacy SDK root Cargo.lock must match HEAD, index, worktree and the reviewed graph" >&2
   exit 1
 fi
 # END canonical source lock assertion.
+)
+
+# BEGIN canonical source lock Git fixtures.
+exercise_canonical_source_lock_git_fixture() (
+  # This is unit coverage of committed/index/worktree equality, not a demand
+  # that the developer commit the current candidate before running tests.
+  # Copy existing commit objects exactly; never create or sign a fixture commit.
+  local source_root="$1"
+  local workflow_path="$2"
+  local fixture_root="$3"
+  local head_oid tree_oid lock_oid imported_oid object_type object_oid
+  local metadata_path metadata_entry
+  local fixture_digest changed_oid
+  git() {
+    env -i PATH=/usr/bin:/bin HOME="${HOME}" LC_ALL=C \
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 \
+      /usr/bin/git --no-replace-objects "$@"
+  }
+  head_oid="$(git -C "${source_root}" rev-parse --verify 'HEAD^{commit}')"
+  tree_oid="$(git -C "${source_root}" rev-parse "${head_oid}^{tree}")"
+  lock_oid="$(git -C "${source_root}" rev-parse "${head_oid}:Cargo.lock")"
+  mkdir -m 700 "${fixture_root}"
+  git -C "${fixture_root}" init -q
+  # Git validates these root metadata blobs when admitting the tree. Preserve
+  # their exact existing objects before importing it, without disabling fsck.
+  for metadata_path in .gitattributes .gitmodules; do
+    metadata_entry="$(git -C "${source_root}" ls-tree "${head_oid}" -- "${metadata_path}")"
+    if [[ -z "${metadata_entry}" ]]; then
+      continue
+    fi
+    if [[ "${metadata_entry}" =~ ^100(644|755)\ blob\ ([0-9a-f]{40})$'\t' ]]; then
+      object_oid="${BASH_REMATCH[2]}"
+    else
+      echo "fixture tree metadata must be a committed regular blob" >&2
+      exit 1
+    fi
+    git -C "${source_root}" cat-file blob "${object_oid}" >"${fixture_root}/object-input"
+    imported_oid="$(git -C "${fixture_root}" hash-object -w -t blob --stdin \
+      <"${fixture_root}/object-input")"
+    [[ "${imported_oid}" == "${object_oid}" ]]
+    git -C "${fixture_root}" cat-file blob "${imported_oid}" \
+      | cmp -s "${fixture_root}/object-input" -
+  done
+  for object_type in commit tree blob; do
+    case "${object_type}" in
+      commit) object_oid="${head_oid}" ;;
+      tree) object_oid="${tree_oid}" ;;
+      blob) object_oid="${lock_oid}" ;;
+    esac
+    git -C "${source_root}" cat-file "${object_type}" "${object_oid}" \
+      >"${fixture_root}/object-input"
+    imported_oid="$(git -C "${fixture_root}" hash-object -w \
+      -t "${object_type}" --stdin <"${fixture_root}/object-input")"
+    [[ "${imported_oid}" == "${object_oid}" ]]
+    git -C "${fixture_root}" cat-file "${object_type}" "${imported_oid}" \
+      | cmp -s "${fixture_root}/object-input" -
+  done
+  rm "${fixture_root}/object-input"
+  git -C "${fixture_root}" update-ref refs/heads/lock-fixture "${head_oid}"
+  git -C "${fixture_root}" symbolic-ref HEAD refs/heads/lock-fixture
+  git -C "${fixture_root}" update-index --add --cacheinfo \
+    "100644,${lock_oid},Cargo.lock"
+  git -C "${fixture_root}" cat-file blob "${lock_oid}" \
+    >"${fixture_root}/Cargo.lock"
+  install -m 600 "${source_root}/.gitignore" "${fixture_root}/.gitignore"
+  fixture_digest="$(python3 -I -S -c \
+    'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    "${fixture_root}/Cargo.lock")"
+  assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+
+  printf '\n# unreviewed worktree mutation\n' >>"${fixture_root}/Cargo.lock"
+  expect_failure "must match HEAD, index, worktree" \
+    assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+  changed_oid="$(git -C "${fixture_root}" hash-object -w --no-filters -- Cargo.lock)"
+  git -C "${fixture_root}" update-index --cacheinfo "100644,${changed_oid},Cargo.lock"
+  # The staged bytes and worktree agree, but their committed owner does not.
+  expect_failure "must match HEAD, index, worktree" \
+    assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+  git -C "${fixture_root}" update-index --cacheinfo "100644,${lock_oid},Cargo.lock"
+  git -C "${fixture_root}" cat-file blob "${lock_oid}" >"${fixture_root}/Cargo.lock"
+  assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+
+  expect_failure "must match HEAD, index, worktree" \
+    assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "$(printf '%064d' 0)"
+  git -C "${fixture_root}" update-index --force-remove Cargo.lock
+  expect_failure "one regular tracked index entry" \
+    assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+  git -C "${fixture_root}" update-index --add --cacheinfo "120000,${lock_oid},Cargo.lock"
+  expect_failure "one regular tracked index entry" \
+    assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+  git -C "${fixture_root}" update-index --cacheinfo "100644,${lock_oid},Cargo.lock"
+  git -C "${fixture_root}" symbolic-ref HEAD refs/heads/missing
+  expect_failure "fatal:" \
+    assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+  git -C "${fixture_root}" symbolic-ref HEAD refs/heads/lock-fixture
+  assert_canonical_source_lock "${fixture_root}" "${workflow_path}" "${fixture_digest}"
+)
+# END canonical source lock Git fixtures.
+exercise_canonical_source_lock_git_fixture \
+  "${SOURCE_ROOT}" "${WORKFLOW_PATH}" "${TEST_ROOT}/canonical-source-git-fixture"
 [[ "$(grep -Fc 'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh")" -eq 1 ]]
 expect_no_match -Eq 'PRIVACY_SDK_(FROZEN_RELEASE|TRACKED_ROOT)_CARGO_LOCK_SHA256' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

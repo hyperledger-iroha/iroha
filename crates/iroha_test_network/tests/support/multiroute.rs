@@ -1,19 +1,21 @@
 //! Shared four-validator, three-public-lane fixture using production NPoS and DA policies.
-use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
-use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
-    da::commitment::DaProofPolicyBundle,
     domain::Domain,
     isi::{
         InstructionBox, Mint, Register, SetParameter,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneVisibility},
-    parameter::{Parameter, system::SumeragiNposParameters},
+    parameter::{
+        Parameter,
+        system::{SumeragiNposParameters, SumeragiParameters},
+    },
     prelude::Quantity,
+    sumeragi_lanes::{
+        SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+    },
 };
 use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
@@ -60,35 +62,6 @@ fn route_stake_asset_definition_id() -> AssetDefinitionId {
 }
 pub(super) fn route_fee_asset_definition_id() -> AssetDefinitionId {
     iroha_data_model::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id
-}
-fn route_multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
-    let lane_count = std::num::NonZeroU32::new(3).expect("lane count");
-    let lanes = vec![
-        ModelLaneConfig {
-            id: LaneId::new(0),
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            alias: "lane-universal".to_owned(),
-            visibility: LaneVisibility::Public,
-            ..ModelLaneConfig::default()
-        },
-        ModelLaneConfig {
-            id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(1),
-            alias: "lane-alice".to_owned(),
-            visibility: LaneVisibility::Public,
-            ..ModelLaneConfig::default()
-        },
-        ModelLaneConfig {
-            id: LaneId::new(2),
-            dataspace_id: DataSpaceId::new(2),
-            alias: "lane-bob".to_owned(),
-            visibility: LaneVisibility::Public,
-            ..ModelLaneConfig::default()
-        },
-    ];
-    let catalog = LaneCatalog::new(lane_count, lanes).expect("route lane catalog");
-    let lane_config = ActualLaneConfig::from_catalog(&catalog);
-    proof_policy_bundle(&lane_config)
 }
 fn route_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
@@ -142,6 +115,46 @@ fn route_multilane_genesis_post_topology_transactions(
         topology_entries,
         topology,
     ));
+    // Physical policy lanes do not create native ordering instances. Sign their
+    // exact committees and account routes in the original genesis as well.
+    let mut native_policy = SumeragiLanePolicy::for_chain(
+        SumeragiParameters {
+            block_cadence_ms: std::num::NonZeroU64::new(
+                u64::try_from(SMOKE_PIPELINE_TIME.as_millis()).unwrap(),
+            )
+            .unwrap(),
+            ..SumeragiParameters::default()
+        },
+        iroha_sumeragi::availability::recommended_data_availability_layout(),
+    );
+    let mut committee = topology_entries
+        .iter()
+        .map(|entry| SumeragiLaneMember {
+            peer: entry.peer.clone(),
+            pop: entry
+                .pop_bytes()
+                .expect("valid fixture PoP")
+                .expect("fixture PoP"),
+        })
+        .collect::<Vec<_>>();
+    committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+    for (id, account) in [(1_u32, &*ALICE_ID), (2_u32, &*BOB_ID)] {
+        native_policy.fixed.push(SumeragiFixedLane {
+            lane: LaneId::new(id),
+            dataspace: DataSpaceId::new(u64::from(id)),
+            committee: committee.clone(),
+        });
+        native_policy.routes.push(SumeragiLaneRoute {
+            lane: LaneId::new(id),
+            account: Some(account.to_string()),
+            instruction: None,
+        });
+    }
+    native_policy
+        .validate()
+        .expect("canonical native fixture lanes");
+    bootstrap_tx
+        .push(SetParameter::new(Parameter::Custom(native_policy.into_custom_parameter())).into());
     for (index, peer_id) in topology.iter().enumerate() {
         let validator_id = route_lane_validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -292,16 +305,14 @@ pub(super) fn network_builder_with_genesis_transactions(
                 topology.as_ref(),
                 &topology_entries,
             );
-            let mut genesis = unexecuted_genesis_factory_with_post_topology(
+            // The builder authenticates this source, then binds DA policies from
+            // the complete lane config before signing the final genesis.
+            unexecuted_genesis_factory_with_post_topology(
                 extra_transactions.clone(),
                 post_topology,
                 topology,
                 topology_entries,
-            );
-            genesis
-                .0
-                .set_da_proof_policies(Some(route_multilane_da_proof_policy_bundle()));
-            genesis
+            )
         })
         .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_npos_consensus()
@@ -357,4 +368,84 @@ pub(super) fn network_builder_with_genesis_transactions(
                 )
                 .write(["nexus", "staking", "max_validators"], 4_i64);
         })
+}
+
+#[test]
+fn multiroute_genesis_authenticates_all_configured_lane_policies() {
+    iroha_test_network::init_instruction_registry();
+    let network = network_builder().build();
+    let genesis = network.genesis();
+    let authority = AccountId::new(
+        iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+            .public_key()
+            .clone(),
+    );
+    iroha_core::block::check_genesis_block(&genesis.0, &authority)
+        .expect("complete multilane genesis signature and results authenticate");
+    let policies = genesis
+        .0
+        .da_proof_policies()
+        .expect("config-derived DA policies");
+    assert_eq!(policies.policies.len(), 3);
+    assert_eq!(
+        genesis.0.header().da_proof_policies_hash(),
+        Some(iroha_crypto::HashOf::new(policies))
+    );
+    let mut native_policies = Vec::new();
+    for input in genesis.0.network_entrypoints() {
+        let iroha_data_model::transaction::TransactionEntrypoint::External(tx) = input else {
+            panic!("genesis must contain signed transactions");
+        };
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            tx.instructions()
+        else {
+            continue;
+        };
+        for instruction in instructions.iter() {
+            let Some(parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                continue;
+            };
+            let Parameter::Custom(custom) = parameter.inner() else {
+                continue;
+            };
+            if let Some(policy) = SumeragiLanePolicy::from_custom_parameter(custom) {
+                native_policies.push(policy.expect("canonical signed native policy"));
+            }
+        }
+    }
+    assert_eq!(
+        native_policies.len(),
+        1,
+        "exactly one signed native lane policy"
+    );
+    let policy = &native_policies[0];
+    iroha_core::sumeragi::lanes::step::validate_policy(policy).unwrap();
+    let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&genesis.0).unwrap();
+    assert_eq!(policy.da_layout, epoch.da_layout);
+    assert_eq!(policy.fixed.len(), 2);
+    assert_eq!(policy.routes.len(), 2);
+    for (index, account) in [&*ALICE_ID, &*BOB_ID].into_iter().enumerate() {
+        let lane = &policy.fixed[index];
+        assert_eq!(lane.lane, LaneId::new(u32::try_from(index + 1).unwrap()));
+        assert_eq!(
+            lane.dataspace,
+            DataSpaceId::new(u64::try_from(index + 1).unwrap())
+        );
+        assert_eq!(lane.committee.len(), 4);
+        for (member, original) in lane.committee.iter().zip(&epoch.committee) {
+            assert_eq!(member.peer, original.validator);
+            assert_eq!(
+                member.pop.as_slice(),
+                original.proof_of_possession.as_slice()
+            );
+        }
+        assert_eq!(
+            policy.routes[index],
+            SumeragiLaneRoute {
+                lane: lane.lane,
+                account: Some(account.to_string()),
+                instruction: None,
+            }
+        );
+    }
 }

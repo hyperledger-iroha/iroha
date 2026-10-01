@@ -1587,9 +1587,10 @@ prints the top contributors to stdout:
 
 Pass `-- --out /tmp/report.json` to control the output path or
 `-- --keep-tarball` to retain the generated `.tgz` for manual inspection. The
-JSON artifact stores the same metadata used in release reviews, so attaching it
-to roadmap evidence or a PR comment satisfies the “bundle-size impact report”
-gate without requiring a full publish.
+JSON artifact stores the same metadata used in release reviews. Bundle sizes
+are informational; code growth has no byte ceiling or percentage gate.
+`npm run bundle:check` verifies the declared eager/deferred module boundaries,
+complete output inventory, and browser isolation.
 
 // Build a fresh RegisterDomain transaction using the native builder helper
 const built = buildRegisterDomainTransaction({
@@ -3155,19 +3156,16 @@ import {
 } from "@iroha/iroha-js";
 import fs from "node:fs";
 
+// Use the manifest emitted alongside this compiled artifact.
+const manifest = JSON.parse(fs.readFileSync("./manifest.json", "utf8"));
+const artifactId = { dataspaceId: "0", codeHash: manifest.code_hash };
+
 const manifestTx = buildRegisterSmartContractCodeTransaction({
   networkId,
   authority,
   feePayment,
-  manifest: {
-    codeHash: Buffer.alloc(32, 0xaa),
-    abiHash: "hash:…",
-    compilerFingerprint: "kotodama-1.2 rustc-1.79",
-    accessSetHints: {
-      readKeys: ["account:sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"],
-      writeKeys: ["contract:apps:ledger"],
-    },
-  },
+  artifactId,
+  manifest,
   privateKey,
 });
 
@@ -3175,7 +3173,7 @@ const codeTx = buildRegisterSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
-  codeHash: Buffer.alloc(32, 0xaa),
+  artifactId,
   code: fs.readFileSync("./contract.to"),
   privateKey,
 });
@@ -3184,30 +3182,22 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
   networkId,
   authority,
   feePayment,
-  codeHash: Buffer.alloc(32, 0xaa),
+  artifactId,
   reason: "retire archived artifact",
   privateKey,
 });
 ```
 
-`buildRegisterSmartContractCodeInstruction/Transaction` accepts partial manifests
-when governance stages code hashes separately, and the native Norito path
-round-trips the full current manifest metadata surface including
-`entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
-hash length and accept `Buffer`, typed arrays, or base64 strings. Public
-deployment uses two explicit steps: `ToriiClient.registerContractCode` submits
-the manifest and code transaction, then `ToriiClient.setContractAlias` binds or
-updates the canonical address. The SDK intentionally has no one-shot
-`deployContract` compatibility wrapper, so signing and alias mutation remain
-visible to the caller.
-`buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
-reclamation ISI into CI/governance tooling and rejects empty reason strings
-before submission so operators get fast feedback during rehearsals.
-
-The recipe mirrors the same validation rules: keys can be supplied as
-`PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, `CONTRACT_ALIAS`
-selects the deploy dataspace via its suffix, and `CONTRACT_LEASE_EXPIRY_MS`
-can stage a leased alias binding for rehearsal environments.
+Every artifact helper requires an explicit `{ dataspaceId, codeHash }` identity;
+use a canonical decimal string for the full unsigned 64-bit dataspace range.
+Manifest registration also requires its `code_hash` to match that identity.
+The local builder checks lifecycle kinds and permissions, unique declarations,
+local callback targets, access-hint completeness and exact schema bindings before
+native encoding. Unknown manifest fields, conflicting field aliases and textual
+hashes without the Iroha marker bit are rejected. Native Norito encoding retains
+`entrypoints`, `kotoba`, and `provenance`; committed ledger admission remains
+authoritative. Bytecode helpers accept `Buffer`, typed arrays, or base64 strings.
+`buildRemoveSmartContractBytesInstruction/Transaction` rejects empty reason strings.
 
 ### Contract calls via Torii
 

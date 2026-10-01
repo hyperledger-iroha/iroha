@@ -239,8 +239,17 @@ impl Drop for RawTapeV1 {
         #[cfg(test)]
         ERASURE.with(|count| {
             if let Some((clean, dirty)) = count.get() {
-                let zero = self.bytes.iter().filter(|&&byte| byte == 0).count();
-                count.set(Some((clean + zero, dirty + self.bytes.len() - zero)));
+                let observed = self
+                    .bytes
+                    .iter()
+                    .fold((clean, dirty), |(clean, dirty), &byte| {
+                        if byte == 0 {
+                            (clean + 1, dirty)
+                        } else {
+                            (clean, dirty + 1)
+                        }
+                    });
+                count.set(Some(observed));
             }
         });
     }

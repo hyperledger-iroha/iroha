@@ -26,7 +26,7 @@ VERIFIER = ROOT / "ci/verify_privacy_python_wheel.py"
 SHELL_HARNESS = ROOT / "ci/privacy_sdk_cargo_lockfile_test.sh"
 _HARNESS_HEADER = "\n".join((
     'VERIFIER_FIXTURE_ROOT="${TEST_ROOT}/wheel-verifier"',
-    '"${TEST_PYTHON}" -I -B - \\',
+    '"${TEST_PYTHON}" -I -S -B - \\',
     '  "${SOURCE_ROOT}/ci/verify_privacy_python_wheel.py" \\',
     '  "${VERIFIER_FIXTURE_ROOT}" <<\'PY\'',
 )) + "\n"
@@ -389,6 +389,58 @@ def test_harness_extraction_requires_its_exact_unique_source_owner() -> None:
             pass
         else:
             raise AssertionError("invalid original harness owner was accepted")
+
+
+def test_shell_owned_inert_child_excludes_installed_distributions(tmp_path: Path) -> None:
+    """The exact shell invocation isolates fixtures from a real venv's installed owners."""
+    environment_root = tmp_path / "ambient-venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment_root)],
+                   capture_output=True, text=True, check=True)
+    python = environment_root / "bin/python"
+    site = Path(subprocess.check_output(
+        [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        text=True,
+    ).strip())
+    # Genuine installed-distribution metadata discovered by importlib.metadata,
+    # without importing a native module or manufacturing an authenticated wheel.
+    for name in ("iroha_native", "iroha_python"):
+        dist = site / f"{name}-9.9.9.dist-info"
+        dist.mkdir(parents=True)
+        (dist / "METADATA").write_text(
+            f"Metadata-Version: 2.3\nName: {name.replace('_', '-')}\nVersion: 9.9.9\n")
+    assert json.loads(subprocess.check_output(
+        [str(python), "-I", "-c", "import importlib.metadata,json; "
+         "print(json.dumps([importlib.metadata.version(name) "
+         "for name in ('iroha-native','iroha-python')]))"], text=True,
+    )) == ["9.9.9", "9.9.9"]
+    source = SHELL_HARNESS.read_bytes()
+    body = extract_original_harness(source)
+    prelude = 'set -euo pipefail\nTEST_PYTHON="$1"\nSOURCE_ROOT="$2"\nTEST_ROOT="$3"\n'
+    # The predecessor actually sees both distributions and the unchanged
+    # production verifier rejects them. The maintained shell header fixes only
+    # interpreter admission, then runs every original fixture assertion.
+    for no_site in (False, True):
+        test_root = tmp_path / ("isolated" if no_site else "site-enabled")
+        test_root.mkdir()
+        header = _HARNESS_HEADER if no_site else _HARNESS_HEADER.replace(" -S", "", 1)
+        program = prelude + header + body + "\nprint('INERT_CHILD_FLAGS=' + json.dumps(" \
+            "{'isolated': sys.flags.isolated, 'no_site': sys.flags.no_site}))\nPY\n"
+        result = subprocess.run(
+            ["/bin/bash", "-c", program, "wheel-child-isolation", str(python),
+             str(ROOT), str(test_root)], capture_output=True, text=True, timeout=120,
+        )
+        (test_root / "controls.log").write_text(result.stdout + result.stderr)
+        if no_site:
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert "two-wheel bounded archive, installed-origin, loader, missing-owner and tamper checks passed" in result.stdout
+            rows = [row.removeprefix("INERT_CHILD_FLAGS=") for row in result.stdout.splitlines()
+                    if row.startswith("INERT_CHILD_FLAGS=")]
+            assert rows == ['{"isolated": 1, "no_site": 1}']
+        else:
+            assert result.returncode != 0
+            assert "package import must resolve exactly one iroha-native distribution" in result.stderr
+            assert "INERT_CHILD_FLAGS=" not in result.stdout
+    assert SHELL_HARNESS.read_bytes() == source
 
 
 def test_pure_builders_preserve_parent_cached_owners_and_distribution(tmp_path, monkeypatch) -> None:

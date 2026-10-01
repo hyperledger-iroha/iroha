@@ -526,8 +526,12 @@ source-sealed monetary XCFramework.
   so full public-input digests disagreed; the coordinator also discarded the
   device response's original signature. Core now owns the shared context,
   including its authenticated Core key reference, and method 3 carries the
-  original low-S signature as its fifth field. The new ten-field contract rejects
-  the retired projection. Rust canonical fixtures pass Kotlin/Java parity and
+  original low-S signature as its fifth field. Method 3 has exactly ten fields
+  for operations other than 12; operation 12 requires the full original signed
+  `IKGMJRS1` response as its eleventh field after qualification. Native admission
+  correlates the exact operation, request ID, payload and authenticator and retains
+  those original bytes through release publication; reconstructed frames and the
+  ten-field operation-12 layout are rejected. Rust canonical fixtures pass Kotlin/Java parity and
   full provider tests retain the original authenticator. Native session admission
   and fresh Rust Core regression execution remain required before closure.
 - **KGM-08 — Medium, canonical SDK and retained-operation boundaries.** Existing
@@ -984,3 +988,21 @@ rollback of trusted time fail validation even with fresh observer signatures.
 This negative sender exercise does not change delayed receiver admission:
 payments already committed within their original request window remain
 receivable after expiry.
+
+The recovered native outbox lifecycle now has a borrowed installed-owner completion verifier.
+It reads the exact private Command/Completed WAL, command, full signed op12 response and native
+publication destination, then authenticates the current Released tombstone before retiring that
+operation's attempt, matching terminal work and transient tokens. Pending device/publication
+work retains its original bytes and blocks another release. Bounded native-origin locator hints
+are never authority; same-owner exact retry rechecks the complete original WAL every time.
+TODO: genuine durable native source lookup remains required for evicted or process-recovered
+locators. The current original-signature verifier requires the same accepted qualification;
+rotated-history retry remains open and rejects without genuine historical native custody.
+
+Transient read slots 6/8/10 can retire under full authenticated admission, while unresolved
+mutation originals remain. Op12 resolves work without needing another transient cache slot and
+must re-enter the genuine native signed-response/publication verifier on each uncertain retry.
+Real private-WAL and signed-observation regressions cover structural identity/storage behavior;
+current-source Cargo execution and a qualified native same-session A → B → exact A lifecycle,
+publication failure/retry and credential-rotation refusal remain required. These source changes
+and public fixtures do not establish shipping physical authority or release readiness.

@@ -69,7 +69,8 @@ write_summary() {
   if [[ -z "$dest" ]]; then
     return
   fi
-  printf '%s\n' "${RESULTS[@]}" | python3 - "$dest" <<'PY'
+  # Keep task records on stdin; pass the summary program separately with -c.
+  printf '%s\n' "${RESULTS[@]}" | python3 -c '
 import json
 import sys
 import datetime
@@ -102,7 +103,7 @@ payload = {
 with open(dest, "w", encoding="utf-8") as f:
     json.dump(payload, f, indent=2)
     f.write("\n")
-PY
+' "$dest"
   echo "Wrote test summary to $dest"
 }
 

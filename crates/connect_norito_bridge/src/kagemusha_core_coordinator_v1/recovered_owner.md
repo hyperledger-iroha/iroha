@@ -69,3 +69,41 @@ It does not turn recovery possession into new monetary work, KYC
 renewal, ledger inclusion or a fabricated wallet bootstrap. Monetary dispatch must
 remain bound to the separately authenticated concrete Core machine and its actual
 paired proofs, nonforking device transactions and original native journals.
+
+Methods 7–9 resolve original native operation records through the freshly authenticated
+Core index under the existing account/device possession lease. Method 8 validates
+the complete current qualification, native context and provider root, while retaining
+the operation's original creation context. Only an Installed native record returns
+recovery material after the original terminal envelope and digest are reverified;
+unfinished records reject, and genuine absence or a validated Released tombstone
+returns no live terminal. A changed current wallet observation or context rejects.
+
+Method 7 correlates the authenticated op9 installation acknowledgement's empty
+envelope field and op10's exact retained envelope separately, then compares every
+signed op21 wallet snapshot field with the current native wallet observation.
+Method 9 requires the exact native recovery archive and authenticated original
+op10 envelope. These observations provide no Release signing or mutation authority.
+
+Completed outbox release retirement requires the installed owner's fresh native checkpoint,
+the exact original private two-record release WAL, original command and full signed response,
+original publication destination and the actual authenticated Released tombstone. Successful
+proof retires only that operation's transient sender tokens and matching terminal attempt.
+Pending device or checkpoint work retains its original attempt and blocks another release.
+Bounded native-origin path locators retain same-owner exact completed retries; they supply no
+authority and every lookup reopens and verifies the full native original. Missing or evicted
+locators require independently installed durable native source lookup and otherwise reject.
+The current verifier requires the same accepted qualification. Historical full-frame retry
+after credential, epoch or release rotation remains unqualified and rejects; public credential
+fields cannot supply historical native signing authority.
+
+The sender observation cache stays bounded at sixteen entries. Fully authenticated new
+observations can retire only read slots 6, 8 and 10. Uncertain mutation originals 5, 7, 9 and 12
+remain until their operation has the native completed-release proof above. A retired read
+lookup fails closed and can obtain a fresh signed native observation; no native WAL is deleted.
+
+Authenticated op12 completion requires no additional transient cache slot. Its exact original
+command, full response and uncertain publication remain with the exclusive native release
+attempt and private WAL. An exact retry without a cached token must match that retained tuple,
+complete qualification and full-frame payload/authenticator projection, then pass Core's original
+signed-response and checkpoint verifier again. Capacity cannot prevent a resolving release,
+and this retry path grants no completion or retirement from process memory alone.

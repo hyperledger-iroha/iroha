@@ -386,6 +386,9 @@ fn state_with_history(history: &[Arc<SignedBlock>]) -> State {
 #[path = "boundary_tests.rs"]
 mod boundaries;
 
+#[path = "state_certificate_tests.rs"]
+mod state_certificate;
+
 #[test]
 fn a_view_of_another_network_is_refused() {
     let (chain, _) = chain();

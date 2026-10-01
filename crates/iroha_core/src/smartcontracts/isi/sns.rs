@@ -1217,11 +1217,39 @@ mod tests {
             .saturating_add(1);
         BlockHeader::new(
             NonZeroU64::new(height).expect("height > 0"),
-            None,
+            state.view().latest_block_hash(),
             None,
             creation_time_ms,
             0,
         )
+    }
+    fn authenticated_alias_maintenance_state(
+        world: World,
+        payment_asset: &AssetDefinitionId,
+    ) -> State {
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        let mut config = TestChainConfig::new(world, 0);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.fees.fee_asset_id = payment_asset.to_string();
+        config.nexus = Some(nexus);
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        let consensus_mode = config.consensus_mode;
+        let prepared =
+            CertifiedTestChain::prepare(config).expect("prepare signed alias maintenance genesis");
+        let state = std::sync::Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished alias maintenance State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            consensus_mode.into(),
+            None,
+        )
+        .expect("apply signed alias maintenance genesis");
+        state
     }
     fn alias_auto_renew_fixture(
         owner_balance: Quantity,
@@ -1279,12 +1307,7 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        configure_test_fee_asset(&state, &payment_asset);
+        let state = authenticated_alias_maintenance_state(world, &payment_asset);
         let target = iroha_data_model::alias_setup::AliasTargetV1::Domain(ResolvedDomainV1::new(
             leased_domain_id,
             DataSpaceId::UNIVERSAL,
@@ -1328,13 +1351,10 @@ mod tests {
         }
     }
     fn run_alias_auto_renew_maintenance(state: &State, now_ms: u64) {
-        let mut header = next_header_at(state, now_ms);
-        // This fixture seeds World without a canonical history. Maintenance is
-        // an ordinary phase following that setup, never unauthenticated genesis.
-        if header.is_genesis() {
-            header.set_height(NonZeroU64::new(2).unwrap());
-        }
-        let mut block = state.block(header.clone());
+        let header = next_header_at(state, now_ms);
+        // Maintenance consumes the original authenticated genesis policy and
+        // actual retained parent, with no synthetic Network transaction.
+        let mut block = state.block(header);
         let outputs = crate::state::run_empty_network_owner_fixture(&mut block, None);
         assert!(
             outputs.is_empty(),
@@ -1363,6 +1383,41 @@ mod tests {
         block
             .commit_world_overlay_for_testing()
             .expect("policy update block commits");
+    }
+    #[test]
+    fn alias_auto_renew_fixture_retains_genesis_identity_and_initial_accounting() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        assert_eq!(fixture.state.committed_height(), 1);
+        assert_eq!(fixture.state.kura().blocks_count(), 1);
+        let genesis = fixture
+            .state
+            .kura()
+            .get_block(std::num::NonZeroUsize::new(1).unwrap())
+            .unwrap();
+        let signed =
+            iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&genesis)
+                .unwrap();
+        let view = fixture.state.view();
+        assert_eq!(
+            crate::sumeragi::lanes::routing::committed_root_scope(view.world()),
+            Some(signed.sumeragi_context.root_scope)
+        );
+        assert_eq!(view.latest_block_hash(), Some(genesis.hash()));
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.owner),
+            Quantity::from(2_u32)
+        );
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.collector),
+            Quantity::zero()
+        );
+        assert_eq!(
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms,
+            AUTO_RENEW_EXPIRY_MS
+        );
     }
     #[test]
     fn native_auto_renew_suspends_invalid_persisted_timing_without_charge() {
@@ -2008,7 +2063,8 @@ mod tests {
         let collector_before = asset_balance(&state, &payment_asset, &collector);
         let first_alias_key = first_alias.account_alias();
         let mut block = state.block(next_header(&state));
-        let mut transaction = block.transaction();
+        let mut transaction =
+            block.transaction_for_fastpq_testing(Hash::prehashed([0x44; Hash::LENGTH]));
         seed_test_call_hash(&mut transaction, 0x44);
         first_ensure
             .execute(&authority, &mut transaction)
@@ -2220,7 +2276,8 @@ mod tests {
         let payer_before = asset_balance(&state, &payment_asset, &authority);
         {
             let mut block = state.block(next_header(&state));
-            let mut transaction = block.transaction();
+            let mut transaction =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC9; Hash::LENGTH]));
             seed_test_call_hash(&mut transaction, 0xC9);
             ensure_parent
                 .clone()
@@ -2477,7 +2534,8 @@ mod tests {
             AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL);
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC2; Hash::LENGTH]));
             seed_test_call_hash(&mut stx, 0xC2);
             ensure_account_alias_instruction(
                 &stx,
@@ -2509,7 +2567,8 @@ mod tests {
         drop(view);
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC3; Hash::LENGTH]));
             seed_test_call_hash(&mut stx, 0xC3);
             renew_account_alias_instruction(&stx, &alias, 1)
                 .execute(&authority, &mut stx)
@@ -2577,7 +2636,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut transaction = block.transaction();
+            let mut transaction =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xC4; Hash::LENGTH]));
             seed_test_call_hash(&mut transaction, 0xC4);
             ensure_account_alias_instruction(
                 &transaction,
@@ -2612,7 +2672,8 @@ mod tests {
             )
         };
         let mut block = state.block(next_header(&state));
-        let mut transaction = block.transaction();
+        let mut transaction =
+            block.transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
         seed_test_call_hash(&mut transaction, 0xC5);
         let mut renewal = renew_account_alias_instruction(&transaction, &alias, 1);
         renewal.expected_current_expiry_ms = current_expiry.saturating_add(1);
@@ -2705,7 +2766,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xD1; Hash::LENGTH]));
             Register::account(Account::new(retail_account.clone()))
                 .execute(&authority, &mut stx)
                 .expect("register retail account");
@@ -2830,7 +2892,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xD2; Hash::LENGTH]));
             Register::account(Account::new(retail_account.clone()))
                 .execute(&authority, &mut stx)
                 .expect("register retail account");
@@ -2925,11 +2988,11 @@ mod tests {
             let payer_before = asset_balance(&state, &payment_asset, &authority);
             let collector_before = asset_balance(&state, &payment_asset, &collector);
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
-            seed_test_call_hash(
-                &mut stx,
-                0xE0_u8.saturating_add(u8::try_from(index).expect("bounded claim index")),
-            );
+            let call_hash_byte =
+                0xE0_u8.saturating_add(u8::try_from(index).expect("bounded claim index"));
+            let mut stx = block
+                .transaction_for_fastpq_testing(Hash::prehashed([call_hash_byte; Hash::LENGTH]));
+            seed_test_call_hash(&mut stx, call_hash_byte);
             match claim.execute(&authority, &mut stx) {
                 Ok(()) => {
                     successes = successes.saturating_add(1);
@@ -3014,7 +3077,8 @@ mod tests {
         );
         {
             let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
+            let mut stx =
+                block.transaction_for_fastpq_testing(Hash::prehashed([0xE2; Hash::LENGTH]));
             seed_test_call_hash(&mut stx, 0xE2);
             ensure_account_alias_instruction(
                 &stx,

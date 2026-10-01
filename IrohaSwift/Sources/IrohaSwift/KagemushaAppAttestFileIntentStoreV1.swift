@@ -103,12 +103,12 @@ public final class KagemushaAppAttestFileIntentStoreV1:
       guard current.key == key,
         case .pending(let previousCounter, let pendingDigest) = current.intent,
         previousCounter < UInt32.max,
-        counter == previousCounter + 1,
+        counter > previousCounter,
         pendingDigest == selectionDigest else {
         throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
       }
       try Self.writeRecord(directory, record: Record(key: key,
-        intent: .complete(counter: counter, selectionDigest: selectionDigest,
+        intent: .complete(previousCounter: previousCounter, counter: counter, selectionDigest: selectionDigest,
           rawAssertion: rawAssertion)))
     }
   }
@@ -130,8 +130,8 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     try withLock { directory in
       let current = try Self.readRecord(directory)
       guard current.key == key,
-        current.intent == .complete(counter: counter, selectionDigest: selectionDigest,
-          rawAssertion: rawAssertion) else {
+        case .complete(_, let storedCounter, let storedDigest, let storedRaw) = current.intent,
+        storedCounter == counter, storedDigest == selectionDigest, storedRaw == rawAssertion else {
         throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
       }
       try Self.writeRecord(directory, record: Record(key: key, intent: .ready(counter: counter)))
@@ -282,19 +282,21 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     var body = magic
     let state: UInt8
     let counter: UInt32
+    let previousCounter: UInt32
     let digest: Data
     let assertion: Data
     switch record.intent {
     case .ready(let value):
-      state = 0; counter = value; digest = Data(repeating: 0, count: 32); assertion = Data()
+      state = 0; counter = value; previousCounter = value; digest = Data(repeating: 0, count: 32); assertion = Data()
     case .pending(let value, let selection):
-      state = 1; counter = value; digest = selection; assertion = Data()
-    case .complete(let value, let selection, let raw):
-      state = 2; counter = value; digest = selection; assertion = raw
+      state = 1; counter = value; previousCounter = value; digest = selection; assertion = Data()
+    case .complete(let previous, let value, let selection, let raw):
+      state = 2; counter = value; previousCounter = previous; digest = selection; assertion = raw
     }
     body.append(state)
     appendLE(UInt16(record.key.count), to: &body)
     body.append(record.key)
+    appendLE(previousCounter, to: &body)
     appendLE(counter, to: &body)
     body.append(digest)
     appendLE(UInt16(assertion.count), to: &body)
@@ -311,7 +313,7 @@ public final class KagemushaAppAttestFileIntentStoreV1:
 
   private static func decode(_ data: Data) throws -> Record {
     let bytes = [UInt8](data)
-    let minimum = magic.count + 1 + 2 + 1 + 4 + 32 + 2 + 32
+    let minimum = magic.count + 1 + 2 + 1 + 8 + 32 + 2 + 32
     guard bytes.count >= minimum, bytes.count <= maximumRecordBytes,
       Array(bytes.prefix(magic.count)) == Array(magic),
       Data(SHA256.hash(data: Data(bytes.dropLast(32)))) == Data(bytes.suffix(32)) else {
@@ -321,11 +323,12 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     let state = bytes[offset]; offset += 1
     let keyCount = Int(readLE(UInt16.self, bytes, at: &offset))
     guard (1...maximumKeyIDBytes).contains(keyCount),
-      offset + keyCount + 4 + 32 + 2 + 32 <= bytes.count else {
+      offset + keyCount + 8 + 32 + 2 + 32 <= bytes.count else {
       throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
     }
     let key = Data(bytes[offset..<(offset + keyCount)]); offset += keyCount
     guard !key.contains(0) else { throw KagemushaAppAttestEvidenceErrorV1.journalMismatch }
+    let previousCounter = readLE(UInt32.self, bytes, at: &offset)
     let counter = readLE(UInt32.self, bytes, at: &offset)
     let digest = Data(bytes[offset..<(offset + 32)]); offset += 32
     let assertionCount = Int(readLE(UInt16.self, bytes, at: &offset))
@@ -336,12 +339,12 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     let assertion = Data(bytes[offset..<(offset + assertionCount)])
     let intent: KagemushaAppAttestAssertionIntentV1
     switch state {
-    case 0 where digest == Data(repeating: 0, count: 32) && assertion.isEmpty:
+    case 0 where previousCounter == counter && digest == Data(repeating: 0, count: 32) && assertion.isEmpty:
       intent = .ready(counter: counter)
-    case 1 where assertion.isEmpty && counter < UInt32.max:
+    case 1 where previousCounter == counter && assertion.isEmpty && counter < UInt32.max:
       intent = .pending(previousCounter: counter, selectionDigest: digest)
-    case 2 where !assertion.isEmpty && counter > 0:
-      intent = .complete(counter: counter, selectionDigest: digest, rawAssertion: assertion)
+    case 2 where !assertion.isEmpty && counter > previousCounter:
+      intent = .complete(previousCounter: previousCounter, counter: counter, selectionDigest: digest, rawAssertion: assertion)
     default:
       throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
     }

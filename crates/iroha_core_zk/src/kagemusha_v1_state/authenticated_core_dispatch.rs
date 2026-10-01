@@ -4,6 +4,21 @@
 //! for an authenticated checkpoint. Journal reservations retain original caller IDs only.
 
 use super::*;
+use iroha_data_model::kagemusha::KagemushaAggregateStateCommitmentV1;
+
+/// Public wallet head copied from the complete freshly authenticated native checkpoint.
+/// These projections disclose no private opening and grant no monetary or hardware authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaAuthenticatedWalletObservationV1 {
+    /// Exact release, asset, policy registry root, logical sequence and state commitment.
+    pub aggregate: KagemushaAggregateStateCommitmentV1,
+    /// Native rollback-resistant wallet journal revision.
+    pub journal_revision: u128,
+    /// Mint and peer credits durably staged but not yet folded into the state.
+    pub pending_credit_count: u128,
+    /// Installed terminal envelopes retained for byte-identical retry.
+    pub retry_outbox_count: u128,
+}
 
 /// Borrowed original proving selection obtainable only from the concrete current native owner.
 /// It cannot be decoded, cloned into a new owner or manufactured from a public candidate.
@@ -138,6 +153,52 @@ impl KagemushaAuthenticatedOutgoingProvingSelectionV1<'_> {
 }
 
 impl KagemushaAuthenticatedCoreOwnerV1 {
+    /// Copy the actual public wallet head and counts under fresh complete checkpoint custody.
+    /// A signed device observation must match every returned field; matching wallet scope alone
+    /// does not establish the currently selected state. The policy ID is the registry root,
+    /// distinct from the manifest's hardware-policy digest.
+    ///
+    /// # Errors
+    /// Rejects lost original custody, changed journals, stale hardware or invalid native state.
+    pub fn current_wallet_observation(
+        &self,
+    ) -> Result<KagemushaAuthenticatedWalletObservationV1, KagemushaStateErrorV1> {
+        self.current_recovery_selection()?;
+        let observation = wallet_observation(&self.machine)?;
+        self.current_recovery_selection()?;
+        Ok(observation)
+    }
+
+    /// Find the original native record for an exact payment credit or redemption identity.
+    /// This read-only result is a retry selector, never a proof or transition capability.
+    ///
+    /// # Errors
+    /// Rejects zero identities, ambiguous or malformed indexes and stale original custody.
+    pub fn outgoing_record_for_terminal(
+        &self,
+        terminal_id: DigestV1,
+    ) -> Result<Option<KagemushaOutgoingOperationRecordV1>, KagemushaStateErrorV1> {
+        self.current_recovery_selection()?;
+        let record = terminal_record(&self.machine, terminal_id)?;
+        self.current_recovery_selection()?;
+        Ok(record)
+    }
+
+    /// Look up the actual retained native operation under fresh complete checkpoint custody.
+    /// An absent record is an authenticated index observation, never a swallowed recovery error.
+    ///
+    /// # Errors
+    /// Rejects zero identities, malformed or foreign records and stale original custody.
+    pub fn outgoing_record_for_operation(
+        &self,
+        operation_id: DigestV1,
+    ) -> Result<Option<KagemushaOutgoingOperationRecordV1>, KagemushaStateErrorV1> {
+        self.current_recovery_selection()?;
+        let record = operation_record(&self.machine, operation_id)?;
+        self.current_recovery_selection()?;
+        Ok(record)
+    }
+
     /// Return the exact installed terminal payment or redemption bytes for one native operation.
     /// The native journal, original proof, reservation, index and selected checkpoint are
     /// reauthenticated before these public retry bytes are copied. They grant no new work.
@@ -335,6 +396,157 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
     }
 }
 
+fn wallet_observation<R, G, H>(
+    machine: &KagemushaStateMachineV1<R, G, H>,
+) -> Result<KagemushaAuthenticatedWalletObservationV1, KagemushaStateErrorV1>
+where
+    R: KagemushaRecursiveVerifierV1,
+    G: KagemushaGuardBundleVerifierV1,
+    H: KagemushaAuthenticatedHistoryStoreV1,
+{
+    let state = &machine.state;
+    let aggregate = KagemushaAggregateStateCommitmentV1 {
+        version: KAGEMUSHA_STATE_VERSION_V1,
+        release_id: state.release_id,
+        network_id: state.lane.network_id,
+        asset: state.lane.asset.clone(),
+        asset_incarnation: state.asset_incarnation,
+        scale: state.lane.scale,
+        liability_pool_id: state.liability_pool_id,
+        lane_id: state.lane.device_lane_id,
+        hardware_epoch_id: state.hardware_epoch.epoch_id,
+        key_reference: state.device_policy_binding.device_key_reference,
+        hardware_policy_id: state.device_policy_binding.hardware_policy_id,
+        sequence: state.logical_sequence,
+        state_commitment: state.state_commitment,
+    };
+    aggregate.validate().map_err(material_error)?;
+    let retry_outbox_count = machine
+        .outgoing_operation_index()
+        .records()
+        .filter(|record| record.phase == KagemushaOutgoingOperationPhaseV1::Installed)
+        .count() as u128;
+    Ok(KagemushaAuthenticatedWalletObservationV1 {
+        aggregate,
+        journal_revision: machine.journal_revision,
+        pending_credit_count: machine.pending_credit_count() as u128,
+        retry_outbox_count,
+    })
+}
+
+fn terminal_record<R, G, H>(
+    machine: &KagemushaStateMachineV1<R, G, H>,
+    terminal_id: DigestV1,
+) -> Result<Option<KagemushaOutgoingOperationRecordV1>, KagemushaStateErrorV1>
+where
+    R: KagemushaRecursiveVerifierV1,
+    G: KagemushaGuardBundleVerifierV1,
+    H: KagemushaAuthenticatedHistoryStoreV1,
+{
+    if terminal_id == [0; 32] {
+        return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+    }
+    let mut matches = machine
+        .outgoing_operation_index()
+        .records()
+        .filter(|record| record.outcome_id == terminal_id);
+    let record = matches.next().cloned();
+    if matches.next().is_some() {
+        return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+    }
+    if let Some(record) = &record {
+        record.validate().map_err(material_error)?;
+        record
+            .context
+            .validate_retained_against_state(&machine.state)
+            .map_err(material_error)?;
+    }
+    Ok(record)
+}
+
+fn operation_record<R, G, H>(
+    machine: &KagemushaStateMachineV1<R, G, H>,
+    operation_id: DigestV1,
+) -> Result<Option<KagemushaOutgoingOperationRecordV1>, KagemushaStateErrorV1>
+where
+    R: KagemushaRecursiveVerifierV1,
+    G: KagemushaGuardBundleVerifierV1,
+    H: KagemushaAuthenticatedHistoryStoreV1,
+{
+    if operation_id == [0; 32] {
+        return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+    }
+    let record = machine
+        .outgoing_operation_index()
+        .lookup(operation_id)
+        .cloned();
+    if let Some(record) = &record {
+        record.validate().map_err(material_error)?;
+        if record.operation_id != operation_id {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        record
+            .context
+            .validate_retained_against_state(&machine.state)
+            .map_err(material_error)?;
+    }
+    Ok(record)
+}
+
 fn material_error(error: impl std::fmt::Display) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::RecoveryMaterial(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observation_uses_actual_registry_root_and_full_width_native_head() {
+        // Pure projection test only. This generic test machine cannot construct the concrete
+        // production owner whose public getter additionally challenges hardware twice.
+        let (mut machine, _, _) =
+            super::super::super::tests::coordinator_operation_store_tests::machine();
+        machine.state.logical_sequence = u128::from(u64::MAX) + 19;
+        machine.journal_revision = u128::from(u64::MAX) + 23;
+        let observed = wallet_observation(&machine).unwrap();
+        assert_eq!(
+            observed.aggregate.hardware_policy_id,
+            machine.state.device_policy_binding.hardware_policy_id
+        );
+        assert_eq!(observed.aggregate.sequence, machine.state.logical_sequence);
+        assert_eq!(
+            observed.aggregate.state_commitment,
+            machine.state.state_commitment
+        );
+        assert_eq!(observed.journal_revision, machine.journal_revision);
+        assert_eq!(
+            observed.pending_credit_count,
+            machine.pending_credit_count() as u128
+        );
+        assert_eq!(observed.retry_outbox_count, 0);
+        let encoded = norito::encode_canonical(&observed.aggregate).unwrap();
+        assert_eq!(
+            KagemushaAggregateStateCommitmentV1::decode_canonical_exact(&encoded).unwrap(),
+            observed.aggregate
+        );
+        machine.state.device_policy_binding.hardware_policy_id = [0; 32];
+        assert!(wallet_observation(&machine).is_err());
+    }
+
+    #[test]
+    fn terminal_selector_rejects_zero_and_never_invents_an_absent_operation() {
+        let (machine, _, _) =
+            super::super::super::tests::coordinator_operation_store_tests::machine();
+        assert!(terminal_record(&machine, [0; 32]).is_err());
+        assert_eq!(terminal_record(&machine, [0x81; 32]).unwrap(), None);
+    }
+
+    #[test]
+    fn operation_selector_distinguishes_invalid_identity_from_authenticated_absence() {
+        let (machine, _, _) =
+            super::super::super::tests::coordinator_operation_store_tests::machine();
+        assert!(operation_record(&machine, [0; 32]).is_err());
+        assert_eq!(operation_record(&machine, [0x82; 32]).unwrap(), None);
+    }
 }

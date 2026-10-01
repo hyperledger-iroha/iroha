@@ -750,11 +750,25 @@ seiyaku GovernedReadFixture {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
-    let code_hash = register_code_bytes(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), artifact, &mut transaction)
-        .expect("register governed contract bytes");
+    let code_hash = register_code_bytes(
+        &harness.authority,
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        artifact,
+        &mut transaction,
+    )
+    .expect("register governed contract bytes");
     assert_eq!(code_hash, verified.code_hash);
-    register_manifest(&harness.authority,contract_address.dataspace_id().expect("test contract dataspace"), signed_manifest, &mut transaction)
-        .expect("register governed contract manifest");
+    register_manifest(
+        &harness.authority,
+        contract_address
+            .dataspace_id()
+            .expect("test contract dataspace"),
+        signed_manifest,
+        &mut transaction,
+    )
+    .expect("register governed contract manifest");
     transaction
         .world_mut_for_testing()
         .bind_inactive_contract_subject_for_testing(
@@ -2569,13 +2583,13 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
     )
     .await
     .expect_err("incomplete active state must fail closed");
-    let crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error
-    else {
-        panic!("incomplete active state must fail with its internal invariant: {error:?}");
-    };
-    assert_eq!(
-        message,
-        "active contract has incomplete code, manifest, alias, or subject bindings"
+    assert!(
+        matches!(
+            &error,
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+                if message == "active contract has incomplete code, manifest, alias, or subject bindings"
+        ),
+        "expected incomplete active contract, got {error:?}"
     );
 }
 #[tokio::test]
@@ -2613,11 +2627,14 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
     )
     .await
     .expect_err("unsigned active manifest must fail closed");
-    let crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error
-    else {
-        panic!("unsigned active manifest must fail with its internal invariant: {error:?}");
-    };
-    assert_eq!(message, "active contract manifest has no signed provenance");
+    assert!(
+        matches!(
+            &error,
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+                if message == "active contract manifest has no signed provenance"
+        ),
+        "expected missing manifest provenance, got {error:?}"
+    );
 }
 #[tokio::test]
 async fn propose_deploy_rejected_without_permission() {

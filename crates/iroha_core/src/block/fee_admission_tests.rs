@@ -471,6 +471,8 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
     nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
     nexus.fees.fee_sink_account_id = sink_id.to_string();
     let state = configured_component_state(world, chain_id.clone(), nexus);
+    let native_chain = component_chain(state);
+    let state = native_chain.state();
     let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
     let trigger_id: TriggerId = "fee_transfer_trigger_guard".parse().unwrap();
     let trigger = Trigger::new(
@@ -487,23 +489,12 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
         )
         .expect("trigger action fixture satisfies validation invariants"),
     );
-    let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_leader_public, leader_private) = leader.into_parts();
-    let setup_block = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-        header.set_height(nonzero!(1_u64));
-    });
-    let setup_signed: SignedBlock = setup_block.clone().into();
-    {
-        let mut setup_state_block = state.block(setup_block.as_ref().header());
-        let mut setup_tx = setup_state_block.transaction();
+    native_chain.setup_world_at(10, |setup_tx| {
         Register::trigger(trigger)
-            .execute(&payer_id, &mut setup_tx)
+            .execute(&payer_id, setup_tx)
             .expect("register data trigger");
-        setup_tx.apply();
-        setup_state_block
-            .commit_world_overlay_for_testing()
-            .expect("commit trigger setup");
-    }
+    });
+    let setup_signed = state.view().latest_block().expect("original genesis");
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -779,6 +770,8 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
         pipeline.parallel_overlay = true;
         pipeline.workers = 2;
         state.set_pipeline(pipeline);
+        let native_chain = component_chain(state);
+        let state = native_chain.state();
 
         let trigger_id: TriggerId = format!("prepared_nested_gas_{reject_nested_action}")
             .parse()
@@ -807,23 +800,12 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         );
-        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (_leader_public, leader_private) = leader.into_parts();
-        let setup_block = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
-            header.set_height(nonzero!(1_u64));
-        });
-        let setup_signed: SignedBlock = setup_block.clone().into();
-        {
-            let mut setup_state_block = state.block(setup_block.as_ref().header());
-            let mut setup_tx = setup_state_block.transaction();
+        native_chain.setup_world_at(10, |setup_tx| {
             Register::trigger(trigger)
-                .execute(&authority, &mut setup_tx)
+                .execute(&authority, setup_tx)
                 .expect("register by-call trigger");
-            setup_tx.apply();
-            setup_state_block
-                .commit_world_overlay_for_testing()
-                .expect("commit trigger setup");
-        }
+        });
+        let setup_signed = state.view().latest_block().expect("original genesis");
 
         let execute_instruction = InstructionBox::from(ExecuteTrigger::new(trigger_id));
         let expected_base_gas =

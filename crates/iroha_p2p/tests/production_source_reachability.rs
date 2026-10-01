@@ -359,7 +359,7 @@ fn shipping_quinn_resolution_keeps_unqualified_releases_fail_closed() {
         "the workspace must resolve one Quinn release"
     );
     let quinn = stable_semver_triplet(quinn[0]).expect("Quinn uses stable semver");
-    assert!(((0, 11, 9)..(0, 12, 0)).contains(&quinn));
+    assert!(((0, 11, 12)..(0, 12, 0)).contains(&quinn));
 
     let proto = locked_package_versions(&lockfile, "quinn-proto");
     assert_eq!(
@@ -368,9 +368,10 @@ fn shipping_quinn_resolution_keeps_unqualified_releases_fail_closed() {
         "the workspace must resolve exactly one Quinn protocol release"
     );
     let proto = stable_semver_triplet(proto[0]).expect("quinn-proto uses stable semver");
-    assert!(((0, 11, 15)..(0, 12, 0)).contains(&proto));
+    assert!(((0, 11, 18)..(0, 12, 0)).contains(&proto));
 
-    if proto < (0, 11, 17) {
+    // Dependency patches alone never authorize shipping endpoint admission.
+    {
         for relative in [
             "src/network.rs",
             "src/transport.rs",

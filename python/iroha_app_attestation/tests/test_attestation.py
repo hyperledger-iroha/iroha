@@ -1,0 +1,276 @@
+"""Adversarial parsing and fail-closed checks for independent raw evidence."""
+
+import unittest
+import hashlib
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+from iroha_app_attestation.attestation import (
+    AttestationRejected,
+    GOOGLE_FACTORY_2016_ROOT_SHA256,
+    GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS,
+    PREPARATION_DOMAIN,
+    Selection,
+    _certificate_valid_at,
+    certificate_key_extensions,
+    certificate_spki_extensions,
+    cbor_exact,
+    der_one,
+    decode_android_chain,
+    encode_android_chain,
+    explicit_tags,
+    oid,
+    verify_apple_raw,
+    verify_android_raw,
+    verify_issuer_preparation,
+    verify_pinned_chain,
+)
+
+
+def selection() -> Selection:
+    return Selection(*[bytes([index]) * 32 for index in range(1, 7)])
+
+
+class AttestationTests(unittest.TestCase):
+    def test_challenge_binds_every_independently_selected_field(self) -> None:
+        original = selection()
+        transcript = original.transcript()
+        self.assertTrue(transcript.startswith(b"iroha:kagemusha:v1:app-device-attestation-challenge\0"))
+        for field in original.__dataclass_fields__:
+            changed = dict(vars(original))
+            changed[field] = bytes([changed[field][0] ^ 1]) + changed[field][1:]
+            self.assertNotEqual(Selection(**changed).transcript(), transcript, field)
+        with self.assertRaises(AttestationRejected):
+            Selection(original.client_nonce, original.client_nonce, *list(vars(original).values())[2:]).transcript()
+        android = Selection(b"\x01" * 32, b"\x02" * 32, b"\x03" * 32,
+                            b"\x04" * 32, b"\0" * 32, b"\x05" * 32)
+        self.assertEqual(hashlib.sha256(android.transcript()).hexdigest(),
+                         "962093f79f952f77b79544f1c16f9d5dd176c6a12997959336be13bb799d12e8")
+
+    def test_cbor_rejects_duplicate_fields_trailing_bytes_and_indefinite_lengths(self) -> None:
+        self.assertEqual(cbor_exact(b"\xa1\x61a\x01"), {"a": 1})
+        for raw in (b"\xa2\x61a\x01\x61a\x02", b"\xa1\x61a\x01\x00", b"\xbf\xff", b"\xa1\x61a"):
+            with self.subTest(raw=raw), self.assertRaises(AttestationRejected):
+                cbor_exact(raw)
+
+    def test_der_rejects_trailing_and_nonminimal_lengths(self) -> None:
+        self.assertEqual(der_one(b"\x04\x01x").value, b"x")
+        for raw in (b"\x04\x01xx", b"\x04\x81\x01x", b"\x04\x82\x00\x01x", b"\x04\x02x"):
+            with self.subTest(raw=raw), self.assertRaises(AttestationRejected):
+                der_one(raw)
+        self.assertEqual(oid(der_one(b"\x06\x03\x2a\x03\x04")), "1.2.3.4")
+        for raw in (b"\x06\x02\x80\x2a", b"\x06\x03\x2a\x80\x03"):
+            with self.subTest(raw=raw), self.assertRaises(AttestationRejected):
+                oid(der_one(raw))
+
+    def test_certificate_parser_rejects_ambiguous_extension_blocks_and_types(self) -> None:
+        def tlv(tag: int, content: bytes) -> bytes:
+            length = (bytes([len(content)]) if len(content) < 128 else
+                      b"\x81" + bytes([len(content)]))
+            return bytes([tag]) + length + content
+
+        version = tlv(0xa0, b"\x02\x01\x02")
+        mandatory = b"\x02\x01\x01" + b"\x30\x00" * 5
+        oid_one, oid_two = b"\x06\x03\x2a\x03\x04", b"\x06\x03\x2a\x03\x05"
+
+        def block(name: bytes, critical: bytes = b"") -> bytes:
+            extension = tlv(0x30, name + critical + b"\x04\x01x")
+            return tlv(0xa3, tlv(0x30, extension))
+
+        def certificate(optionals: bytes) -> bytes:
+            return tlv(0x30, tlv(0x30, version + mandatory + optionals)
+                       + b"\x30\x00\x03\x01\x00")
+
+        _, extensions = certificate_spki_extensions(certificate(block(oid_one)))
+        self.assertEqual(extensions, {"1.2.3.4": b"x"})
+        for malformed in (
+            block(oid_one) + block(oid_two),
+            block(oid_one) + b"\x81\x02\x00\x01",
+            block(oid_one, b"\x02\x01\x01"),
+            block(oid_one, b"\x01\x01\x00"),
+        ):
+            with self.subTest(malformed=malformed), self.assertRaises(AttestationRejected):
+                certificate_spki_extensions(certificate(malformed))
+
+    def test_keymint_accepts_documented_optional_tags_but_rejects_ambiguous_der(self) -> None:
+        def wrap(tag: bytes, content: bytes) -> bytes:
+            assert len(content) < 128
+            return tag + bytes([len(content)]) + content
+
+        def context(number: int, item: bytes) -> bytes:
+            chunks = [number & 127]
+            number >>= 7
+            while number:
+                chunks.insert(0, 128 | (number & 127))
+                number >>= 7
+            return wrap(b"\xbf" + bytes(chunks), item)
+
+        integer = b"\x02\x04\x0c\x06\x7f\x01"
+        vendor_patch = context(718, integer)
+        brand = context(710, b"\x04\x05Pixel")
+        early_boot = context(305, b"\x05\x00")
+        valid = wrap(b"\x30", early_boot + brand + vendor_patch)
+        self.assertEqual(set(explicit_tags(der_one(valid))), {305, 710, 718})
+        for body in (
+            vendor_patch + brand,  # unsorted
+            brand + brand,  # duplicate
+            context(725, b"\x05\x00"),  # unknown future semantics
+            context(718, b"\x04\x01x"),  # wrong ASN.1 type
+            context(305, b"\x05\x01\x00"),  # nonempty NULL
+        ):
+            with self.subTest(body=body), self.assertRaises(AttestationRejected):
+                explicit_tags(der_one(wrap(b"\x30", body)))
+
+    def test_android_chain_envelope_is_single_versioned_bounded_der_layout(self) -> None:
+        chain = [b"\x30\x00", b"\x30\x03\x02\x01\x01"]
+        encoded = encode_android_chain(chain)
+        self.assertEqual(encoded, b"KMCA\x01\x02\0\0\0\x02\x30\0"
+                         b"\0\0\0\x05\x30\x03\x02\x01\x01")
+        self.assertEqual(decode_android_chain(encoded), chain)
+        for malformed in (
+            encoded[:-1], encoded + b"x", b"KMCA\x02" + encoded[5:],
+            encoded[:5] + b"\x01" + encoded[6:],
+            encoded[:6] + b"\0\0\0\x03" + encoded[10:],
+        ):
+            with self.subTest(malformed=malformed), self.assertRaises(AttestationRejected):
+                decode_android_chain(malformed)
+
+    def test_fake_apple_and_android_evidence_cannot_be_promoted(self) -> None:
+        selected = selection()
+        with self.assertRaises(AttestationRejected):
+            verify_apple_raw(
+                b"\xa1\x63fmt\x6fapple-appattest", b"\x01" * 32,
+                "TEAMID.example.app", "production", selected,
+                b"fake root", b"\x02" * 32, 1_000, Path("/usr/bin/openssl"),
+                expected_validation_category=None, expected_bundle_version=None,
+            )
+        with self.assertRaises(AttestationRejected):
+            verify_android_raw(
+                [b"fake leaf", b"fake intermediate"], selected,
+                "org.example.app", 1, b"\x03" * 32,
+                b"fake root", b"\x02" * 32, 1_000, Path("/usr/bin/openssl"),
+                allowed_security_levels=frozenset({2}),
+            )
+
+    def test_pinned_chain_checks_real_signatures_and_root_digest(self) -> None:
+        executable = shutil.which("openssl")
+        if executable is None:
+            self.skipTest("OpenSSL CLI unavailable")
+        openssl = Path(executable).resolve()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            def run(*args: str) -> None:
+                subprocess.run([str(openssl), *args], cwd=directory, capture_output=True, check=True)
+
+            run("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                "-nodes", "-keyout", "root.key", "-out", "root.pem", "-days", "2",
+                "-subj", "/CN=Test Root", "-addext", "basicConstraints=critical,CA:TRUE",
+                "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+            run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                "-nodes", "-keyout", "leaf.key", "-out", "leaf.csr", "-subj", "/CN=Test Leaf")
+            run("x509", "-req", "-in", "leaf.csr", "-CA", "root.pem", "-CAkey", "root.key",
+                "-CAcreateserial", "-out", "leaf.pem", "-days", "2")
+            run("x509", "-in", "root.pem", "-outform", "DER", "-out", "root.der")
+            run("x509", "-in", "leaf.pem", "-outform", "DER", "-out", "leaf.der")
+            root, leaf = (directory / "root.der").read_bytes(), (directory / "leaf.der").read_bytes()
+            point, _ = certificate_key_extensions(leaf)
+            self.assertEqual(len(point), 65)
+            current = int(time.time() * 1000)
+            self.assertTrue(_certificate_valid_at(leaf, current))
+            self.assertFalse(_certificate_valid_at(leaf, current + 4 * 86_400_000))
+            verify_pinned_chain([leaf, root], root, hashlib.sha256(root).digest(), current, openssl)
+            with self.assertRaises(AttestationRejected):
+                verify_pinned_chain([leaf, root], root, b"\x01" * 32, current, openssl)
+            with self.assertRaisesRegex(AttestationRejected, "exact 2016 root"):
+                verify_pinned_chain(
+                    [leaf, root], root, hashlib.sha256(root).digest(), current, openssl,
+                    allow_google_factory_expired_root=True,
+                )
+
+    def test_published_factory_root_is_valid_before_expiry_only(self) -> None:
+        root = (Path(__file__).parent / "fixtures" / "google_factory_root_2016.der").read_bytes()
+        self.assertEqual(hashlib.sha256(root).digest(), GOOGLE_FACTORY_2016_ROOT_SHA256)
+        self.assertTrue(_certificate_valid_at(root, GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS))
+        self.assertFalse(_certificate_valid_at(root, GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS
+                                                + 30 * 86_400_000))
+
+    def test_issuer_preparation_signature_binds_nonce_account_profile_lane_key_and_release(self) -> None:
+        executable = shutil.which("openssl")
+        if executable is None:
+            self.skipTest("OpenSSL CLI unavailable")
+        openssl = Path(executable).resolve()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            def run(*args: str) -> None:
+                subprocess.run([str(openssl), *args], cwd=directory, capture_output=True, check=True)
+
+            run("genpkey", "-algorithm", "ED25519", "-out", "issuer.pem")
+            run("pkey", "-in", "issuer.pem", "-pubout", "-outform", "DER", "-out", "issuer.der")
+            issuer_key = (directory / "issuer.der").read_bytes()
+            account = "owner"
+            policy_id, release_id = b"\x05" * 32, b"\x06" * 32
+            selected = Selection(b"\x03" * 32, b"\x04" * 32, release_id,
+                                 b"\x07" * 32, b"\x08" * 32, b"\x09" * 32)
+            header = (b"\x01" + (1_000).to_bytes(8, "little") + (121_000).to_bytes(8, "little")
+                      + selected.client_nonce + selected.server_nonce + selected.release_id
+                      + selected.hardware_profile_id + selected.attested_key_id + selected.lane_id)
+            message = (PREPARATION_DOMAIN + header[1:] + policy_id
+                       + hashlib.sha256(account.encode()).digest())
+            self.assertEqual(len(message), 318)
+            self.assertEqual(hashlib.sha256(message).hexdigest(),
+                             "409f62d1db4cd8478b3d70dc2679350fcbdd7aa5743a1234b982ff03bd2095f7")
+            (directory / "message.bin").write_bytes(message)
+            run("pkeyutl", "-sign", "-inkey", "issuer.pem", "-rawin", "-in", "message.bin", "-out", "signature.bin")
+            token = header + (directory / "signature.bin").read_bytes()
+            args = (token, selected, account, policy_id,
+                    issuer_key, hashlib.sha256(issuer_key).digest(), 1_001, openssl)
+            verified = verify_issuer_preparation(*args)
+            self.assertEqual(verified.server_nonce, b"\x04" * 32)
+            with self.assertRaises(AttestationRejected):
+                verify_issuer_preparation(*args[:-2], 121_001, openssl)
+            self.assertEqual(
+                verify_issuer_preparation(*args[:-2], 121_001, openssl,
+                                          require_fresh=False).server_nonce,
+                selected.server_nonce,
+            )
+            android = Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
+                                selected.hardware_profile_id, b"\0" * 32, selected.lane_id)
+            android_header = header[:145] + b"\0" * 32 + header[177:]
+            (directory / "message.bin").write_bytes(
+                PREPARATION_DOMAIN + android_header[1:] + policy_id
+                + hashlib.sha256(account.encode()).digest())
+            run("pkeyutl", "-sign", "-inkey", "issuer.pem", "-rawin", "-in", "message.bin", "-out", "signature.bin")
+            android_token = android_header + (directory / "signature.bin").read_bytes()
+            self.assertEqual(verify_issuer_preparation(android_token, android, account, policy_id,
+                             issuer_key, hashlib.sha256(issuer_key).digest(), 1_001, openssl).server_nonce,
+                             selected.server_nonce)
+            for index, changed in (
+                (0, token[:49] + b"\x05" + token[50:]),
+                (1, Selection(b"\x07" * 32, selected.server_nonce, selected.release_id,
+                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
+                (1, Selection(selected.client_nonce, b"\x07" * 32, selected.release_id,
+                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
+                (1, Selection(selected.client_nonce, selected.server_nonce, b"\x07" * 32,
+                              selected.hardware_profile_id, selected.attested_key_id, selected.lane_id)),
+                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
+                              b"\x0a" * 32, selected.attested_key_id, selected.lane_id)),
+                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
+                              selected.hardware_profile_id, b"\x0a" * 32, selected.lane_id)),
+                (1, Selection(selected.client_nonce, selected.server_nonce, selected.release_id,
+                              selected.hardware_profile_id, selected.attested_key_id, b"\x0a" * 32)),
+                (2, "other account"),
+                (3, b"\x07" * 32),
+                (5, b"\x07" * 32),
+                (6, 121_000),
+            ):
+                mutated = list(args)
+                mutated[index] = changed
+                with self.subTest(index=index), self.assertRaises(AttestationRejected):
+                    verify_issuer_preparation(*mutated)
+
+
+if __name__ == "__main__":
+    unittest.main()

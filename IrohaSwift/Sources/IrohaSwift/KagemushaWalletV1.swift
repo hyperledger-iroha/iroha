@@ -162,6 +162,7 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
   var operationLock: NSRecursiveLock { get }
   func acknowledgeDurableResult(operationID: Data, canonicalResult: Data) throws
   func qualification() throws -> KagemushaHardwareQualificationV1
+  func authenticatedPolicy() throws -> KagemushaHardwarePolicyV1
   func recover() throws -> KagemushaHardwareRecoveryV1
   /// Recheck live new-work admission immediately before device dispatch, after durable reservation.
   func bootstrapState(allowBootstrap: () throws -> Bool) throws -> Data
@@ -242,6 +243,13 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
   func recoverRedemption(redemptionID: Data) throws -> Data?
   func recoverRedemptionByOperationID(operationID: Data) throws -> Data?
   func rotateHardwareEpoch() throws -> Data
+}
+
+extension KagemushaHardwareProviderV1 {
+  /// Providers without the held native catalog projection cannot admit an aggregate.
+  public func authenticatedPolicy() throws -> KagemushaHardwarePolicyV1 {
+    throw KagemushaWalletErrorV1.nativeVerificationRequired
+  }
 }
 
 /// Opaque identity of one complete cached wallet state. Only the owning wallet
@@ -663,7 +671,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
       let state = try KagemushaNoritoV1.decodeAggregateStateShapeExact(
         provider.rotateHardwareEpoch())
       let qualification = try provider.qualification()
-      try Self.requireStateQualification(state, qualification)
+      try Self.requireStateQualification(state, qualification, policy: provider.authenticatedPolicy())
       guard sameBalanceIdentity(previousState, state),
         qualification.credential.laneCommitment
           == previousQualification.credential.laneCommitment,
@@ -689,7 +697,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     let folded = try provider.foldPendingCredit(selector: selector)
     guard folded.selector == selector else { throw invalid("pending-fold selector") }
     let state = try KagemushaNoritoV1.decodeAggregateStateShapeExact(folded.aggregateState)
-    try Self.requireStateQualification(state, qualificationValue)
+    try Self.requireStateQualification(state, qualificationValue, policy: provider.authenticatedPolicy())
     guard sameBalanceIdentity(beforeState, state),
       state.sequence == (try beforeState.sequence.adding(1)),
       state.stateCommitment != beforeState.stateCommitment
@@ -731,7 +739,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
 
   private func installAuthoritativeState(_ bytes: Data) throws {
     let state = try KagemushaNoritoV1.decodeAggregateStateShapeExact(bytes)
-    try Self.requireStateQualification(state, qualificationValue)
+    try Self.requireStateQualification(state, qualificationValue, policy: provider.authenticatedPolicy())
     guard sameBalanceIdentity(aggregateStateValue, state),
       aggregateStateValue.sequence.isLessThanOrEqual(to: state.sequence),
       state.sequence != aggregateStateValue.sequence,
@@ -765,7 +773,7 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     }
     guard let bytes = recovery.aggregateState else { throw invalid("missing aggregate state") }
     let state = try KagemushaNoritoV1.decodeAggregateStateShapeExact(bytes)
-    try requireStateQualification(state, qualification)
+    try requireStateQualification(state, qualification, policy: provider.authenticatedPolicy())
     guard try provider.journalRevision() == recovery.journalRevision
     else { throw invalid("inconsistent recovered journal") }
     return (qualification, recovery, state)
@@ -773,11 +781,12 @@ public final class KagemushaWalletV1: @unchecked Sendable {
 
   private static func requireStateQualification(
     _ state: KagemushaAggregateStateCommitmentV1,
-    _ qualification: KagemushaHardwareQualificationV1
+    _ qualification: KagemushaHardwareQualificationV1,
+    policy: KagemushaHardwarePolicyV1
   ) throws {
     guard state.networkID == qualification.credential.networkID,
       state.releaseID == qualification.releaseID,
-      state.hardwarePolicyID == qualification.hardwarePolicyDigest,
+      policy.matches(qualification: qualification, aggregateState: state),
       state.hardwareEpochID == qualification.credential.hardwareEpochID,
       state.keyReference == qualification.credential.deviceKeyReference
     else { throw invalid("aggregate state qualification") }

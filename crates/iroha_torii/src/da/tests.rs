@@ -1932,6 +1932,7 @@ fn pin_intent_retry_adopts_randomized_mldsa_witness_bytes() {
 }
 #[test]
 fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
+    let spool = tempdir().expect("DA assignment spool");
     let nexus = nexus_with_scheme(LaneId::new(1), DaProofScheme::MerkleSha256);
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
@@ -1949,7 +1950,7 @@ fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
             None,
             &replication_policy,
             &rent_policy,
-            Path::new(""),
+            spool.path(),
             &operator,
             None,
         )
@@ -2079,8 +2080,10 @@ fn validate_request_rejects_unbounded_erasure_work_before_allocation() {
     let mut request = sample_request();
     request.total_size = MAX_CANONICAL_PAYLOAD_BYTES;
     request.chunk_size = MAX_CHUNK_SIZE_BYTES;
-    request.erasure_profile.data_shards = 1;
-    request.erasure_profile.parity_shards = 3;
+    request.erasure_profile.data_shards = 2;
+    // Keep generated parity below its cap so this fixture reaches the distinct
+    // retained workspace bound: 72 MiB generated, 164 MiB workspace.
+    request.erasure_profile.parity_shards = 2;
     request.erasure_profile.row_parity_stripes = 1;
     let err = validate_request_shape(&request)
         .expect_err("retained row-parity matrix must fit the workspace budget");
@@ -2395,6 +2398,10 @@ fn lane_proof_scheme_rejects_future_created_autoscale_lane_before_committed_heig
         iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
         "7".to_owned(),
     );
+    let keys = (0xa1_u8..=0xa4)
+        .map(|seed| checked_fixture_keypair(vec![seed; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    crate::test_utils::pin_autoscale_lane_committee_for_test(&mut elastic_lane, &keys);
     let mut nexus = nexus_with_catalog(lane_catalog_with_lanes(vec![
         ModelLaneConfig::default(),
         elastic_lane,

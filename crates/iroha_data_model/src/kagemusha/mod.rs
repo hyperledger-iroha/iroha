@@ -5,11 +5,13 @@
 //! reserve settlement.
 
 pub mod kagemusha_app_enrollment_v1;
+pub mod kagemusha_app_operation_approval_v1;
 pub mod kagemusha_device_response_v1;
 pub mod kagemusha_device_v1;
 pub mod kagemusha_enrolled_open_selector_v1;
 pub mod kagemusha_mobile_bootstrap_freshness_v1;
 pub mod kagemusha_mobile_bootstrap_v1;
+pub mod kagemusha_ordinary_app_enrollment_v1;
 pub mod kagemusha_release_v1;
 pub mod kagemusha_retail_enrollment_challenge_v1;
 pub mod kagemusha_retail_enrollment_v1;
@@ -17,11 +19,12 @@ pub mod kagemusha_v1;
 pub mod verifier_registry_v1;
 
 pub use self::{
-    kagemusha_app_enrollment_v1::*, kagemusha_device_response_v1::*, kagemusha_device_v1::*,
+    kagemusha_app_enrollment_v1::*, kagemusha_app_operation_approval_v1::*,
+    kagemusha_device_response_v1::*, kagemusha_device_v1::*,
     kagemusha_enrolled_open_selector_v1::*, kagemusha_mobile_bootstrap_freshness_v1::*,
-    kagemusha_mobile_bootstrap_v1::*, kagemusha_release_v1::*,
-    kagemusha_retail_enrollment_challenge_v1::*, kagemusha_retail_enrollment_v1::*,
-    kagemusha_v1::*, verifier_registry_v1::*,
+    kagemusha_mobile_bootstrap_v1::*, kagemusha_ordinary_app_enrollment_v1::*,
+    kagemusha_release_v1::*, kagemusha_retail_enrollment_challenge_v1::*,
+    kagemusha_retail_enrollment_v1::*, kagemusha_v1::*, verifier_registry_v1::*,
 };
 
 /// Prefix embedded into KAGEMUSHA V1 instruction rejection messages.

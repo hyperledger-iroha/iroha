@@ -200,7 +200,10 @@ fn short_merged_page_cannot_override_explicit_route_continuation() -> Result<()>
     }
     .into();
     let (result, requests) = read_scripted_permissions(vec![
-        (complete_headers(), page(&[manage.clone()], true)?),
+        (
+            complete_headers(),
+            page(std::slice::from_ref(&manage), true)?,
+        ),
         (complete_headers(), page(&[], false)?),
     ])?;
     assert_eq!(result?.manage_alias_permission, manage);

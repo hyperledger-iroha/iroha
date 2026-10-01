@@ -183,7 +183,7 @@ fn live_reader_reuses_original_archived_contexts_through_actual_native_tip() {
     ));
     assert_eq!(
         chain.state().verified_sumeragi_lane_state().unwrap_err(),
-        missing_source.to_string(),
+        format!("required historical native lane state source 2: {missing_source}"),
         "the live reader must propagate the original missing-record refusal"
     );
     std::fs::write(&path, &original).unwrap();

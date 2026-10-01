@@ -472,21 +472,24 @@ fn applied_wait_result_has_one_exact_v1_key_set() {
 #[test]
 fn contract_artifact_route_requires_canonical_scoped_path_fields() {
     let hash = hex::encode(iroha_crypto::Hash::new(b"canonical scoped artifact").as_ref());
-    let args = norito::json!({
-        "path": { "dataspace_id": "7", "code_hash": (hash.clone()) }
-    });
-    let artifact =
-        crate::routing::parse_contract_artifact_path("7", &hash).expect("typed scoped artifact");
-    assert_eq!(artifact.dataspace_id.as_u64(), 7);
-    assert_eq!(hex::encode(artifact.code_hash.as_ref()), hash);
-    assert_eq!(
-        contract_artifact_route(args.as_object().expect("object"), false).unwrap(),
-        format!("/v1/contracts/artifacts/7/{hash}")
-    );
-    assert_eq!(
-        contract_artifact_route(args.as_object().expect("object"), true).unwrap(),
-        format!("/v1/contracts/artifacts/7/{hash}/bytes")
-    );
+    for dataspace_id in [7, u64::MAX] {
+        let scope = dataspace_id.to_string();
+        let args = norito::json!({
+            "path": { "dataspace_id": (scope.clone()), "code_hash": (hash.clone()) }
+        });
+        let artifact = crate::routing::parse_contract_artifact_path(&scope, &hash)
+            .expect("typed scoped artifact");
+        assert_eq!(artifact.dataspace_id.as_u64(), dataspace_id);
+        assert_eq!(hex::encode(artifact.code_hash.as_ref()), hash);
+        assert_eq!(
+            contract_artifact_route(args.as_object().expect("object"), false).unwrap(),
+            format!("/v1/contracts/artifacts/{scope}/{hash}")
+        );
+        assert_eq!(
+            contract_artifact_route(args.as_object().expect("object"), true).unwrap(),
+            format!("/v1/contracts/artifacts/{scope}/{hash}/bytes")
+        );
+    }
     for retired in [
         norito::json!({ "code_hash": (hash.clone()), "dataspace_id": "7" }),
         norito::json!({ "hash": (hash.clone()), "dataspace_id": "7" }),
@@ -533,7 +536,15 @@ fn extract_block_identifier_argument_requires_canonical_path_field() {
 }
 #[test]
 fn remaining_canonical_path_extractors_reject_retired_flat_aliases() {
-    let cases: [(Value, fn(&Map) -> Result<String, String>); 9] = [
+    let cases: [(Value, fn(&Map) -> Result<String, String>); 11] = [
+        (
+            norito::json!({ "dataspace_id": "0", "code_hash": ("11".repeat(32)) }),
+            |arguments| contract_artifact_route(arguments, false),
+        ),
+        (
+            norito::json!({ "dataspace_id": "0", "hash": ("11".repeat(32)) }),
+            |arguments| contract_artifact_route(arguments, false),
+        ),
         (
             norito::json!({ "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw" }),
             extract_contract_address_argument,

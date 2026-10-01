@@ -2584,6 +2584,15 @@ class HttpClientTransport private constructor(
             HttpClientTransport(
                 HttpTransportScope.own(OkHttpTransportExecutor.create(asyncExecutor = asyncExecutor)), config,
             )
+
+        /**
+         * Transfers one freshly constructed executor to this client's lifetime. The application
+         * must not share the transferred executor with another client. Closing this client cancels
+         * its calls and closes the executor; resources borrowed by that executor stay borrowed.
+         */
+        @JvmStatic
+        fun createOwned(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport =
+            HttpClientTransport(HttpTransportScope.own(executor), config)
         /** Adds explicit local staging; transaction submission never drains or fills this queue. */
         @JvmStatic fun withDirectoryPendingQueue(config: ClientConfig, queueDir: Path): ClientConfig = config.toBuilder().enableDirectoryPendingQueue(queueDir).build()
         /** Adds explicit local staging; transaction submission never drains or fills this queue. */

@@ -6,6 +6,8 @@
 //! an application decision. Conflicting Commit certificates across views establish a safety
 //! violation without attributing their intersection (§3.6).
 
+use std::borrow::Borrow;
+
 use crate::{
     api::CommittedTip,
     crypto::{AttestationVerifier, CertError, Crypto, Verifier},
@@ -18,7 +20,7 @@ use crate::{
 ///
 /// These borrowed inputs must come from the original committed history owner. An embedded
 /// evidence context or a node-local record is not an authentication source.
-pub struct EvidenceContext<'a> {
+pub struct EvidenceContext<'a, Header: Borrow<BlockHeader> = BlockHeader> {
     /// Application-derived exact native instance, including its network and lane identity.
     pub instance: Hash32,
     /// Height whose authority is being supplied.
@@ -34,7 +36,9 @@ pub struct EvidenceContext<'a> {
     /// Demotion window fixed by signed genesis for this instance.
     pub demotion_window: u64,
     /// Every committed header of the exact demotion interval, in ascending height order.
-    pub demotion_headers: &'a [BlockHeader],
+    /// Borrowing preserves each caller's original immutable allocation owner; wrappers grant
+    /// no authority and undergo the identical count, order, instance and topology checks.
+    pub demotion_headers: &'a [Header],
 }
 
 /// Verified attribution, without conferring authorization to change stake or balances.
@@ -96,7 +100,7 @@ impl From<CertError> for EvidenceError {
     }
 }
 
-impl EvidenceContext<'_> {
+impl<Header: Borrow<BlockHeader>> EvidenceContext<'_, Header> {
     fn validate(&self) -> Result<(), EvidenceError> {
         let committee = &self.config.committee;
         if self.height <= self.genesis_height
@@ -127,7 +131,7 @@ impl EvidenceContext<'_> {
                 let count = last.checked_sub(first).and_then(|n| n.checked_add(1));
                 if count != u64::try_from(self.demotion_headers.len()).ok()
                     || (first..=last)
-                        .zip(self.demotion_headers)
+                        .zip(self.demotion_headers.iter().map(Borrow::borrow))
                         .any(|(height, header)| {
                             header.height != height || header.instance != self.instance
                         })
@@ -142,7 +146,7 @@ impl EvidenceContext<'_> {
             self.height,
             self.genesis_height,
             self.demotion_window,
-            self.demotion_headers,
+            self.demotion_headers.iter().map(Borrow::borrow),
         );
         Topology::from_parts(
             committee_permutation(
@@ -169,10 +173,10 @@ impl EvidenceContext<'_> {
 /// Rejects incomplete authority, wrong epoch/generation context or instance, absent conflicts,
 /// incorrect defect labels, and invalid signatures. Caller-owned decode/admission byte limits
 /// must be enforced before constructing the input graph.
-pub fn verify_evidence(
+pub fn verify_evidence<Header: Borrow<BlockHeader>>(
     crypto: &dyn Crypto,
     attestation: &dyn AttestationVerifier,
-    context: &EvidenceContext<'_>,
+    context: &EvidenceContext<'_, Header>,
     evidence: &Evidence,
 ) -> Result<EvidenceAttribution, EvidenceError> {
     context.validate()?;
@@ -274,10 +278,10 @@ pub fn verify_evidence(
     })
 }
 
-fn proposal_defect(
+fn proposal_defect<Header: Borrow<BlockHeader>>(
     crypto: &dyn Crypto,
     attestation: &dyn AttestationVerifier,
-    context: &EvidenceContext<'_>,
+    context: &EvidenceContext<'_, Header>,
     topology: &Topology,
     proposal: &Proposal,
     block_hash: Hash32,

@@ -1268,14 +1268,16 @@ fn constrain_unqualified_hardware_selection_limbs_v1<F: KagemushaPoseidonFieldV1
 }
 
 #[cfg(test)]
-/// Tie both signed Core indices and Apple's signed counter to committed state cells.
+/// Bind financial logical indexes and an independent signed App Attest counter.
 ///
 /// `canonical_s` and `authenticator_data` must be the same assigned bytes used by the
 /// assertion SHA/P-256 relation. This helper does not authenticate them by itself.
-fn constrain_apple_signed_secure_index_v1<F: KagemushaPoseidonFieldV1>(
+fn constrain_apple_signed_logical_indices_and_counter_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     predecessor_secure_index: AssignedValue<F>,
     successor_secure_index: AssignedValue<F>,
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
     canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
     authenticator_data: &[AssignedValue<F>; 37],
 ) {
@@ -1303,8 +1305,8 @@ fn constrain_apple_signed_secure_index_v1<F: KagemushaPoseidonFieldV1>(
     let signed_after = compose_le(ctx, after_bytes);
     ctx.constrain_equal(&signed_before, &predecessor_secure_index);
     ctx.constrain_equal(&signed_after, &successor_secure_index);
-    range.range_check(ctx, predecessor_secure_index, 32);
-    range.range_check(ctx, successor_secure_index, 32);
+    range.range_check(ctx, predecessor_secure_index, 128);
+    range.range_check(ctx, successor_secure_index, 128);
     let exact_next = gate.inc(ctx, signed_before);
     ctx.constrain_equal(&exact_next, &signed_after);
     let counter_be = gate.inner_product(
@@ -1312,7 +1314,11 @@ fn constrain_apple_signed_secure_index_v1<F: KagemushaPoseidonFieldV1>(
         authenticator_data[33..37].iter().copied(),
         [24, 16, 8, 0].map(|bit| halo2_base::QuantumCell::Constant(power_of_two::<F>(bit))),
     );
-    ctx.constrain_equal(&counter_be, &signed_after);
+    range.range_check(ctx, retained_counter_floor, 32);
+    range.range_check(ctx, accepted_counter, 32);
+    ctx.constrain_equal(&counter_be, &accepted_counter);
+    let advanced = range.is_less_than(ctx, retained_counter_floor, accepted_counter, 32);
+    gate.assert_is_const(ctx, &advanced, &F::ONE);
 }
 
 #[cfg(test)]
@@ -1453,6 +1459,8 @@ fn constrain_apple_signed_subject_state_fields_v1<F: KagemushaPoseidonFieldV1>(
     public: &[AssignedValue<F>],
     canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
     authenticator_data: &[AssignedValue<F>; 37],
+    retained_counter_floor: AssignedValue<F>,
+    accepted_counter: AssignedValue<F>,
     enrolled_credential: &KagemushaHardwareCredentialV1,
 ) -> Result<[AssignedValue<F>; 65], String> {
     use KagemushaHardwareSelectionSigningLayoutV1 as S;
@@ -1546,10 +1554,12 @@ fn constrain_apple_signed_subject_state_fields_v1<F: KagemushaPoseidonFieldV1>(
             );
         }
     }
-    constrain_apple_signed_secure_index_v1(
+    constrain_apple_signed_logical_indices_and_counter_v1(
         builder,
         predecessor.secure_index,
         state.successor.secure_index,
+        retained_counter_floor,
+        accepted_counter,
         canonical_s,
         authenticator_data,
     );
@@ -4793,71 +4803,65 @@ mod tests {
     }
 
     #[test]
-    fn apple_signed_counter_is_bound_to_both_committed_secure_indices() {
+    fn apple_signed_counter_is_independent_from_exact_financial_logical_indices() {
         fn check<F: KagemushaPoseidonFieldV1>(
-            signed_before: u128,
-            signed_after: u128,
-            counter: u32,
+            logical: u128,
             state_before: u128,
             state_after: u128,
+            floor: u32,
+            signed_counter: u32,
+            accepted_counter: u32,
         ) -> bool {
-            let mut s = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
-            s[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_BEFORE]
-                .copy_from_slice(&signed_before.to_le_bytes());
-            s[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_AFTER]
-                .copy_from_slice(&signed_after.to_le_bytes());
+            let mut signing = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+            signing[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_BEFORE]
+                .copy_from_slice(&logical.to_le_bytes());
+            signing[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_AFTER]
+                .copy_from_slice(&(logical + 1).to_le_bytes());
             let mut auth = [0_u8; 37];
-            auth[33..37].copy_from_slice(&counter.to_be_bytes());
+            auth[33..37].copy_from_slice(&signed_counter.to_be_bytes());
             let mut builder = BaseCircuitBuilder::<F>::new(false)
                 .use_k(10)
                 .use_lookup_bits(9)
                 .use_instance_columns(1);
             let ctx = builder.main(0);
-            let assigned_before = ctx.load_witness(F::from_u128(state_before));
-            let assigned_after = ctx.load_witness(F::from_u128(state_after));
-            let assigned_s = std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(s[i]))));
-            let assigned_auth =
-                std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(auth[i]))));
-            constrain_apple_signed_secure_index_v1(
+            let before = ctx.load_witness(F::from_u128(state_before));
+            let after = ctx.load_witness(F::from_u128(state_after));
+            let floor = ctx.load_witness(F::from(u64::from(floor)));
+            let accepted = ctx.load_witness(F::from(u64::from(accepted_counter)));
+            let signing = std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(signing[i]))));
+            let auth = std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(auth[i]))));
+            constrain_apple_signed_logical_indices_and_counter_v1(
                 &mut builder,
-                assigned_before,
-                assigned_after,
-                &assigned_s,
-                &assigned_auth,
+                before,
+                after,
+                floor,
+                accepted,
+                &signing,
+                &auth,
             );
             builder.assigned_instances = vec![Vec::new()];
             builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
             MockProver::run(10, &builder, vec![Vec::new()])
-                .expect("signed-index binding circuit synthesizes")
+                .expect("independent signed counter circuit")
                 .verify()
                 .is_ok()
         }
-
-        for outcome in [
-            check::<Fp>(7, 8, 8, 7, 8),
-            check::<Fq>(7, 8, 8, 7, 8),
-            !check::<Fp>(7, 8, 8, 6, 8),
-            !check::<Fq>(7, 8, 8, 6, 8),
-            !check::<Fp>(7, 9, 9, 7, 9),
-            !check::<Fq>(7, 9, 9, 7, 9),
-            !check::<Fp>(7, 8, 9, 7, 8),
-            !check::<Fq>(7, 8, 9, 7, 8),
-            !check::<Fp>(
-                u128::from(u32::MAX),
-                u128::from(u32::MAX) + 1,
-                0,
-                u128::from(u32::MAX),
-                u128::from(u32::MAX) + 1,
-            ),
-            !check::<Fq>(
-                u128::from(u32::MAX),
-                u128::from(u32::MAX) + 1,
-                0,
-                u128::from(u32::MAX),
-                u128::from(u32::MAX) + 1,
-            ),
+        let logical = u128::from(u32::MAX) + 50;
+        for accepted in [
+            check::<Fp>(logical, logical, logical + 1, 4, 9, 9),
+            check::<Fq>(logical, logical, logical + 1, 4, 9, 9),
+            !check::<Fp>(logical, logical - 1, logical + 1, 4, 9, 9),
+            !check::<Fq>(logical, logical - 1, logical + 1, 4, 9, 9),
+            !check::<Fp>(logical, logical, logical + 2, 4, 9, 9),
+            !check::<Fq>(logical, logical, logical + 2, 4, 9, 9),
+            !check::<Fp>(logical, logical, logical + 1, 9, 9, 9),
+            !check::<Fq>(logical, logical, logical + 1, 9, 9, 9),
+            !check::<Fp>(logical, logical, logical + 1, 10, 9, 9),
+            !check::<Fq>(logical, logical, logical + 1, 10, 9, 9),
+            !check::<Fp>(logical, logical, logical + 1, 4, 9, 10),
+            !check::<Fq>(logical, logical, logical + 1, 4, 9, 10),
         ] {
-            assert!(outcome);
+            assert!(accepted);
         }
     }
 

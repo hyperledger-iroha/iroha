@@ -1,8 +1,9 @@
 //! Original incoming work under the same installed concrete Core and qualified physical owner.
 use super::*;
 use iroha_core_zk::kagemusha_v1_state::{
-    KagemushaAuthenticatedIncomingFoldV1, MintInboxReservationV1, MintReservationCertificateV1,
-    MintStageCertificateV1, PaymentStageAuthorizationV1,
+    CreditIdV1, KagemushaAuthenticatedIncomingFoldV1, KagemushaTransitionKindV1,
+    MintInboxReservationV1, MintReservationCertificateV1, MintStageCertificateV1,
+    PaymentStageAuthorizationV1,
 };
 use iroha_data_model::kagemusha::{
     KagemushaCreditOpeningV1, KagemushaDeviceSignatureV1, KagemushaMintCreditV1,
@@ -76,7 +77,7 @@ pub(super) struct IncomingAttempt {
 }
 
 impl NativeCoreWorkOwnerV1 {
-    pub(super) fn from_pending_incoming(
+    pub(in super::super) fn from_pending_incoming(
         path: String,
         cap: KagemushaAuthenticatedIncomingFoldV1,
     ) -> Result<Self> {
@@ -95,11 +96,11 @@ impl NativeCoreWorkOwnerV1 {
             return Err(Error::Rejected);
         }
         let kind: u32 = match cap.transition().hardware_statement.kind {
-            iroha_data_model::kagemusha::KagemushaTransitionKindV1::MintFold => 0,
-            iroha_data_model::kagemusha::KagemushaTransitionKindV1::ReceiveFold => 1,
+            KagemushaTransitionKindV1::MintFold => 0,
+            KagemushaTransitionKindV1::ReceiveFold => 1,
             _ => return Err(Error::Rejected),
         };
-        let request = vec![kind.to_le_bytes().to_vec(), cap.credit_id().to_vec()];
+        let request = vec![kind.to_le_bytes().to_vec(), cap.credit_id().0.to_vec()];
         cap.recheck_originals().map_err(|_| Error::Rejected)?;
         source.recheck_originals()?;
         Ok(Self {
@@ -117,9 +118,14 @@ impl NativeCoreWorkOwnerV1 {
                 completion: None,
             }),
             stage_request: None,
+            release_attempt: None,
+            completed_release_locators: std::collections::BTreeMap::new(),
         })
     }
-    pub(super) fn stage_incoming_original(&mut self, fields: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+    pub(in super::super) fn stage_incoming_original(
+        &mut self,
+        fields: &[Vec<u8>],
+    ) -> Result<Vec<Vec<u8>>> {
         let (kind, credit) = selection(fields, 2)?;
         if let Some(previous) = &self.stage_request {
             if previous == fields {
@@ -139,13 +145,13 @@ impl NativeCoreWorkOwnerV1 {
         self.destination(&destination)?;
         match &original {
             KagemushaNativeIncomingStageOriginalsV1::ReserveMint { reservation, .. }
-                if kind == 0 && reservation.credit_id() == credit =>
+                if kind == 0 && reservation.credit_id() == CreditIdV1(credit) =>
             {
                 ()
             }
             KagemushaNativeIncomingStageOriginalsV1::StageMint {
                 credit: original, ..
-            } if kind == 1 && original.statement.credit_id == credit => (),
+            } if kind == 1 && original.statement.lifecycle.credit_id == credit => (),
             KagemushaNativeIncomingStageOriginalsV1::StagePeer {
                 payment,
                 trusted_staged_at_ms,
@@ -200,7 +206,10 @@ impl NativeCoreWorkOwnerV1 {
         Ok(vec![credit.to_vec()])
     }
 
-    pub(super) fn prepare_incoming(&mut self, fields: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+    pub(in super::super) fn prepare_incoming(
+        &mut self,
+        fields: &[Vec<u8>],
+    ) -> Result<Vec<Vec<u8>>> {
         let (kind, credit) = selection(fields, 1)?;
         if let Some(attempt) = &self.incoming_attempt {
             if attempt.request != fields || attempt.completion.is_some() {
@@ -228,13 +237,13 @@ impl NativeCoreWorkOwnerV1 {
             let cap = match kind {
                 0 => owner.prepare_incoming_mint_fold(
                     &originals.intent_directory,
-                    credit,
+                    CreditIdV1(credit),
                     originals.successor_state_nonce,
                     originals.trusted_time_ms,
                 ),
                 1 => owner.prepare_incoming_receive_fold(
                     &originals.intent_directory,
-                    credit,
+                    CreditIdV1(credit),
                     originals.successor_state_nonce,
                     originals.trusted_time_ms,
                 ),
@@ -303,7 +312,7 @@ impl NativeCoreWorkOwnerV1 {
         }
         let response = vec![
             cap.history_operation_id().to_vec(),
-            cap.credit_id().to_vec(),
+            cap.credit_id().0.to_vec(),
             hardware,
             proof_statement.to_vec(),
             normalized.to_vec(),
@@ -324,7 +333,10 @@ impl NativeCoreWorkOwnerV1 {
         Ok(response)
     }
 
-    pub(super) fn complete_incoming(&mut self, fields: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+    pub(in super::super) fn complete_incoming(
+        &mut self,
+        fields: &[Vec<u8>],
+    ) -> Result<Vec<Vec<u8>>> {
         if fields.len() != 4 {
             return Err(Error::Rejected);
         }
@@ -410,4 +422,34 @@ fn selection(fields: &[Vec<u8>], max_kind: u32) -> Result<(u32, [u8; 32])> {
         return Err(Error::Rejected);
     }
     Ok((kind, credit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incoming_selector_keeps_typed_credit_identity_and_refuses_malformed_fields() {
+        for kind in 0_u32..=2 {
+            let credit = [kind as u8 + 1; 32];
+            let fields = vec![kind.to_le_bytes().to_vec(), credit.to_vec()];
+            let selected = selection(&fields, 2).unwrap();
+            assert_eq!(selected, (kind, CreditIdV1(credit).0));
+            assert_eq!(selected.1.to_vec(), fields[1]);
+            if kind == 2 {
+                assert!(selection(&fields, 1).is_err());
+            }
+        }
+        for fields in [
+            vec![],
+            vec![0_u32.to_le_bytes().to_vec()],
+            vec![vec![0; 3], vec![1; 32]],
+            vec![0_u32.to_le_bytes().to_vec(), vec![1; 31]],
+            vec![0_u32.to_le_bytes().to_vec(), vec![0; 32]],
+            vec![3_u32.to_le_bytes().to_vec(), vec![1; 32]],
+            vec![0_u32.to_le_bytes().to_vec(), vec![1; 32], vec![]],
+        ] {
+            assert!(selection(&fields, 2).is_err());
+        }
+    }
 }

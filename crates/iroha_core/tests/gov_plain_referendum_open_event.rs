@@ -5,7 +5,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{GovernanceReferendumRecord, GovernanceReferendumStatus, State, World},
+    state::{GovernanceReferendumRecord, GovernanceReferendumStatus, State, StateReadOnly, World},
 };
 use iroha_data_model::{
     Registrable,
@@ -34,20 +34,19 @@ fn plain_ballot_emits_open_event_with_window() {
     cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
     cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
     state.set_gov(cfg);
+    let chain = crate::block::tests::component_chain(state);
+    let state = chain.state();
     let rid = "plain-open-event".to_string();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
-    {
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
+    chain.setup_world_at(0, |stx| {
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
             referendum_id: rid.clone(),
         }
         .into();
         Grant::account_permission(ballot_perm, ALICE_ID.clone())
-            .execute(&ALICE_ID, &mut stx)
+            .execute(&ALICE_ID, stx)
             .expect("grant ballot permission");
         iroha_core::query::standalone_plain_test_fixture::fund_voter(
-            &mut stx,
+            stx,
             &iroha_test_samples::ALICE_ID,
             1_000_000_u64.into(),
             0,
@@ -66,13 +65,15 @@ fn plain_ballot_emits_open_event_with_window() {
                     iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
             },
         );
-        stx.apply();
-        sblock
-            .commit_empty_block_for_testing()
-            .expect("commit proposed referendum setup at H=1");
-    }
+    });
 
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
+    let header = BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     CastPlainBallot {

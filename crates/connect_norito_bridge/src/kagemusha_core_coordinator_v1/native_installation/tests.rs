@@ -429,7 +429,7 @@ fn issuer_completion_cannot_reopen_recovery_without_concrete_authenticated_core(
 }
 
 #[test]
-fn installed_wrapper_virtual_handles_revoke_older_inner_handle_reuse() {
+fn installed_wrapper_close_revokes_old_handle_without_a_second_initial_attempt() {
     let source = Arc::new(Provisioner::default());
     // Explicit test-only repeated inner handle; the production factory instead composes
     // NativeInitialSelectionBackend and never accepts this application-defined backend.
@@ -460,8 +460,9 @@ fn installed_wrapper_virtual_handles_revoke_older_inner_handle_reuse() {
     };
     assert_eq!(backend.open("/durable/enrollment"), Ok(1));
     backend.close(1).unwrap();
-    assert_eq!(backend.open("/durable/enrollment"), Ok(2));
-    // This synthetic inner always returns7. Its reused handle must not revive the old Open.
+    assert_eq!(backend.open("/durable/enrollment"), Err(Error::Rejected));
+    // This synthetic inner always returns7. Closing its sole initial attempt must
+    // not revive either the old virtual handle or a guessed subsequent handle.
     let request = kagemusha_core_coordinator_encode_request_v1(&[
         1_u32.to_le_bytes().to_vec(),
         fixture::journal_account().as_bytes().to_vec(),
@@ -472,7 +473,10 @@ fn installed_wrapper_virtual_handles_revoke_older_inner_handle_reuse() {
         Err(Error::Rejected)
     );
     assert_eq!(backend.close(1), Err(Error::Rejected));
-    backend.invoke_initial_enrollment(2, &request).unwrap();
+    assert_eq!(
+        backend.invoke_initial_enrollment(2, &request),
+        Err(Error::Rejected)
+    );
 }
 
 #[test]

@@ -3600,22 +3600,22 @@ mod tests {
         );
         assert_eq!(
             entrypoint_signature(&run).expect("canonical kotoage signature"),
-            "kotoage fn run(quantity amount) authorize(\"Run\")",
+            "kotoage fn run(quantity amount) -> () authorize(\"Run\")",
         );
         assert_eq!(
             entrypoint_signature(&descriptor("read", EntryPointKind::View))
                 .expect("canonical view signature"),
-            "view fn read()",
+            "view fn read() -> ()",
         );
         assert_eq!(
             entrypoint_signature(&descriptor("hajimari", EntryPointKind::Hajimari))
                 .expect("canonical hajimari signature"),
-            "hajimari()",
+            "hajimari() -> ()",
         );
         assert_eq!(
             entrypoint_signature(&descriptor("kaizen", EntryPointKind::Kaizen))
                 .expect("canonical kaizen signature"),
-            "kaizen()",
+            "kaizen() -> ()",
         );
         let mut typed = descriptor("write", EntryPointKind::Kotoage);
         typed.params = vec![
@@ -3631,7 +3631,7 @@ mod tests {
         typed.permission = Some("CanWrite\"Memo\\Ledger\n".to_owned());
         assert_eq!(
             entrypoint_signature(&typed).expect("escaped typed kotoage signature"),
-            "kotoage fn write(quantity amount, string memo) authorize(\"CanWrite\\\"Memo\\\\Ledger\\n\")"
+            "kotoage fn write(quantity amount, string memo) -> () authorize(\"CanWrite\\\"Memo\\\\Ledger\\n\")"
         );
         let manifest = ContractManifest {
             seiyaku_name: Some("Demo".to_owned()),
@@ -3649,7 +3649,7 @@ mod tests {
         };
         let rendered = render_pseudo_source("00", Some(&manifest), None);
         assert!(rendered.contains(
-            "kotoage fn write(quantity amount, string memo) authorize(\"CanWrite\\\"Memo\\\\Ledger\\n\")"
+            "kotoage fn write(quantity amount, string memo) -> () authorize(\"CanWrite\\\"Memo\\\\Ledger\\n\")"
         ));
         assert!(!rendered.contains("// permission:"));
         assert_eq!(rendered.matches("CanWrite").count(), 1);
@@ -3761,7 +3761,13 @@ mod tests {
     #[tokio::test]
     async fn instruction_contract_view_renders_pseudo_source_for_register_bytes() {
         let _guard = TestDataDirGuard::new();
-        let program = crate::test_utils::minimal_ivm_program(1);
+        let program = kotodama_lang::session::CompilerSession::default()
+            .build(kotodama_lang::session::CompileRequest {
+                source: "seiyaku Demo { view fn main() {} }",
+                source_name: Some("instruction-view.ko"),
+            })
+            .expect("compile an artifact with an authenticated view entrypoint")
+            .artifact;
         let code_hash = canonical_code_hash(&program).expect("canonical hash");
         let instruction = dm::InstructionBox::from(RegisterSmartContractBytes {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(

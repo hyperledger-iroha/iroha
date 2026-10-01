@@ -292,6 +292,7 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
     canonicalCommand _: Data,
     canonicalReply _: Data,
     responseAuthenticator _: Data,
+    originalResponse _: Data?,
     qualification _: KagemushaHardwareQualificationV1
   ) throws {}
 

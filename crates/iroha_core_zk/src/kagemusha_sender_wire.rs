@@ -54,21 +54,29 @@ pub const HARDWARE_AUTHORIZATION_KEY_REFERENCE_DOMAIN_V1: &[u8] =
 const HARDWARE_AUTHORIZATION_MAX_BYTES_V1: usize = 2 * 1024;
 
 /// Closed failures for shape and replay binding. No variant grants authority.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Diagnostics expose static classifications without command or custody bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SenderErrorV1 {
     /// Empty, oversized or resource-amplifying archive.
+    #[error("sender payload is empty or exceeds its resource limits")]
     Size,
     /// Wrong schema or noncanonical Norito bytes.
+    #[error("sender payload has noncanonical encoding")]
     CanonicalEncoding,
     /// Unsupported operation, bad selector, or mismatched native context.
+    #[error("sender operation is not bound to the current native context")]
     Binding,
     /// Public request, envelope, or closed terminal receipt is invalid.
+    #[error("sender public request, envelope, or terminal receipt is invalid")]
     PublicShape,
     /// An operation ID or durable anchor has been rebound.
+    #[error("sender operation or durable anchor was rebound")]
     Conflict,
     /// An observation regresses or changes a terminal tombstone.
+    #[error("sender observation regresses or changes a terminal result")]
     StateRegression,
     /// A page is not the exact bounded selection at its pinned revision.
+    #[error("sender page is not the exact selection at its pinned revision")]
     Snapshot,
 }
 type Result<T> = std::result::Result<T, SenderErrorV1>;
@@ -240,8 +248,8 @@ pub enum SenderRecoverySelectorV1 {
 
 /// Closed terminal receipt selector for native outbox release.
 ///
-/// A redemption projection is public binding material only. Core exposes no redemption
-/// outbox release path, so the projection alone never authorizes release.
+/// A redemption projection is public binding material only. Native Core additionally requires
+/// complete authenticated consensus originals and the actual retained voucher before release.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderTerminalReceiptV1",
@@ -1424,6 +1432,14 @@ pub fn terminal_envelope_digest_v1(bytes: &[u8]) -> Result<[u8; 32]> {
     Ok(digest_bytes(ENVELOPE_DOMAIN, bytes))
 }
 
+/// Digest the bounded original ACK transcript used by signed payment-release authorization.
+/// This byte projection grants no authority; callers still authenticate the exact receiver
+/// acknowledgement against its canonical request and payment before accepting it.
+pub(crate) fn acknowledgement_digest_v1(acknowledgement: &[u8]) -> Result<[u8; 32]> {
+    bound(acknowledgement, KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1)?;
+    Ok(digest_bytes(ACK_DOMAIN, acknowledgement))
+}
+
 fn accepted_terminal_receipt_digest(
     operation_id: [u8; 32],
     inputs: &SenderPublicInputsV1,
@@ -1448,7 +1464,7 @@ fn accepted_terminal_receipt_digest(
                 &payment,
             )
             .map_err(|_| SenderErrorV1::PublicShape)?;
-            Ok(digest_bytes(ACK_DOMAIN, acknowledgement))
+            acknowledgement_digest_v1(acknowledgement)
         }
         (
             SenderPublicInputsV1::RedeemSplit { .. },
@@ -1764,4 +1780,55 @@ pub fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>> {
     }
     .encode_canonical()
     .ok()
+}
+
+#[cfg(test)]
+mod acknowledgement_digest_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_ack_digest_matches_original_release_and_refuses_unbounded_inputs() {
+        let encoded = canonical_command_body_for_tests(12).expect("canonical release fixture");
+        let command = SenderCommandV1::decode_canonical_exact(12, [7; 32], &encoded)
+            .expect("original signed release authorization");
+        let SenderCommandBodyV1::Release {
+            inputs,
+            envelope,
+            terminal_receipt: SenderTerminalReceiptV1::PaymentAcknowledgement(acknowledgement),
+            hardware_authorization,
+            ..
+        } = command.body
+        else {
+            panic!("expected payment release fixture");
+        };
+        let request = inputs.send_request().expect("canonical payment request");
+        let payment = KagemushaPaymentV1::decode_canonical_shape_exact_against(&envelope, &request)
+            .expect("canonical payment");
+        KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(
+            &acknowledgement,
+            &request,
+            &payment,
+        )
+        .expect("exact original receiver acknowledgement");
+        let digest = acknowledgement_digest_v1(&acknowledgement).expect("bounded original ACK");
+        // Pre-edit accepted-ACK domain + zero separator + full LE-u64 length + exact archive.
+        assert_eq!(
+            hex::encode(digest),
+            "fba7426311fdcc0703134d5a57c7e2bc8f971df483760106c3fc8f12bc284814"
+        );
+        let authorization =
+            SenderHardwareAuthorizationV1::decode_canonical_exact(&hardware_authorization)
+                .expect("signed release authorization");
+        assert_eq!(authorization.terminal_receipt_digest, Some(digest));
+        let mut changed = acknowledgement;
+        let last = changed.len() - 1;
+        changed[last] ^= 1;
+        assert_ne!(acknowledgement_digest_v1(&changed).unwrap(), digest);
+        for bytes in [
+            Vec::new(),
+            vec![1; KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1 + 1],
+        ] {
+            assert_eq!(acknowledgement_digest_v1(&bytes), Err(SenderErrorV1::Size));
+        }
+    }
 }

@@ -5,7 +5,7 @@
 //! Genesis execution remains untrusted until its actual H2 successor is fully verified.
 
 use super::NativeExecutionProjectionV1;
-use crate::sumeragi::certified_chain::{CertifiedPrefix, CommittedBlock};
+use crate::sumeragi::certified_chain::{CertifiedPrefix, CommittedBlock, PrefixArtifacts};
 use iroha_data_model::{NetworkId, block::SignedBlock, sumeragi_lanes::SumeragiLaneState};
 use iroha_model_base::chain::ChainId;
 use std::{collections::BTreeMap, sync::Arc};
@@ -134,11 +134,37 @@ impl NativeExecutionEvidenceVerifier {
         context_evidence: &[u8],
         genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
     ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
+        self.push_original_height(block, context_evidence, None, genesis)
+    }
+
+    /// The production history reader acquires exact original bulk owners before entering the
+    /// verification interval. Local refusal therefore cannot advance or poison this cursor.
+    pub(crate) fn push_prepared_height_with_genesis(
+        &mut self,
+        artifacts: PrefixArtifacts,
+        context_evidence: &[u8],
+        genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
+    ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
+        self.push_original_height(
+            Arc::clone(artifacts.source()),
+            context_evidence,
+            Some(artifacts),
+            genesis,
+        )
+    }
+
+    fn push_original_height(
+        &mut self,
+        block: Arc<SignedBlock>,
+        context_evidence: &[u8],
+        artifacts: Option<PrefixArtifacts>,
+        genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
+    ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
         if self.poisoned {
             return Err("native evidence interval is poisoned".into());
         }
         self.poisoned = true;
-        let result = self.push_height_inner(block, context_evidence, genesis);
+        let result = self.push_height_inner(block, context_evidence, artifacts, genesis);
         if result.is_ok() {
             self.poisoned = false;
         }
@@ -149,6 +175,7 @@ impl NativeExecutionEvidenceVerifier {
         &mut self,
         block: Arc<SignedBlock>,
         context_evidence: &[u8],
+        artifacts: Option<PrefixArtifacts>,
         accept_genesis: impl FnOnce(VerifiedNativeExecutionCarrier) -> Result<(), String>,
     ) -> Result<Option<VerifiedNativeExecutionCarrier>, String> {
         let body_bytes = u64::try_from(
@@ -187,6 +214,9 @@ impl NativeExecutionEvidenceVerifier {
             return Err("native context projection changes its exact carrier identity".into());
         }
         let Some(finality) = self.finality.as_mut() else {
+            if artifacts.is_some() {
+                return Err("native genesis must use its result-only original certificate".into());
+            }
             self.finality = Some(
                 CertifiedPrefix::new(&self.chain_id, self.network, block)
                     .map_err(|error| error.to_string())?,
@@ -195,10 +225,12 @@ impl NativeExecutionEvidenceVerifier {
             self.retained_bytes = retained;
             return Ok(None);
         };
-        let (verified, genesis) = finality
-            .push(block)
-            .map_err(|error| error.to_string())?
-            .into_parts();
+        let verified = match artifacts {
+            Some(artifacts) => finality.push_prepared(artifacts),
+            None => finality.push(block),
+        }
+        .map_err(|error| error.to_string())?;
+        let (verified, genesis) = verified.into_parts();
         if let Some(genesis) = genesis {
             let projection = self
                 .pending_genesis

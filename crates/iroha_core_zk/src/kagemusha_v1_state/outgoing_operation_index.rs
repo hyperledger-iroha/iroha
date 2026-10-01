@@ -875,7 +875,6 @@ impl KagemushaOutgoingOperationIndexV1 {
         )
     }
 
-    #[cfg(test)]
     /// Retain a terminal tombstone after a separately verified terminal receipt.
     ///
     /// This method does not validate or authorize a receipt. The state machine

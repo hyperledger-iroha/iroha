@@ -535,9 +535,8 @@ mod tests {
                 .expect("persist activation for next UTC day");
         }
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 86_400_000, 0));
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
         set_physical_lane(&mut stx);
-        stx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
         let movement = |purpose, retail_account, amount: u32, digest| RetailMonetaryMovementV1 {
             asset_definition_id: policy.asset_definition_id.clone(),
             purpose,

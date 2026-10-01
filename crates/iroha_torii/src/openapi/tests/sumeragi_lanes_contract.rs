@@ -192,6 +192,15 @@ fn sumeragi_lane_schemas_match_the_served_rust_dto() {
         json_fields(record, "lane record"),
         closed_schema_fields(&schemas, "SumeragiLaneRecord")
     );
+    let da_layout = record.get("da_layout").expect("signed lane DA layout");
+    assert_eq!(
+        json_fields(da_layout, "lane DA layout"),
+        closed_schema_fields(&schemas, "SumeragiDataAvailabilityLayout")
+    );
+    assert_eq!(
+        da_layout.get("encoding").expect("signed encoding"),
+        &norito::json!({"encoding": "reed_solomon16", "details": null})
+    );
     assert_eq!(
         json_fields(record.get("params").expect("params"), "lane params"),
         closed_schema_fields(&schemas, "SumeragiParameters")

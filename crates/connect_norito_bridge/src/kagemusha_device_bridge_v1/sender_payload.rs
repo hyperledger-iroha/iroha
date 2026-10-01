@@ -4,19 +4,17 @@ pub use iroha_core_zk::kagemusha_sender_wire::*;
 #[cfg(test)]
 use iroha_core_zk::kagemusha_v1_state::{
     DevicePolicyBindingV1, HardwareEpochV1, KagemushaLaneIdV1, KagemushaStateContextV1,
+    KagemushaTransitionKindV1,
 };
 #[cfg(test)]
 use iroha_data_model::{
     account::AccountId,
-    kagemusha::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaOperationKindV1},
+    kagemusha::{KagemushaDeviceSignatureV1, KagemushaOperationKindV1, KagemushaPaymentRequestV1},
 };
 #[cfg(test)]
-use norito::{
-    NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, Encode},
-};
+use norito::codec::{Decode, Encode};
 #[cfg(test)]
-use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
+use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,7 +81,12 @@ mod tests {
         let SenderCommandBodyV1::Prepare { inputs: send } = command.body else {
             panic!("prepare fixture body")
         };
-        let beneficiary = send.send_request().unwrap().recipient;
+        let SenderPublicInputsV1::SendSplit { request } = &send else {
+            panic!("send fixture public inputs")
+        };
+        let beneficiary = KagemushaPaymentRequestV1::decode_canonical_exact(request)
+            .unwrap()
+            .recipient;
         let redemption = SenderPublicInputsV1::RedeemSplit {
             amount: 7,
             beneficiary,
@@ -219,7 +222,8 @@ mod tests {
                 authorization.hardware_transition_statement.kind = kind;
                 authorization.hardware_transition_statement.amount = amount;
                 authorization.authorization_id = authorization
-                    .expected_authorization_id()
+                    .unsigned_preimage()
+                    .authorization_id()
                     .expect("mutated authorization preimage");
                 let signature: P256Signature = signing_key.sign(&authorization.authorization_id);
                 let signature = signature.normalize_s().unwrap_or(signature);
@@ -584,7 +588,10 @@ mod explicit_schema_identity_tests {
             SenderHardwareAuthorizationV1::decode_canonical_exact(&hardware_authorization).unwrap();
         assert_eq!(roundtrip(&authorization), hardware_authorization);
         assert_eq!(
-            authorization.expected_authorization_id().unwrap(),
+            authorization
+                .unsigned_preimage()
+                .authorization_id()
+                .unwrap(),
             authorization.authorization_id
         );
     }

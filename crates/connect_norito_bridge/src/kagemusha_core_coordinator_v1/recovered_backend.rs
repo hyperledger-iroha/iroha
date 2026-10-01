@@ -18,7 +18,7 @@ use iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1;
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -47,11 +47,27 @@ struct Opens {
     values: BTreeMap<u64, Open>,
 }
 
+// A synced device result is already immutable. Open may only finish its original publication;
+// this holder grants no account challenge, observation, device dispatch or usable predecessor.
+enum DeferredReleaseStage {
+    Original(Box<iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOutboxReleaseV1>),
+    Publication(Box<iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedCorePublicationV1>),
+    Published(Box<KagemushaAuthenticatedCoreOwnerV1>),
+    Frozen,
+}
+struct DeferredRelease {
+    stage: DeferredReleaseStage,
+    response: Vec<u8>,
+    destination: super::KagemushaNativeCorePublicationDestinationV1,
+    native_key: KagemushaDevicePublicKeyV1,
+    signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
+}
 /// Concrete possession-only recovery adapter retaining the original production Core owner.
 /// Applications cannot construct it from a checkpoint, wallet projection or arbitrary verifier.
 pub struct KagemushaAuthenticatedRecoveredCoordinatorV1 {
     path: String,
-    owner: Arc<Mutex<AuthenticatedRecoveredOwnerV1>>,
+    owner: OnceLock<Arc<Mutex<AuthenticatedRecoveredOwnerV1>>>,
+    deferred_release: Mutex<Option<DeferredRelease>>,
     registry: RecoveredEnrolledSessionRegistryV1<AuthenticatedRecoveredOwnerV1>,
     opens: Mutex<Opens>,
 }
@@ -85,7 +101,8 @@ impl KagemushaAuthenticatedRecoveredCoordinatorV1 {
             .map_err(|_| Error::Rejected)?;
         Ok(Self {
             path,
-            owner: Arc::new(Mutex::new(owner)),
+            owner: OnceLock::from(Arc::new(Mutex::new(owner))),
+            deferred_release: Mutex::new(None),
             registry: RecoveredEnrolledSessionRegistryV1::new(),
             opens: Mutex::new(Opens {
                 next: 1,
@@ -113,7 +130,8 @@ impl KagemushaAuthenticatedRecoveredCoordinatorV1 {
         .map_err(|_| Error::Rejected)?;
         Ok(Self {
             path,
-            owner: Arc::new(Mutex::new(owner)),
+            owner: OnceLock::from(Arc::new(Mutex::new(owner))),
+            deferred_release: Mutex::new(None),
             registry: RecoveredEnrolledSessionRegistryV1::new(),
             opens: Mutex::new(Opens {
                 next: 1,
@@ -141,7 +159,8 @@ impl KagemushaAuthenticatedRecoveredCoordinatorV1 {
         .map_err(|_| Error::Rejected)?;
         Ok(Self {
             path,
-            owner: Arc::new(Mutex::new(owner)),
+            owner: OnceLock::from(Arc::new(Mutex::new(owner))),
+            deferred_release: Mutex::new(None),
             registry: RecoveredEnrolledSessionRegistryV1::new(),
             opens: Mutex::new(Opens {
                 next: 1,
@@ -149,6 +168,148 @@ impl KagemushaAuthenticatedRecoveredCoordinatorV1 {
             }),
         })
     }
+    /// Recover an actual original command-only outbox release under independently selected custody.
+    /// Public ACKs, frame archives and paths cannot construct the exclusive native capability.
+    pub fn from_native_pending_outbox_release(
+        path: String,
+        cap: iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOutboxReleaseV1,
+        native_key: KagemushaDevicePublicKeyV1,
+        signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
+    ) -> Result<Self> {
+        kagemusha_core_coordinator_validate_storage_path_v1(path.as_bytes())
+            .map_err(|_| Error::Rejected)?;
+        if let Some((response, directory, checkpoint_id)) =
+            cap.completed_original().map_err(|_| Error::Rejected)?
+        {
+            let binding = cap
+                .retained_enrollment_binding()
+                .map_err(|_| Error::Rejected)?;
+            if binding.core_authorization_key_reference != crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_key_reference_v1(&native_key) {
+                return Err(Error::Rejected);
+            }
+            let destination =
+                super::native_core_work::NativeCoreWorkOwnerV1::completed_release_destination(
+                    &path,
+                    &cap,
+                    &directory,
+                    checkpoint_id,
+                )?;
+            super::core_authorization_signer::RetainedCoreAuthorizationSignerV1::new(
+                native_key,
+                signer.clone(),
+            )?;
+            return Ok(Self {
+                path,
+                owner: OnceLock::new(),
+                deferred_release: Mutex::new(Some(DeferredRelease {
+                    stage: DeferredReleaseStage::Original(Box::new(cap)),
+                    response,
+                    destination,
+                    native_key,
+                    signer,
+                })),
+                registry: RecoveredEnrolledSessionRegistryV1::new(),
+                opens: Mutex::new(Opens {
+                    next: 1,
+                    values: BTreeMap::new(),
+                }),
+            });
+        }
+        let owner = AuthenticatedRecoveredOwnerV1::from_pending_outbox_release(
+            path.clone(),
+            cap,
+            native_key,
+            signer,
+        )
+        .map_err(|_| Error::Rejected)?;
+        Ok(Self {
+            path,
+            owner: OnceLock::from(Arc::new(Mutex::new(owner))),
+            deferred_release: Mutex::new(None),
+            registry: RecoveredEnrolledSessionRegistryV1::new(),
+            opens: Mutex::new(Opens {
+                next: 1,
+                values: BTreeMap::new(),
+            }),
+        })
+    }
+    fn selected_owner(&self) -> Result<Arc<Mutex<AuthenticatedRecoveredOwnerV1>>> {
+        self.owner.get().cloned().ok_or(Error::Unavailable)
+    }
+    fn finish_deferred_release(&self) -> Result<()> {
+        if self.owner.get().is_some() {
+            return Ok(());
+        }
+        let mut guard = self.deferred_release.lock().map_err(|_| Error::Rejected)?;
+        if self.owner.get().is_some() {
+            return Ok(());
+        }
+        let pending = guard.as_mut().ok_or(Error::Rejected)?;
+        super::core_authorization_signer::RetainedCoreAuthorizationSignerV1::new(
+            pending.native_key,
+            pending.signer.clone(),
+        )?;
+        if matches!(pending.stage, DeferredReleaseStage::Original(_)) {
+            let DeferredReleaseStage::Original(cap) =
+                std::mem::replace(&mut pending.stage, DeferredReleaseStage::Frozen)
+            else {
+                return Err(Error::Rejected);
+            };
+            match (*cap).complete_or_retain(
+                &pending.response,
+                &pending.destination.directory,
+                pending.destination.checkpoint_operation_id,
+            ) {
+                Ok(publication) => {
+                    pending.stage = DeferredReleaseStage::Publication(Box::new(publication))
+                }
+                Err((cap, _)) => {
+                    pending.stage = DeferredReleaseStage::Original(Box::new(cap));
+                    return Err(Error::Unavailable);
+                }
+            }
+        }
+        if matches!(pending.stage, DeferredReleaseStage::Publication(_)) {
+            let DeferredReleaseStage::Publication(publication) =
+                std::mem::replace(&mut pending.stage, DeferredReleaseStage::Frozen)
+            else {
+                return Err(Error::Rejected);
+            };
+            match publication.finish() {
+                Ok(core) => pending.stage = DeferredReleaseStage::Published(Box::new(core)),
+                Err((publication, _)) => {
+                    pending.stage = DeferredReleaseStage::Publication(publication);
+                    return Err(Error::Unavailable);
+                }
+            }
+        }
+        let DeferredReleaseStage::Published(core) =
+            std::mem::replace(&mut pending.stage, DeferredReleaseStage::Frozen)
+        else {
+            return Err(Error::Rejected);
+        };
+        // Even a temporary signer/catalog admission refusal after hardware CAS retains the
+        // actual returned successor. It never reconstructs an owner from a public projection.
+        match AuthenticatedRecoveredOwnerV1::new_or_retain(
+            self.path.clone(),
+            *core,
+            pending.native_key,
+            pending.signer.clone(),
+        ) {
+            Ok(owner) => {
+                self.owner
+                    .set(Arc::new(Mutex::new(owner)))
+                    .map_err(|_| Error::Rejected)?;
+                *guard = None;
+                Ok(())
+            }
+            Err((core, _)) => {
+                pending.stage = DeferredReleaseStage::Published(Box::new(core));
+                Err(Error::Unavailable)
+            }
+        }
+    }
+
     fn active(active: &AtomicBool) -> std::result::Result<(), RegistryError> {
         if active.load(Ordering::Acquire) {
             Ok(())
@@ -194,7 +355,7 @@ impl KagemushaAuthenticatedRecoveredCoordinatorV1 {
                     }
                 };
                 if let Some(saved) = saved {
-                    self.owner
+                    self.selected_owner()?
                         .lock()
                         .map_err(|_| Error::Rejected)?
                         .require_pending_original(&saved)
@@ -204,7 +365,7 @@ impl KagemushaAuthenticatedRecoveredCoordinatorV1 {
                 }
                 let pending = self
                     .registry
-                    .begin_checked(self.owner.clone(), || Self::active(&active))
+                    .begin_checked(self.selected_owner()?, || Self::active(&active))
                     .map_err(|_| Error::Rejected)?;
                 let response = Self::challenge(&pending)?;
                 let mut opens = self.opens.lock().map_err(|_| Error::Rejected)?;
@@ -456,6 +617,20 @@ impl KagemushaAuthenticatedRecoveredCoordinatorV1 {
                         Self::response(&[operation.to_vec()])
                             .map_err(|_| RegistryError::Rejected)?
                     }
+                    Method::ReleaseOutbox => {
+                        let fields = owner.prepare_payment_release(fields)?;
+                        Self::response(&fields).map_err(|_| RegistryError::Rejected)?
+                    }
+                    Method::AuthenticatedHardwarePolicy => {
+                        let fields = owner.authenticated_hardware_policy()?;
+                        Self::response(&fields).map_err(|_| RegistryError::Rejected)?
+                    }
+                    Method::AcceptInstalledTerminal
+                    | Method::RecoverSender
+                    | Method::RecoverTerminalEnvelope => {
+                        let fields = owner.read_terminal_work(method, fields)?;
+                        Self::response(&fields).map_err(|_| RegistryError::Rejected)?
+                    }
                     Method::PrepareIncomingFold
                     | Method::CompleteIncomingFold
                     | Method::StageIncomingOriginal => {
@@ -502,7 +677,8 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaAuthenticatedRecoveredCoordi
         }
         // Complete only the exact already authorized pending publication before a new
         // account/device challenge. No old usable predecessor or generic fallback exists.
-        self.owner
+        self.finish_deferred_release()?;
+        self.selected_owner()?
             .lock()
             .map_err(|_| Error::Rejected)?
             .resume_original_publication()
@@ -552,6 +728,11 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaAuthenticatedRecoveredCoordi
                     | Method::BeginSenderTransition
                     | Method::ProvePreparedSenderTransition
                     | Method::BuildTerminalEnvelope
+                    | Method::AcceptInstalledTerminal
+                    | Method::RecoverSender
+                    | Method::RecoverTerminalEnvelope
+                    | Method::ReleaseOutbox
+                    | Method::AuthenticatedHardwarePolicy
                     | Method::PrepareIncomingFold
                     | Method::CompleteIncomingFold
                     | Method::StageIncomingOriginal

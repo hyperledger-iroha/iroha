@@ -62,16 +62,33 @@ impl AuthenticatedRecoveredOwnerV1 {
         native_key: KagemushaDevicePublicKeyV1,
         signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
     ) -> Result<Self> {
-        let observer =
-            NativeStartupQualificationOwnerV1::from_authenticated_core_owner(&core, &native_key)
-                .map_err(|_| RegistryError::Rejected)?;
-        let signer = super::core_authorization_signer::RetainedCoreAuthorizationSignerV1::new(
+        Self::new_or_retain(path, core, native_key, signer).map_err(|(_, error)| error)
+    }
+    pub(super) fn new_or_retain(
+        path: String,
+        core: KagemushaAuthenticatedCoreOwnerV1,
+        native_key: KagemushaDevicePublicKeyV1,
+        signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
+    ) -> std::result::Result<Self, (KagemushaAuthenticatedCoreOwnerV1, RegistryError)> {
+        let observer = match NativeStartupQualificationOwnerV1::from_authenticated_core_owner(
+            &core,
+            &native_key,
+        ) {
+            Ok(value) => value,
+            Err(_) => return Err((core, RegistryError::Rejected)),
+        };
+        let signer = match super::core_authorization_signer::RetainedCoreAuthorizationSignerV1::new(
             native_key, signer,
-        )
-        .map_err(|_| RegistryError::Rejected)?;
+        ) {
+            Ok(value) => value,
+            Err(_) => return Err((core, RegistryError::Rejected)),
+        };
+        let core = match super::native_core_work::NativeCoreWorkOwnerV1::new_or_retain(path, core) {
+            Ok(value) => value,
+            Err((core, _)) => return Err((core, RegistryError::Rejected)),
+        };
         Ok(Self {
-            core: super::native_core_work::NativeCoreWorkOwnerV1::new(path, core)
-                .map_err(|_| RegistryError::Rejected)?,
+            core,
             native_key,
             observer,
             evidence: None,
@@ -133,12 +150,38 @@ impl AuthenticatedRecoveredOwnerV1 {
             sender_replies: BTreeMap::new(),
         })
     }
+    pub(super) fn from_pending_outbox_release(
+        path: String,
+        cap: iroha_core_zk::kagemusha_v1_state::KagemushaAuthenticatedOutboxReleaseV1,
+        native_key: KagemushaDevicePublicKeyV1,
+        signer: Arc<dyn super::KagemushaNativeCoreAuthorizationSignerV1>,
+    ) -> Result<Self> {
+        let core =
+            super::native_core_work::NativeCoreWorkOwnerV1::from_pending_outbox_release(path, cap)
+                .map_err(|_| RegistryError::Rejected)?;
+        let observer =
+            NativeStartupQualificationOwnerV1::from_original_work_owner(&core, &native_key)
+                .map_err(|_| RegistryError::Rejected)?;
+        let signer = super::core_authorization_signer::RetainedCoreAuthorizationSignerV1::new(
+            native_key, signer,
+        )
+        .map_err(|_| RegistryError::Rejected)?;
+        Ok(Self {
+            core,
+            native_key,
+            observer,
+            evidence: None,
+            lease_source: None,
+            signer,
+            sender_replies: BTreeMap::new(),
+        })
+    }
     // Original public sender replies are admitted independently of the method5/6 caller's
     // archive. Their signature is observation evidence only; private preparation/proof and
     // consuming Core stages remain mandatory before hardware authorization or funds change.
     pub(super) fn accept_sender_reply(&mut self, fields: &[Vec<u8>]) -> Result<()> {
         self.require_current()?;
-        if fields.len() != 10 {
+        if fields.len() < 10 {
             return Err(RegistryError::Rejected);
         }
         let operation = u8::try_from(u32::from_le_bytes(
@@ -148,15 +191,72 @@ impl AuthenticatedRecoveredOwnerV1 {
                 .map_err(|_| RegistryError::Rejected)?,
         ))
         .map_err(|_| RegistryError::Rejected)?;
+        if fields.len() != if operation == 12 { 11 } else { 10 } {
+            return Err(RegistryError::Rejected);
+        }
         let request_id: [u8; 32] = fields[1]
             .as_slice()
             .try_into()
             .map_err(|_| RegistryError::Rejected)?;
+        if operation == 12 {
+            if let Some(original) = self.sender_replies.get(&(operation, request_id)) {
+                if original.original_command() != fields[2]
+                    || original.original_reply() != fields[3]
+                    || original.original_authenticator() != fields[4]
+                    || original
+                        .original_response()
+                        .map_err(|_| RegistryError::Rejected)?
+                        != fields[10]
+                {
+                    return Err(RegistryError::Rejected);
+                }
+                self.observer
+                    .sender_qualification(&fields[5..10])
+                    .map_err(|_| RegistryError::Rejected)?;
+                let command = original.original_command().to_vec();
+                let full = &fields[10];
+                self.core
+                    .complete_payment_release(request_id, &command, full)
+                    .map_err(|_| RegistryError::Rejected)?;
+                self.advance_native_lease_source()?;
+                sender_reply_cache::retire_completed_operation(
+                    &mut self.sender_replies,
+                    request_id,
+                );
+                return self.require_current();
+            }
+        }
+        if operation == 12
+            && self
+                .core
+                .has_retained_release_completion(request_id, &fields[2], &fields[10])
+                .map_err(|_| RegistryError::Rejected)?
+        {
+            self.observer
+                .sender_qualification(&fields[5..10])
+                .map_err(|_| RegistryError::Rejected)?;
+            let original =
+                iroha_data_model::kagemusha::kagemusha_decode_device_success_response_v1(
+                    &fields[10],
+                    12,
+                    request_id,
+                )
+                .map_err(|_| RegistryError::Rejected)?;
+            if original.payload != fields[3] || original.authenticator != fields[4] {
+                return Err(RegistryError::Rejected);
+            }
+            self.core
+                .complete_payment_release(request_id, &fields[2], &fields[10])
+                .map_err(|_| RegistryError::Rejected)?;
+            self.advance_native_lease_source()?;
+            sender_reply_cache::retire_completed_operation(&mut self.sender_replies, request_id);
+            return self.require_current();
+        }
         let qualification = self
             .observer
-            .sender_qualification(&fields[5..])
+            .sender_qualification(&fields[5..10])
             .map_err(|_| RegistryError::Rejected)?;
-        let (context, inputs_digest, provider_root) = self
+        let (current_context, context, inputs_digest, provider_root) = self
             .core
             .sender_observation_selection(request_id)
             .map_err(|_| RegistryError::Rejected)?;
@@ -166,7 +266,7 @@ impl AuthenticatedRecoveredOwnerV1 {
             &fields[2],
             &fields[3],
             &fields[4],
-            &context,
+            &current_context,
             &qualification,
             provider_root,
         )
@@ -180,18 +280,21 @@ impl AuthenticatedRecoveredOwnerV1 {
         {
             return Err(RegistryError::Rejected);
         }
-        let key = (operation, request_id);
-        if let Some(previous) = self.sender_replies.get(&key) {
-            if previous != &token {
-                return Err(RegistryError::Rejected);
-            }
+        let token = if operation == 12 {
+            token
+                .retain_original_response(&fields[10])
+                .map_err(|_| RegistryError::Rejected)?
         } else {
-            // Bound process-local signed observation memory. No original native journal is
-            // discarded or replaced when this transient read budget is exhausted.
-            if self.sender_replies.len() >= 16 {
-                return Err(RegistryError::Rejected);
-            }
-            self.sender_replies.insert(key, token);
+            token
+        };
+        sender_reply_cache::admit_authenticated(&mut self.sender_replies, token)?;
+        if operation == 12 {
+            let full = &fields[10];
+            self.core
+                .complete_payment_release(request_id, &fields[2], full)
+                .map_err(|_| RegistryError::Rejected)?;
+            self.advance_native_lease_source()?;
+            sender_reply_cache::retire_completed_operation(&mut self.sender_replies, request_id);
         }
         self.require_current()
     }
@@ -410,6 +513,54 @@ impl AuthenticatedRecoveredOwnerV1 {
         self.advance_native_lease_source()?;
         result
     }
+    pub(super) fn prepare_payment_release(&mut self, fields: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+        self.require_current()?;
+        let qualification_start = match fields.get(1).map(Vec::as_slice) {
+            Some([0, 0, 0, 0]) if fields.len() == 10 => 5,
+            Some([1, 0, 0, 0]) if fields.len() == 11 => 6,
+            _ => return Err(RegistryError::Rejected),
+        };
+        self.observer
+            .sender_qualification(&fields[qualification_start..])
+            .map_err(|_| RegistryError::Rejected)?;
+        if let Some(completed) = self
+            .core
+            .retire_completed_release_attempt()
+            .map_err(|_| RegistryError::Rejected)?
+        {
+            sender_reply_cache::retire_completed_operation(&mut self.sender_replies, completed);
+            self.advance_native_lease_source()?;
+            self.require_current()?;
+        }
+        let response = self
+            .core
+            .prepare_payment_release(fields, &self.signer)
+            .map_err(|_| RegistryError::Rejected)?;
+        self.require_current()?;
+        Ok(response)
+    }
+    pub(super) fn authenticated_hardware_policy(&self) -> Result<Vec<Vec<u8>>> {
+        self.require_current()?;
+        // An unfinished exclusive operation may still read its original admitted catalog.
+        // This token is current native custody, not a usable monetary owner or mutation grant.
+        self.core
+            .current_recovery_selection()
+            .map_err(|_| RegistryError::Rejected)?;
+        let release = self
+            .core
+            .authenticated_release()
+            .map_err(|_| RegistryError::Rejected)?;
+        let result = vec![
+            release.release_id().to_vec(),
+            release.hardware_policy_digest().to_vec(),
+            release.provider_policy_root().to_vec(),
+        ];
+        self.core
+            .current_recovery_selection()
+            .map_err(|_| RegistryError::Rejected)?;
+        self.require_current()?;
+        Ok(result)
+    }
     pub(super) fn require_pending_original(&self, pending: &BegunRecoveredSessionV1) -> Result<()> {
         self.require_current()?;
         pending
@@ -443,6 +594,12 @@ impl AuthenticatedRecoveredOwnerV1 {
             .map_err(|_| RegistryError::Rejected)
     }
 }
+
+#[path = "native_read_work.rs"]
+mod native_read_work;
+
+#[path = "sender_reply_cache.rs"]
+mod sender_reply_cache;
 
 impl sealed::RecoveredOwner for AuthenticatedRecoveredOwnerV1 {}
 

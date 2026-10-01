@@ -136,6 +136,7 @@ fn validate_value_schema(
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::smart_contract::ContractArtifactId;
     use iroha_data_model::{
         isi::{InstructionBox, smart_contract_code::RegisterSmartContractCode},
         smart_contract::entrypoint::{
@@ -143,6 +144,7 @@ mod tests {
             MAX_ENTRYPOINT_ARGUMENT_TYPE_NODES,
         },
     };
+    use iroha_model_base::topology::DataSpaceId;
     use norito::json::{self, Value};
 
     const FIXTURE_NETWORK_PREFIX: u16 = 753;
@@ -188,32 +190,22 @@ mod tests {
         json::from_value(manifest).expect("current model manifest")
     }
 
-    // This schema codec fixture is separate from ledger manifest admission: the shared
-    // presentation fixture intentionally leaves code_hash optional. The instruction still
-    // owns one explicit canonical artifact identity and grants no execution authority.
-    fn fixture_artifact_id() -> iroha_data_model::smart_contract::ContractArtifactId {
-        iroha_data_model::smart_contract::ContractArtifactId::new(
-            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            iroha_crypto::Hash::new(b"manifest schema codec artifact"),
+    fn artifact_id() -> ContractArtifactId {
+        // These fixtures exercise schema admission independently of deployable
+        // artifact custody; some intentionally omit the manifest code hash.
+        ContractArtifactId::new(
+            DataSpaceId::new(u64::MAX),
+            iroha_crypto::Hash::new(b"manifest schema fixture artifact"),
         )
     }
 
-    fn fixture_artifact_json() -> Value {
-        Value::Object(
-            [
-                ("dataspace_id".to_owned(), Value::String("0".to_owned())),
-                (
-                    "code_hash".to_owned(),
-                    json::to_value(&fixture_artifact_id().code_hash).expect("artifact hash JSON"),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        )
+    fn artifact_json() -> Value {
+        crate::lifecycle_instructions::render_artifact_id(&artifact_id()).expect("artifact JSON")
     }
 
     fn instruction_json(manifest: &ContractManifest) -> String {
-        json::to_json(&norito::json!({ "RegisterSmartContractCode": { "artifact_id": (fixture_artifact_json()), "manifest": manifest } }))
+        let artifact = artifact_json();
+        json::to_json(&norito::json!({ "RegisterSmartContractCode": { "artifact_id": artifact, "manifest": manifest } }))
             .expect("manifest instruction JSON")
     }
 
@@ -262,7 +254,7 @@ mod tests {
         // frame/archive remain canonical and checksummed, so rejection exercises
         // the native decoded-manifest schema boundary rather than CRC handling.
         let instruction: InstructionBox = RegisterSmartContractCode {
-            artifact_id: fixture_artifact_id(),
+            artifact_id: artifact_id(),
             manifest: manifest.clone(),
         }
         .into();
@@ -375,7 +367,7 @@ mod tests {
                     }
                 }
                 let source = json::to_json(
-                    &norito::json!({ "RegisterSmartContractCode": { "artifact_id": (fixture_artifact_json()), "manifest": manifest } }),
+                    &norito::json!({ "RegisterSmartContractCode": { "artifact_id": (artifact_json()), "manifest": manifest } }),
                 )
                 .expect("JSON");
                 assert!(encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).is_err());
@@ -466,18 +458,18 @@ mod tests {
         malformed.entrypoints.as_mut().unwrap()[0].return_schema = None;
         let instructions: [InstructionBox; 3] = [
             RegisterSmartContractCode {
-                artifact_id: fixture_artifact_id(),
+                artifact_id: artifact_id(),
                 manifest,
             }
             .into(),
             RegisterSmartContractCode {
-                artifact_id: fixture_artifact_id(),
+                artifact_id: artifact_id(),
                 manifest: malformed,
             }
             .into(),
             CancelSmartContractCodeUpload {
-                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                artifact_id: ContractArtifactId::new(
+                    DataSpaceId::new(u64::MAX),
                     iroha_crypto::Hash::new(b"manifest codec cancellation"),
                 ),
             }

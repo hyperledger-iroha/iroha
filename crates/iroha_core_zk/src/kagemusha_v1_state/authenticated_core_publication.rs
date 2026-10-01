@@ -11,7 +11,7 @@ const FORMAT: PrivateJournalFormat = PrivateJournalFormat {
     filename: "core-checkpoint.norito.wal",
     magic: b"IKGCPW1\0",
     hash_domain: b"iroha:kagemusha:v1:core-checkpoint-publication\0",
-    maximum_payload_bytes: 8 * 1024 * 1024,
+    maximum_payload_bytes: (redemption_finality::ORIGINAL_MAX_BYTES + 8 * 1024 * 1024) as u64,
 };
 
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -116,6 +116,35 @@ pub enum KagemushaAuthenticatedCoreRecoveryV1 {
     Selected(KagemushaAuthenticatedCoreOwnerV1),
     /// Exclusive retained publication requiring the original hardware exchange.
     Pending(KagemushaAuthenticatedCorePublicationV1),
+}
+
+impl KagemushaAuthenticatedCoreRecoveryV1 {
+    pub(super) fn require_original_operation(
+        &self,
+        expected: DigestV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let actual = match self {
+            Self::Pending(pending) => {
+                pending.recheck_originals()?;
+                pending.statement().operation_id
+            }
+            Self::Selected(owner) => {
+                owner.current_recovery_selection()?;
+                let original = owner
+                    .selected_publication
+                    .as_ref()
+                    .ok_or(KagemushaStateErrorV1::SnapshotIntegrity)?;
+                original.require_selected(&owner.machine)?;
+                decode_original(&original.canonical_record)?
+                    .statement
+                    .operation_id
+            }
+        };
+        if expected == [0; 32] || actual != expected {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        Ok(())
+    }
 }
 
 impl KagemushaAuthenticatedCoreRecoveryInputsV1<'_> {
@@ -435,8 +464,25 @@ impl KagemushaAuthenticatedCoreOwnerV1 {
     }
 }
 
+// A publication contains exactly one original. Replay that frame and at most
+// one extra-frame refusal probe, each still under FORMAT's existing 8 MiB cap.
+// This bounds recovery work; the exact record and native authority checks below
+// remain mandatory and grant nothing through the retained bytes.
+fn replay_original_record(
+    mut replay_next: impl FnMut() -> Result<bool, PrivateJournalError>,
+) -> Result<(), PrivateJournalError> {
+    if !replay_next()? {
+        return Ok(());
+    }
+    if replay_next()? {
+        return Err(PrivateJournalError::Corrupt);
+    }
+    Ok(())
+}
+
 fn read_original(journal: &mut PrivateJournal) -> Result<Vec<u8>, KagemushaStateErrorV1> {
-    while journal.replay_next().map_err(material_error)?.is_some() {}
+    replay_original_record(|| journal.replay_next().map(|record| record.is_some()))
+        .map_err(material_error)?;
     let mut original = None;
     journal
         .scan_complete(|sequence, bytes| {
@@ -470,7 +516,11 @@ fn decode_original(bytes: &[u8]) -> Result<Record, KagemushaStateErrorV1> {
     if bytes.is_empty() || bytes.len() as u64 > FORMAT.maximum_payload_bytes {
         return Err(KagemushaStateErrorV1::SnapshotIntegrity);
     }
-    let record = norito::decode_canonical::<Record>(bytes).map_err(material_error)?;
+    let record = norito::decode_canonical_with_limits::<Record>(
+        bytes,
+        norito::canonical_decode_limits(bytes.len()),
+    )
+    .map_err(material_error)?;
     if norito::encode_canonical(&record).map_err(material_error)? != bytes
         || record.previous.recovery_anchor() != record.previous_anchor.statement
         || record.successor.recovery_anchor() != record.statement.successor
@@ -768,5 +818,95 @@ mod tests {
         reopened.append(&canonical).unwrap();
         assert!(read_original(&mut reopened).is_err());
         assert!(reopened.check_owned().is_err());
+    }
+
+    #[test]
+    fn checkpoint_original_wal_replay_bounds_work_and_refuses_extra_frames() {
+        // Real descriptor-owned WAL framing only: marker bytes authenticate no
+        // checkpoint proof, hardware selection, native owner or monetary action.
+        for count in [2, 3, 128] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().canonicalize().unwrap().join("publication");
+            let mut journal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+            for _ in 0..count {
+                journal.append(b"original-checkpoint-marker").unwrap();
+            }
+            drop(journal);
+            let mut reopened = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+            let mut calls = 0;
+            let result = replay_original_record(|| {
+                calls += 1;
+                reopened.replay_next().map(|record| record.is_some())
+            });
+            assert_eq!(result, Err(PrivateJournalError::Corrupt));
+            assert_eq!(
+                calls, 2,
+                "extra original frame {count} must stop at the first probe"
+            );
+            drop(reopened);
+            let mut reopened = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+            assert!(read_original(&mut reopened).is_err());
+        }
+    }
+
+    #[test]
+    fn checkpoint_original_wal_replay_preserves_complete_empty_and_torn_refusal() {
+        use std::io::Write as _;
+
+        // These are actual WAL prefix/torn-write specimens, never accepted
+        // production recovery owners or substitutes for Guard/proof checks.
+        for shape in ["complete", "empty", "torn-payload", "torn-suffix-header"] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().canonicalize().unwrap().join("publication");
+            let mut journal = PrivateJournal::create_new(&path, FORMAT).unwrap();
+            if shape != "empty" {
+                journal.append(b"original-checkpoint-marker").unwrap();
+            }
+            drop(journal);
+            if shape == "torn-payload" {
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(path.join(FORMAT.filename))
+                    .unwrap();
+                file.set_len(file.metadata().unwrap().len() - 1).unwrap();
+                file.sync_all().unwrap();
+            } else if shape == "torn-suffix-header" {
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(path.join(FORMAT.filename))
+                    .unwrap();
+                file.write_all(
+                    &[0; crate::kagemusha_v1_state::private_journal::FRAME_HEADER_BYTES - 1],
+                )
+                .unwrap();
+                file.sync_all().unwrap();
+            }
+            let mut reopened = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+            let mut calls = 0;
+            let result = replay_original_record(|| {
+                calls += 1;
+                reopened.replay_next().map(|record| record.is_some())
+            });
+            assert!(
+                calls <= 2,
+                "{shape} must preserve the original replay bound"
+            );
+            if shape == "complete" {
+                assert_eq!(result, Ok(()));
+                assert_eq!(calls, 2);
+                assert_eq!(
+                    read_original(&mut reopened).unwrap(),
+                    b"original-checkpoint-marker"
+                );
+                reopened
+                    .require_single_record(b"original-checkpoint-marker")
+                    .unwrap();
+            } else {
+                assert_eq!(result, Err(PrivateJournalError::Corrupt), "{shape}");
+                drop(reopened);
+                let mut reopened = PrivateJournal::open_existing(&path, FORMAT).unwrap();
+                assert!(read_original(&mut reopened).is_err(), "{shape}");
+            }
+        }
     }
 }

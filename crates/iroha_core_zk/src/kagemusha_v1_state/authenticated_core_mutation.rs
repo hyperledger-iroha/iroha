@@ -38,6 +38,11 @@ pub(super) enum Mutation {
         proof: KagemushaRedemptionProofV1,
         retry_metadata: Vec<u8>,
     },
+    OutboxRelease {
+        canonical_command: Vec<u8>,
+        original_response: Vec<u8>,
+        canonical_terminal_original: Vec<u8>,
+    },
     // Closed native incoming archive. Only the incoming module's bounded exact canonical
     // decoder and original proof/Guard/history verifier can interpret this material.
     Incoming {

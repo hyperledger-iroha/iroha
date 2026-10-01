@@ -2607,7 +2607,7 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
     assert!(!verifier.contains("verify_opened_query_relations_with_deep_v1"));
     let engine = include_str!("../engine.rs");
     let engine_production = &engine[..engine
-        .find("#[cfg(test)]")
+        .find("#[cfg(test)]\nmod tests {")
         .expect("engine production/test boundary")];
     assert!(engine_production.contains("verify_zk_x509_main_aggregate_stark_v1"));
     assert!(engine_production.contains("ca_accumulator_subproof_binding_from_proof_v1"));

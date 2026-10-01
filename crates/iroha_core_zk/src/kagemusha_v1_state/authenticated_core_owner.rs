@@ -18,23 +18,39 @@ pub use bootstrap_proving::KagemushaAuthenticatedBootstrapProvingSelectionV1;
 
 #[path = "authenticated_core_dispatch.rs"]
 mod dispatch;
-pub use dispatch::KagemushaAuthenticatedOutgoingProvingSelectionV1;
 pub use dispatch::KagemushaAuthenticatedCommittedOutgoingProvingSelectionV1;
+pub use dispatch::KagemushaAuthenticatedOutgoingProvingSelectionV1;
+pub use dispatch::KagemushaAuthenticatedWalletObservationV1;
 #[path = "authenticated_core_publication.rs"]
 mod publication;
-pub use publication::{KagemushaAuthenticatedCorePublicationV1, KagemushaAuthenticatedCoreRecoveryInputsV1, KagemushaAuthenticatedCoreRecoveryV1};
+pub use publication::{
+    KagemushaAuthenticatedCorePublicationV1, KagemushaAuthenticatedCoreRecoveryInputsV1,
+    KagemushaAuthenticatedCoreRecoveryV1,
+};
 #[path = "authenticated_core_outgoing.rs"]
 mod outgoing;
-pub use outgoing::{KagemushaAuthenticatedOutgoingCommitV1, KagemushaAuthenticatedOutgoingCommitRecoveryV1};
+pub use outgoing::{
+    KagemushaAuthenticatedOutgoingCommitRecoveryV1, KagemushaAuthenticatedOutgoingCommitV1,
+};
 #[path = "authenticated_core_incoming.rs"]
 mod incoming;
-pub use incoming::{KagemushaAuthenticatedIncomingFoldV1, KagemushaAuthenticatedIncomingProvingSelectionV1};
+pub use incoming::{
+    KagemushaAuthenticatedIncomingFoldV1, KagemushaAuthenticatedIncomingProvingSelectionV1,
+};
 #[path = "authenticated_core_mutation.rs"]
 mod mutation;
 use mutation::Mutation;
 #[path = "authenticated_core_device_commit.rs"]
 mod device_commit;
 pub use device_commit::KagemushaOriginalOutgoingHardwareCommitV1;
+#[path = "authenticated_core_payment_release.rs"]
+mod payment_release;
+pub use payment_release::{
+    KagemushaAuthenticatedOutboxReleaseV1, KagemushaAuthenticatedPaymentReleaseSelectionV1,
+};
+#[path = "authenticated_core_redemption_finality.rs"]
+mod redemption_finality;
+pub use redemption_finality::KagemushaAuthenticatedRedemptionFinalitySelectionV1;
 
 /// Concrete machine type; caller-defined accepting verifiers cannot construct this owner.
 type Machine = KagemushaStateMachineV1<

@@ -40,7 +40,7 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
     }
     let operation = bytes[Self.operationTag]
     let outgoing = operation == 2 || operation == 4
-    guard bytes[Self.version].elementsEqual([1, 0]), (1...5).contains(operation),
+    guard bytes[Self.version].elementsEqual([1, 0]), (0...5).contains(operation),
       Self.scopedDigests.allSatisfy({ range in bytes[range].contains(where: { $0 != 0 }) }),
       bytes[Self.policyEpoch].contains(where: { $0 != 0 }),
       bytes[Self.hardwareEpochGeneration].contains(where: { $0 != 0 }),
@@ -48,30 +48,25 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
       bytes[Self.terminalCommitment].contains(where: { $0 != 0 }) == outgoing else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
     }
-    var carry: UInt16 = 1
-    for offset in 0..<16 {
-      let sum = UInt16(bytes[Self.secureIndexBefore.lowerBound + offset]) + carry
-      guard bytes[Self.secureIndexAfter.lowerBound + offset] == UInt8(truncatingIfNeeded: sum) else {
+    if operation == 0 {
+      guard bytes[Self.secureIndexBefore].allSatisfy({ $0 == 0 }),
+        bytes[Self.secureIndexAfter].allSatisfy({ $0 == 0 }) else {
         throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
       }
-      carry = sum >> 8
-    }
-    guard carry == 0 else {
-      throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
+    } else {
+      var carry: UInt16 = 1
+      for offset in 0..<16 {
+        let sum = UInt16(bytes[Self.secureIndexBefore.lowerBound + offset]) + carry
+        guard bytes[Self.secureIndexAfter.lowerBound + offset] == UInt8(truncatingIfNeeded: sum) else {
+          throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
+        }
+        carry = sum >> 8
+      }
+      guard carry == 0 else {
+        throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
+      }
     }
     canonicalSelectionSigningBytes = Data(bytes)
-  }
-
-  /// Compare Core's trusted predecessor to the signed secure index before spending hardware.
-  func validateExpectedPreviousCounter(_ expected: UInt32) throws {
-    let bytes = [UInt8](canonicalSelectionSigningBytes)
-    let offset = Self.secureIndexBefore.lowerBound
-    guard bytes[(offset + 4)..<Self.secureIndexBefore.upperBound].allSatisfy({ $0 == 0 }),
-      (0..<4).allSatisfy({ index in
-        bytes[offset + index] == UInt8(truncatingIfNeeded: expected >> (index * 8))
-      }) else {
-      throw KagemushaAppAttestEvidenceErrorV1.assertionCounterMismatch
-    }
   }
 
   /// Apple signs SHA256(authenticatorData || clientDataHash); here clientDataHash = SHA256(S).
@@ -140,7 +135,7 @@ public protocol KagemushaAppAttestServiceV1: Sendable {
 public enum KagemushaAppAttestAssertionIntentV1: Equatable, Sendable {
   case ready(counter: UInt32)
   case pending(previousCounter: UInt32, selectionDigest: Data)
-  case complete(counter: UInt32, selectionDigest: Data, rawAssertion: Data)
+  case complete(previousCounter: UInt32, counter: UInt32, selectionDigest: Data, rawAssertion: Data)
 }
 
 public protocol KagemushaAppAttestAssertionIntentStoringV1: Sendable {
@@ -312,12 +307,20 @@ public struct KagemushaAppAttestAssertionEvidenceV1: Equatable, Sendable {
     signatureMessageDigest = Data(SHA256.hash(data: nonce))
   }
 
-  /// Reject an assertion that skipped the committed predecessor's counter.
-  /// Core must authenticate the predecessor before supplying this value.
-  func validateExactNext(previousCounter: UInt32) throws {
-    guard previousCounter < UInt32.max, signCount == previousCounter + 1 else {
+  /// Reject replay against the independently retained App Attest counter floor.
+  /// Financial logical indexes are separate, and other assertions may cause counter gaps.
+  func validateCounterAdvance(previousCounter: UInt32) throws {
+    guard signCount > previousCounter else {
       throw KagemushaAppAttestEvidenceErrorV1.assertionCounterMismatch
     }
+  }
+
+  /// Decode only the signed counter shape; this does not authenticate an assertion.
+  static func originalSignCount(_ raw: Data) throws -> UInt32 {
+    let parsed = try parseAssertion(raw)
+    let bytes = [UInt8](parsed.authenticatorData)
+    return (UInt32(bytes[33]) << 24) | (UInt32(bytes[34]) << 16)
+      | (UInt32(bytes[35]) << 8) | UInt32(bytes[36])
   }
 
   private static func parseAssertion(_ raw: Data) throws -> (authenticatorData: Data, signature: Data) {
@@ -349,7 +352,7 @@ public struct KagemushaAppAttestAssertionEvidenceV1: Equatable, Sendable {
 }
 
 /// Evidence acquisition only. Core must independently verify enrollment, the authenticated
-/// predecessor, strict-next counter, and proof fold before admitting money.
+/// predecessor, independent monotonic App Attest counter, and proof fold before admitting money.
 public actor KagemushaAppAttestEvidenceProviderV1 {
   private let service: any KagemushaAppAttestServiceV1
   private let intentStore: any KagemushaAppAttestAssertionIntentStoringV1
@@ -416,7 +419,6 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
     default:
       throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
     }
-    try binding.validateExpectedPreviousCounter(expectedPreviousCounter)
     try intentStore.reserve(keyID: keyID, previousCounter: expectedPreviousCounter,
       selectionDigest: digest)
     guard try intentStore.load(keyID: keyID) == .pending(
@@ -437,11 +439,12 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
         rawAssertion: raw, clientDataHash: digest, expectedAppIDHash: expectedAppIDHash,
         expectedRelease: expectedRelease,
         enrolledAssertionPublicKeyX963: enrolledAssertionPublicKeyX963)
-      try evidence.validateExactNext(previousCounter: expectedPreviousCounter)
+      try evidence.validateCounterAdvance(previousCounter: expectedPreviousCounter)
       try intentStore.complete(keyID: keyID, counter: evidence.signCount,
         selectionDigest: digest, rawAssertion: raw)
       guard try intentStore.load(keyID: keyID) == .complete(
-        counter: evidence.signCount, selectionDigest: digest, rawAssertion: raw) else {
+        previousCounter: expectedPreviousCounter, counter: evidence.signCount,
+        selectionDigest: digest, rawAssertion: raw) else {
         throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
       }
     } catch {
@@ -471,14 +474,17 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
     switch intent {
     case .pending:
       throw KagemushaAppAttestEvidenceErrorV1.assertionOutcomeUnknown
-    case .complete(let counter, let selectionDigest, let rawAssertion)
-      where counter == expectedPreviousCounter + 1 && selectionDigest == digest:
-      try binding.validateExpectedPreviousCounter(expectedPreviousCounter)
+    case .complete(let previousCounter, let counter, let selectionDigest, let rawAssertion)
+      where previousCounter == expectedPreviousCounter && counter > previousCounter
+        && selectionDigest == digest:
       let evidence = try KagemushaAppAttestAssertionEvidenceV1(
         rawAssertion: rawAssertion, clientDataHash: digest,
         expectedAppIDHash: expectedAppIDHash, expectedRelease: expectedRelease,
         enrolledAssertionPublicKeyX963: enrolledAssertionPublicKeyX963)
-      try evidence.validateExactNext(previousCounter: expectedPreviousCounter)
+      try evidence.validateCounterAdvance(previousCounter: expectedPreviousCounter)
+      guard evidence.signCount == counter else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
       return evidence
     default:
       throw KagemushaAppAttestEvidenceErrorV1.journalMismatch

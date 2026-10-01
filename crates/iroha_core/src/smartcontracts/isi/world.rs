@@ -14923,7 +14923,13 @@ pub mod isi {
             iroha_data_model::smart_contract::manifest::ContractManifest,
             iroha_data_model::query::error::QueryExecutionFail,
         > {
-            crate::executor::root_scope::ensure_committed_artifact_scope(state_ro.world(), &self.artifact_id).map_err(|error| iroha_data_model::query::error::QueryExecutionFail::Conversion(error.to_string()))?;
+            crate::executor::root_scope::ensure_committed_artifact_scope(
+                state_ro.world(),
+                &self.artifact_id,
+            )
+            .map_err(|error| {
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(error.to_string())
+            })?;
             state_ro
                 .world()
                 .contract_manifests()
@@ -18410,8 +18416,9 @@ pub mod isi {
                         .and_then(|policy| {
                             crate::sumeragi::private_dataspace::ensure_parent_execution_separate(
                                 &state_transaction.world,
-                                policy.fixed.iter().map(|lane| lane.dataspace)
-                                    .chain(policy.autoscale.iter().map(|autoscale| autoscale.dataspace)),
+                                policy.fixed.iter().map(|lane| lane.dataspace).chain(
+                                    policy.autoscale.iter().map(|autoscale| autoscale.dataspace),
+                                ),
                             )?;
                             crate::sumeragi::lanes::step::validate_policy(&policy)
                         })

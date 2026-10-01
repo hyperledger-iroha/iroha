@@ -421,7 +421,8 @@ impl ExecutionOutputReservation<'_> {
     /// Retain an actual Network rejection without changing its economic disposition.
     ///
     /// The execution owner has already dropped the rejected business overlay and
-    /// settled its independently determined penalty/fee fragments. Oversized error
+    /// staged its independently determined fee fragment. It may apply the fee
+    /// only after this receipt-bearing row is funded. Oversized error
     /// details use a distinct bounded diagnostic, never healthy `OutputLimit`.
     /// This projection must not be used to choose fees, misconduct or work charges.
     ///
@@ -451,6 +452,22 @@ impl ExecutionOutputReservation<'_> {
         if !same_origin(terminal, &actual) {
             return Err("rejection differs from its reserved Network source".into());
         }
+        let actual_bytes = output_bytes(&actual)?;
+        let actual_total = self
+            .owner
+            .committed_bytes
+            .checked_add(actual_bytes)
+            .and_then(|sum| sum.checked_add(self.owner.remaining_terminal_bytes));
+        if actual_bytes <= self.owner.limits.max_output_bytes
+            && actual_total.is_some_and(|sum| sum <= self.owner.limits.max_total_output_bytes)
+        {
+            return match self.finish(actual)? {
+                ReservedExecutionOutput::Accepted(row) => Ok(row),
+                ReservedExecutionOutput::OutputLimit(_) => {
+                    Err("fitting rejection lost its exact output budget".into())
+                }
+            };
+        }
         let ExecutionOutputV1::Network(network) = terminal else {
             return Err("rejection has no Network terminal".into());
         };
@@ -464,7 +481,27 @@ impl ExecutionOutputReservation<'_> {
         }
         error.reason.clear();
         error.reason.push_str(NETWORK_REJECTION_DIAGNOSTIC_OMITTED);
+        // Retain every actual charge in the bounded fallback too. This bounded
+        // clone follows the portable receipt limit; no error text is cloned.
+        if let Some(receipt) = actual.result().nexus_fee_receipt() {
+            if norito::canonical_frame_len(receipt).map_err(|error| error.to_string())?
+                > super::consensus::MAX_NEXUS_FEE_RECEIPT_BYTES
+            {
+                return Err("rejection Nexus receipt exceeds portable bound".into());
+            }
+            network.result.set_nexus_fee_receipt(Some(receipt.clone()));
+        }
         self.terminal_bytes = output_bytes(terminal)?;
+        let total = self
+            .owner
+            .committed_bytes
+            .checked_add(self.terminal_bytes)
+            .and_then(|sum| sum.checked_add(self.owner.remaining_terminal_bytes));
+        if self.terminal_bytes > self.owner.limits.max_output_bytes
+            || !total.is_some_and(|sum| sum <= self.owner.limits.max_total_output_bytes)
+        {
+            return Err("actual rejection fee receipt has no funded terminal".into());
+        }
         match self.finish(actual)? {
             ReservedExecutionOutput::Accepted(row) | ReservedExecutionOutput::OutputLimit(row) => {
                 Ok(row)

@@ -2627,7 +2627,7 @@ mod tests {
             .split_once("fn prove_range_once(")
             .expect("range prover")
             .1
-            .split_once("fn prove_range_with_mode(")
+            .split_once("#[cfg(test)]\nfn preflight_fcmp_range_v1(")
             .expect("range prover boundary")
             .0;
         assert!(!prove_range.contains("a_l.0.iter().copied()"));
@@ -2707,7 +2707,7 @@ mod tests {
             .split_once("fn prove_range_once(")
             .expect("range prover")
             .1
-            .split_once("fn prove_range_with_mode(")
+            .split_once("#[cfg(test)]\nfn preflight_fcmp_range_v1(")
             .expect("range prover boundary")
             .0;
         assert!(prove_range.contains("let alpha = random_nonzero_scalar(rng)?;"));

@@ -3378,7 +3378,7 @@ mod tests {
             SnsNamespace, get_name_record, policy_by_id, quote_resolved_name_registration,
             seed_default_namespace_policies_for_payment_asset,
         },
-        state::{State, World},
+        state::{State, StateReadOnly, World},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -3408,7 +3408,7 @@ mod tests {
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
         prelude::{Domain, InstructionBox, Json, Quantity, Register},
-        transaction::IvmBytecode,
+        transaction::{Executable, IvmBytecode},
     };
     use iroha_executor_data_model::isi::multisig::{
         DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigCancel, MultisigPropose,
@@ -3433,6 +3433,71 @@ mod tests {
         KeyPair::try_random().expect("multisig ISI fixture key generation should succeed")
     }
     include!("multisig/core_execution_tests.rs");
+    fn runtime_state(
+        world: World,
+        chain_id: ChainId,
+        nexus: Option<iroha_config::parameters::actual::Nexus>,
+    ) -> State {
+        use crate::sumeragi::{
+            startup,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+
+        let mut config = TestChainConfig::new(world, 0);
+        config.chain_id = chain_id;
+        config.nexus = nexus;
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        let consensus_mode = config.consensus_mode;
+        let prepared =
+            CertifiedTestChain::prepare(config).expect("prepare signed multisig genesis");
+        let state = std::sync::Arc::try_unwrap(prepared.state)
+            .unwrap_or_else(|_| panic!("unpublished multisig State is unique"));
+        startup::apply_genesis(
+            &state,
+            prepared.genesis.block().clone(),
+            &genesis_account,
+            consensus_mode.into(),
+            None,
+        )
+        .expect("apply original signed multisig genesis");
+        state
+    }
+    fn runtime_header(state: &State, creation_time_ms: u64) -> BlockHeader {
+        BlockHeader::new(
+            nonzero!(2_u64),
+            Some(
+                state
+                    .view()
+                    .latest_block_hash()
+                    .expect("original genesis parent"),
+            ),
+            None,
+            creation_time_ms,
+            0,
+        )
+    }
+    macro_rules! runtime_tx {
+        ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr) => {
+            runtime_tx!($state, $block, $transaction, $world, $chain_id, 0);
+        };
+        ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr, $creation_time_ms:expr) => {
+            let $state = runtime_state($world, ChainId::from($chain_id), None);
+            let mut $block = $state.block(runtime_header(&$state, $creation_time_ms));
+            let mut $transaction = $block.transaction_for_callback_testing();
+        };
+    }
+    #[test]
+    fn multisig_runtime_fixture_retains_original_chain_and_genesis_parent() {
+        let chain_id = ChainId::from("multisig-runtime-original-source");
+        let state = runtime_state(World::new(), chain_id.clone(), None);
+        assert_eq!(state.chain_id_ref(), &chain_id);
+        assert_eq!(state.view().height(), 1);
+        let original = state.view().latest_block_hash().expect("signed genesis");
+        let header = runtime_header(&state, 1_000);
+        assert_eq!(header.height().get(), 2);
+        assert_eq!(header.prev_block_hash(), Some(original));
+        assert_eq!(header.creation_time_ms, 1_000);
+    }
     macro_rules! tx {
         ($state:ident, $block:ident, $transaction:ident, $world:expr, $chain_id:expr) => {
             tx!($state, $block, $transaction, $world, $chain_id, 1_u64, 0);
@@ -3512,28 +3577,26 @@ mod tests {
             &mut world,
             &payment_asset_definition_id.to_string(),
         );
-        let mut state = State::new_with_chain(
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: sbp,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("sbp dataspace catalog");
+        nexus.fees.fee_asset_id = payment_asset_definition_id.to_string();
+        let state = runtime_state(
             world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
             ChainId::from("multisig-fi-registration-alias-batch"),
+            Some(nexus),
         );
-        state.set_dataspace_catalog_for_testing(
-            DataSpaceCatalog::new(vec![
-                DataSpaceMetadata::default(),
-                DataSpaceMetadata {
-                    id: sbp,
-                    alias: "sbp".to_owned(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("sbp dataspace catalog"),
-        );
-        state.nexus.write().fees.fee_asset_id = payment_asset_definition_id.to_string();
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let block_header = runtime_header(&state, 0);
         let mut block = state.block(block_header);
-        let mut tx = block.transaction();
+        let mut tx = block.transaction_for_callback_testing();
         let spec = spec(
             BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             2,
@@ -6442,7 +6505,7 @@ mod tests {
     }
     #[test]
     fn multisig_propose_rejects_ttl_above_default() {
-        tx!(state, block, tx, World::new(), "multisig-ttl-chain");
+        runtime_tx!(state, block, tx, World::new(), "multisig-ttl-chain");
         let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("ttl", "universal").unwrap();
         let signer1 = checked_keypair();
@@ -6700,7 +6763,7 @@ mod tests {
         use iroha_model_base::name::Name;
         use kotodama_lang::compiler::Compiler as KotodamaCompiler;
         use kotodama_lang::compiler::{CompilerMode, CompilerOptions};
-        tx!(
+        runtime_tx!(
             state,
             block,
             tx,
@@ -7104,19 +7167,16 @@ seiyaku TriggerDispatch {
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
         let mut world = World::new();
         seed_domain_name_lease(&mut world, &owner_id, &domain_id);
-        let state = State::new_with_chain(
+        let state = runtime_state(
             world,
-            kura,
-            query_handle,
             ChainId::from("recovery-invalidates-multisig-proposals"),
+            None,
         );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 1_000, 0);
+        let block_header = runtime_header(&state, 1_000);
         let mut block = state.block(block_header);
-        let mut tx = block.transaction();
+        let mut tx = block.transaction_for_callback_testing();
         domain!(tx, owner_id, domain_id, "domain registration");
         for (account_id, label) in [
             (&owner_id, "register owner"),
@@ -7271,7 +7331,7 @@ seiyaku TriggerDispatch {
                 action::{Action, Repeats},
             },
         };
-        tx!(
+        runtime_tx!(
             state,
             block,
             tx,
@@ -7762,7 +7822,7 @@ seiyaku TriggerDispatch {
     }
     #[test]
     fn multisig_signatories_must_be_single_accounts() {
-        tx!(
+        runtime_tx!(
             state,
             block,
             tx,
@@ -7819,13 +7879,12 @@ seiyaku TriggerDispatch {
     }
     #[test]
     fn multisig_deferred_execution_reenters_active_executor_and_preserves_valid_flow() {
-        tx!(
+        runtime_tx!(
             state,
             block,
             tx,
             World::new(),
             "multisig-deferred-active-executor",
-            2_u64,
             0
         );
         let domain_id = DomainId::try_new("deferred", "universal").expect("domain id");
@@ -8097,7 +8156,7 @@ seiyaku TriggerDispatch {
     }
     #[test]
     fn multisig_approval_weight_sum_does_not_overflow() {
-        tx!(state, block, tx, World::new(), "multisig-weight-overflow");
+        runtime_tx!(state, block, tx, World::new(), "multisig-weight-overflow");
         let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("weights", "universal").unwrap();
         let owner_key = checked_keypair();
@@ -8332,17 +8391,12 @@ seiyaku TriggerDispatch {
             "pending request cannot inherit replacement approvals".to_owned(),
         ))];
         let outstanding_hash = HashOf::new(&outstanding_instructions);
-        Executor::Initial
-            .execute_instruction(
-                &mut tx,
-                &signer1_id,
-                InstructionBox::from(MultisigPropose::new(
-                    multisig_id.clone(),
-                    outstanding_instructions,
-                    None,
-                )),
-            )
-            .expect("create outstanding proposal before ordinary rekey");
+        execute_propose(
+            &mut tx,
+            &signer1_id,
+            &MultisigPropose::new(multisig_id.clone(), outstanding_instructions, None),
+        )
+        .expect("create outstanding proposal before ordinary rekey");
         let replacement_policy = multisig_policy_for_members(&[(&signer2, 1), (&signer3, 1)]);
         let rejected = replace_account_controller(
             &signer1_id,

@@ -1,4 +1,4 @@
-use iroha_data_model::block::BlockExecutionContextBundle;
+use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext};
 // Canonical Network index fixtures exercise structural membership, never mint execution/finality.
 /// Attach structurally checked outputs under a finite, explicit storage-test policy.
 pub(crate) fn install_network_index_test_outputs(
@@ -325,7 +325,11 @@ fn network_index_native_block() -> SignedBlock {
     use iroha_data_model::sumeragi_lanes::{SumeragiLaneMerge, SumeragiLaneMergeSection};
     // This fixture tests structural indexing only. It never supplies finality authority.
     let mut block = network_index_block_at(3, vec![network_index_signal_input(7)]);
-    let mut context = BlockExecutionContextBundle::new(Vec::new());
+    let mut context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+        block.network_entrypoint_at(0).unwrap().hash(),
+        LaneId::new(2),
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )]);
     context.lane_merge = Some(SumeragiLaneMergeSection {
         merges: vec![SumeragiLaneMerge {
             lane: LaneId::new(2),
@@ -375,7 +379,18 @@ fn canonical_network_index_projects_merged_suffix_once_and_rejects_missing_outpu
 
     // Direct inputs precede the merged suffix and both occupy ordinary Network rows.
     let mut combined = block.clone();
-    combined.set_external_entrypoints(vec![network_index_signal_input(99), source.clone()]);
+    let direct = network_index_signal_input(99);
+    let mut context = combined.execution_context().unwrap().clone();
+    context.external.insert(
+        0,
+        ExternalExecutionContext::new(
+            direct.hash(),
+            LaneId::SINGLE,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        ),
+    );
+    combined.set_external_entrypoints(vec![direct, source.clone()]);
+    combined.set_execution_context(Some(context));
     attach_ok_results_to_block(&mut combined);
     Kura::insert_transaction_entrypoint_heights(&mut index, height, &combined);
     assert!(index.incomplete_heights.is_empty());

@@ -1098,7 +1098,7 @@ pub mod network {
     // QUIC datagram settings (best-effort gossip/health delivery).
     /// Whether QUIC DATAGRAM support is enabled when QUIC transport is in use.
     ///
-    /// This remains `false` until quinn-proto 0.11.17 or later is locked and
+    /// This remains `false` until quinn-proto 0.11.18 or later is locked and
     /// requalified. Reliable streams carry best-effort topics meanwhile.
     pub const QUIC_DATAGRAMS_ENABLED: bool = false;
     /// Upper bound (bytes) for a single QUIC datagram payload.

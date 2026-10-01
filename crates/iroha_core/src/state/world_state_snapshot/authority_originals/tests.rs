@@ -411,10 +411,23 @@ fn certified_fee_cut_requires_existing_read_root_and_releases_budget_on_refusal(
 
 #[test]
 fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_a_default() {
-    use iroha_data_model::nexus::{
-        NexusRuntimeCatalogV1, RuntimeDataSpaceAdditionV1, dataspace_catalog_hash,
+    use crate::state::{StateReadOnly as _, WorldReadOnly as _, derive_committee_key_id};
+    use iroha_crypto::bls_normal_pop_prove;
+    use iroha_data_model::{
+        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+        isi::{InstructionBox, SetParameter, consensus_keys::RegisterConsensusKey},
+        nexus::{
+            LaneConfig, LaneLifecycleParameterV1, LaneVisibility, NexusCatalogTransitionV1,
+            NexusRuntimeCatalogV1, RuntimeDataSpaceAdditionV1, RuntimeLaneManifestV1,
+            dataspace_catalog_hash,
+        },
+        parameter::Parameter,
     };
-    use iroha_data_model::parameter::Parameter;
+    use iroha_executor_data_model::permission::{
+        governance::CanManageConsensusKeys, parameter::CanSetParameters,
+    };
+    use iroha_model_base::{peer::PeerId, topology::LaneId};
+    use iroha_primitives::{json::Json, numeric::Quantity};
     let mut world = World::new();
     let account = owner(49);
     let native_hash = Hash::new(b"explicit synthetic physical dataspace original");
@@ -447,7 +460,10 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
     );
     world.account_permissions.insert(
         account.clone(),
-        BTreeSet::from([iroha_executor_data_model::permission::query::CanReadAllLedgerData.into()]),
+        BTreeSet::from([
+            iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
+            CanSetParameters.into(),
+        ]),
     );
     world.account_aliases.insert(alias.clone(), account.clone());
     world.account_rekey_records.insert(
@@ -472,23 +488,129 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
         ),
         lease.clone(),
     );
-    let runtime = NexusRuntimeCatalogV1 {
-        version: 1,
-        baseline_dataspaces_hash: dataspace_catalog_hash(&baseline),
-        baseline_manifests_hash: Hash::prehashed(
-            crate::state::LaneManifestRegistry::empty().baseline_consensus_policy_digest(),
-        ),
-        dataspaces: vec![addition],
-        manifests: vec![],
-    };
-    {
-        let mut parameters = world.parameters.block();
-        parameters.set_parameter(Parameter::Custom(runtime.into_custom_parameter().unwrap()));
-        parameters.commit();
+    // A World-only catalog is not an admitted runtime transition. Keep the
+    // actual Universal baseline, register real synthetic lane Committee custody
+    // in signed genesis, then execute the typed catalog transition at H2.
+    let mut validators = (0xC1_u8..=0xC4)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    validators.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+    for key in &validators {
+        let id = AccountId::new(key.public_key().clone());
+        let (id, value) = Account::new(id.clone()).build(&id).into_key_value();
+        world.accounts.insert(id, value);
     }
-    let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1_000)).unwrap();
-    chain.commit_at(2_000, vec![]);
-    let tip = chain.committed(2);
+    let mut config = TestChainConfig::new(world, 1_000);
+    // RegisterConsensusKey requires this exact permission even in signed genesis.
+    // Keep the original genesis signer separate from the alias-bearing retail owner.
+    config.world.account_permissions.insert(
+        AccountId::new(config.genesis_key.public_key().clone()),
+        BTreeSet::from([CanManageConsensusKeys.into()]),
+    );
+    config.validator_keys = Some(validators.clone());
+    config.genesis_instructions = validators
+        .iter()
+        .map(|key| {
+            let id = derive_committee_key_id(key.public_key());
+            RegisterConsensusKey {
+                id: id.clone(),
+                record: ConsensusKeyRecord {
+                    id,
+                    public_key: key.public_key().clone(),
+                    pop: Some(bls_normal_pop_prove(key.private_key()).unwrap()),
+                    activation_height: 1,
+                    expiry_height: None,
+                    replaces: None,
+                    status: ConsensusKeyStatus::Active,
+                },
+            }
+            .into()
+        })
+        .collect();
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.staking.public_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    config.nexus = Some(nexus);
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    let members = validators
+        .iter()
+        .map(|key| {
+            norito::json!({
+                "validator": (AccountId::new(key.public_key().clone()).to_string()),
+                "peer_id": (PeerId::new(key.public_key().clone()).to_string())
+            })
+        })
+        .collect::<Vec<_>>();
+    let transition = {
+        let view = chain.state().view();
+        assert_eq!(view.nexus().configured_dataspace_catalog, baseline);
+        assert!(view.runtime_catalog_hash().unwrap().is_none());
+        NexusCatalogTransitionV1 {
+            version: NexusCatalogTransitionV1::VERSION,
+            expected_catalog_hash: LaneLifecycleParameterV1::catalog_hash(
+                &view.nexus().lane_catalog,
+            ),
+            expected_incarnation_root: LaneLifecycleParameterV1::incarnation_root(
+                &LaneLifecycleParameterV1::canonical_incarnations(
+                    &view.nexus().lane_catalog,
+                    &chain.state().lane_incarnations_snapshot(),
+                )
+                .unwrap(),
+            ),
+            expected_runtime_catalog_hash: view.runtime_catalog_hash().unwrap(),
+            dataspace_additions: vec![addition.clone()],
+            lane_additions: vec![LaneConfig {
+                id: LaneId::new(1),
+                alias: "is2".into(),
+                dataspace_id: dataspace,
+                visibility: LaneVisibility::Restricted,
+                ..LaneConfig::default()
+            }],
+            manifest_additions: vec![RuntimeLaneManifestV1 {
+                lane_id: LaneId::new(1),
+                manifest: Json::new(norito::json!({
+                    "lane": "is2", "version": 1,
+                    "validators": members,
+                    "quorum": 3
+                })),
+            }],
+        }
+    };
+    let authority = KeyPair::from_seed(vec![49; 32], Algorithm::Ed25519);
+    assert_eq!(AccountId::new(authority.public_key().clone()), account);
+    let signed_transition = chain.sign(
+        &authority,
+        [InstructionBox::from(SetParameter::new(Parameter::Custom(
+            transition.into_custom_parameter().unwrap(),
+        )))],
+        1_001,
+    );
+    assert_eq!(chain.commit_at(2_000, vec![signed_transition]), vec![true]);
+    chain.commit_at(3_000, vec![]);
+    let tip = chain.committed(3);
+    {
+        let view = chain.state().view();
+        assert_eq!(view.nexus().configured_dataspace_catalog, baseline);
+        assert_eq!(view.nexus().dataspace_catalog, catalog);
+        let parameter = view
+            .world()
+            .parameters()
+            .custom()
+            .get(&NexusRuntimeCatalogV1::parameter_id())
+            .unwrap();
+        let runtime = NexusRuntimeCatalogV1::from_custom_parameter(parameter)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            runtime.baseline_dataspaces_hash,
+            dataspace_catalog_hash(&baseline)
+        );
+        assert_eq!(runtime.dataspaces, vec![addition]);
+    }
     let budget = AllocationBudget::new(48 * 1024 * 1024);
     // A raw World overlay defaults to Universal, which must never drive this selection.
     assert!(

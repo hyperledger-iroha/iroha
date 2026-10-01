@@ -1443,6 +1443,12 @@ fn tool_registry_honors_universal_kagemusha_mcp_projection() {
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
+    assert!(
+        !route_catalog::kagemusha::AUTHORITY_STATE
+            .projections()
+            .mcp(),
+        "complete challenged World exports must remain outside the MCP projection"
+    );
     for route in route_catalog::kagemusha::ROUTES {
         let method = match route.method() {
             CatalogHttpMethod::Any => {
@@ -1454,13 +1460,14 @@ fn tool_registry_honors_universal_kagemusha_mcp_projection() {
             CatalogHttpMethod::Patch => Method::PATCH,
             CatalogHttpMethod::Delete => Method::DELETE,
         };
-        assert!(
+        assert_eq!(
             tools.iter().any(|tool| tool.route_backing().is_some_and(
                 |(_, tool_method, path_template)| {
                     tool_method == &method && path_template == route.path()
                 }
             )),
-            "cataloged universal KAGEMUSHA route is missing from MCP: {} {}",
+            route.projections().mcp(),
+            "KAGEMUSHA route disagrees with its declared MCP projection: {} {}",
             route.method().as_str(),
             route.path()
         );

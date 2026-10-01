@@ -8182,12 +8182,20 @@ mod zk_roots_selector_tests {
         .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::with([domain], [account], [definition]),
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        ));
-        bind_permanent_asset_alias_for_test(&state, &authority, &definition_id, "usd#main");
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+            iroha_core::sumeragi::test_chain::TestChainConfig::new(
+                iroha_core::state::World::with([domain], [account], [definition]),
+                1_000,
+            ),
+        )
+        .expect("signed genesis anchors the selector snapshot");
+        let state = chain.state().clone();
+        bind_permanent_asset_alias_for_test(
+            &state,
+            &authority,
+            &definition_id,
+            "usd#issuer.universal",
+        );
         (state, definition_id)
     }
     fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
@@ -8264,12 +8272,15 @@ mod zk_roots_selector_tests {
             .expect("commit frontier checkpoints for test");
     }
     fn assert_query_conversion_contains(err: Error, expected: &str) {
-        assert!(matches!(
-            err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-            )) if message.contains(expected)
-        ));
+        assert!(
+            matches!(
+                &err,
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+                )) if message.contains(expected)
+            ),
+            "unexpected query error: {err:?}"
+        );
     }
     fn assert_profile_anchored_empty_roots(payload: &ZkRootsGetResponseDto) {
         let empty_root = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1.empty_root();
@@ -8328,7 +8339,13 @@ mod zk_roots_selector_tests {
         asset_id: String,
         max: u32,
     ) -> ZkRootsGetResponseDto {
-        let response = roots_response(state, accept, asset_id, max).await;
+        let response = roots_response(
+            state,
+            accept.or_else(|| Some(HeaderValue::from_static("application/json"))),
+            asset_id,
+            max,
+        )
+        .await;
         assert_response(&response, StatusCode::OK, Some("application/json"));
         norito::json::from_slice(&response_bytes(response).await).expect("json response payload")
     }
@@ -8336,13 +8353,13 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved =
-            resolve_asset_definition_selector(&view, "usd#main", 0).expect("alias should resolve");
+            resolve_asset_definition_selector(&view, "usd#issuer.universal", 0).expect("alias should resolve");
         assert_eq!(resolved, definition_id);
     }
     routing_test! { sync resolve_asset_definition_selector_accepts_trimmed_alias_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
-        let resolved = resolve_asset_definition_selector(&view, "  usd#main  ", 0)
+        let resolved = resolve_asset_definition_selector(&view, "  usd#issuer.universal  ", 0)
             .expect("trimmed alias should resolve");
         assert_eq!(resolved, definition_id);
     }
@@ -8402,10 +8419,10 @@ mod zk_roots_selector_tests {
         ));
     }
     routing_test! { sync parse_tx_history_asset_selector_accepts_asset_alias_literal
-        let parsed = parse_tx_history_asset_selector("usd#main").expect("selector should parse");
+        let parsed = parse_tx_history_asset_selector("usd#issuer.universal").expect("selector should parse");
         match parsed {
             TxHistoryAssetSelectorInput::DefinitionSelector(value) => {
-                assert_eq!(value, "usd#main")
+                assert_eq!(value, "usd#issuer.universal")
             }
             other => panic!("unexpected selector variant: {other:?}"),
         }
@@ -8413,7 +8430,7 @@ mod zk_roots_selector_tests {
     routing_test! { sync resolve_tx_history_asset_selector_accepts_asset_alias_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
-        let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), None)
+        let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#issuer.universal"), None)
             .expect("selector should resolve");
         assert!(matches!(
             resolved,
@@ -8426,7 +8443,7 @@ mod zk_roots_selector_tests {
         let other_definition =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee");
         let err =
-            resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), Some(&other_definition))
+            resolve_tx_history_asset_selector(&view, 0, Some("usd#issuer.universal"), Some(&other_definition))
                 .expect_err("mismatched selector should fail");
         assert!(matches!(
             err,
@@ -8637,7 +8654,7 @@ mod zk_roots_selector_tests {
     }
     routing_test! { async handle_v1_zk_roots_accepts_alias_literal_and_returns_profile_empty_root
         let (state, _) = selector_state();
-        let payload = json_roots_payload(state, None, "usd#main".to_owned(), 5).await;
+        let payload = json_roots_payload(state, None, "usd#issuer.universal".to_owned(), 5).await;
         assert_profile_anchored_empty_roots(&payload);
     }
     routing_test! { async handle_v1_zk_roots_prefers_norito_when_accept_quality_ties
@@ -8839,9 +8856,9 @@ mod zk_roots_selector_tests {
             seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
         let response = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
-                asset_id: "usd#main".to_owned(),
+                asset_id: "usd#issuer.universal".to_owned(),
                 commitments: vec![
                     hex::encode(commitments[2]),
                     format!("0x{}", hex::encode(commitments[0])),
@@ -8958,7 +8975,7 @@ mod zk_roots_selector_tests {
             seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
         let response = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: Vec::new(),
@@ -8989,7 +9006,7 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state_without_zk();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x66; 32])],
@@ -9009,7 +9026,7 @@ mod zk_roots_selector_tests {
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x27; 32]], None);
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x28; 32])],
@@ -9028,7 +9045,7 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x88; 32]), hex::encode([0x88; 32])],
@@ -9043,7 +9060,7 @@ mod zk_roots_selector_tests {
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x29; 32], [0x29; 32]], None);
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x29; 32])],
@@ -9057,7 +9074,7 @@ mod zk_roots_selector_tests {
         let (state, definition_id) = selector_state();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec!["0x1234".to_owned()],
@@ -9074,7 +9091,7 @@ mod zk_roots_selector_tests {
             .collect();
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments,
@@ -9089,7 +9106,7 @@ mod zk_roots_selector_tests {
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x2a; 32]], None);
         let response = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x2a; 32])],
@@ -9118,7 +9135,7 @@ mod zk_roots_selector_tests {
         );
         let err = handle_v1_zk_merkle_path(
             state,
-            None,
+            Some(HeaderValue::from_static("application/json")),
             crate::NoritoJson(ZkMerklePathGetRequestDto {
                 asset_id: definition_id.to_string(),
                 commitments: vec![hex::encode([0x2b; 32])],
@@ -20486,14 +20503,15 @@ mod multisig_selector_tests {
             receiver,
         )
     }
-    fn install_paynet_routing_state(state: &State) {
+    fn build_paynet_routing_state(world: World) -> Arc<State> {
         let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
-        let mut nexus = state.nexus.write();
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.routing_policy = paynet_routing_policy();
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
         nexus.dataspace_catalog = dataspace_catalog;
+        // Bind the configured catalog before State captures its native routing authority.
+        Arc::new(State::new_with_pre_genesis_nexus_for_testing(world, nexus, LiveQueryStore::start_test()))
     }
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
@@ -20737,48 +20755,14 @@ mod multisig_selector_tests {
             signer,
         )
     }
-    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let meta = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            vector_length: 0,
-            max_cycles: 1,
-            abi_version,
-        };
-        let mut out = meta.encode();
-        let interface = ivm::EmbeddedContractInterfaceV1 {
-            callables: Vec::new(),
-            seiyaku_name: "TestContract".to_owned(),
-            compiler_fingerprint: "torii-tests".to_owned(),
-            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: 0,
-            access_set_hints: None,
-            kotoba: Vec::new(),
-            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-                name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
-                params: Vec::new(),
-                argument_schema: None,
-                return_type: Some("()".to_owned()),
-                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
-                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
-                }),
-                permission: Some("CanEnactGovernance".to_owned()),
-                read_keys: Vec::new(),
-                write_keys: Vec::new(),
-                access_hints_complete: Some(true),
-                access_hints_skipped: Vec::new(),
-                triggers: Vec::new(),
-                entry_pc: 0,
-            }],
-            error_messages: Vec::new(),
-            error_types: Vec::new(),
-            states: Vec::new(),
-        };
-        out.extend_from_slice(&interface.encode_section());
-        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        out
+    fn minimal_ivm_program() -> Vec<u8> {
+        kotodama_lang::compiler::Compiler::new()
+            .compile_source(
+                r#"seiyaku TestContract {
+                    kotoage fn main() authorize("CanEnactGovernance") {}
+                }"#,
+            )
+            .expect("compile complete ABI V1 multisig contract fixture")
     }
     fn multisig_contract_test_fixture() -> (
         Arc<State>,
@@ -20860,7 +20844,7 @@ mod multisig_selector_tests {
             authority,
             authority_keypair,
             contract_address,
-            minimal_ivm_program(1),
+            minimal_ivm_program(),
             None,
         );
     }
@@ -21523,13 +21507,13 @@ mod multisig_selector_tests {
     routing_test! { sync contract_call_detached_submission_rejects_changed_or_noncanonical_payload
         let (state, queue, key, request) = public_contract_call_fixture();
         let (exact, builder) = detached_public_contract_call(&state, &queue, &key, &request);
-        let retired = builder.clone();
-        let signature = Signature::try_new(key.private_key(), &retired.payload_hash_bytes()).expect("sign other intent");
+        let changed_builder = builder.clone().with_instructions([dm::Log::new(dm::Level::INFO, "different signed invocation".to_owned())]);
+        let signature = Signature::try_new(key.private_key(), &changed_builder.payload_hash_bytes()).expect("sign other intent");
         let mut changed = exact.clone();
-        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(retired.encode_payload()));
+        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(changed_builder.encode_payload()));
         changed.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
         let error = prepare_contract_call_request(queue.clone(), state.clone(), changed)
-            .expect_err("even a valid retired-admission signature cannot enter the public contract surface");
+            .expect_err("a valid signature over another invocation must fail exact payload binding");
         assert!(expect_conversion(error).contains("exact requested invocation"));
         let mut bytes = builder.encode_payload();
         bytes.push(0);
@@ -23396,7 +23380,7 @@ seiyaku BytesPayloadNormalizeTest {
         )
         .await
         .expect_err("all-zero detached signature must be rejected");
-        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
+        assert!(expect_conversion(err).contains("invalid signature_b64: Ed25519 signature failed admission"));
     }
     routing_test! { async multisig_generic_immediate_propose_routes_inner_dataspace
         use base64::Engine as _;
@@ -23418,8 +23402,7 @@ seiyaku BytesPayloadNormalizeTest {
             BTreeSet::new(),
             None,
         );
-        let state = build_state(world);
-        install_paynet_routing_state(state.as_ref());
+        let state = build_paynet_routing_state(world);
         let (queue, mut event_receiver) = build_paynet_routing_queue();
         let fee_payment = dm::FeePaymentIntent::authority(Vec::new(), None);
         let direct_plan = multisig_immediate_execution_routing_plan(
@@ -23608,8 +23591,7 @@ seiyaku BytesPayloadNormalizeTest {
     routing_test! { sync multisig_immediate_contract_call_plan_routes_contract_dataspace
         let (world, _multisig_account_id, signer_account_id, _alias_literal, _signer_keypair) =
             quorum_one_multisig_world();
-        let state = build_state(world);
-        install_paynet_routing_state(state.as_ref());
+        let state = build_paynet_routing_state(world);
         let (queue, _event_receiver) = build_paynet_routing_queue();
         let paynet_dataspace_id = DataSpaceId::new(10);
         let paynet_lane_id = LaneId::new(2);

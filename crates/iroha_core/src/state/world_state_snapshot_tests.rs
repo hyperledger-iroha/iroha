@@ -557,6 +557,35 @@ fn names_publisher_requires_actual_native_root_and_complete_exact_cut_originals(
     let tip = chain.committed(2);
     let budget = AllocationBudget::new(32 * 1024 * 1024);
     let generation = state.state_view_generation();
+    // Native startup seeds the reserved universal lease before the certified
+    // genesis. Its durable key uses the native selector hash, not the label.
+    let universal_selector =
+        crate::sns::selector_for_dataspace_alias(crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS)
+            .unwrap();
+    let universal_key = crate::sns::record_storage_key(&universal_selector);
+    let universal_owner = chain.genesis_account().clone();
+    let universal_controller =
+        iroha_data_model::account::AccountAddress::from_account_id(&universal_owner).unwrap();
+    let mut universal_metadata = iroha_model_base::metadata::Metadata::default();
+    universal_metadata.insert(
+        crate::sns::SNS_DATASPACE_ID_METADATA_KEY.parse().unwrap(),
+        iroha_primitives::json::Json::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL.as_u64(),
+        ),
+    );
+    let expected_universal_record = iroha_data_model::sns::NameRecordV1::new(
+        universal_selector,
+        universal_owner,
+        vec![iroha_data_model::sns::NameControllerV1::account(
+            &universal_controller,
+        )],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        universal_metadata,
+    );
     state
         .with_native_resource_names_snapshot_v1(
             &tip,
@@ -587,13 +616,40 @@ fn names_publisher_requires_actual_native_root_and_complete_exact_cut_originals(
                     keys.iter()
                         .any(|key| key.as_ref() == "customer/private-key-name")
                 );
+                assert_eq!(names.len(), 2, "duplicate disclosed rows are refused");
                 assert_eq!(
-                    names.len(),
-                    1,
+                    names
+                        .iter()
+                        .map(|(key, _)| key.as_ref())
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    std::collections::BTreeSet::from([
+                        "sns/records/4099/is2",
+                        universal_key.as_ref(),
+                    ]),
+                    "only the exact synthetic SNS row and native universal lease are disclosed"
+                );
+                let synthetic = names
+                    .iter()
+                    .find(|entry| entry.0.as_ref() == "sns/records/4099/is2")
+                    .unwrap();
+                assert_eq!(synthetic.1, &vec![1, 2, 3]);
+                let universal = names
+                    .iter()
+                    .find(|entry| entry.0 == &universal_key)
+                    .unwrap();
+                use norito::codec::{Decode as _, Encode as _};
+                let mut universal_wire = universal.1.as_slice();
+                let universal_record =
+                    iroha_data_model::sns::NameRecordV1::decode(&mut universal_wire).unwrap();
+                assert!(universal_wire.is_empty());
+                assert_eq!(universal_record, expected_universal_record);
+                assert_eq!(universal_record.encode(), *universal.1);
+                assert!(
+                    !names
+                        .iter()
+                        .any(|entry| { entry.0.as_ref() == "customer/private-key-name" }),
                     "unrelated values must be withheld even from the full reader"
                 );
-                assert_eq!(names[0].0.as_ref(), "sns/records/4099/is2");
-                assert_eq!(names[0].1, &vec![1, 2, 3]);
                 assert!(
                     require_complete_table_count(
                         snapshot,

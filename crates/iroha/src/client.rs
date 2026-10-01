@@ -1,4 +1,5 @@
 //! End-point querying logic, including custom public and authenticated routes.
+mod authority_originals;
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
 mod capability_test_support;
@@ -26,7 +27,6 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod resource_names_state;
-mod authority_originals;
 pub use authority_originals::NativeAuthorityOriginalsReadV1;
 mod runtime_governance_client_auth;
 /// Public SCCP v1 read API.

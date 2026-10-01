@@ -326,7 +326,12 @@ fn generated_queries() -> Vec<Value> {
         "business_receipt".parse().expect("settlement identifier"),
     )]));
     rows.push(record([
-        query::smart_contract::FindContractManifestByArtifactId::new(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::new(u64::MAX), Hash::new(b"query contract"))),
+        query::smart_contract::FindContractManifestByArtifactId::new(
+            iroha_data_model::smart_contract::ContractArtifactId::new(
+                iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+                Hash::new(b"query contract"),
+            ),
+        ),
     ]));
     rows.push(record([query::sns::FindDataspaceNameOwnerById::new(
         DataSpaceId::new(11),

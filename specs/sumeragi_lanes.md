@@ -120,8 +120,9 @@ The row uses global creation and retirement heights; native lane heights are not
 occurrence heights. Live incarnations retain their original registration and pending-unbond
 custody. Retirement at `r = c + A + 1` admits reports through `r + evidence_horizon`
 inclusively, and releases custody only after the mandatory penalty phase at
-`r + evidence_horizon + slashing_delay`. Existing obligations keep the maximum authenticated
-policy fences encountered; a same-block policy extension applies before withdrawal. Unresolved
+`r + evidence_horizon + slashing_delay`. The installed evidence horizon and slashing delay are immutable, as specified in
+`sumeragi_evidence_api.md`; obligation finalization defensively keeps maximum stored fences
+without authorizing policy extensions. Unresolved
 committed evidence retains the monetary obligation. All retained evidence records, including
 terminal replay fences, keep the provenance row until record pruning; terminal records alone
 do not extend monetary withdrawal fences. No later account/key registration inherits it.
@@ -138,21 +139,30 @@ At most 4096 original incarnation rows are retained. Exhaustion defers new lane 
 existing closing, retirement and ordinary block execution continue. Expired rows are reclaimed
 before creation, and the complete table is included in the ordinary lane-state commitment.
 
-Production historical lane-store authority retains the original archive read job across local
-refusal, including its acquired file and partial bytes. The complete authenticated global prefix
+Production historical lane-store authority captures its exact original State view, allocation
+pool and native tip before releasing State guards and opening the archive. It retains the
+original archive read job across local refusal, including its acquired file and partial bytes. The complete authenticated global prefix
 must match the captured native tip's carrier, core hash and execution result. Genesis-created
 lanes acquire authority only after the actual H2 successor authenticates genesis execution.
 The installed schedule retains the original complete creation frame and its prepaid selected
 committee/key/epoch graph; immutable record comparison uses a streaming identity rather than a
 second lane-record clone. A cancelled request is completed or explicitly rejected before a new
-request can replace that original acquisition. The prefix decoder, BLS admission cache and
-schedule-returned configuration clones still require separate resource accounting.
+request can replace that original acquisition. Before advancing its certificate cursor, this
+reader acquires the exact signed availability table, result witness and canonical resultless
+proposal in the original State pool. Partial backing and completed archive bytes survive local
+refusal; the independent historical committee still verifies every QC and signed RS16 relation.
+Prefix/result graphs, certificate metadata, RS16/BLS scratch and caches, and schedule-returned
+configuration clones still require separate resource accounting. A borrowed scan of the
+authenticated tip payload checks retained custody identity, immutable policy fences, original
+sparse signer bindings and retirement against the original creation owner. A missing reclaimed
+row grants historical storage authority only; it supplies no monetary authority.
 
 **Open H3 boundary:** the custody ledger, withdrawal fences and reverse branch cursor are
 prerequisites. `LaneAncestry` checks exact signed-RS16 source, native QC, hash/result and every
 parent link from a separately authenticated frontier without cloning source owners. Its caller
-must still authenticate the original global creation/current context, retain complete demotion
-headers through resource refusal, and install native-scope attribution and exact original
+must still connect this original global creation/current-cut authority to offence admission,
+retain complete demotion-header owners through resource refusal, and install native-scope
+attribution and exact original
 custody penalty effects. Raw lane heights must never enter the global verifier or slashing
 clock. The sparse ledger backing and World clones also still require complete original-pool
 allocation ownership. This slice does not qualify lane offences or resource accounting.

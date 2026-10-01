@@ -59,6 +59,8 @@
 mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
+#[cfg(feature = "app_api")]
+mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
 mod game;
@@ -69,8 +71,6 @@ mod iso_profile;
 mod kagemusha_commands;
 #[cfg(feature = "app_api")]
 mod kagemusha_state;
-#[cfg(feature = "app_api")]
-mod authority_originals;
 mod ledger_state_finality;
 mod nft_market;
 mod operator_auth;
